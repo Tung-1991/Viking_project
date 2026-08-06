@@ -1,0 +1,990 @@
+{
+  "MASTER_EVAL_MODE": "VETO",
+  "MIN_MATCHING_VOTES": 3,
+  "FORCE_ANY_MODE": false,
+  "G0_TIMEFRAME": "1d",
+  "G1_TIMEFRAME": "1h",
+  "G2_TIMEFRAME": "15m",
+  "G3_TIMEFRAME": "15m",
+  "BOT_ACTIVE_SYMBOLS": [
+    "VN30F1M",
+    "AAA",
+    "ANV",
+    "CTD",
+    "CTP",
+    "DC4",
+    "DBC",
+    "DCM",
+    "DGC",
+    "DGW",
+    "DIG",
+    "DRC",
+    "DXS",
+    "GEG",
+    "HAG",
+    "HAP",
+    "HAR",
+    "HPG",
+    "HPX",
+    "HT1",
+    "IDC",
+    "ITC",
+    "JVC",
+    "KDH",
+    "LDG",
+    "MBS",
+    "NHA",
+    "NLG",
+    "NVL",
+    "PDR",
+    "PLX",
+    "PNJ",
+    "POW",
+    "QCG",
+    "SCR",
+    "SCS",
+    "TDM",
+    "TLG",
+    "TV2",
+    "VIX",
+    "VPG"
+  ],
+  "PRIORITY_SYMBOLS": [],
+  "SCAN_SNAPSHOT_ENABLED": true,
+  "SCAN_SNAPSHOT_INTERVAL_MINUTES": 15,
+  "SCAN_SNAPSHOT_RETENTION_DAYS": 250,
+  "SCAN_SNAPSHOT_SYMBOLS": [
+    "VN30F1M",
+    "AAA",
+    "ANV",
+    "CTD",
+    "CTP",
+    "DC4",
+    "DBC",
+    "DCM",
+    "DGC",
+    "DGW",
+    "DIG",
+    "DRC",
+    "DXS",
+    "GEG",
+    "HAG",
+    "HAP",
+    "HAR",
+    "HPG",
+    "HPX",
+    "HT1",
+    "IDC",
+    "ITC",
+    "JVC",
+    "KDH",
+    "LDG",
+    "MBS",
+    "NHA",
+    "NLG",
+    "NVL",
+    "PDR",
+    "PLX",
+    "PNJ",
+    "POW",
+    "QCG",
+    "SCR",
+    "SCS",
+    "TDM",
+    "TLG",
+    "TV2",
+    "VIX",
+    "VPG"
+  ],
+  "voting_rules": {
+    "G0": {
+      "max_opposite": 0,
+      "max_none": 0,
+      "master_rule": "FIX"
+    },
+    "G1": {
+      "max_opposite": 0,
+      "max_none": 1,
+      "master_rule": "PASS"
+    },
+    "G2": {
+      "max_opposite": 0,
+      "max_none": 2,
+      "master_rule": "PASS"
+    },
+    "G3": {
+      "max_opposite": 0,
+      "max_none": 1,
+      "master_rule": "IGNORE"
+    }
+  },
+  "risk_tsl": {
+    "base_risk": 1.0,
+    "base_sl": "G0",
+    "sl_atr_multiplier": 0.2,
+    "tsl_mode": "STATIC",
+    "bot_tsl": "BE+SWING",
+    "mode_multipliers": {
+      "ANY": 1.0,
+      "TREND": 1.0,
+      "RANGE": 0.5,
+      "BREAKOUT": 1.5,
+      "EXHAUSTION": 1.0
+    },
+    "strict_risk": false
+  },
+  "indicators": {
+    "adx": {
+      "active": true,
+      "groups": [
+        "G1"
+      ],
+      "is_trend": false,
+      "macro_role": "NONE",
+      "active_modes": [
+        "ANY"
+      ],
+      "params": {
+        "period": 14,
+        "strong": 23
+      },
+      "trigger_mode": "STRICT_CLOSE",
+      "group_trigger_modes": {},
+      "group_params": {}
+    },
+    "ema": {
+      "active": true,
+      "groups": [
+        "G0",
+        "G1"
+      ],
+      "is_trend": true,
+      "macro_role": "BASE",
+      "active_modes": [
+        "ANY"
+      ],
+      "params": {
+        "period": 50
+      },
+      "trigger_mode": "STRICT_CLOSE",
+      "group_params": {
+        "G1": {
+          "period": 20
+        }
+      },
+      "group_trigger_modes": {}
+    },
+    "swing_point": {
+      "active": true,
+      "groups": [
+        "G2"
+      ],
+      "is_trend": false,
+      "macro_role": "NONE",
+      "active_modes": [
+        "ANY"
+      ],
+      "params": {
+        "lookback": 50,
+        "strength": 2,
+        "atr_buffer": 0.5
+      },
+      "trigger_mode": "STRICT_CLOSE",
+      "group_trigger_modes": {},
+      "group_params": {}
+    },
+    "atr": {
+      "active": false,
+      "groups": [
+        "G1"
+      ],
+      "is_trend": false,
+      "macro_role": "NONE",
+      "active_modes": [
+        "ANY"
+      ],
+      "params": {
+        "period": 14,
+        "multiplier": 1.5
+      },
+      "trigger_mode": "REALTIME_TICK",
+      "group_trigger_modes": {},
+      "group_params": {}
+    },
+    "pivot_points": {
+      "active": false,
+      "groups": [
+        "G3"
+      ],
+      "is_trend": false,
+      "macro_role": "NONE",
+      "active_modes": [
+        "ANY"
+      ],
+      "params": {},
+      "trigger_mode": "REALTIME_TICK",
+      "group_trigger_modes": {},
+      "group_params": {}
+    },
+    "ema_cross": {
+      "active": false,
+      "groups": [
+        "G2"
+      ],
+      "is_trend": false,
+      "macro_role": "NONE",
+      "active_modes": [
+        "ANY"
+      ],
+      "params": {
+        "fast": 20,
+        "slow": 50
+      },
+      "trigger_mode": "STRICT_CLOSE",
+      "group_trigger_modes": {},
+      "group_params": {}
+    },
+    "volume": {
+      "active": true,
+      "groups": [
+        "G2"
+      ],
+      "is_trend": false,
+      "macro_role": "NONE",
+      "active_modes": [
+        "ANY"
+      ],
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      },
+      "trigger_mode": "STRICT_CLOSE",
+      "group_trigger_modes": {},
+      "group_params": {}
+    },
+    "supertrend": {
+      "active": true,
+      "groups": [
+        "G0"
+      ],
+      "is_trend": true,
+      "macro_role": "NONE",
+      "active_modes": [
+        "ANY"
+      ],
+      "params": {
+        "period": 10,
+        "multiplier": 3.0
+      },
+      "trigger_mode": "STRICT_CLOSE",
+      "group_trigger_modes": {},
+      "group_params": {}
+    },
+    "psar": {
+      "active": false,
+      "groups": [
+        "G2"
+      ],
+      "is_trend": false,
+      "macro_role": "NONE",
+      "active_modes": [
+        "TREND"
+      ],
+      "params": {
+        "step": 0.02,
+        "max_step": 0.2
+      },
+      "trigger_mode": "REALTIME_TICK",
+      "group_trigger_modes": {},
+      "group_params": {}
+    },
+    "bollinger_bands": {
+      "active": false,
+      "groups": [
+        "G2"
+      ],
+      "is_trend": false,
+      "macro_role": "NONE",
+      "active_modes": [
+        "RANGE"
+      ],
+      "params": {
+        "period": 20,
+        "std_dev": 2.0
+      },
+      "trigger_mode": "REALTIME_TICK",
+      "group_trigger_modes": {},
+      "group_params": {}
+    },
+    "fibonacci": {
+      "active": false,
+      "groups": [
+        "G2"
+      ],
+      "is_trend": false,
+      "macro_role": "NONE",
+      "active_modes": [
+        "RANGE"
+      ],
+      "params": {
+        "tolerance": 0.001
+      },
+      "trigger_mode": "REALTIME_TICK",
+      "group_trigger_modes": {},
+      "group_params": {}
+    },
+    "rsi": {
+      "active": false,
+      "groups": [
+        "G2"
+      ],
+      "is_trend": false,
+      "macro_role": "NONE",
+      "active_modes": [
+        "ANY"
+      ],
+      "params": {
+        "period": 14,
+        "upper": 70,
+        "lower": 30
+      },
+      "trigger_mode": "STRICT_CLOSE",
+      "group_trigger_modes": {},
+      "group_params": {}
+    },
+    "stochastic": {
+      "active": false,
+      "groups": [
+        "G2"
+      ],
+      "is_trend": false,
+      "macro_role": "NONE",
+      "active_modes": [
+        "RANGE"
+      ],
+      "params": {
+        "k": 14,
+        "d": 3,
+        "smooth": 3,
+        "upper": 80,
+        "lower": 20
+      },
+      "trigger_mode": "STRICT_CLOSE",
+      "group_trigger_modes": {},
+      "group_params": {}
+    },
+    "macd": {
+      "active": true,
+      "groups": [
+        "G1"
+      ],
+      "is_trend": false,
+      "macro_role": "NONE",
+      "active_modes": [
+        "ANY"
+      ],
+      "params": {
+        "fast": 12,
+        "slow": 26,
+        "signal": 9
+      },
+      "trigger_mode": "STRICT_CLOSE",
+      "group_trigger_modes": {},
+      "group_params": {}
+    },
+    "multi_candle": {
+      "active": false,
+      "groups": [
+        "G3"
+      ],
+      "is_trend": false,
+      "macro_role": "NONE",
+      "active_modes": [
+        "EXHAUSTION"
+      ],
+      "params": {
+        "num_candles": 3,
+        "min_total_pips": 50
+      },
+      "trigger_mode": "STRICT_CLOSE",
+      "group_trigger_modes": {},
+      "group_params": {}
+    },
+    "candle": {
+      "active": false,
+      "groups": [
+        "G3"
+      ],
+      "is_trend": false,
+      "macro_role": "NONE",
+      "active_modes": [
+        "ANY"
+      ],
+      "params": {
+        "min_body_size": 1.2,
+        "check_volume": true
+      },
+      "trigger_mode": "STRICT_CLOSE",
+      "group_trigger_modes": {},
+      "group_params": {}
+    },
+    "simple_breakout": {
+      "active": true,
+      "groups": [
+        "G2"
+      ],
+      "is_trend": true,
+      "macro_role": "NONE",
+      "active_modes": [
+        "ANY"
+      ],
+      "params": {
+        "lookback": 2,
+        "atr_buffer": 0.0
+      },
+      "trigger_mode": "STRICT_CLOSE",
+      "group_trigger_modes": {},
+      "group_params": {}
+    }
+  },
+  "check_indicators": {
+    "adx": {
+      "active": true,
+      "groups": [
+        "G0",
+        "G1"
+      ],
+      "params": {
+        "period": 14,
+        "strong": 23
+      },
+      "group_params": {}
+    },
+    "ema": {
+      "active": true,
+      "groups": [
+        "G0",
+        "G1"
+      ],
+      "params": {
+        "period": 50
+      },
+      "group_params": {}
+    },
+    "swing_point": {
+      "active": false,
+      "groups": [
+        "G1"
+      ],
+      "params": {
+        "lookback": 50,
+        "strength": 2,
+        "atr_buffer": 0.5
+      },
+      "group_params": {}
+    },
+    "atr": {
+      "active": false,
+      "groups": [
+        "G1"
+      ],
+      "params": {
+        "period": 14,
+        "multiplier": 1.5
+      },
+      "group_params": {}
+    },
+    "pivot_points": {
+      "active": false,
+      "groups": [
+        "G3"
+      ],
+      "params": {},
+      "group_params": {}
+    },
+    "ema_cross": {
+      "active": false,
+      "groups": [
+        "G2"
+      ],
+      "params": {
+        "fast": 9,
+        "slow": 21
+      },
+      "group_params": {}
+    },
+    "volume": {
+      "active": true,
+      "groups": [
+        "G0",
+        "G1"
+      ],
+      "params": {
+        "period": 20,
+        "multiplier": 1.1
+      },
+      "group_params": {}
+    },
+    "supertrend": {
+      "active": false,
+      "groups": [
+        "G2"
+      ],
+      "params": {
+        "period": 10,
+        "multiplier": 3.0
+      },
+      "group_params": {}
+    },
+    "psar": {
+      "active": false,
+      "groups": [
+        "G2"
+      ],
+      "params": {
+        "step": 0.02,
+        "max_step": 0.2
+      },
+      "group_params": {}
+    },
+    "bollinger_bands": {
+      "active": true,
+      "groups": [
+        "G0",
+        "G1"
+      ],
+      "params": {
+        "period": 20,
+        "std_dev": 2.0
+      },
+      "group_params": {}
+    },
+    "fibonacci": {
+      "active": false,
+      "groups": [
+        "G2"
+      ],
+      "params": {
+        "tolerance": 0.001
+      },
+      "group_params": {}
+    },
+    "rsi": {
+      "active": true,
+      "groups": [
+        "G0",
+        "G1"
+      ],
+      "params": {
+        "period": 14,
+        "upper": 70,
+        "lower": 30
+      },
+      "group_params": {}
+    },
+    "stochastic": {
+      "active": false,
+      "groups": [
+        "G2"
+      ],
+      "params": {
+        "k": 14,
+        "d": 3,
+        "smooth": 3,
+        "upper": 80,
+        "lower": 20
+      },
+      "group_params": {}
+    },
+    "macd": {
+      "active": true,
+      "groups": [
+        "G0",
+        "G1"
+      ],
+      "params": {
+        "fast": 12,
+        "slow": 26,
+        "signal": 9
+      },
+      "group_params": {}
+    },
+    "multi_candle": {
+      "active": false,
+      "groups": [
+        "G3"
+      ],
+      "params": {
+        "num_candles": 3,
+        "min_total_pips": 50
+      },
+      "group_params": {}
+    },
+    "candle": {
+      "active": false,
+      "groups": [
+        "G3"
+      ],
+      "params": {
+        "min_body_size": 1.2,
+        "check_volume": true
+      },
+      "group_params": {}
+    },
+    "simple_breakout": {
+      "active": false,
+      "groups": [
+        "G2"
+      ],
+      "params": {
+        "lookback": 1,
+        "atr_buffer": 0.0
+      },
+      "group_params": {}
+    }
+  },
+  "dca_config": {
+    "ENABLED": false,
+    "MAX_STEPS": 3,
+    "STEP_MULTIPLIER": 1.5,
+    "DISTANCE_ATR_R": 1.0,
+    "USE_PARENT_SL": true,
+    "COOLDOWN": 60,
+    "MINI_BRAIN": {
+      "active": false,
+      "timeframe": "15m",
+      "max_opposite": 0,
+      "max_none": 0,
+      "indicators": {}
+    }
+  },
+  "pca_config": {
+    "ENABLED": false,
+    "MAX_STEPS": 2,
+    "STEP_MULTIPLIER": 0.5,
+    "DISTANCE_ATR_R": 1.5,
+    "USE_PARENT_SL": true,
+    "CONFIRM_ADX": 23,
+    "MINI_BRAIN": {
+      "active": false,
+      "timeframe": "15m",
+      "max_opposite": 0,
+      "max_none": 0,
+      "indicators": {}
+    }
+  },
+  "entry_exit": {
+    "enabled": true,
+    "preview_only": false,
+    "active_tactics": [
+      "SWING_REJECTION"
+    ],
+    "entry_tactics": [
+      "SWING_REJECTION"
+    ],
+    "exit_tactic": "SWING_REJECTION",
+    "sl_mode": "SANDBOX",
+    "fallback_tactic": "OFF",
+    "signal_ttl_seconds": 900,
+    "missing_data_policy": "BLOCK",
+    "tp_policy": "TACTIC_FIRST",
+    "sl_source_group": "BASE_SL",
+    "default_exit": {
+      "use_rr_tp": false,
+      "tp_rr_ratio": 1.5,
+      "use_swing_tp": true
+    },
+    "sl_distance": {
+      "min_atr": 1.0,
+      "max_atr": 2.5
+    },
+    "fib_retrace": {
+      "swing_source_group": "G2",
+      "entry_levels": "0.5,0.618",
+      "entry_tolerance_atr": 0.15,
+      "tp_levels": "1.272,1.618",
+      "use_tactic_tp": true
+    },
+    "breakout_retest": {
+      "source_group": "G1",
+      "max_bars_after_breakout": 6,
+      "retest_atr": 0.5,
+      "use_tactic_tp": false
+    },
+    "swing_rejection": {
+      "source_group": "G1",
+      "max_atr_from_swing": 0.7,
+      "sl_atr_buffer": 0.2,
+      "require_rejection_candle": false,
+      "allow_breakout_entry": false,
+      "max_breakout_atr": 0.5
+    },
+    "swing_structure": {
+      "source_group": "G0",
+      "entry_atr": 0.7,
+      "sl_atr_buffer": 0.2,
+      "allow_breakout_entry": true,
+      "max_breakout_atr": 0.5
+    },
+    "pullback_zone": {
+      "source": "EMA20",
+      "max_atr_from_zone": 0.5,
+      "sl_atr_buffer": 0.2,
+      "tp_atr_multiplier": 1.5
+    },
+    "bb_reclaim": {
+      "band": "MID",
+      "max_atr_from_band": 0.5
+    }
+  },
+  "manual_margin": {
+    "ENABLE_MANUAL_MARGIN": false,
+    "MARGIN_RISK_BASE": "EQUITY_NAV",
+    "MAX_MARGIN_ORDER_VALUE_PCT": 50.0,
+    "MIN_RTT_TO_OPEN": 100.0,
+    "CALL_RTT": 87.0,
+    "FORCE_RTT": 80.0,
+    "MAX_MANUAL_MARGIN_LOSS_PCT": 3.0,
+    "BOT_ALLOW_MARGIN": false
+  },
+  "market_calendar": {
+    "use_dnse_working_dates": true,
+    "manual_closed_dates": [],
+    "block_entry_ato": true,
+    "block_entry_atc": true,
+    "avoid_vn30_expiry_entry": false,
+    "avoid_vn30_rebalance_entry": false,
+    "vn30_rebalance_dates": [],
+    "avoid_ckcs_open_entry": true,
+    "ckcs_entry_delay_minutes": 15
+  },
+  "opportunity_settings": {
+    "enabled": true,
+    "show_in_running_table": false,
+    "retention_hours": 24.0,
+    "history_enabled": true,
+    "default_order_mode": "MARKET",
+    "default_slippage_ticks": 2
+  },
+  "ai_advisor_schedule": {
+    "mode": "Manual Only",
+    "fixed_time": "",
+    "export_days": 7,
+    "global_emergency": true,
+    "include_previous_response": false,
+    "last_fixed_date": "",
+    "ckcs_auto_report_morning": true,
+    "ckcs_auto_report_afternoon": true,
+    "ckcs_send_api_morning": false,
+    "ckcs_send_api_afternoon": false,
+    "ckcs_morning_time": "11:35",
+    "ckcs_afternoon_time": "14:50",
+    "ckcs_report_days": 15,
+    "ckcs_liquidity_filter_enabled": true,
+    "ckcs_liquidity_sessions": 60,
+    "ckcs_liquidity_min_billion": 10.0,
+    "ckcs_last_morning_date": "",
+    "ckcs_last_afternoon_date": ""
+  },
+  "bot_safeguard": {
+    "MAX_DAILY_LOSS_PERCENT": 10.0,
+    "BOT_ORDER_MODE": "NORMAL",
+    "BOT_ENTRY_ORDER_TYPE": "MARKET",
+    "BOT_ATC_EXIT": false,
+    "PENDING_ORDER_EXPIRE_HOURS": 24.0,
+    "MAX_OPEN_POSITIONS": 1,
+    "MAX_TRADES_PER_DAY": 3,
+    "MAX_LOSING_STREAK": 2,
+    "VOLATILITY_BRAKE_ENABLED": true,
+    "VOLATILITY_BRAKE_SYMBOLS": [
+      "VN30F1M"
+    ],
+    "VOLATILITY_BRAKE_ACTION": "ALERT_ONLY",
+    "VOLATILITY_BRAKE_SYMBOL_COOLDOWN_MINUTES": 30.0,
+    "VOLATILITY_BRAKE_TELEGRAM_ENABLED": true,
+    "VOLATILITY_BRAKE_WINDOW_SECONDS": 60.0,
+    "VOLATILITY_BRAKE_STOCK_PCT": 1.5,
+    "VOLATILITY_BRAKE_DERIVATIVE_POINTS": 5.0,
+    "VOLATILITY_BRAKE_CONFIRMATIONS": 2,
+    "VOLATILITY_BRAKE_SESSION_ENABLED": true,
+    "VOLATILITY_BRAKE_SESSION_DERIVATIVE_POINTS": 20.0,
+    "VOLATILITY_BRAKE_SESSION_STOCK_PCT": 3.0,
+    "FORCE_MIN_LOT": false,
+    "STOCK_MAX_ORDER_NAV_PCT": 20.0,
+    "RISK_GATE_MAX_PCT_PS": 8.0,
+    "RISK_GATE_MAX_PCT_CS": 3.0,
+    "LOSS_COUNT_MODE": "TOTAL",
+    "COOLDOWN_MINUTES": 5,
+    "NUM_H1_BARS": 100,
+    "NUM_M15_BARS": 100,
+    "CHECK_PING": true,
+    "MAX_PING_MS": 150,
+    "CHECK_SPREAD": true,
+    "MAX_SPREAD_POINTS": 1.0,
+    "DAEMON_LOOP_DELAY": 15.0,
+    "DCA_PCA_SCAN_INTERVAL": 2.0,
+    "LOG_COOLDOWN_MINUTES": 60.0,
+    "MANUAL_SIGNAL_LOG_ENABLE": false,
+    "BOT_USE_TP": true,
+    "BOT_TP_RR_RATIO": 2.0,
+    "BOT_USE_SWING_TP": true,
+    "BOT_USE_RR_TP": false,
+    "STRICT_MIN_LOT": false,
+    "POST_CLOSE_COOLDOWN": 0,
+    "CLOSE_ON_REVERSE_MIN_TIME": 180,
+    "DCA_PCA_COOLDOWN_SECONDS": 300,
+    "CLOSE_ON_REVERSE_USE_PNL": true,
+    "REV_CLOSE_ON_NONE": false,
+    "REV_CONFIRM_SECONDS": 300,
+    "REV_CONFIRM_SCANS": 2,
+    "REV_CLOSE_MIN_PROFIT": 0.0,
+    "REV_CLOSE_MIN_PROFIT_UNIT": "USD",
+    "REV_CLOSE_MAX_LOSS": 0.0,
+    "REV_CLOSE_MAX_LOSS_UNIT": "USD",
+    "WATERMARK_TRIGGER": 0.0,
+    "WATERMARK_TRIGGER_UNIT": "USD",
+    "WATERMARK_DRAWDOWN": 0.0,
+    "WATERMARK_DRAWDOWN_UNIT": "USD",
+    "MIN_SL_POINTS": 0,
+    "REJECT_ON_MAX_LOT": false,
+    "MAX_BASKET_DRAWDOWN_USD": 0.0,
+    "MAX_BASKET_DRAWDOWN_UNIT": "USD",
+    "GLOBAL_COOLDOWN_HOURS": 4.0,
+    "APPLY_GLOBAL_COOLDOWN_ON_SAFEGUARD": false,
+    "GLOBAL_BRAKE_MODE": "Mode 1: Total Freeze"
+  },
+  "TSL_CONFIG": {
+    "BE_CASH_TYPE": "USD",
+    "BE_VALUE": 5.0,
+    "BE_TRIGGER": 250000.0,
+    "BE_CASH_STRAT": "TRAILING (Gap)",
+    "BE_CASH_FEE_PROTECT": true,
+    "BE_CASH_SOFT_BUFFER_TYPE": "USD",
+    "BE_CASH_SOFT_BUFFER": 3.0,
+    "BE_CASH_MIN_LOCK": 0.0,
+    "BE_MODE": "SOFT",
+    "BE_OFFSET_RR": 0.8,
+    "BE_OFFSET_POINTS": 0,
+    "BE_SL_LOSS_ENABLE": false,
+    "BE_SL_LOSS_UNIT": "R",
+    "BE_SL_LOSS_TRIGGER": 0.5,
+    "BE_SL_LOSS_STEP": 0.15,
+    "BE_SL_GUARD_BUFFER": 0.075,
+    "BE_SL_LOSS_ACTION": "RECOVERY_GUARD",
+    "BE_SL_REENTRY_LOCK_SEC": 1800,
+    "ONE_TIME_BE": false,
+    "PNL_LEVELS": [
+      [
+        0.5,
+        0.1
+      ],
+      [
+        1.0,
+        0.5
+      ],
+      [
+        2.0,
+        1.2
+      ]
+    ],
+    "STEP_R_SIZE": 1.0,
+    "STEP_R_RATIO": 0.8,
+    "SWING_GROUP": "G0",
+    "PSAR_GROUP": "G2",
+    "PSAR_STEP": 0.02,
+    "PSAR_MAX": 0.2,
+    "PSAR_PROFIT_ONLY": true,
+    "PSAR_PROFIT_BUFFER_POINTS": 0,
+    "ANTI_CASH_USD": 10.0,
+    "ANTI_CASH_HARD_STOP_UNIT": "USD",
+    "ANTI_CASH_TIME": 3600,
+    "ANTI_CASH_TIME_ENABLE": true,
+    "ANTI_CASH_MAE_ENABLE": true,
+    "ANTI_CASH_MAE_MAX_LOSS_USD": 25.0,
+    "ANTI_CASH_MAE_MAX_LOSS_UNIT": "USD",
+    "ANTI_CASH_MAE_MIN_HOLD_SEC": 300,
+    "ANTI_CASH_MAE_LOW_MFE_USD": 5.0,
+    "ANTI_CASH_MAE_LOW_MFE_UNIT": "USD",
+    "ANTI_CASH_MFE_ENABLE": true,
+    "ANTI_CASH_MFE_TRIGGER_USD": 30.0,
+    "ANTI_CASH_MFE_TRIGGER_UNIT": "USD",
+    "ANTI_CASH_MFE_GIVEBACK_USD": 20.0,
+    "ANTI_CASH_MFE_GIVEBACK_UNIT": "USD",
+    "ANTI_CASH_MFE_FLOOR_USD": 0.0,
+    "ANTI_CASH_MFE_FLOOR_UNIT": "USD",
+    "ANTI_CASH_REENTRY_LOCK_SEC": 900
+  },
+  "TSL_LOGIC_MODE": "STATIC",
+  "symbol_configs": {
+    "VN30F1M": {
+      "max_orders": 1,
+      "max_same_direction_orders": 1,
+      "max_spread": 1,
+      "max_ping": 150,
+      "fixed_lot": 0.0,
+      "max_lot_cap": 1.0,
+      "watermark_trigger": 0.0,
+      "watermark_trigger_unit": "USD",
+      "watermark_drawdown": 0.0,
+      "watermark_drawdown_unit": "USD",
+      "min_sl_points": 0,
+      "max_basket_drawdown": 0.0,
+      "max_basket_drawdown_unit": "USD",
+      "reject_on_max_lot": false
+    }
+  },
+  "AUTO_TRADE_ENABLED": false,
+  "MONEY_DISPLAY_ZERO_TRIM": "000",
+  "MONEY_DISPLAY_UNIT": "K_VND",
+  "PAPER_INITIAL_BALANCE": 100000000.0,
+  "PAPER_SPREAD_POINTS": 0.0,
+  "DNSE_BROKER_FEE_PER_CONTRACT": 0.0,
+  "DNSE_EXCHANGE_FEE_PER_CONTRACT": 2700.0,
+  "DNSE_CLEARING_FEE_PER_CONTRACT": 2550.0,
+  "CKCS_WATCHLIST": [
+    "AAA",
+    "ANV",
+    "CTD",
+    "CTP",
+    "DC4",
+    "DBC",
+    "DCM",
+    "DGC",
+    "DGW",
+    "DIG",
+    "DRC",
+    "DXS",
+    "GEG",
+    "HAG",
+    "HAP",
+    "HAR",
+    "HPG",
+    "HPX",
+    "HT1",
+    "IDC",
+    "ITC",
+    "JVC",
+    "KDH",
+    "LDG",
+    "MBS",
+    "NHA",
+    "NLG",
+    "NVL",
+    "PDR",
+    "PLX",
+    "PNJ",
+    "POW",
+    "QCG",
+    "SCR",
+    "SCS",
+    "TDM",
+    "TLG",
+    "TV2",
+    "VIX",
+    "VPG"
+  ],
+  "CKPS_SYMBOLS": [
+    "VN30F1M"
+  ],
+  "UI_ACTIVE_SYMBOL": "AAA"
+}

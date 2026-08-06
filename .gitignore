@@ -1,0 +1,63 @@
+# Virtual environments
+ckvnvenv/
+venv/
+env/
+DNSE/
+
+# Recovery/debug artifacts (one-off, do not commit)
+*_recovered.txt
+
+# Settings bundles (export/import chuyển máy — chứa watchlist/chiến thuật, không đẩy lên git)
+ratckvn_settings_*.json
+
+# Python cache/test artifacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime data: ignore everything by default
+data/*
+data/copy/
+
+# Keep strategy templates only
+!data/templates/
+!data/templates/**
+!data/*/
+data/*/*
+!data/templates/**/*
+!data/*/templates/
+!data/*/templates/**
+
+# Runtime logs
+*.log
+data/logs/
+
+# Runtime/private JSON outside whitelisted templates
+*.json
+!data/templates/**/*.json
+!data/*/templates/**/*.json
+
+# Local secrets/config
+.env
+.env.*
+!.env.example
+# config.py
+
+# IDE/system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Gói setting PUBLIC được phép commit; PRIVATE và backup luôn ở máy cục bộ.
+!data/copy/
+data/copy/*
+!data/copy/public/
+!data/copy/public/**
+data/copy/private/
+data/copy/rollback/

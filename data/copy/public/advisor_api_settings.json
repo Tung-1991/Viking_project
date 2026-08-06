@@ -1,0 +1,15 @@
+{
+  "settings_version": 2,
+  "provider": "openai",
+  "model": "gpt-5.6",
+  "reasoning_effort": "medium",
+  "web_search_enabled": true,
+  "advisor_prompt_limit": 200000,
+  "advisor_flow_limit": 200000,
+  "user_context_limit": 100000,
+  "technical_settings_limit": 1000000,
+  "previous_response_limit": 60000,
+  "workbook_limit_rows": 80,
+  "scan_summary_limit": 40000,
+  "max_output_tokens": 8000
+}

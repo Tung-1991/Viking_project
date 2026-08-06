@@ -1,0 +1,174 @@
+{
+  "VN30F1M": {
+    "sandbox": {
+      "MASTER_EVAL_MODE": "VETO",
+      "G0_TIMEFRAME": "1h",
+      "G1_TIMEFRAME": "15m",
+      "G2_TIMEFRAME": "5m",
+      "G3_TIMEFRAME": "1m",
+      "voting_rules": {
+        "G0": {
+          "max_opposite": 0,
+          "max_none": 1,
+          "master_rule": "PASS"
+        },
+        "G1": {
+          "max_opposite": 0,
+          "max_none": 2,
+          "master_rule": "FIX"
+        },
+        "G2": {
+          "max_opposite": 0,
+          "max_none": 1,
+          "master_rule": "PASS"
+        },
+        "G3": {
+          "max_opposite": 0,
+          "max_none": 1,
+          "master_rule": "IGNORE"
+        }
+      },
+      "indicators": {
+        "adx": {
+          "active": true,
+          "groups": [
+            "G0",
+            "G1"
+          ],
+          "trigger_mode": "REALTIME_TICK",
+          "params": {
+            "period": 14,
+            "strong": 20
+          }
+        },
+        "ema": {
+          "active": true,
+          "groups": [
+            "G0",
+            "G1"
+          ],
+          "is_trend": true,
+          "trigger_mode": "REALTIME_TICK",
+          "params": {
+            "period": 20
+          }
+        },
+        "supertrend": {
+          "active": true,
+          "groups": [
+            "G0",
+            "G1"
+          ],
+          "is_trend": true,
+          "trigger_mode": "REALTIME_TICK",
+          "params": {
+            "period": 10,
+            "multiplier": 2.0
+          }
+        },
+        "macd": {
+          "active": true,
+          "groups": [
+            "G1"
+          ],
+          "trigger_mode": "REALTIME_TICK",
+          "params": {
+            "fast": 12,
+            "slow": 26,
+            "signal": 9
+          }
+        },
+        "simple_breakout": {
+          "active": true,
+          "groups": [
+            "G2"
+          ],
+          "is_trend": true,
+          "trigger_mode": "REALTIME_TICK",
+          "params": {
+            "lookback": 2,
+            "atr_buffer": 0.0
+          }
+        },
+        "ema_cross": {
+          "active": false
+        },
+        "volume": {
+          "active": false
+        },
+        "rsi": {
+          "active": false
+        },
+        "swing_point": {
+          "active": false,
+          "params": {
+            "lookback": 20,
+            "strength": 2,
+            "atr_buffer": 0.5
+          },
+          "group_params": {
+            "G0": {
+              "lookback": 20
+            },
+            "G1": {
+              "lookback": 12
+            },
+            "G2": {
+              "lookback": 12
+            },
+            "G3": {
+              "lookback": 20
+            }
+          }
+        }
+      },
+      "risk_tsl": {
+        "base_risk": 1.0,
+        "base_sl": "G1",
+        "sl_atr_multiplier": 0.2,
+        "tsl_mode": "STATIC",
+        "bot_tsl": "BE+SWING",
+        "strict_risk": true
+      },
+      "entry_exit": {
+        "enabled": true,
+        "preview_only": false,
+        "active_tactics": [
+          "SWING_REJECTION"
+        ],
+        "entry_tactics": [
+          "SWING_REJECTION"
+        ],
+        "exit_tactic": "SWING_REJECTION",
+        "sl_mode": "SANDBOX",
+        "fallback_tactic": "OFF",
+        "signal_ttl_seconds": 900,
+        "missing_data_policy": "BLOCK",
+        "tp_policy": "TACTIC_FIRST",
+        "sl_source_group": "G1",
+        "default_exit": {
+          "use_rr_tp": false,
+          "tp_rr_ratio": 1.5,
+          "use_swing_tp": true
+        },
+        "sl_distance": {
+          "min_atr": 0.3,
+          "max_atr": 2.5
+        },
+        "swing_rejection": {
+          "source_group": "G1",
+          "max_atr_from_swing": 0.7,
+          "sl_atr_buffer": 0.2,
+          "require_rejection_candle": false,
+          "allow_breakout_entry": false,
+          "max_breakout_atr": 0.5
+        }
+      },
+      "bot_safeguard": {
+        "BOT_USE_SWING_TP": true,
+        "BOT_USE_RR_TP": false,
+        "BOT_TP_RR_RATIO": 1.5
+      }
+    }
+  }
+}
