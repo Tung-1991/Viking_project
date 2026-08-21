@@ -1,0 +1,274 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+import json
+import os
+from pathlib import Path
+import re
+import tempfile
+from datetime import datetime
+from typing import Any
+
+from dotenv import load_dotenv
+
+
+PACKAGE_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = PACKAGE_ROOT.parent
+ENV_PATH = PACKAGE_ROOT / ".env"
+RUNTIME_ROOT = PACKAGE_ROOT / "runtime"
+ACCOUNTS_ROOT = RUNTIME_ROOT / "accounts"
+
+load_dotenv(ENV_PATH, encoding="utf-8-sig", override=False)
+
+
+# Technical constants are deliberately not exposed in the UI.
+ORDER_TTL_SECONDS = 24 * 60 * 60
+HTTP_TIMEOUT_SECONDS = 15.0
+HTTP_RETRIES = 1
+HEARTBEAT_SECONDS = 2.0
+DAEMON_LOOP_SECONDS = 1.0
+# REST is only a fallback while the realtime WebSocket is unavailable. Keep it
+# deliberately slower so a disconnected WS cannot create an API request storm.
+REST_TICK_TTL_SECONDS = 15.0
+ACCOUNT_TTL_SECONDS = 5.0
+ORDERS_TTL_SECONDS = 5.0
+POSITIONS_TTL_SECONDS = 5.0
+WORKING_DATES_TTL_SECONDS = 24 * 60 * 60
+STOCK_ROUND_LOT = 100
+# One canonical fallback for live sizing, PAPER and backtest.  A successful
+# DNSE fee lookup is saved into AppSettings and therefore supersedes these
+# values everywhere; individual modules must not invent their own fallback.
+DEFAULT_BUY_FEE_PCT = 0.045
+DEFAULT_SELL_FEE_PCT = 0.045
+DEFAULT_SELL_TAX_PCT = 0.1
+PAPER_BUY_FEE_RATE = DEFAULT_BUY_FEE_PCT / 100.0
+PAPER_SELL_FEE_RATE = DEFAULT_SELL_FEE_PCT / 100.0
+PAPER_SELL_TAX_RATE = DEFAULT_SELL_TAX_PCT / 100.0
+API_BASE_URL = os.getenv("DNSE_BASE_URL", "https://openapi.dnse.com.vn").rstrip("/")
+API_VERSION = os.getenv("DNSE_API_VERSION", "2026-05-07")
+WS_URL = os.getenv("DNSE_WS_URL", "wss://ws-openapi.dnse.com.vn")
+
+# Official Vietnam stock-exchange closures for 2026 (VNX/HNX schedule).
+# DNSE working dates remain the primary calendar; this list is a local
+# fail-safe and custom_holidays only contains user additions.
+DEFAULT_VN_TRADING_HOLIDAYS = (
+    "2026-01-01",
+    "2026-01-02",
+    "2026-02-16",
+    "2026-02-17",
+    "2026-02-18",
+    "2026-02-19",
+    "2026-02-20",
+    "2026-04-27",
+    "2026-04-30",
+    "2026-05-01",
+    "2026-08-31",
+    "2026-09-01",
+    "2026-09-02",
+)
+
+# The stock universe carried over from the stable CKCS system.  Keeping the
+# default in code means a new account starts with the same universe even when
+# DNSE_CKCS_WATCHLIST is not present in .env.
+DEFAULT_CKCS_WATCHLIST = (
+    "AAA", "ANV", "CTD", "CTP", "DC4", "DBC", "DCM", "DGC", "DGW", "DIG",
+    "DRC", "DXS", "GEG", "HAG", "HAP", "HAR", "HPG", "HPX", "HT1", "IDC",
+    "ITC", "JVC", "KDH", "LDG", "MBS", "NHA", "NLG", "NVL", "PDR", "PLX",
+    "PNJ", "POW", "QCG", "SCR", "SCS", "TDM", "TLG", "TV2", "VIX", "VPG",
+)
+
+
+def _watchlist_from_env() -> list[str]:
+    raw = os.getenv("DNSE_CKCS_WATCHLIST", "")
+    configured = list(
+        dict.fromkeys(item.strip().upper() for item in raw.split(",") if item.strip())
+    )
+    return configured or list(DEFAULT_CKCS_WATCHLIST)
+
+
+def active_account_id() -> str:
+    for key in ("DNSE_STOCK_ACCOUNT_NO", "DNSE_ACCOUNT_NO"):
+        value = str(os.getenv(key, "") or "").strip()
+        if value and value.lower() not in {"none", "true", "false"}:
+            return value
+    return "PAPER"
+
+
+def normalize_account_id(account_id: str | None) -> str:
+    value = str(account_id or "PAPER").strip().upper() or "PAPER"
+    # Account IDs are directory names.  Never allow separators or traversal.
+    return re.sub(r"[^A-Z0-9_.-]", "_", value).strip(".") or "PAPER"
+
+
+def account_root(account_id: str | None = None) -> Path:
+    account = normalize_account_id(account_id or active_account_id())
+    return ACCOUNTS_ROOT / account
+
+
+def update_env(values: dict[str, str | None], path: str | Path = ENV_PATH) -> None:
+    """Atomically update selected private values in Viking V2's own .env."""
+    target = Path(path)
+    try:
+        current = target.read_text(encoding="utf-8-sig").splitlines()
+    except OSError:
+        current = []
+    removals = {str(key) for key, value in values.items() if value is None}
+    pending = {str(key): str(value) for key, value in values.items() if value is not None}
+    output: list[str] = []
+    for line in current:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            output.append(line)
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key in removals:
+            continue
+        output.append(f"{key}={pending.pop(key)}" if key in pending else line)
+    output.extend(f"{key}={value}" for key, value in pending.items())
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".env.", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("\n".join(output).rstrip() + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+    for key, value in values.items():
+        if value is None:
+            os.environ.pop(str(key), None)
+        else:
+            os.environ[str(key)] = str(value)
+
+
+@dataclass(slots=True)
+class AppSettings:
+    watchlist: list[str] = field(default_factory=_watchlist_from_env)
+    paper_mode: bool = True
+    paper_initial_balance: float = 100_000_000.0
+    confirm_real_orders: bool = True
+    telegram_enabled: bool = False
+    telegram_chat_id: str = ""
+    telegram_token_env: str = "TELE_BOT_KEY"
+    telegram_buy_batch_minutes: int = 30
+    # Báo cả tín hiệu bot không vào được, kèm lý do. Tắt mặc định vì nó ồn
+    # hơn hẳn: mỗi phiên có thể vài chục mã báo mua mà chỉ năm chỗ để vào.
+    telegram_signal_alerts: bool = False
+    bot_order_mode: str = "MARKET"
+    allow_ato: bool = False
+    allow_atc: bool = False
+    bot_em_modes: list[str] = field(default_factory=lambda: ["NORMAL", "HIGH", "IND_EXIT"])
+    # Real DNSE rates.  The bot needs them to leave room for the fee when
+    # sizing an order, and the paper broker charges with them.
+    buy_fee_pct: float = DEFAULT_BUY_FEE_PCT
+    sell_fee_pct: float = DEFAULT_SELL_FEE_PCT
+    sell_tax_pct: float = DEFAULT_SELL_TAX_PCT
+    sell_wait_policy: str = "RECHECK"
+    # Live/PAPER operation follows the unfinished 1D candle so EMA/RSI can
+    # react during the session. Backtest explicitly opts into CLOSED when it
+    # only has completed daily candles.
+    signal_mode: str = "REALTIME"
+    rule_parameters: dict[str, Any] = field(default_factory=dict)
+    corporate_actions: list[dict[str, Any]] = field(default_factory=list)
+    custom_holidays: list[str] = field(default_factory=list)
+
+    @property
+    def trading_holidays(self) -> list[str]:
+        """Official exchange closures plus account-specific additions."""
+        return sorted(set(DEFAULT_VN_TRADING_HOLIDAYS).union(self.custom_holidays))
+
+    def normalize(self) -> "AppSettings":
+        self.watchlist = list(
+            dict.fromkeys(str(item).strip().upper() for item in self.watchlist if str(item).strip())
+        )
+        if not self.watchlist:
+            self.watchlist = list(DEFAULT_CKCS_WATCHLIST)
+        self.paper_initial_balance = max(0.0, float(self.paper_initial_balance or 0.0))
+        self.telegram_signal_alerts = bool(self.telegram_signal_alerts)
+        self.telegram_chat_id = str(self.telegram_chat_id or "").strip()
+        self.telegram_token_env = str(self.telegram_token_env or "TELE_BOT_KEY").strip()
+        try:
+            self.telegram_buy_batch_minutes = max(
+                1, min(120, int(float(self.telegram_buy_batch_minutes or 30)))
+            )
+        except (TypeError, ValueError):
+            self.telegram_buy_batch_minutes = 30
+        self.bot_order_mode = str(self.bot_order_mode or "MARKET").strip().upper()
+        if self.bot_order_mode not in {"MARKET", "LO_LOCAL"}:
+            self.bot_order_mode = "MARKET"
+        self.allow_ato = bool(self.allow_ato)
+        self.allow_atc = bool(self.allow_atc)
+        for name in ("buy_fee_pct", "sell_fee_pct", "sell_tax_pct"):
+            setattr(self, name, min(5.0, max(0.0, float(getattr(self, name) or 0.0))))
+        allowed_em = {"TP", "NORMAL", "HIGH", "IND_EXIT"}
+        self.bot_em_modes = list(
+            dict.fromkeys(
+                str(item or "").strip().upper()
+                for item in (self.bot_em_modes or [])
+                if str(item or "").strip().upper() in allowed_em
+            )
+        )
+        self.sell_wait_policy = str(self.sell_wait_policy or "RECHECK").strip().upper()
+        if self.sell_wait_policy not in {"RECHECK", "KEEP"}:
+            self.sell_wait_policy = "RECHECK"
+        self.signal_mode = str(self.signal_mode or "REALTIME").strip().upper()
+        if self.signal_mode not in {"REALTIME", "CLOSED"}:
+            self.signal_mode = "REALTIME"
+        self.rule_parameters = dict(self.rule_parameters) if isinstance(self.rule_parameters, dict) else {}
+        self.corporate_actions = [
+            dict(item) for item in self.corporate_actions if isinstance(item, dict) and str(item.get("symbol", "")).strip()
+        ]
+        holidays: list[str] = []
+        for raw in self.custom_holidays or []:
+            text = str(raw or "").strip()[:10]
+            try:
+                datetime.strptime(text, "%Y-%m-%d")
+            except ValueError:
+                continue
+            if text not in DEFAULT_VN_TRADING_HOLIDAYS:
+                holidays.append(text)
+        self.custom_holidays = sorted(set(holidays))
+        return self
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self.normalize())
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any] | None) -> "AppSettings":
+        raw = raw if isinstance(raw, dict) else {}
+        allowed = {name for name in cls.__dataclass_fields__}
+        return cls(**{key: value for key, value in raw.items() if key in allowed}).normalize()
+
+
+def load_settings(account_id: str | None = None) -> AppSettings:
+    path = account_root(account_id) / "settings.json"
+    try:
+        with path.open("r", encoding="utf-8-sig") as handle:
+            return AppSettings.from_dict(json.load(handle))
+    except (OSError, ValueError, TypeError):
+        settings = AppSettings().normalize()
+        if not path.exists():
+            save_settings(settings, account_id)
+        return settings
+
+
+def save_settings(settings: AppSettings, account_id: str | None = None) -> Path:
+    path = account_root(account_id) / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(settings.to_dict(), handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+    return path

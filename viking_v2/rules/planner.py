@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import uuid
+from typing import Any
+
+from ..models import OrderIntent, StrategyDecision
+from ..trading.orders import OrderQueue
+from ..trading.portfolio import round_lot_down, size_buy_order
+from ..trading.state import TradeStateStore
+from .state import RuleStateStore
+
+
+@dataclass(slots=True)
+class PlanResult:
+    intent: OrderIntent | None
+    reason: str
+
+
+class StrategyOrderPlanner:
+    """Translate an approved rule decision into one persistent order intent."""
+
+    def __init__(self, queue: OrderQueue, trades: TradeStateStore, rule_state: RuleStateStore):
+        self.queue = queue
+        self.trades = trades
+        self.rule_state = rule_state
+
+    def plan(
+        self,
+        decision: StrategyDecision,
+        *,
+        execution_mode: str,
+        execution_style: str,
+        tick: dict[str, Any],
+        portfolio: dict[str, Any],
+        candle_key: str,
+        allow_ato: bool = False,
+        allow_atc: bool = False,
+        bot_em_modes: list[str] | None = None,
+        sell_wait_policy: str = "RECHECK",
+    ) -> PlanResult:
+        if decision.action == "WAIT":
+            return PlanResult(None, decision.reason)
+        symbol = decision.symbol
+        style = str(execution_style or "MARKET").upper()
+        side = "BUY" if decision.action == "BUY" else "SELL"
+        price_key = "ask" if side == "BUY" else "bid"
+        price = float(tick.get(price_key, tick.get("price", 0.0)) or 0.0)
+        if price <= 0 or bool(tick.get("stale", False)):
+            return PlanResult(None, "NO_LIVE_EXECUTION_PRICE")
+
+        if side == "BUY":
+            if self.queue.find_active(symbol, side="BUY", execution_mode=execution_mode):
+                return PlanResult(None, "BUY_ALREADY_PENDING")
+            checks = (
+                decision.details.get("entry_checks")
+                if isinstance(decision.details, dict)
+                and isinstance(decision.details.get("entry_checks"), dict)
+                else {}
+            )
+            available_cash = float(
+                portfolio.get("available_cash", checks.get("available_cash", 0.0)) or 0.0
+            )
+            nav = float(portfolio.get("nav", checks.get("nav", 0.0)) or 0.0)
+            sizing = size_buy_order(
+                budget_vnd=float(portfolio.get("order_budget", 0.0) or 0.0),
+                price_board=price,
+                available_cash=available_cash,
+                nav=nav,
+                force_min_lot_enabled=bool(checks.get("force_min_lot_enabled", False)),
+            )
+            quantity = sizing.quantity
+            if quantity <= 0:
+                return PlanResult(None, sizing.reason)
+            if not self.rule_state.claim_signal(symbol, "BUY", candle_key):
+                return PlanResult(None, "BUY_SIGNAL_ALREADY_PROCESSED")
+            alerted_id = (
+                decision.details.get("telegram_signal_id", "")
+                if isinstance(decision.details, dict)
+                else ""
+            )
+            trade_id = str(alerted_id or uuid.uuid4().hex)
+        else:
+            trade_id = str(portfolio.get("trade_id", "") or "")
+            remaining = max(0, int(portfolio.get("position_quantity", 0) or 0))
+            quantity = round_lot_down(remaining * float(decision.quantity_fraction or 1.0))
+            if quantity <= 0:
+                return PlanResult(None, "ODD_LOT_REMAINDER")
+            active_sell = [
+                item
+                for item in self.queue.find_active(symbol, side="SELL", execution_mode=execution_mode)
+                if not trade_id or item.trade_id == trade_id
+            ]
+            if active_sell:
+                return PlanResult(None, "SELL_ALREADY_PENDING")
+            if (
+                decision.event == "INDICATOR_EXIT"
+                and not self.rule_state.claim_signal(symbol, "SELL", candle_key)
+            ):
+                return PlanResult(None, "SELL_SIGNAL_ALREADY_PROCESSED")
+
+        local_limit = style == "LO_LOCAL"
+        reason = decision.event or decision.reason
+        triggered = decision.details.get("triggered_events") if isinstance(decision.details, dict) else None
+        if isinstance(triggered, list) and triggered:
+            reason = "+".join(str(value) for value in triggered)
+        intent = OrderIntent.create(
+            symbol,
+            side,
+            quantity,
+            "LO" if local_limit else "MARKET",
+            limit_price=price if local_limit else 0.0,
+            execution_mode="REAL" if str(execution_mode).upper() == "REAL" else "PAPER",
+            source="EM" if decision.scope == "POSITION_MANAGEMENT" else "BOT",
+            trade_id=trade_id,
+            action="OPEN" if side == "BUY" else "CLOSE",
+            reason=reason,
+            wait_for_trigger=local_limit,
+            allow_ato=bool(allow_ato and not local_limit),
+            allow_atc=bool(allow_atc and not local_limit),
+            em_modes=list(bot_em_modes or []) if side == "BUY" else [],
+            sell_wait_policy=sell_wait_policy if side == "SELL" else "KEEP",
+            signal=decision.signal,
+            candle_key=candle_key,
+            entry_market_state=decision.market_state if side == "BUY" else "UNKNOWN",
+            entry_exposure=(
+                float(decision.details.get("exposure", 0.0) or 0.0)
+                if side == "BUY" and isinstance(decision.details, dict) else 0.0
+            ),
+            entry_budget=(
+                float(portfolio.get("order_budget", 0.0) or 0.0)
+                if side == "BUY" else 0.0
+            ),
+        )
+        self.queue.add(intent)
+        return PlanResult(intent, "PLANNED")

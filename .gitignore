@@ -1,63 +1,32 @@
-# Virtual environments
+# Hệ thống cũ, giữ tạm cho tới khi chắc chắn không cần nữa
+OLD/
+
+# Môi trường ảo
 ckvnvenv/
 venv/
 env/
-DNSE/
 
-# Recovery/debug artifacts (one-off, do not commit)
-*_recovered.txt
-
-# Settings bundles (export/import chuyển máy — chứa watchlist/chiến thuật, không đẩy lên git)
-ratckvn_settings_*.json
-
-# Python cache/test artifacts
+# Python
 **/__pycache__/
-**/*.pyc
-**/*.pyo
-**/*.pyd
+**/*.py[cod]
 .pytest_cache/
 .coverage
 htmlcov/
 
-# Runtime data: ignore everything by default
-data/*
-data/copy/
+# Dữ liệu chạy: giá tải về, lệnh, nhật ký, file Excel xuất ra
+viking_v2/runtime/
 
-# Keep strategy templates only
-!data/templates/
-!data/templates/**
-!data/*/
-data/*/*
-!data/templates/**/*
-!data/*/templates/
-!data/*/templates/**
-
-# Runtime logs
-*.log
-data/logs/
-
-# Runtime/private JSON outside whitelisted templates
-*.json
-!data/templates/**/*.json
-!data/*/templates/**/*.json
-
-# Local secrets/config
+# Bí mật
 .env
 .env.*
 !.env.example
-# config.py
+viking_v2/.env
 
-# IDE/system files
+# IDE và hệ điều hành
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
 *.swp
-
-# Gói setting PUBLIC được phép commit; PRIVATE và backup luôn ở máy cục bộ.
-!data/copy/
-data/copy/*
-!data/copy/public/
-!data/copy/public/**
-data/copy/private/
-data/copy/rollback/
+*.log
+.artifacts/
