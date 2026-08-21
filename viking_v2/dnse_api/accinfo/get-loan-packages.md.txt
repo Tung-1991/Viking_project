@@ -1,0 +1,243 @@
+## Danh sách gói vay
+
+### Base URLs:
+- **https://openapi.dnse.com.vn**
+
+<span id="getLoanPackages"></span>
+
+### `GET /accounts/{accountNo}/loan-packages`
+
+Truy vấn danh sách gói vay để đặt lệnh theo từng mã chứng khoán.
+
+Với giao dịch cơ sở, trả về **tối đa 2 gói vay** bao gồm:
+
+- Gói tiền mặt: Tỷ lệ ký quỹ tiền mặt 100%, không sử dụng tiền vay margin (`initialRate` = 1)
+    
+- Gói vay ký quỹ (margin): Tỷ lệ ký quỹ dưới 100%, có sử dụng đòn bẩy tiền vay margin (`initialRate` ≠ 1)
+    
+
+Với giao dịch phái sinh, tài khoản thường chỉ áp dụng **một gói vay duy nhất** cho tất cả các mã, với bộ tỷ lệ ký quỹ và phí cố định.
+
+<h3 id="getloanpackages-parameters">Parameters</h3>
+
+|Name|In|Type|Required|Description|
+|---|---|---|---|---|
+|marketType|query|string|true|Loại thị trường |
+|symbol|query|string|true|Mã chứng khoán|
+|X-API-Key|header|string|true|API Key được cấp khi đăng ký dịch vụ|
+|X-Aux-Date|header|string|true|Thời gian thực hiện yêu cầu|
+|X-Signature|header|string|true|Chữ ký xác thực yêu cầu|
+|version|header|string(date)|false|Phiên bản API |
+|accountNo|path|string|true|Số tiểu khoản|
+
+#### Detailed descriptions
+
+**marketType**: Loại thị trường 
+- STOCK: Gói vay giao dịch cơ sở
+- DERIVATIVE: Gói vay giao dịch phái sinh
+
+> Code samples
+
+```shell
+# You can also use wget
+curl -X GET https://openapi.dnse.com.vn/accounts/{accountNo}/loan-packages?marketType=DERIVATIVE&symbol=41I1G4000 \
+  -H 'Accept: application/json' \
+  -H 'X-API-Key: eyJvcmciOiJkbnNlIiwiaWQiOiI5YmMzYmViN2JjY2U0MmE0Yjk1NDE0MTA2YTMzODIxNyIsImgiOiJtdXJtdXIxMjgifQ==' \
+  -H 'X-Aux-Date: Mon, 19 Jan 2026 07:45:23 +0000' \
+  -H 'X-Signature: your_signature' \
+  -H 'version: 2026-05-07'
+
+```
+
+```http
+GET https://openapi.dnse.com.vn/accounts/{accountNo}/loan-packages?marketType=DERIVATIVE&symbol=41I1G4000 HTTP/1.1
+Host: openapi.dnse.com.vn
+Accept: application/json
+X-API-Key: eyJvcmciOiJkbnNlIiwiaWQiOiI5YmMzYmViN2JjY2U0MmE0Yjk1NDE0MTA2YTMzODIxNyIsImgiOiJtdXJtdXIxMjgifQ==
+X-Aux-Date: Mon, 19 Jan 2026 07:45:23 +0000
+X-Signature: your_signature
+version: 2026-05-07
+
+```
+
+```go
+package main
+
+import (
+       "bytes"
+       "net/http"
+)
+
+func main() {
+
+    headers := map[string][]string{
+        "Accept": []string{"application/json"},
+        "X-API-Key": []string{"eyJvcmciOiJkbnNlIiwiaWQiOiI5YmMzYmViN2JjY2U0MmE0Yjk1NDE0MTA2YTMzODIxNyIsImgiOiJtdXJtdXIxMjgifQ=="},
+        "X-Aux-Date": []string{"Mon, 19 Jan 2026 07:45:23 +0000"},
+        "X-Signature": []string{"your_signature"},
+        "version": []string{"2026-05-07"},
+    }
+
+    data := bytes.NewBuffer([]byte{jsonReq})
+    req, err := http.NewRequest("GET", "https://openapi.dnse.com.vn/accounts/{accountNo}/loan-packages", data)
+    req.Header = headers
+
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    // ...
+}
+
+```
+
+```javascript
+
+const headers = {
+  'Accept':'application/json',
+  'X-API-Key':'eyJvcmciOiJkbnNlIiwiaWQiOiI5YmMzYmViN2JjY2U0MmE0Yjk1NDE0MTA2YTMzODIxNyIsImgiOiJtdXJtdXIxMjgifQ==',
+  'X-Aux-Date':'Mon, 19 Jan 2026 07:45:23 +0000',
+  'X-Signature':'your_signature',
+  'version':'2026-05-07'
+};
+
+fetch('https://openapi.dnse.com.vn/accounts/{accountNo}/loan-packages?marketType=DERIVATIVE&symbol=41I1G4000',
+{
+  method: 'GET',
+
+  headers: headers
+})
+.then(function(res) {
+    return res.json();
+}).then(function(body) {
+    console.log(body);
+});
+
+```
+
+```python
+import requests
+headers = {
+  'Accept': 'application/json',
+  'X-API-Key': 'eyJvcmciOiJkbnNlIiwiaWQiOiI5YmMzYmViN2JjY2U0MmE0Yjk1NDE0MTA2YTMzODIxNyIsImgiOiJtdXJtdXIxMjgifQ==',
+  'X-Aux-Date': 'Mon, 19 Jan 2026 07:45:23 +0000',
+  'X-Signature': 'your_signature',
+  'version': '2026-05-07'
+}
+
+r = requests.get('https://openapi.dnse.com.vn/accounts/{accountNo}/loan-packages', params={
+  'marketType': 'DERIVATIVE',  'symbol': '41I1G4000'
+}, headers = headers)
+
+print(r.json())
+
+```
+
+```java
+URL obj = new URL("https://openapi.dnse.com.vn/accounts/{accountNo}/loan-packages?marketType=DERIVATIVE&symbol=41I1G4000");
+HttpURLConnection con = (HttpURLConnection) obj.openConnection();
+con.setRequestMethod("GET");
+int responseCode = con.getResponseCode();
+BufferedReader in = new BufferedReader(
+    new InputStreamReader(con.getInputStream()));
+String inputLine;
+StringBuffer response = new StringBuffer();
+while ((inputLine = in.readLine()) != null) {
+    response.append(inputLine);
+}
+in.close();
+System.out.println(response.toString());
+
+```
+
+> Example responses
+
+> 200 Response
+
+```json
+{
+  "symbolType": "VN30F1M",
+  "marketType": "DERIVATIVE",
+  "loanPackages": [
+    {
+      "id": 2279,
+      "name": "Gói giao dịch 02",
+      "initialRate": 0.1848,
+      "maintenanceRate": 0.1735,
+      "liquidRate": 0.1731,
+      "tradingFee": {
+        "id": 2404,
+        "name": "2000/HĐ",
+        "scope": "PRODUCT",
+        "channel": "ALL",
+        "schemaType": "FIXED",
+        "createdDate": "2022-12-13T08:22:12.530837Z",
+        "modifiedDate": "2022-12-13T08:22:12.530837Z",
+        "fixedTradingFee": 2000,
+        "fixedDailyCloseTradingFee": 2000,
+        "progressTradingFee": [
+          {
+            "fromQuantity": 1,
+            "toQuantity": 2000,
+            "fee": 1500
+          }
+        ],
+        "progressDailyCloseTradingFee": [
+          {
+            "fromQuantity": 2001,
+            "toQuantity": 3000,
+            "fee": 2196
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+<h3 id="getloanpackages-responseschema">Response Schema</h3>
+
+Status Code **200**
+
+|Name|Type|Required|Restrictions|Description|
+|---|---|---|---|---|
+|» symbolType|string|false|none|Phân loại mã hợp đồng phái sinh theo thời gian đáo hạn (áp dụng cho DERIVATIVE)<br>- VN30F1M: HĐTL chỉ số VN30 1 tháng<br>- VN30F2M: HĐTL chỉ số VN30 2 tháng<br>- VN30F1Q: HĐTL chỉ số VN30 1 quý<br>- VN30F2Q: HĐTL chỉ số VN30 2 quý|
+|» marketType|string|false|none|Loại thị trường<br>- STOCK: Gói vay giao dịch cơ sở<br>- DERIVATIVE: Gói vay giao dịch phái sinh|
+|» loanPackages|[object]|false|none|Danh sách gói vay|
+|»» id|integer(int32)|false|none|Id gói vay|
+|»» name|string|false|none|Tên gói vay|
+|»» initialRate|number(double)|false|none|Tỷ lệ ban đầu|
+|»» maintenanceRate|number(double)|false|none|Tỷ lệ duy trì (call margin)|
+|»» liquidRate|number(double)|false|none|Tỷ lệ xử lý (force sell)|
+|»» tradingFee|object|false|none|Thông tin biểu phí phái sinh (áp dụng cho DERIVATIVE)|
+|»»» id|integer(int32)|false|none|Id chính sách phí phái sinh|
+|»»» name|string|false|none|Tên chính sách phí|
+|»»» scope|string|false|none|Phạm vi áp dụng|
+|»»» channel|string|false|none|Kênh áp dụng|
+|»»» schemaType|string|false|none|Loại biểu phí<br>FIXED: Phí cố định<br>PROGRESSIVE: Phí lũy tiến|
+|»»» createdDate|string(date-time)|false|none|Thời điểm áp dụng|
+|»»» modifiedDate|string(date-time)|false|none|Thời điểm cập nhật|
+|»»» fixedTradingFee|integer(int32)|false|none|Phí cố định trên 1 hợp đồng|
+|»»» fixedDailyCloseTradingFee|integer(int32)|false|none|Phí đóng vị thế trong ngày|
+|»»» progressTradingFee|[object]|false|none|Phí giao dịch lũy tiến|
+|»»»» fromQuantity|number(double)|false|none|Khối lượng bắt đầu|
+|»»»» toQuantity|number(double)|false|none|Khối lượng kết thúc|
+|»»»» fee|number(double)|false|none|Mức phí|
+|»»» progressDailyCloseTradingFee|[object]|false|none|Phí đóng vị thế trong ngày lũy tiến|
+|»»»» fromQuantity|number(double)|false|none|Khối lượng bắt đầu|
+|»»»» toQuantity|number(double)|false|none|Khối lượng kết thúc|
+|»»»» fee|number(double)|false|none|Mức phí|
+
+Status Code **400**
+
+|Name|Type|Required|Restrictions|Description|
+|---|---|---|---|---|
+|» code|string|false|none|none|
+|» message|string|false|none|none|
+|» status|integer|false|none|none|
+
+Status Code **500**
+
+|Name|Type|Required|Restrictions|Description|
+|---|---|---|---|---|
+|» code|string|false|none|none|
+|» message|string|false|none|none|
+|» status|integer|false|none|none|
