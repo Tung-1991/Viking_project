@@ -27,3 +27,6 @@ Thumbs.db
 *.swp
 *.log
 .artifacts/
+
+# Tài liệu API của DNSE, để tra cứu tại chỗ, không cần đẩy lên git
+viking_v2/dnse_api/
