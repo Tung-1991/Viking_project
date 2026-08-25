@@ -53,6 +53,20 @@ def test_order_expires_after_24_hours(tmp_path):
     assert queue.get(intent.id).status == "EXPIRED"
 
 
+def test_sell_waiting_for_t2_does_not_expire_after_24_hours(tmp_path):
+    now = [1000.0]
+    queue = OrderQueue(tmp_path / "orders-settlement.json", now=lambda: now[0])
+    intent = OrderIntent.create("FPT", "SELL", 100, "MARKET")
+    intent.created_at = now[0]
+    intent.expires_at = now[0] + 86400
+    intent.status = "WAITING_SETTLEMENT"
+    intent.settlement_waited = True
+    queue.add(intent)
+    now[0] += 4 * 86400
+    assert queue.expire() == []
+    assert queue.get(intent.id).status == "WAITING_SETTLEMENT"
+
+
 def test_outside_session_cache_survives_tet_until_first_eligible_session(tmp_path):
     now = [1000.0]
     queue = OrderQueue(tmp_path / "orders.json", now=lambda: now[0])

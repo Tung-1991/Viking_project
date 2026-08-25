@@ -15,7 +15,13 @@ class TradeStateStore:
 
     def __init__(self, path: str | Path):
         self.store = AtomicJSONStore(
-            path, default={"cycles": [], "loss_streaks": {}, "capital": {}}
+            path,
+            default={
+                "cycles": [],
+                "loss_streaks": {},
+                "loss_streak_updated_at": {},
+                "capital": {},
+            },
         )
         self._lock = threading.RLock()
 
@@ -24,8 +30,18 @@ class TradeStateStore:
         raw = raw if isinstance(raw, dict) else {}
         cycles = raw.get("cycles") if isinstance(raw.get("cycles"), list) else []
         streaks = raw.get("loss_streaks") if isinstance(raw.get("loss_streaks"), dict) else {}
+        streak_updates = (
+            raw.get("loss_streak_updated_at")
+            if isinstance(raw.get("loss_streak_updated_at"), dict)
+            else {}
+        )
         capital = raw.get("capital") if isinstance(raw.get("capital"), dict) else {}
-        return {"cycles": cycles, "loss_streaks": streaks, "capital": capital}
+        return {
+            "cycles": cycles,
+            "loss_streaks": streaks,
+            "loss_streak_updated_at": streak_updates,
+            "capital": capital,
+        }
 
     @staticmethod
     def _key(symbol: str, execution_mode: str) -> str:
@@ -101,7 +117,15 @@ class TradeStateStore:
             raw["cycles"] = rows
             if cycle.status == "CLOSED" and (not previous or previous.status != "CLOSED"):
                 key = self._key(cycle.symbol, cycle.execution_mode)
-                raw["loss_streaks"][key] = 0 if cycle.outcome == "WIN" else int(raw["loss_streaks"].get(key, 0) or 0) + 1
+                if cycle.outcome == "WIN":
+                    raw["loss_streaks"][key] = 0
+                    raw["loss_streak_updated_at"].pop(key, None)
+                else:
+                    raw["loss_streaks"][key] = int(raw["loss_streaks"].get(key, 0) or 0) + 1
+                    # Keep the close time of the latest loss. When this loss
+                    # reaches the configured threshold it is also the exact
+                    # beginning of the wall-clock cooldown.
+                    raw["loss_streak_updated_at"][key] = float(cycle.closed_at or time.time())
                 capital = raw["capital"].get(key)
                 capital = dict(capital) if isinstance(capital, dict) else {}
                 principal = max(
@@ -156,8 +180,73 @@ class TradeStateStore:
         raw = self._read()
         return max(0, int(raw["loss_streaks"].get(self._key(symbol, execution_mode), 0) or 0))
 
-    def is_loss_locked(self, symbol: str, execution_mode: str, threshold: int = 3) -> bool:
-        return self.loss_streak(symbol, execution_mode) >= max(1, int(threshold or 3))
+    def active_loss_streak(
+        self,
+        symbol: str,
+        execution_mode: str,
+        *,
+        threshold: int = 3,
+        lock_hours: float = 24.0,
+        now: float | None = None,
+    ) -> int:
+        """Return the current streak and expire a completed loss cooldown.
+
+        The duration is wall-clock time, including nights, weekends and
+        holidays. This keeps LIVE/PAPER identical to backtest's timedelta
+        based cooldown instead of turning 24 hours into trading-session hours.
+        """
+        key = self._key(symbol, execution_mode)
+        limit = max(1, int(threshold or 3))
+        duration = max(0.0, float(lock_hours or 0.0)) * 3600.0
+        current = float(time.time() if now is None else now)
+        with self._lock:
+            raw = self._read()
+            streak = max(0, int(raw["loss_streaks"].get(key, 0) or 0))
+            if streak < limit:
+                return streak
+
+            started = float(raw["loss_streak_updated_at"].get(key, 0.0) or 0.0)
+            if started <= 0:
+                # Migrate state written before cooldown timestamps existed.
+                closed_losses = [
+                    TradeCycle.from_dict(row)
+                    for row in raw["cycles"]
+                    if isinstance(row, dict)
+                    and self._key(row.get("symbol", ""), row.get("execution_mode", "")) == key
+                    and str(row.get("status", "")).upper() == "CLOSED"
+                ]
+                latest = max(
+                    (cycle.closed_at for cycle in closed_losses if cycle.outcome == "LOSS"),
+                    default=0.0,
+                )
+                started = float(latest or current)
+                raw["loss_streak_updated_at"][key] = started
+                self.store.write(raw)
+
+            if duration > 0 and current < started + duration:
+                return streak
+
+            raw["loss_streaks"][key] = 0
+            raw["loss_streak_updated_at"].pop(key, None)
+            self.store.write(raw)
+            return 0
+
+    def is_loss_locked(
+        self,
+        symbol: str,
+        execution_mode: str,
+        threshold: int = 3,
+        *,
+        lock_hours: float = 24.0,
+        now: float | None = None,
+    ) -> bool:
+        return self.active_loss_streak(
+            symbol,
+            execution_mode,
+            threshold=threshold,
+            lock_hours=lock_hours,
+            now=now,
+        ) >= max(1, int(threshold or 3))
 
     def capital_available(self, symbol: str, execution_mode: str, proposed: float) -> float:
         """Cap a new order by the symbol's non-compounding capital ledger."""

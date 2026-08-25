@@ -72,7 +72,9 @@ class StrategyOrderPlanner:
             quantity = sizing.quantity
             if quantity <= 0:
                 return PlanResult(None, sizing.reason)
-            if not self.rule_state.claim_signal(symbol, "BUY", candle_key):
+            if not self.rule_state.claim_signal(
+                symbol, "BUY", candle_key, stream=execution_mode,
+            ):
                 return PlanResult(None, "BUY_SIGNAL_ALREADY_PROCESSED")
             alerted_id = (
                 decision.details.get("telegram_signal_id", "")
@@ -95,7 +97,9 @@ class StrategyOrderPlanner:
                 return PlanResult(None, "SELL_ALREADY_PENDING")
             if (
                 decision.event == "INDICATOR_EXIT"
-                and not self.rule_state.claim_signal(symbol, "SELL", candle_key)
+                and not self.rule_state.claim_signal(
+                    symbol, "SELL", candle_key, stream=execution_mode,
+                )
             ):
                 return PlanResult(None, "SELL_SIGNAL_ALREADY_PROCESSED")
 

@@ -115,7 +115,15 @@ class OrderQueue:
             changed = len(trimmed) != len(rows)
             rows = trimmed
             for row in rows:
-                if str(row.get("status", "")).upper() in FINAL_STATUSES | {"UNKNOWN"}:
+                status = str(row.get("status", "")).upper()
+                if status in FINAL_STATUSES | {"UNKNOWN"}:
+                    continue
+                # A sell waiting for T+2 is not a stale trading instruction.
+                # It cannot legally be sent yet, and weekends/holidays routinely
+                # make that wait longer than the generic 24-hour queue TTL.
+                if status == "WAITING_SETTLEMENT" or (
+                    status == "WAITING_TOKEN" and bool(row.get("settlement_waited", False))
+                ):
                     continue
                 if bool(row.get("defer_expiry_until_eligible", False)) and not bool(row.get("eligible_session_seen", False)):
                     continue

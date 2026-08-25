@@ -12,6 +12,25 @@ if TYPE_CHECKING:
 
 
 VN_TZ = timezone(timedelta(hours=7))
+STOCK_SETTLEMENT_RELEASE = datetime.min.time().replace(hour=13)
+
+
+def stock_is_sellable_after_settlement(
+    settle_date: str | date | datetime,
+    at: datetime,
+) -> bool:
+    """Whether a cash-equity position may be sold under the T+2 timetable.
+
+    VSDC members finish allocating settled stock before the afternoon session.
+    Live trading still trusts the broker's ``tradeQuantity`` because it knows
+    the actual allocation time.  PAPER and backtest have no broker allocation
+    event, so 13:00 Vietnam time is their deterministic, fail-safe boundary.
+    """
+    settled = _as_date(settle_date)
+    local = at.astimezone(VN_TZ) if at.tzinfo else at.replace(tzinfo=VN_TZ)
+    if local.date() != settled:
+        return local.date() > settled
+    return local.time().replace(tzinfo=None) >= STOCK_SETTLEMENT_RELEASE
 
 def market_now() -> datetime:
     return datetime.now(VN_TZ)
@@ -368,8 +387,10 @@ class MarketDataService:
         length = len(data["t"])
         if length == 0 or any(len(data[key]) != length for key in keys):
             return []
-        phase = market_phase()[0]
-        today = datetime.now(VN_TZ).date()
+        now = market_now()
+        phase = market_phase(now)[0]
+        today = now.date()
+        today_is_closed = phase == "CLOSED" and now.time().replace(tzinfo=None) >= datetime.min.time().replace(hour=14, minute=45)
         rows: list[dict[str, Any]] = []
         for index in range(length):
             try:
@@ -383,7 +404,9 @@ class MarketDataService:
                         "low": float(data["l"][index]),
                         "close": float(data["c"][index]),
                         "volume": float(data["v"][index]),
-                        "closed": bar_date < today or phase not in {"ATO", "OPEN", "ATC"},
+                        # LUNCH and pre-open are not a completed daily candle.
+                        # CLOSED mode must never consume a morning-only bar.
+                        "closed": bar_date < today or (bar_date == today and today_is_closed),
                     }
                 )
             except (TypeError, ValueError, OverflowError):

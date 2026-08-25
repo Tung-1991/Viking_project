@@ -13,6 +13,7 @@ VALID_PHASES = {"UPTREND", "DOWNTREND", "ACCUMULATION", "DISTRIBUTION"}
 # A scenario may also opt out of Phase 1 entirely and pin one exposure itself.
 NO_PHASE = "NONE"
 SCENARIO_PHASES = VALID_PHASES | {NO_PHASE}
+SIMULATION_MODES = {"DAILY", "REPLAY", "AUTO_HYBRID"}
 
 
 def _iso_date(value: str | date | datetime) -> str:
@@ -36,7 +37,7 @@ class BacktestConfig:
     # exposure and the state label above is only a placeholder the rule accepts.
     use_market_phase: bool = True
     loss_lock_enabled: bool = False
-    loss_lock_hours: int = 48
+    loss_lock_hours: int = 24
     whipsaw_enabled: bool = False
     em_modes: list[str] = field(default_factory=lambda: ["NORMAL", "HIGH", "IND_EXIT"])
     sell_wait_policy: str = "RECHECK"
@@ -50,6 +51,9 @@ class BacktestConfig:
     rule_parameters: dict[str, Any] = field(default_factory=dict)
     warmup_sessions: int = 250
     execution_resolution: str = "AUTO"
+    # DAILY preserves historical behaviour. REPLAY is strict; AUTO_HYBRID
+    # falls back to the daily engine for symbol-days without complete imports.
+    simulation_mode: str = "DAILY"
     export_signals: bool = False
     run_name: str = ""
 
@@ -83,6 +87,9 @@ class BacktestConfig:
         self.execution_resolution = str(self.execution_resolution or "AUTO").upper()
         if self.execution_resolution not in {"AUTO", "1", "3", "5", "15", "30", "1H", "1D"}:
             self.execution_resolution = "AUTO"
+        self.simulation_mode = str(self.simulation_mode or "DAILY").strip().upper().replace(" ", "_")
+        if self.simulation_mode not in SIMULATION_MODES:
+            self.simulation_mode = "DAILY"
         self.export_signals = bool(self.export_signals)
 
     def to_dict(self) -> dict[str, Any]:
@@ -114,7 +121,7 @@ class BacktestSettings:
     fixed_exposure_pct: float = 60.0
     # Mirrors the live bot, which ships with both guards on.
     loss_lock_enabled: bool = True
-    loss_lock_hours: int = 48
+    loss_lock_hours: int = 24
     whipsaw_enabled: bool = True
     em_modes: list[str] = field(default_factory=lambda: ["NORMAL", "HIGH", "IND_EXIT"])
     sell_wait_policy: str = "RECHECK"
@@ -123,6 +130,9 @@ class BacktestSettings:
     sell_fee_pct: float = config.DEFAULT_SELL_FEE_PCT
     sell_tax_pct: float = config.DEFAULT_SELL_TAX_PCT
     rule_parameters: dict[str, Any] = field(default_factory=dict)
+    # New Mode 2 windows prefer imported intraday data. BacktestConfig itself
+    # still defaults to DAILY so old serialized runs remain reproducible.
+    simulation_mode: str = "AUTO_HYBRID"
 
     def __post_init__(self) -> None:
         self.symbols = list(dict.fromkeys(str(x).strip().upper() for x in self.symbols if str(x).strip()))
@@ -136,6 +146,9 @@ class BacktestSettings:
         self.em_modes = list(dict.fromkeys(str(x).upper() for x in self.em_modes if str(x).upper() in allowed))
         self.sell_wait_policy = "KEEP" if str(self.sell_wait_policy).upper() == "KEEP" else "RECHECK"
         self.fill_session = "CONTINUOUS" if str(self.fill_session).upper() == "CONTINUOUS" else "ATO"
+        self.simulation_mode = str(self.simulation_mode or "AUTO_HYBRID").strip().upper().replace(" ", "_")
+        if self.simulation_mode not in SIMULATION_MODES:
+            self.simulation_mode = "AUTO_HYBRID"
         for name in ("buy_fee_pct", "sell_fee_pct", "sell_tax_pct"):
             setattr(self, name, min(5.0, max(0.0, float(getattr(self, name) or 0.0))))
         # A settings file written before a parameter existed must still hand back
@@ -236,6 +249,12 @@ class BacktestEvent:
     profit_pct: float = 0.0
     peak_profit_pct: float = 0.0
     equity_after: float = 0.0
+    signal_time: str = ""
+    decision_time: str = ""
+    fill_time: str = ""
+    simulation_mode: str = "DAILY"
+    source_resolution: str = "1D"
+    data_quality: str = "FULL"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

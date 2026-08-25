@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import math
 
-from viking_v2.rules.business import crossover_signal, indicator_snapshot
+from viking_v2.rules.business import (
+    crossover_signal,
+    crossover_signal_from_snapshots,
+    indicator_snapshot,
+)
 from viking_v2.rules.business import StaticRule, StaticRuleParameters, classify_market_state
 
 
@@ -35,6 +39,30 @@ def test_phase2_can_use_independent_buy_and_sell_ema_pairs():
     assert crossover_signal(
         _bars(B_VALUES), 5, 10, 14, sell_fast=3, sell_slow=6
     ) == "SELL"
+
+
+def test_realtime_crossover_compares_two_consecutive_observations():
+    previous = {
+        "buy_ema_fast": 9.9, "buy_ema_slow": 10.0,
+        "sell_ema_fast": 9.9, "sell_ema_slow": 10.0,
+    }
+    current = {
+        "buy_ema_fast": 10.1, "buy_ema_slow": 10.0,
+        "sell_ema_fast": 10.1, "sell_ema_slow": 10.0,
+        "rsi": 55.0, "rsi_previous": 50.0,
+    }
+    assert crossover_signal_from_snapshots(current, previous) == "BUY"
+
+    previous = {
+        "buy_ema_fast": 10.1, "buy_ema_slow": 10.0,
+        "sell_ema_fast": 10.1, "sell_ema_slow": 10.0,
+    }
+    current = {
+        "buy_ema_fast": 9.9, "buy_ema_slow": 10.0,
+        "sell_ema_fast": 9.9, "sell_ema_slow": 10.0,
+        "rsi": 45.0, "rsi_previous": 50.0,
+    }
+    assert crossover_signal_from_snapshots(current, previous, prefer="SELL") == "SELL"
 
 
 def test_indicator_snapshot_exposes_the_exact_preview_values():
@@ -111,6 +139,24 @@ def test_realtime_mode_can_use_live_daily_bar_but_closed_mode_cannot():
     assert closed.action == "WAIT"
     # An omitted mode must behave like CLOSED, never like REALTIME.
     assert default.action == "WAIT"
+
+
+def test_closed_and_realtime_use_independent_comparison_points():
+    bars = _bars(M_VALUES)
+    current = indicator_snapshot(bars)
+    context = {
+        "symbol": "FPT",
+        "bars": bars,
+        "previous_market_state": "UPTREND",
+        # The live stream was already above on its preceding observation, so
+        # there is no new intraday transition now.
+        "previous_indicators": current,
+    }
+    portfolio = {"available_capital": 100_000_000, "open_positions": 0}
+    realtime = StaticRule().evaluate({**context, "signal_mode": "REALTIME"}, portfolio)
+    closed = StaticRule().evaluate({**context, "signal_mode": "CLOSED"}, portfolio)
+    assert realtime.signal == "" and realtime.action == "WAIT"
+    assert closed.signal == "BUY" and closed.action == "BUY"
 
 
 def test_entry_respects_pending_loss_lock_capacity_and_capital():

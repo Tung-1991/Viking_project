@@ -111,7 +111,7 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         self._build_window()
         self._build_layout()
         install_fast_scroll(self)
-        self.bind("<Button-1>", self._hide_popups_from_main_click, add="+")
+        self.bind("<Button-1>", self._minimize_popups_from_main_click, add="+")
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.after(150, self._start_services)
         self.after(50, self._drain_ui_callbacks)
@@ -150,7 +150,7 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         # weight used to stretch it on tall screens, leaving a large empty
         # strip below PREVIEW while taking space away from the orders table.
         self.right.grid_rowconfigure(1, weight=1)
-        self.right.grid_rowconfigure(2, weight=0, minsize=300)
+        self.right.grid_rowconfigure(2, weight=0, minsize=320)
         self._left_panel()
         self._right_panel()
         self.after_idle(self._sync_left_scrollbar)

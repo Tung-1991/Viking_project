@@ -12,7 +12,7 @@ import requests
 
 from ... import config
 from ...models import BrokerOrderResult, OrderIntent
-from ...trading.portfolio import available_to_sell, price_in_band, validate_quantity
+from ...trading.portfolio import available_to_sell, dnse_price, price_in_band, validate_quantity
 from .signing import generate_signature_header
 
 
@@ -435,6 +435,13 @@ class DNSEClient:
         valid, reason, quantity = validate_quantity(intent.quantity)
         if not valid:
             return BrokerOrderResult(False, "REJECTED", message=reason, error="INVALID_QUANTITY")
+        if not self.has_trading_token():
+            return BrokerOrderResult(
+                False,
+                "WAITING_TOKEN",
+                message="Trading token required",
+                error="TRADING_TOKEN_REQUIRED",
+            )
         if intent.side == "SELL":
             available = available_to_sell(self.get_positions(force=True), intent.symbol)
             if available < quantity:
@@ -444,18 +451,43 @@ class DNSEClient:
                     message=f"Chỉ có {available} CP {intent.symbol} bán được; yêu cầu {quantity}.",
                     error="INSUFFICIENT_SELLABLE",
                 )
-        if intent.order_type == "LO":
+        secdef: dict[str, Any] = {}
+        if intent.order_type in {"LO", "MARKET"}:
             secdef = self.get_secdef(intent.symbol) or {}
-            floor_price = float(secdef.get("floorPrice", 0.0) or 0.0)
-            ceiling_price = float(secdef.get("ceilingPrice", 0.0) or 0.0)
-            if not price_in_band(intent.limit_price, floor_price, ceiling_price):
+        api_limit_price = dnse_price(intent.limit_price) if intent.order_type == "LO" else 0.0
+        if intent.order_type == "LO":
+            floor_price = dnse_price(secdef.get("floorPrice", 0.0))
+            ceiling_price = dnse_price(secdef.get("ceilingPrice", 0.0))
+            if not price_in_band(api_limit_price, floor_price, ceiling_price):
                 return BrokerOrderResult(
                     False,
                     "REJECTED",
                     message=f"Giá LO ngoài biên [{floor_price:g} .. {ceiling_price:g}].",
                     error="PRICE_OUT_OF_BAND",
                 )
-        order_type = "MOK" if intent.order_type == "MARKET" else intent.order_type
+        order_type = intent.order_type
+        if intent.order_type == "MARKET":
+            market_id = str(
+                secdef.get("marketId", secdef.get("market", secdef.get("exchange", ""))) or ""
+            ).upper()
+            if market_id in {"STO", "HOSE", "HSX"}:
+                order_type = "MTL"
+            elif market_id in {"STX", "HNX"}:
+                order_type = "MTL"
+            elif market_id in {"UPX", "UPCOM"}:
+                return BrokerOrderResult(
+                    False,
+                    "REJECTED",
+                    message="UPCOM không hỗ trợ lệnh thị trường; hãy dùng LO.",
+                    error="UNSUPPORTED_MARKET_ORDER",
+                )
+            else:
+                return BrokerOrderResult(
+                    False,
+                    "REJECTED",
+                    message="Không xác định được sàn để chọn loại lệnh thị trường.",
+                    error="UNKNOWN_EXCHANGE",
+                )
         request_tag = intent.request_tag or f"V2:{intent.id[:8].upper()}:{intent.attempt}"
         intent.request_tag = request_tag
         payload = {
@@ -464,7 +496,7 @@ class DNSEClient:
             "side": "NB" if intent.side == "BUY" else "NS",
             "quantity": quantity,
             "orderType": order_type,
-            "price": float(intent.limit_price if intent.order_type == "LO" else 0.0),
+            "price": float(api_limit_price),
             "remark": request_tag,
         }
         ok, data, status, message = self._request(
@@ -492,13 +524,14 @@ class DNSEClient:
         valid, reason, normalized = validate_quantity(quantity)
         if not valid:
             return BrokerOrderResult(False, "REJECTED", message=reason, error="INVALID_QUANTITY")
+        api_price = dnse_price(price)
         detail = self.get_order_detail(order_id) or {}
         symbol = str(detail.get("symbol", "") or "").upper()
         if symbol:
             secdef = self.get_secdef(symbol) or {}
-            floor_price = float(secdef.get("floorPrice", 0.0) or 0.0)
-            ceiling_price = float(secdef.get("ceilingPrice", 0.0) or 0.0)
-            if not price_in_band(float(price), floor_price, ceiling_price):
+            floor_price = dnse_price(secdef.get("floorPrice", 0.0) or 0.0)
+            ceiling_price = dnse_price(secdef.get("ceilingPrice", 0.0) or 0.0)
+            if not price_in_band(api_price, floor_price, ceiling_price):
                 return BrokerOrderResult(
                     False,
                     "REJECTED",
@@ -509,7 +542,7 @@ class DNSEClient:
             "PUT",
             f"/accounts/{self.account_no}/orders/{order_id}",
             params={"marketType": "STOCK", "orderCategory": "NORMAL"},
-            payload={"price": float(price), "quantity": normalized},
+            payload={"price": api_price, "quantity": normalized},
             require_token=True,
         )
         self._cache.pop("orders", None)

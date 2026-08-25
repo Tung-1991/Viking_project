@@ -37,6 +37,7 @@ class RuleStateStore:
                 "processed_signals": {},
                 "processed_alerts": {},
                 "telegram_signals": {},
+                "indicator_streams": {},
             },
         )
         self._lock = threading.RLock()
@@ -53,7 +54,49 @@ class RuleStateStore:
         raw["processed_signals"] = _renamed_signal_keys(raw.get("processed_signals"))
         raw["processed_alerts"] = raw.get("processed_alerts") if isinstance(raw.get("processed_alerts"), dict) else {}
         raw["telegram_signals"] = raw.get("telegram_signals") if isinstance(raw.get("telegram_signals"), dict) else {}
+        raw["indicator_streams"] = raw.get("indicator_streams") if isinstance(raw.get("indicator_streams"), dict) else {}
         return raw
+
+    def observe_indicators(
+        self,
+        symbol: str,
+        stream: str,
+        session_key: str,
+        snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persist consecutive live EMA observations and return the prior one.
+
+        REAL and PAPER are separate streams.  Persisting this small snapshot
+        also prevents a daemon restart during the session from silently falling
+        back to comparing the live candle with yesterday again.
+        """
+        symbol = str(symbol or "").strip().upper()
+        stream = str(stream or "").strip().upper()
+        session_key = str(session_key or "").strip()
+        snapshot = dict(snapshot or {})
+        if not symbol or not stream or not snapshot:
+            return {}
+        key = f"{stream}|{symbol}"
+        with self._lock:
+            raw = self._read()
+            existing = raw["indicator_streams"].get(key)
+            previous = (
+                dict(existing.get("snapshot") or {})
+                if isinstance(existing, dict) else {}
+            )
+            periods = (
+                "buy_ema_fast_period", "buy_ema_slow_period",
+                "sell_ema_fast_period", "sell_ema_slow_period", "rsi_period",
+            )
+            if previous and any(previous.get(name) != snapshot.get(name) for name in periods):
+                previous = {}
+            raw["indicator_streams"][key] = {
+                "session": session_key,
+                "snapshot": snapshot,
+                "updated_at": time.time(),
+            }
+            self.store.write(raw)
+            return previous
 
     def confirmed_market_state(self) -> str:
         return str(self._read()["market"].get("confirmed", "UNKNOWN") or "UNKNOWN").upper()
@@ -224,13 +267,20 @@ class RuleStateStore:
             return {}
         return dict(current)
 
-    def claim_signal(self, symbol: str, signal: str, candle_key: str) -> bool:
+    def claim_signal(
+        self,
+        symbol: str,
+        signal: str,
+        candle_key: str,
+        stream: str = "",
+    ) -> bool:
         symbol = str(symbol or "").upper()
         signal = str(signal or "").upper()
         candle_key = str(candle_key or "")
+        stream = str(stream or "").strip().upper()
         if not symbol or signal not in {"BUY", "SELL"} or not candle_key:
             return False
-        key = f"{symbol}|{signal}"
+        key = f"{stream}|{symbol}|{signal}" if stream else f"{symbol}|{signal}"
         with self._lock:
             raw = self._read()
             if str(raw["processed_signals"].get(key, "")) == candle_key:
@@ -239,8 +289,16 @@ class RuleStateStore:
             self.store.write(raw)
             return True
 
-    def release_signal(self, symbol: str, signal: str, candle_key: str) -> bool:
-        key = f"{str(symbol or '').upper()}|{str(signal or '').upper()}"
+    def release_signal(
+        self,
+        symbol: str,
+        signal: str,
+        candle_key: str,
+        stream: str = "",
+    ) -> bool:
+        stream = str(stream or "").strip().upper()
+        base = f"{str(symbol or '').upper()}|{str(signal or '').upper()}"
+        key = f"{stream}|{base}" if stream else base
         with self._lock:
             raw = self._read()
             if str(raw["processed_signals"].get(key, "")) != str(candle_key or ""):

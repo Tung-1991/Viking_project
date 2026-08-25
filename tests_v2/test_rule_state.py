@@ -109,6 +109,44 @@ def test_signal_is_claimed_once_per_symbol_direction_and_candle(tmp_path):
     assert store.claim_signal("FPT", "SELL", "2026-08-12")
 
 
+def test_real_and_paper_do_not_consume_each_others_signal(tmp_path):
+    store = RuleStateStore(tmp_path / "rule-streams.json")
+    assert store.claim_signal("FPT", "BUY", "D1", stream="PAPER")
+    assert store.claim_signal("FPT", "BUY", "D1", stream="REAL")
+    assert not store.claim_signal("FPT", "BUY", "D1", stream="PAPER")
+    assert store.release_signal("FPT", "BUY", "D1", stream="PAPER")
+    assert store.claim_signal("FPT", "BUY", "D1", stream="PAPER")
+    assert not store.claim_signal("FPT", "BUY", "D1", stream="REAL")
+
+
+def test_live_indicator_observations_survive_restart_and_keep_modes_separate(tmp_path):
+    path = tmp_path / "rule-indicators.json"
+    first = RuleStateStore(path)
+    one = {
+        "buy_ema_fast_period": 3, "buy_ema_slow_period": 6,
+        "sell_ema_fast_period": 3, "sell_ema_slow_period": 6,
+        "rsi_period": 14, "buy_ema_fast": 10.0, "buy_ema_slow": 10.1,
+    }
+    two = {**one, "buy_ema_fast": 10.2}
+    assert first.observe_indicators("FPT", "REAL", "D1", one) == {}
+
+    restarted = RuleStateStore(path)
+    assert restarted.observe_indicators("FPT", "REAL", "D1", two) == one
+    assert restarted.observe_indicators("FPT", "PAPER", "D1", two) == {}
+
+
+def test_indicator_observation_resets_when_periods_change(tmp_path):
+    store = RuleStateStore(tmp_path / "rule-periods.json")
+    old = {
+        "buy_ema_fast_period": 3, "buy_ema_slow_period": 6,
+        "sell_ema_fast_period": 3, "sell_ema_slow_period": 6,
+        "rsi_period": 14,
+    }
+    changed = {**old, "buy_ema_fast_period": 5}
+    store.observe_indicators("FPT", "REAL", "D1", old)
+    assert store.observe_indicators("FPT", "REAL", "D1", changed) == {}
+
+
 def test_signals_claimed_before_the_buy_sell_rename_stay_claimed(tmp_path):
     path = tmp_path / "rule.json"
     path.write_text(

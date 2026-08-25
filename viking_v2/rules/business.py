@@ -75,6 +75,7 @@ def crossover_signal(
     sell_slow: int | None = None,
     prefer: str = "BUY",
 ) -> str:
+    rows = list(rows or [])
     values = closes(rows)
     buy_fast = max(1, int(fast or 3))
     buy_slow = max(1, int(slow or 6))
@@ -82,24 +83,62 @@ def crossover_signal(
     exit_slow = max(1, int(sell_slow if sell_slow is not None else buy_slow))
     if len(values) < max(buy_slow + 1, exit_slow + 1, rsi_period + 2):
         return ""
-    buy_fast_values = ema(values, buy_fast)
-    buy_slow_values = ema(values, buy_slow)
-    sell_fast_values = ema(values, exit_fast)
-    sell_slow_values = ema(values, exit_slow)
-    rsi_values = rsi(values, rsi_period)
-    current_rsi, previous_rsi = rsi_values[-1], rsi_values[-2]
-    if current_rsi is None or previous_rsi is None:
+    current = indicator_snapshot(
+        rows, buy_fast, buy_slow, rsi_period,
+        sell_fast=exit_fast, sell_slow=exit_slow,
+    )
+    previous = indicator_snapshot(
+        rows[:-1], buy_fast, buy_slow, rsi_period,
+        sell_fast=exit_fast, sell_slow=exit_slow,
+    )
+    return crossover_signal_from_snapshots(current, previous, prefer=prefer)
+
+
+def crossover_signal_from_snapshots(
+    current: dict[str, Any] | None,
+    previous: dict[str, Any] | None,
+    *,
+    prefer: str = "BUY",
+) -> str:
+    """Evaluate one EMA transition between two consecutive observations.
+
+    ``current`` may be an unfinished daily candle rebuilt from a live tick or
+    an intraday source bar.  Its EMA values must be compared with the preceding
+    observation of that same candle, not repeatedly with yesterday's close.
+    RSI keeps the documented daily comparison through ``rsi_previous``.
+    """
+    current = current if isinstance(current, dict) else {}
+    previous = previous if isinstance(previous, dict) else {}
+
+    def number(source: dict[str, Any], key: str) -> float | None:
+        try:
+            value = source.get(key)
+            return None if value is None else float(value)
+        except (TypeError, ValueError):
+            return None
+
+    current_rsi = number(current, "rsi")
+    previous_daily_rsi = number(current, "rsi_previous")
+    current_buy_fast = number(current, "buy_ema_fast")
+    current_buy_slow = number(current, "buy_ema_slow")
+    previous_buy_fast = number(previous, "buy_ema_fast")
+    previous_buy_slow = number(previous, "buy_ema_slow")
+    current_sell_fast = number(current, "sell_ema_fast")
+    current_sell_slow = number(current, "sell_ema_slow")
+    previous_sell_fast = number(previous, "sell_ema_fast")
+    previous_sell_slow = number(previous, "sell_ema_slow")
+    required = (
+        current_rsi, previous_daily_rsi,
+        current_buy_fast, current_buy_slow, previous_buy_fast, previous_buy_slow,
+        current_sell_fast, current_sell_slow, previous_sell_fast, previous_sell_slow,
+    )
+    if any(value is None for value in required):
         return ""
-    crossed_up = (
-        buy_fast_values[-2] <= buy_slow_values[-2]
-        and buy_fast_values[-1] > buy_slow_values[-1]
-    )
-    crossed_down = (
-        sell_fast_values[-2] >= sell_slow_values[-2]
-        and sell_fast_values[-1] < sell_slow_values[-1]
-    )
-    buy_signal = crossed_up and current_rsi > previous_rsi
-    sell_signal = crossed_down and current_rsi < previous_rsi
+
+    crossed_up = previous_buy_fast <= previous_buy_slow and current_buy_fast > current_buy_slow
+    crossed_down = previous_sell_fast >= previous_sell_slow and current_sell_fast < current_sell_slow
+    buy_signal = crossed_up and current_rsi > previous_daily_rsi
+    sell_signal = crossed_down and current_rsi < previous_daily_rsi
     if str(prefer or "BUY").upper() == "SELL":
         if sell_signal:
             return "SELL"
@@ -216,6 +255,7 @@ class StaticRuleParameters:
     initial_sl_pct: float = -3.0
     reentry_sl_pct: float = -2.1
     loss_lock_count: int = 3
+    loss_lock_hours: int = 24
     no_compound_enabled: bool = True
     force_min_lot_enabled: bool = True
     take_profit_pct: float = 7.0
@@ -374,15 +414,31 @@ class StaticRule:
             market_details["confirmation_pending"] = bool(confirmation.get("pending", False))
         position = portfolio.get("position") if isinstance(portfolio.get("position"), dict) else {}
         quantity = max(0, int(position.get("quantity", portfolio.get("position_quantity", 0)) or 0))
-        signal = crossover_signal(
+        indicators = indicator_snapshot(
             bars,
             self.params.buy_ema_fast,
             self.params.buy_ema_slow,
             self.params.rsi_period,
             sell_fast=self.params.sell_ema_fast,
             sell_slow=self.params.sell_ema_slow,
-            prefer="SELL" if quantity > 0 else "BUY",
         )
+        previous_indicators = context.get("previous_indicators")
+        if signal_mode.upper() == "REALTIME" and isinstance(previous_indicators, dict):
+            signal = crossover_signal_from_snapshots(
+                indicators,
+                previous_indicators,
+                prefer="SELL" if quantity > 0 else "BUY",
+            )
+        else:
+            signal = crossover_signal(
+                bars,
+                self.params.buy_ema_fast,
+                self.params.buy_ema_slow,
+                self.params.rsi_period,
+                sell_fast=self.params.sell_ema_fast,
+                sell_slow=self.params.sell_ema_slow,
+                prefer="SELL" if quantity > 0 else "BUY",
+            )
         # Whipsaw is an entry guard, so it follows the BUY EMA pair only.
         crosses = crossover_count(
             bars,
@@ -393,14 +449,7 @@ class StaticRule:
         details = {
             "market": market_details,
             "exposure": self.params.exposure.get(market_state, 0.0),
-            "indicators": indicator_snapshot(
-                bars,
-                self.params.buy_ema_fast,
-                self.params.buy_ema_slow,
-                self.params.rsi_period,
-                sell_fast=self.params.sell_ema_fast,
-                sell_slow=self.params.sell_ema_slow,
-            ),
+            "indicators": indicators,
             "entry_checks": {
                 "nav": float(portfolio.get("nav", 0.0) or 0.0),
                 "available_cash": float(portfolio.get("available_cash", 0.0) or 0.0),
@@ -411,6 +460,7 @@ class StaticRule:
                 "force_min_lot_enabled": self.params.force_min_lot_enabled,
                 "loss_streak": int(portfolio.get("loss_streak", 0) or 0),
                 "loss_lock_count": self.params.loss_lock_count,
+                "loss_lock_hours": self.params.loss_lock_hours,
                 "whipsaw_enabled": self.params.whipsaw_enabled,
                 "whipsaw_crossovers": crosses,
                 "whipsaw_limit": self.params.whipsaw_n,

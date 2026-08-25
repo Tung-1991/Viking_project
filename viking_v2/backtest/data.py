@@ -11,6 +11,7 @@ from ..storage import AtomicJSONStore
 
 
 VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+EMPTY_RANGE_RETRY_SECONDS = 5 * 60
 
 
 def bar_date(row: dict[str, Any]) -> date:
@@ -124,6 +125,18 @@ class HistoricalDataStore:
             and coverage_start <= requested_start
             and coverage_end >= end_date
         )
+        if not covered and isinstance(raw, dict):
+            try:
+                checked_start = datetime.strptime(str(raw.get("checked_start", ""))[:10], "%Y-%m-%d").date()
+                checked_end = datetime.strptime(str(raw.get("checked_end", ""))[:10], "%Y-%m-%d").date()
+                checked_at = float(raw.get("checked_at", 0.0) or 0.0)
+                covered = bool(
+                    checked_start <= requested_start
+                    and checked_end >= end_date
+                    and time.time() - checked_at < EMPTY_RANGE_RETRY_SECONDS
+                )
+            except (TypeError, ValueError):
+                pass
         # Compatibility for caches created before explicit coverage metadata.
         if not covered and cached:
             covered = (
@@ -149,14 +162,24 @@ class HistoricalDataStore:
                         {int(row["time"]): row for row in [*cached, *fetched]}.values(),
                         key=lambda row: int(row["time"]),
                     )
-                new_start = min(requested_start, coverage_start) if coverage_start else requested_start
-                new_end = max(end_date, coverage_end) if coverage_end else end_date
+                # Coverage describes bars that really exist, not ranges for
+                # which an API request happened to be attempted.  Writing the
+                # requested dates here made an empty historical response look
+                # complete and permanently suppressed retries for the gap.
+                actual_start = bar_date(cached[0]) if cached else None
+                actual_end = bar_date(cached[-1]) if cached else None
                 store.write({
                     "symbol": symbol,
                     "resolution": resolution,
                     "updated_at": time.time(),
-                    "coverage_start": new_start.isoformat(),
-                    "coverage_end": new_end.isoformat(),
+                    "coverage_start": actual_start.isoformat() if actual_start else "",
+                    "coverage_end": actual_end.isoformat() if actual_end else "",
+                    # A short negative-cache avoids hammering an unsupported
+                    # resolution while still retrying later.  It is deliberately
+                    # separate from truthful bar coverage above.
+                    "checked_start": requested_start.isoformat(),
+                    "checked_end": end_date.isoformat(),
+                    "checked_at": time.time(),
                     "bars": cached,
                 })
                 if not fetched and not cached:

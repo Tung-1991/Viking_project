@@ -10,7 +10,7 @@ from ..connections.dnse.paper import PaperBroker
 from .market import market_phase
 from ..models import BrokerOrderResult, OrderIntent, TradeCycle
 from .orders import OrderQueue
-from .portfolio import available_to_sell, round_lot_down, validate_quantity
+from .portfolio import available_to_sell, board_price, round_lot_down, validate_quantity
 from ..storage import CSVOrderJournal, JSONLineJournal
 from .state import TradeStateStore
 from ..rules.state import RuleStateStore
@@ -189,7 +189,12 @@ class ExecutionService:
             if intent.filled_quantity > 0:
                 self._mark_exit_events(intent)
             elif self.rule_state and intent.signal in {"BUY", "SELL"} and intent.candle_key:
-                self.rule_state.release_signal(intent.symbol, intent.signal, intent.candle_key)
+                self.rule_state.release_signal(
+                    intent.symbol,
+                    intent.signal,
+                    intent.candle_key,
+                    stream=intent.execution_mode,
+                )
             event = {
                 "ts": time.time(),
                 "intent": cancelled.to_dict(),
@@ -222,7 +227,7 @@ class ExecutionService:
             return
         raw = result.raw if isinstance(result.raw, dict) else {}
         body = raw.get("data") if isinstance(raw.get("data"), dict) else raw
-        price = float(body.get("averagePrice", body.get("price", 0.0)) or 0.0)
+        price = board_price(body.get("averagePrice", body.get("price", 0.0)))
         fee = float(body.get("fee", body.get("totalFee", 0.0)) or 0.0) + float(body.get("tax", 0.0) or 0.0)
         if intent.side == "BUY":
             previous = self.trade_state.get(intent.trade_id)

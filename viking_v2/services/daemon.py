@@ -20,7 +20,12 @@ from ..trading.portfolio import PortfolioContextBuilder
 from .runtime import RuntimeBridge
 from ..storage import SignalLog, AtomicJSONStore
 from ..rules.state import RuleStateStore
-from ..rules.business import StaticRule, StaticRuleParameters, classify_market_state
+from ..rules.business import (
+    StaticRule,
+    StaticRuleParameters,
+    classify_market_state,
+    indicator_snapshot,
+)
 from ..trading.state import TradeStateStore
 
 
@@ -324,6 +329,21 @@ def run(account_id: str | None = None) -> int:
                             context["confirmed_market_state"] = confirmed_market_state
                             context["market_confirmation"] = market_confirmation
                             candle_key = str((bars[-1] if bars else {}).get("time", "") or "")
+                            if settings.signal_mode == "REALTIME" and bars:
+                                current_indicators = indicator_snapshot(
+                                    bars,
+                                    rule.params.buy_ema_fast,
+                                    rule.params.buy_ema_slow,
+                                    rule.params.rsi_period,
+                                    sell_fast=rule.params.sell_ema_fast,
+                                    sell_slow=rule.params.sell_ema_slow,
+                                )
+                                context["previous_indicators"] = rule_state.observe_indicators(
+                                    symbol,
+                                    "PAPER" if runtime.paper_mode else "REAL",
+                                    candle_key,
+                                    current_indicators,
+                                )
                             exposure = rule.params.exposure.get(confirmed_market_state, 0.0)
                             portfolio = portfolio_builder.build(
                                 symbol,
@@ -334,6 +354,8 @@ def run(account_id: str | None = None) -> int:
                                 exposure=exposure,
                                 max_positions=rule.params.max_positions,
                                 no_compound_enabled=rule.params.no_compound_enabled,
+                                loss_lock_count=rule.params.loss_lock_count,
+                                loss_lock_hours=rule.params.loss_lock_hours,
                                 corporate_actions=settings.corporate_actions,
                                 working_dates=working_dates,
                             )
@@ -357,6 +379,7 @@ def run(account_id: str | None = None) -> int:
                                 "market_state": confirmed_market_state,
                                 "acted": decision.action,
                                 "blocked_by": "" if decision.action != "WAIT" else decision.reason,
+                                "candle_key": candle_key,
                             })
                     except Exception as exc:
                         cycle_error = str(exc)

@@ -10,6 +10,8 @@ from viking_v2 import config as app_config
 from viking_v2.backtest.engine import BacktestEngine, _normal_trail_fill, _opening_fill_price
 from viking_v2.backtest.models import BacktestConfig, BacktestScenario, BacktestSettings, BacktestTrade
 from viking_v2.backtest.report import ROUND_HEADERS, exit_detail, export_run_excel
+from viking_v2.backtest.replay import ReplayDataStore
+from viking_v2.rules.business import StrategyDecision
 
 
 VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
@@ -44,6 +46,33 @@ def test_historical_store_caches_dnse_daily_data(tmp_path):
     second = store.load_daily("FPT", "2023-08-01", "2023-12-01", warmup_sessions=260)
     assert second == first
     assert calls == []
+
+
+def test_historical_cache_reports_real_coverage_and_retries_missing_gap(tmp_path, monkeypatch):
+    clock = [1_000.0]
+    monkeypatch.setattr("viking_v2.backtest.data.time.time", lambda: clock[0])
+    calls = []
+    payload = _payload(
+        [10.0] * 11,
+        datetime(2026, 1, 10, tzinfo=VN_TZ),
+    )
+
+    def fetch(*args):
+        calls.append(args)
+        return payload
+
+    store = HistoricalDataStore(root=tmp_path / "truthful-coverage", fetcher=fetch)
+    store.load_bars("FPT", "2026-01-01", "2026-01-31", resolution="1D")
+    cached = store._store("FPT", "1D").read()
+    assert cached["coverage_start"] == "2026-01-10"
+    assert cached["coverage_end"] == "2026-01-20"
+    first_count = len(calls)
+
+    store.load_bars("FPT", "2026-01-01", "2026-01-31", resolution="1D")
+    assert len(calls) == first_count
+    clock[0] += 301
+    store.load_bars("FPT", "2026-01-01", "2026-01-31", resolution="1D")
+    assert len(calls) > first_count
 
 
 def test_backtest_reuses_static_rule_and_fills_next_session(tmp_path):
@@ -116,6 +145,7 @@ def test_scenario_without_a_market_state_is_rejected():
 def test_loss_cooldown_is_calendar_hours():
     config = BacktestConfig(["FPT"], "2024-01-01", "2024-02-01", loss_lock_hours=48)
     assert config.loss_lock_hours == 48
+    assert BacktestConfig(["FPT"], "2024-01-01", "2024-02-01").loss_lock_hours == 24
 
 
 def test_backtest_defaults_are_neutral_and_independent():
@@ -125,11 +155,15 @@ def test_backtest_defaults_are_neutral_and_independent():
     assert config.fixed_market_phase == "ACCUMULATION"
     assert config.fixed_exposure_pct == 60
     assert config.loss_lock_enabled is False
+    assert config.loss_lock_hours == 24
     assert config.whipsaw_enabled is False
     assert config.em_modes == ["NORMAL", "HIGH", "IND_EXIT"]
     assert config.execution_resolution == "AUTO"
+    assert config.simulation_mode == "DAILY"
     assert config.buy_fee_rate == pytest.approx(app_config.DEFAULT_BUY_FEE_PCT / 100.0)
     assert BacktestSettings().buy_fee_pct == pytest.approx(app_config.DEFAULT_BUY_FEE_PCT)
+    assert BacktestSettings().loss_lock_hours == 24
+    assert BacktestSettings().simulation_mode == "AUTO_HYBRID"
 
 
 def test_continuous_fill_uses_first_candle_open_at_or_after_0915():
@@ -294,3 +328,279 @@ def test_scenario_accepts_runtime_callbacks_without_putting_them_in_config(tmp_p
     )
     assert result.config.run_name == "VA"
     assert progress
+
+
+def test_mode2_replay_catches_intraday_daily_ema_cross_and_fills_next_bar(tmp_path):
+    start = datetime(2025, 12, 1, tzinfo=VN_TZ)
+    values = [8.0] * 221
+    test_day = (start + timedelta(days=220)).date().isoformat()
+    payload = _payload(values, start)
+
+    def fetch(_symbol, resolution, _from, _to):
+        return payload if resolution == "1D" else None
+
+    store = HistoricalDataStore(root=tmp_path / "data", fetcher=fetch)
+    replay = ReplayDataStore(store.root / "replay")
+    source = tmp_path / "HOSE_DLY_FPT, 1.csv"
+    source.write_text(
+        "time,open,high,low,close,Volume\n"
+        f"{test_day}T02:15:00Z,8,9,8,9,100\n"
+        f"{test_day}T02:16:00Z,9,9,9,9,100\n"
+        f"{test_day}T07:45:00Z,8,8,8,8,100\n",
+        encoding="utf-8",
+    )
+    replay.import_file(source, price_scale=1)
+    config = BacktestConfig(
+        ["FPT"], test_day, test_day, initial_capital=100_000_000,
+        fixed_market_phase="UPTREND", fixed_exposure_pct=100,
+        fill_session="CONTINUOUS", simulation_mode="REPLAY",
+        rule_parameters={"buy_ema_fast": 2, "buy_ema_slow": 3, "rsi_period": 2,
+                         "max_positions": 1, "no_compound_enabled": False},
+    )
+    result = BacktestEngine(store, replay).run(config, save=False)
+    buys = [event for event in result.events if event.side == "BUY"]
+    assert len(buys) == 1
+    assert datetime.fromisoformat(buys[0].signal_time).strftime("%H:%M") == "09:15"
+    assert datetime.fromisoformat(buys[0].fill_time).strftime("%H:%M") == "09:16"
+    assert buys[0].source_resolution == "1"
+    assert result.data_quality["signal_resolution"] == "1D_REALTIME"
+    report = export_run_excel(result, tmp_path / "exports", mode="MODE 2", stamp="replay")
+    from openpyxl import load_workbook
+    workbook = load_workbook(report, read_only=True)
+    assert {"TÍN HIỆU", "KHỚP LỆNH", "THÔNG TIN"} <= set(workbook.sheetnames)
+    fill_rows = list(workbook["KHỚP LỆNH"].iter_rows(values_only=True))
+    assert fill_rows[1][1].endswith("+07:00")
+    assert fill_rows[1][2].endswith("+07:00")
+    workbook.close()
+
+    daily = BacktestEngine(store, replay).run(BacktestConfig(
+        ["FPT"], test_day, test_day, initial_capital=100_000_000,
+        fixed_market_phase="UPTREND", fixed_exposure_pct=100,
+        simulation_mode="DAILY",
+        rule_parameters={"buy_ema_fast": 2, "buy_ema_slow": 3, "rsi_period": 2,
+                         "max_positions": 1, "no_compound_enabled": False},
+    ), save=False)
+    assert [event for event in daily.events if event.side == "BUY"] == []
+
+
+def test_replay_uses_previous_source_bar_not_previous_daily_close_for_ema(tmp_path):
+    start = datetime(2025, 12, 1, tzinfo=VN_TZ)
+    values = [100.0] * 220 + [101.0, 100.0, 100.5, 100.6]
+    test_day = (start + timedelta(days=len(values) - 1)).date().isoformat()
+    payload = _payload(values, start)
+    store = HistoricalDataStore(
+        root=tmp_path / "ema-stream",
+        fetcher=lambda _symbol, resolution, _from, _to: payload if resolution == "1D" else None,
+    )
+    replay = ReplayDataStore(store.root / "replay")
+    source = tmp_path / "HOSE_DLY_FPT, 1.csv"
+    source.write_text(
+        "time,open,high,low,close,Volume\n"
+        f"{test_day}T02:15:00Z,95,95,95,95,100\n"
+        f"{test_day}T02:16:00Z,100.6,100.6,100.6,100.6,100\n"
+        f"{test_day}T02:17:00Z,100.6,100.6,100.6,100.6,100\n"
+        f"{test_day}T07:45:00Z,100.6,100.6,100.6,100.6,100\n",
+        encoding="utf-8",
+    )
+    replay.import_file(source, price_scale=1)
+    result = BacktestEngine(store, replay).run(BacktestConfig(
+        ["FPT"], test_day, test_day,
+        initial_capital=100_000_000, fixed_market_phase="UPTREND",
+        fixed_exposure_pct=100, fill_session="CONTINUOUS",
+        simulation_mode="REPLAY", whipsaw_enabled=False,
+        rule_parameters={"buy_ema_fast": 3, "buy_ema_slow": 6, "rsi_period": 14,
+                         "max_positions": 1, "no_compound_enabled": False},
+    ), save=False)
+    buy = next(event for event in result.events if event.side == "BUY")
+    assert datetime.fromisoformat(buy.signal_time).strftime("%H:%M") == "09:16"
+    assert datetime.fromisoformat(buy.fill_time).strftime("%H:%M") == "09:17"
+
+
+def test_replay_strict_rejects_missing_day_but_hybrid_records_fallback(tmp_path):
+    start = datetime(2025, 12, 1, tzinfo=VN_TZ)
+    values = [8.0] * 221
+    test_day = (start + timedelta(days=220)).date().isoformat()
+    payload = _payload(values, start)
+    store = HistoricalDataStore(
+        root=tmp_path / "data",
+        fetcher=lambda _symbol, resolution, _from, _to: payload if resolution == "1D" else None,
+    )
+    common = dict(
+        symbols=["FPT"], start_date=test_day, end_date=test_day,
+        fixed_market_phase="UPTREND", initial_capital=100_000_000,
+    )
+    with pytest.raises(RuntimeError, match="thiếu dữ liệu FULL"):
+        BacktestEngine(store).run(BacktestConfig(**common, simulation_mode="REPLAY"), save=False)
+    result = BacktestEngine(store).run(
+        BacktestConfig(**common, simulation_mode="AUTO_HYBRID"), save=False,
+    )
+    assert result.data_quality["fallback_count"] == 1
+    assert result.data_quality["source_coverage"]["FPT"][test_day]["data_quality"] == "FALLBACK_1D"
+
+
+@pytest.mark.parametrize("fill_session, expected", [("ATO", "09:15"), ("CONTINUOUS", "09:16")])
+def test_replay_atc_signal_carries_to_next_eligible_session(tmp_path, fill_session, expected):
+    start = datetime(2025, 12, 1, tzinfo=VN_TZ)
+    values = [8.0] * 222
+    signal_day = (start + timedelta(days=220)).date()
+    fill_day = (start + timedelta(days=221)).date()
+    payload = _payload(values, start)
+    store = HistoricalDataStore(
+        root=tmp_path / fill_session,
+        fetcher=lambda _symbol, resolution, _from, _to: payload if resolution == "1D" else None,
+    )
+    replay = ReplayDataStore(store.root / "replay")
+    source = tmp_path / f"HOSE_DLY_FPT, 1-{fill_session}.csv"
+    # Override filename inference because the test suffix follows the resolution.
+    source.write_text(
+        "time,open,high,low,close,Volume\n"
+        f"{signal_day}T02:15:00Z,8,8,8,8,100\n"
+        f"{signal_day}T07:45:00Z,8,9,8,9,100\n"
+        f"{fill_day}T02:15:00Z,9,9,9,9,100\n"
+        f"{fill_day}T02:16:00Z,9,9,9,9,100\n"
+        f"{fill_day}T07:45:00Z,9,9,9,9,100\n",
+        encoding="utf-8",
+    )
+    replay.import_file(source, symbol="FPT", resolution="1", price_scale=1)
+    result = BacktestEngine(store, replay).run(BacktestConfig(
+        ["FPT"], signal_day.isoformat(), fill_day.isoformat(),
+        initial_capital=100_000_000, fixed_market_phase="UPTREND",
+        fixed_exposure_pct=100, fill_session=fill_session, simulation_mode="REPLAY",
+        rule_parameters={"buy_ema_fast": 2, "buy_ema_slow": 3, "rsi_period": 2,
+                         "max_positions": 1, "no_compound_enabled": False},
+    ), save=False)
+    buy = next(event for event in result.events if event.side == "BUY")
+    assert datetime.fromisoformat(buy.signal_time).strftime("%Y-%m-%d %H:%M") == f"{signal_day} 14:45"
+    assert datetime.fromisoformat(buy.fill_time).strftime("%Y-%m-%d %H:%M") == f"{fill_day} {expected}"
+
+
+def test_replay_rechecks_waiting_t2_sell_before_fill(tmp_path, monkeypatch):
+    start = datetime(2025, 12, 1, tzinfo=VN_TZ)
+    values = [10.0] * 223
+    days = [(start + timedelta(days=index)).date() for index in range(220, 223)]
+    payload = _payload(values, start)
+    store = HistoricalDataStore(
+        root=tmp_path / "data",
+        fetcher=lambda _symbol, resolution, _from, _to: payload if resolution == "1D" else None,
+    )
+    replay = ReplayDataStore(store.root / "replay")
+    source = tmp_path / "HOSE_DLY_FPT, 1.csv"
+    rows = []
+    for day in days:
+        for utc_time in ("02:15", "02:16", "07:45"):
+            rows.append(f"{day}T{utc_time}:00Z,10,10,10,10,100")
+    source.write_text(
+        "time,open,high,low,close,Volume\n" + "\n".join(rows) + "\n",
+        encoding="utf-8",
+    )
+    replay.import_file(source, price_scale=1)
+
+    class Rule:
+        def __init__(self, _params):
+            pass
+
+        def evaluate(self, context, portfolio):
+            stamp = datetime.fromtimestamp(context["bars"][-1]["time"], VN_TZ)
+            quantity = portfolio.get("position_quantity", 0)
+            if not quantity and stamp.date() == days[0] and stamp.strftime("%H:%M") == "09:15":
+                return StrategyDecision("BUY", "FPT", "BUY_SIGNAL", event="ENTRY_BUY", signal="BUY")
+            if quantity and stamp.date() == days[0]:
+                return StrategyDecision("SELL", "FPT", "SELL_SIGNAL", event="INDICATOR_EXIT", signal="SELL")
+            return StrategyDecision("WAIT", "FPT", "HOLD_POSITION", signal="")
+
+    monkeypatch.setattr("viking_v2.backtest.engine.StaticRule", Rule)
+    result = BacktestEngine(store, replay).run(BacktestConfig(
+        ["FPT"], days[0].isoformat(), days[-1].isoformat(),
+        initial_capital=100_000_000, fixed_market_phase="UPTREND",
+        fixed_exposure_pct=100, fill_session="CONTINUOUS",
+        simulation_mode="REPLAY", sell_wait_policy="RECHECK", em_modes=[],
+        rule_parameters={"max_positions": 1, "no_compound_enabled": False},
+    ), save=False)
+    assert [event.side for event in result.events] == ["BUY"]
+    assert result.trades[0].outcome == "OPEN"
+
+
+def test_replay_waiting_t2_sell_fills_no_earlier_than_1300(tmp_path, monkeypatch):
+    start = datetime(2025, 12, 1, tzinfo=VN_TZ)
+    values = [10.0] * 223
+    days = [(start + timedelta(days=index)).date() for index in range(220, 223)]
+    payload = _payload(values, start)
+    store = HistoricalDataStore(
+        root=tmp_path / "data-t2-time",
+        fetcher=lambda _symbol, resolution, _from, _to: payload if resolution == "1D" else None,
+    )
+    replay = ReplayDataStore(store.root / "replay")
+    source = tmp_path / "HOSE_DLY_FPT, 1-t2-time.csv"
+    rows = []
+    for day in days:
+        # UTC times map to 09:15, 09:16, 11:29, 13:00 and 14:45 Vietnam time.
+        # 12:59 is lunch and correctly rejected by the replay importer; the
+        # PAPER test above covers the exact 12:59:59 boundary.
+        for utc_time in ("02:15", "02:16", "04:29", "06:00", "07:45"):
+            rows.append(f"{day}T{utc_time}:00Z,10,10,10,10,100")
+    source.write_text(
+        "time,open,high,low,close,Volume\n" + "\n".join(rows) + "\n",
+        encoding="utf-8",
+    )
+    replay.import_file(source, symbol="FPT", resolution="1", price_scale=1)
+
+    class Rule:
+        def __init__(self, _params):
+            pass
+
+        def evaluate(self, context, portfolio):
+            stamp = datetime.fromtimestamp(context["bars"][-1]["time"], VN_TZ)
+            quantity = portfolio.get("position_quantity", 0)
+            if not quantity and stamp.date() == days[0] and stamp.strftime("%H:%M") == "09:15":
+                return StrategyDecision("BUY", "FPT", "BUY_SIGNAL", event="ENTRY_BUY", signal="BUY")
+            if quantity and stamp.date() == days[0] and stamp.strftime("%H:%M") == "14:45":
+                return StrategyDecision("SELL", "FPT", "SELL_SIGNAL", event="INDICATOR_EXIT", signal="SELL")
+            return StrategyDecision("WAIT", "FPT", "HOLD_POSITION", signal="")
+
+    monkeypatch.setattr("viking_v2.backtest.engine.StaticRule", Rule)
+    result = BacktestEngine(store, replay).run(BacktestConfig(
+        ["FPT"], days[0].isoformat(), days[-1].isoformat(),
+        initial_capital=100_000_000, fixed_market_phase="UPTREND",
+        fixed_exposure_pct=100, fill_session="CONTINUOUS",
+        simulation_mode="REPLAY", sell_wait_policy="KEEP", em_modes=[],
+        rule_parameters={"max_positions": 1, "no_compound_enabled": False},
+    ), save=False)
+    sell = next(event for event in result.events if event.side == "SELL")
+    assert datetime.fromisoformat(sell.fill_time).strftime("%Y-%m-%d %H:%M") == f"{days[2]} 13:00"
+
+
+def test_daily_never_uses_morning_open_on_t2_for_waiting_sell(tmp_path, monkeypatch):
+    start = datetime(2025, 12, 1, tzinfo=VN_TZ)
+    values = [10.0] * 225
+    days = [(start + timedelta(days=index)).date() for index in range(220, 225)]
+    store = HistoricalDataStore(
+        root=tmp_path / "daily-t2-time",
+        fetcher=lambda _symbol, resolution, _from, _to: (
+            _payload(values, start) if resolution == "1D" else None
+        ),
+    )
+
+    class Rule:
+        def __init__(self, _params):
+            pass
+
+        def evaluate(self, context, portfolio):
+            day = datetime.fromtimestamp(context["bars"][-1]["time"], VN_TZ).date()
+            quantity = portfolio.get("position_quantity", 0)
+            if not quantity and day == days[0]:
+                return StrategyDecision("BUY", "FPT", "BUY_SIGNAL", event="ENTRY_BUY", signal="BUY")
+            if quantity:
+                return StrategyDecision("SELL", "FPT", "SELL_SIGNAL", event="INDICATOR_EXIT", signal="SELL")
+            return StrategyDecision("WAIT", "FPT", "HOLD_POSITION", signal="")
+
+    monkeypatch.setattr("viking_v2.backtest.engine.StaticRule", Rule)
+    result = BacktestEngine(store).run(BacktestConfig(
+        ["FPT"], days[0].isoformat(), days[-1].isoformat(),
+        initial_capital=100_000_000, fixed_market_phase="UPTREND",
+        fixed_exposure_pct=100, simulation_mode="DAILY", em_modes=[],
+        rule_parameters={"max_positions": 1, "no_compound_enabled": False},
+    ), save=False)
+    sell = next(event for event in result.events if event.side == "SELL")
+    # BUY fills on days[1], so days[3] is T+2. DAILY has no afternoon price
+    # and must not pretend its morning Open is sellable; it waits to days[4].
+    assert sell.date == days[4].isoformat()

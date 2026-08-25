@@ -332,7 +332,7 @@ class RuleSettingsPopup:
         self._summary(
             body,
             "VỐN & BẢO VỆ",
-            "WIN reset chu kỳ · 3 LOSS khóa BUY · position đang giữ vẫn được quản lý",
+            "WIN reset chu kỳ · 3 LOSS khóa BUY 24 giờ · position đang giữ vẫn được quản lý",
             "WIN/LOSS chỉ tính khi trade đóng hoàn toàn và đã trừ phí. Whipsaw và khóa LOSS chỉ chặn BUY/Re-entry mới; không tắt SL hoặc Exit Manager của position đang giữ.",
         )
 
@@ -350,6 +350,12 @@ class RuleSettingsPopup:
         # Hai mức SL đã chuyển sang tab EXIT MANAGER để nằm cùng chỗ với chốt lời.
         stops = self._card(body, "KHÓA SAU LỖ", "Bộ chặn entry sau chuỗi lệnh thua. Hai mức cắt lỗ nằm ở tab EXIT MANAGER.", 1, 1)
         self.loss_lock = self._field(stops, "Khóa sau LOSS", self.params.loss_lock_count, "Mặc định 3 LOSS liên tiếp; một WIN reset về 0.")
+        self.loss_lock_hours = self._field(
+            stops,
+            "Mở lại sau (giờ)",
+            self.params.loss_lock_hours,
+            "24 giờ đồng hồ kể từ lúc đóng lệnh lỗ thứ ba; có tính đêm, cuối tuần và ngày nghỉ.",
+        )
 
         whip = self._card(body, "WHIPSAW", "Bộ chống nhiễu trước entry. Không thuộc Exit Manager và không can thiệp position đang giữ.", 1, 2)
         self.whipsaw_enabled = self._switch(
@@ -559,7 +565,7 @@ class RuleSettingsPopup:
 
         settlement = self._card(
             body, "SELL CHỜ T+",
-            "Áp dụng cho SL, NORMAL, HIGH và EXIT SELL khi cổ phiếu chưa về đủ để bán.",
+            "Áp dụng cho SL, NORMAL, HIGH và EXIT SELL khi cổ phiếu chưa về đủ để bán; T+2 chỉ sẵn sàng từ phiên chiều.",
             1, 2,
         )
         self.sell_wait_policy = tk.StringVar(
@@ -696,6 +702,7 @@ class RuleSettingsPopup:
             rsi_period = int(self._number(self.rsi_period, "RSI"))
             max_positions = int(self._number(self.max_positions, "Tối đa position"))
             loss_lock = int(self._number(self.loss_lock, "Khóa sau LOSS"))
+            loss_lock_hours = int(self._number(self.loss_lock_hours, "Mở lại sau"))
             whipsaw_n = int(self._number(self.whipsaw_n, "Whipsaw N"))
             whipsaw_x = int(self._number(self.whipsaw_x, "Whipsaw X"))
             exposures = {
@@ -720,7 +727,7 @@ class RuleSettingsPopup:
             if min(
                 ma_period, pivot_left, pivot_right, confirm_sessions,
                 volume_average, buy_ema_fast, sell_ema_fast, rsi_period,
-                max_positions, loss_lock, whipsaw_n,
+                max_positions, loss_lock, loss_lock_hours, whipsaw_n,
             ) < 1:
                 raise ValueError("Các chu kỳ và giới hạn phải lớn hơn 0")
             if buy_ema_slow <= buy_ema_fast:
@@ -759,6 +766,7 @@ class RuleSettingsPopup:
             self.params.initial_sl_pct = initial_sl
             self.params.reentry_sl_pct = reentry_sl
             self.params.loss_lock_count = loss_lock
+            self.params.loss_lock_hours = loss_lock_hours
             self.params.whipsaw_enabled = bool(self.whipsaw_enabled.get())
             self.params.whipsaw_n = whipsaw_n
             self.params.whipsaw_x = whipsaw_x

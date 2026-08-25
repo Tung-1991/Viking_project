@@ -42,6 +42,26 @@ def price_in_band(price: float, floor_price: float, ceiling_price: float) -> boo
         return False
     return True
 
+
+def board_price(value: Any) -> float:
+    """Return the canonical internal stock price (thousand-VND board units).
+
+    DNSE market-data endpoints use board prices such as ``23.35`` while the
+    trading/account endpoints use VND such as ``23350``.  Everything outside
+    the DNSE adapter uses board prices so PnL, sizing and protection rules can
+    never compare values with different units.
+    """
+    try:
+        price = max(0.0, float(value or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+    return price / 1000.0 if price >= 1000.0 else price
+
+
+def dnse_price(value: Any) -> float:
+    """Convert an internal board price to the VND unit required by trading APIs."""
+    return board_price(value) * 1000.0
+
 def available_to_sell(positions: Iterable[Any], symbol: str) -> int:
     target = str(symbol or "").upper()
     total = 0
@@ -50,9 +70,11 @@ def available_to_sell(positions: Iterable[Any], symbol: str) -> int:
         pos_symbol = str(raw.get("symbol") or getattr(position, "symbol", "") or "").upper()
         if pos_symbol != target:
             continue
-        value = raw.get("tradeQuantity")
-        if value is None:
-            value = raw.get("openQuantity", raw.get("quantity", 0))
+        # ``openQuantity`` includes stock which may still be waiting for T+2.
+        # Selling must fail closed if the broker omits its explicit sellable
+        # quantity; guessing here could turn an API schema issue into an
+        # illegal early sell request on a REAL account.
+        value = raw.get("tradeQuantity", 0)
         try:
             total += max(0, int(float(value or 0)))
         except (TypeError, ValueError):
@@ -145,10 +167,10 @@ def position_quantity(row: dict[str, Any]) -> int:
     return max(0, int(_number(row, "openQuantity", "quantity", "volume")))
 
 def position_price(row: dict[str, Any]) -> float:
-    return _number(row, "marketPrice", "currentPrice", "price", "costPrice", "averagePrice")
+    return board_price(_number(row, "marketPrice", "currentPrice", "price", "costPrice", "averagePrice"))
 
 def position_cost(row: dict[str, Any]) -> float:
-    return _number(row, "costPrice", "averagePrice", "avgPrice", "price")
+    return board_price(_number(row, "costPrice", "averagePrice", "avgPrice", "price"))
 
 def stock_value(positions: Iterable[dict[str, Any]]) -> float:
     return sum(position_quantity(row) * position_price(row) * 1000.0 for row in positions or [])
@@ -182,6 +204,9 @@ class PortfolioContextBuilder:
         exposure: float,
         max_positions: int,
         no_compound_enabled: bool = True,
+        loss_lock_count: int = 3,
+        loss_lock_hours: float = 24.0,
+        now: float | None = None,
         corporate_actions: list[dict[str, Any]] | None = None,
         working_dates: list[str] | None = None,
         today: date | None = None,
@@ -215,8 +240,19 @@ class PortfolioContextBuilder:
         )
         if no_compound_enabled:
             budget = self.trades.capital_available(symbol, mode, budget)
-        matching = next((row for row in rows if str(row.get("symbol", "") or "").upper() == symbol and position_quantity(row) > 0), None)
+        matching_rows = [
+            row for row in rows
+            if str(row.get("symbol", "") or "").upper() == symbol
+            and position_quantity(row) > 0
+        ]
         active_trade = self.trades.active_for(symbol, mode)
+        active_loss_streak = self.trades.active_loss_streak(
+            symbol,
+            mode,
+            threshold=loss_lock_count,
+            lock_hours=loss_lock_hours,
+            now=now,
+        )
         context: dict[str, Any] = {
             "nav": nav,
             "available_cash": cash,
@@ -226,7 +262,7 @@ class PortfolioContextBuilder:
             "order_budget": budget,
             "open_positions": len({str(row.get("symbol", "") or "").upper() for row in rows if position_quantity(row) > 0}),
             "pending_buy": bool(self.queue.find_active(symbol, side="BUY", execution_mode=mode)),
-            "loss_streak": self.trades.loss_streak(symbol, mode),
+            "loss_streak": active_loss_streak,
         }
         action = action_for_symbol(
             corporate_actions or [],
@@ -237,21 +273,34 @@ class PortfolioContextBuilder:
         if action:
             context["corporate_action"] = action
             context["corporate_action_blocked"] = bool(action.get("blocks_entry", False))
-        if not matching:
+        if not matching_rows:
             return context
-        quantity = position_quantity(matching)
-        avg_price = position_cost(matching)
-        current_price = float(tick.get("price", position_price(matching)) or position_price(matching))
+        quantity = sum(position_quantity(row) for row in matching_rows)
+        weighted_cost = sum(
+            position_quantity(row) * position_cost(row) for row in matching_rows
+        )
+        avg_price = weighted_cost / quantity if quantity > 0 else 0.0
+        fallback_price = next(
+            (position_price(row) for row in matching_rows if position_price(row) > 0),
+            0.0,
+        )
+        current_price = board_price(tick.get("price", fallback_price)) or fallback_price
+        first_matching = matching_rows[0]
         trade_id = active_trade.id if active_trade else str(
-            matching.get("tradeId", matching.get("positionId", matching.get("id", f"{mode}:{symbol}")))
+            first_matching.get(
+                "tradeId",
+                first_matching.get("positionId", first_matching.get("id", f"{mode}:{symbol}")),
+            )
             or f"{mode}:{symbol}"
         )
-        managed = bool(active_trade) or str(matching.get("source", "") or "").upper() == "BOT"
+        managed = bool(active_trade) or any(
+            str(row.get("source", "") or "").upper() == "BOT" for row in matching_rows
+        )
         profit_pct = ((current_price / avg_price) - 1.0) * 100.0 if avg_price > 0 and current_price > 0 else 0.0
         realized_net = (
             float(active_trade.net_pnl)
             if active_trade
-            else -abs(_number(matching, "buyFee", "fee"))
+            else -sum(abs(_number(row, "buyFee", "fee")) for row in matching_rows)
         )
         unrealized = (current_price - avg_price) * quantity * 1000.0
         estimated_exit_cost = 0.0
@@ -274,7 +323,9 @@ class PortfolioContextBuilder:
             "quantity": quantity,
             "avg_price": avg_price,
             "current_price": current_price,
-            "trade_quantity": max(0, int(_number(matching, "tradeQuantity"))),
+            "trade_quantity": sum(
+                max(0, int(_number(row, "tradeQuantity"))) for row in matching_rows
+            ),
             "trade_id": trade_id,
             "managed_by_bot": managed,
             "managed_by_app": managed,

@@ -103,6 +103,32 @@ def test_external_position_blocks_bot_management_but_is_visible(tmp_path):
     assert context["position"]["quantity"] == 100
 
 
+def test_real_positions_use_board_price_and_aggregate_same_symbol_rows(tmp_path):
+    builder = PortfolioContextBuilder(
+        OrderQueue(tmp_path / "orders-units.json"),
+        TradeStateStore(tmp_path / "trades-units.json"),
+        RuleStateStore(tmp_path / "rules-units.json"),
+    )
+    context = builder.build(
+        "FPT",
+        execution_mode="REAL",
+        balance={"equity": 100_000_000, "stock": {"availableCash": 0}},
+        positions=[
+            {"symbol": "FPT", "openQuantity": 100, "tradeQuantity": 100,
+             "costPrice": 100_000, "marketPrice": 101_000},
+            {"symbol": "FPT", "openQuantity": 200, "tradeQuantity": 0,
+             "costPrice": 102_000, "marketPrice": 101_000},
+        ],
+        tick={"price": 101.5},
+        exposure=0.9,
+        max_positions=5,
+    )
+    assert context["position"]["quantity"] == 300
+    assert context["position"]["trade_quantity"] == 100
+    assert context["position"]["avg_price"] == 101.33333333333333
+    assert context["position"]["current_price"] == 101.5
+
+
 def test_paper_position_persists_net_pnl_mae_mfe_input_after_fees(tmp_path):
     trades = TradeStateStore(tmp_path / "trades.json")
     rules = RuleStateStore(tmp_path / "rule.json")
@@ -132,3 +158,39 @@ def test_paper_position_persists_net_pnl_mae_mfe_input_after_fees(tmp_path):
     metrics = rules.position_metrics("FPT", "T1")
     assert metrics["current_net_pnl"] == expected
     assert metrics["mfe_net_pnl"] == expected
+
+
+def test_portfolio_context_auto_unlocks_loss_streak_after_24_hours(tmp_path):
+    trades = TradeStateStore(tmp_path / "trades-lock.json")
+    lock_started = 1_800_000_000.0
+    for index in range(3):
+        cycle = trades.create("FPT", "PAPER")
+        trades.record_buy_fill(cycle.id, 100, 100)
+        trades.record_sell_fill(
+            cycle.id,
+            100,
+            99,
+            closed_at=lock_started - 2 + index,
+        )
+    builder = PortfolioContextBuilder(
+        OrderQueue(tmp_path / "orders-lock.json"),
+        trades,
+        RuleStateStore(tmp_path / "rules-lock.json"),
+    )
+    common = dict(
+        symbol="FPT",
+        execution_mode="PAPER",
+        balance={"equity": 100_000_000, "stock": {"availableCash": 100_000_000}},
+        positions=[],
+        tick={"price": 100},
+        exposure=1.0,
+        max_positions=1,
+        loss_lock_count=3,
+        loss_lock_hours=24,
+    )
+
+    locked = builder.build(**common, now=lock_started + 24 * 3600 - 1)
+    unlocked = builder.build(**common, now=lock_started + 24 * 3600)
+
+    assert locked["loss_streak"] == 3
+    assert unlocked["loss_streak"] == 0

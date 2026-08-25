@@ -31,13 +31,16 @@ from .view import (
     _price_unit,
 )
 from .info import InfoPopup
-from .windows import DataTablePopup, HistoryPopup
+from .windows import DataTablePopup, HistoryPopup, minimize_popup
 
 # One list so a new tactic never has to be remembered in four separate places.
 EM_TACTICS: tuple[tuple[str, str], ...] = (
     ("TP", "TP"), ("NORMAL", "NORMAL"), ("HIGH", "HIGH"), ("IND_EXIT", "EXIT SELL"),
 )
 EM_LABELS: dict[str, str] = dict(EM_TACTICS)
+SIGNAL_HISTORY_ROW_LIMIT = 250
+HISTORY_EVENT_LIMIT = 300
+HISTORY_DAY_LIMIT = 7
 
 
 class DashboardActionsMixin:
@@ -488,18 +491,18 @@ class DashboardActionsMixin:
             ),
         )
 
-    def _hide_popups_from_main_click(self, event: Any) -> None:
+    def _minimize_popups_from_main_click(self, event: Any) -> None:
         """A main-window click minimizes viewers; it never destroys their state."""
         widget = event.widget
-        openers = {
+        openers = tuple(
             getattr(self, name, None) for name in (
                 "rule_button", "connection_button", "backtest_button", "info_button",
                 "history_button", "portfolio_button", "running_legend_button",
             )
-        }
+        )
         cursor = widget
         while cursor is not None:
-            if cursor in openers:
+            if any(cursor is opener for opener in openers):
                 return
             cursor = getattr(cursor, "master", None)
         for popup in (
@@ -510,10 +513,7 @@ class DashboardActionsMixin:
             getattr(self, "_history_popup", None),
             *getattr(self, "_data_popups", {}).values(),
         ):
-            if popup and popup.top.winfo_exists() and str(popup.top.state()) != "withdrawn":
-                hide = getattr(popup, "hide", None)
-                if callable(hide):
-                    hide()
+            minimize_popup(popup)
 
     def _open_backtest_popup(self) -> None:
         popup = self._backtest_popup
@@ -697,15 +697,21 @@ class DashboardActionsMixin:
         return datetime.min
 
     def _signal_log_rows(self) -> list[dict[str, Any]]:
-        """Latest signals the rule produced, newest shown first by the popup."""
-        return SignalLog(self.bridge.signal_log_path).read_all(limit=500)
+        """Only recent signal days are rendered; Excel keeps the full archive."""
+        rows = SignalLog(self.bridge.signal_log_path).read_all(limit=SIGNAL_HISTORY_ROW_LIMIT)
+        recent_days = sorted({str(row.get("timestamp", ""))[:10] for row in rows}, reverse=True)
+        visible_days = set(recent_days[:HISTORY_DAY_LIMIT])
+        return [row for row in rows if str(row.get("timestamp", ""))[:10] in visible_days]
 
     def _history_popup_groups(self, mode: str) -> list[dict[str, Any]]:
         """Build day -> trade -> event without counting order attempts as trades."""
         mode = "REAL" if str(mode).upper() == "REAL" else "PAPER"
         events: list[dict[str, Any]] = []
         seen_orders: set[str] = set()
-        for index, row in enumerate(CSVOrderJournal(self.bridge.history_csv_path).read_all()):
+        recent_events = CSVOrderJournal(self.bridge.history_csv_path).read_all(
+            limit=HISTORY_EVENT_LIMIT,
+        )
+        for index, row in enumerate(recent_events):
             if str(row.get("execution_mode", "PAPER")).upper() != mode:
                 continue
             item = dict(row)
@@ -844,7 +850,7 @@ class DashboardActionsMixin:
                 "values": ("", "", "", "", "", "", ""),
                 "trades": trades,
             })
-        return output
+        return output[:HISTORY_DAY_LIMIT]
 
     def _sync_cancel_button(self) -> None:
         mode = "REAL" if self.tabs.get() == "CKCS REAL" else "PAPER"

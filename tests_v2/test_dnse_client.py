@@ -188,7 +188,7 @@ def test_place_replace_cancel_are_stock_normal(monkeypatch):
         ]
     )
     value = client(session)
-    monkeypatch.setattr(value, "get_secdef", lambda _symbol: {"floorPrice": 90, "ceilingPrice": 110})
+    monkeypatch.setattr(value, "get_secdef", lambda _symbol: {"floorPrice": 90_000, "ceilingPrice": 110_000})
     result = value.place_order(OrderIntent.create("FPT", "BUY", 100, "LO", limit_price=100, execution_mode="REAL"))
     assert result.ok and result.order_id == "1"
     value.replace_order("1", price=101, quantity=100)
@@ -198,15 +198,29 @@ def test_place_replace_cancel_are_stock_normal(monkeypatch):
         assert kwargs["params"] == {"marketType": "STOCK", "orderCategory": "NORMAL"}
         assert kwargs["headers"]["trading-token"] == "token"
     assert session.calls[0][2]["json"]["orderType"] == "LO"
+    assert session.calls[0][2]["json"]["price"] == 100_000.0
+    assert session.calls[2][2]["json"]["price"] == 101_000.0
     assert session.calls[0][2]["json"]["remark"].startswith("V2:")
 
 
-def test_market_intent_is_sent_as_market_not_converted(monkeypatch):
+def test_market_intent_uses_exchange_supported_mtl(monkeypatch):
     session = Session([Response(data={"id": "1", "orderStatus": "New"})])
     value = client(session)
+    monkeypatch.setattr(value, "get_secdef", lambda _symbol: {"marketId": "STO"})
     value.place_order(OrderIntent.create("FPT", "BUY", 100, "MARKET", execution_mode="REAL"))
-    assert session.calls[0][2]["json"]["orderType"] == "MOK"
+    assert session.calls[0][2]["json"]["orderType"] == "MTL"
     assert session.calls[0][2]["json"]["price"] == 0.0
+
+
+def test_upcom_market_order_fails_closed_before_submission(monkeypatch):
+    session = Session()
+    value = client(session)
+    monkeypatch.setattr(value, "get_secdef", lambda _symbol: {"marketId": "UPX"})
+    result = value.place_order(
+        OrderIntent.create("ABC", "BUY", 100, "MARKET", execution_mode="REAL")
+    )
+    assert not result.ok and result.error == "UNSUPPORTED_MARKET_ORDER"
+    assert session.calls == []
 
 
 def test_rate_limit_retries_once(monkeypatch):
@@ -222,6 +236,7 @@ def test_transport_timeout_reconciles_by_remark_without_resend(monkeypatch):
     session = Session([requests.Timeout("lost"), requests.Timeout("lost")])
     value = client(session)
     monkeypatch.setattr(value, "get_orders", lambda force=False: [])
+    monkeypatch.setattr(value, "get_secdef", lambda _symbol: {"marketId": "STO"})
     result = value.place_order(OrderIntent.create("FPT", "BUY", 100, "MARKET", execution_mode="REAL"))
     assert not result.ok
     assert result.error == "ORDER_STATUS_UNKNOWN"

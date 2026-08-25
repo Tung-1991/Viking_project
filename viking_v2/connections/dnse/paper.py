@@ -7,12 +7,13 @@ from typing import Any, Callable
 
 from ... import config
 from ...models import BrokerOrderResult, OrderIntent
-from ...trading.portfolio import available_to_sell, validate_quantity
+from ...trading.market import VN_TZ, stock_is_sellable_after_settlement
+from ...trading.portfolio import available_to_sell, board_price, validate_quantity
 from ...storage import AtomicJSONStore
 
 
 def _next_business_day(value: datetime, days: int = 2, working_dates: list[str] | None = None) -> datetime:
-    if working_dates:
+    if working_dates is not None:
         candidates = []
         current = value.date()
         for raw in working_dates:
@@ -25,6 +26,7 @@ def _next_business_day(value: datetime, days: int = 2, working_dates: list[str] 
         candidates.sort()
         if len(candidates) >= days:
             return candidates[days - 1]
+        raise ValueError("Lịch giao dịch không đủ để xác định ngày T+2.")
     result = value
     added = 0
     while added < days:
@@ -84,13 +86,13 @@ class PaperBroker:
         return state
 
     def _refresh_settlement(self, state: dict[str, Any]) -> None:
-        today = datetime.fromtimestamp(self._now()).date()
+        now = datetime.fromtimestamp(self._now(), VN_TZ)
         changed = False
         for position in state.get("positions", []):
             settle = str(position.get("settleDate", "") or "")[:10]
             if settle and int(position.get("tradeQuantity", 0) or 0) <= 0:
                 try:
-                    if today >= datetime.strptime(settle, "%Y-%m-%d").date():
+                    if stock_is_sellable_after_settlement(settle, now):
                         position["tradeQuantity"] = int(position.get("openQuantity", 0) or 0)
                         changed = True
                 except ValueError:
@@ -110,6 +112,19 @@ class PaperBroker:
 
     def get_balance(self) -> dict[str, Any]:
         state = self._state()
+        changed = False
+        for row in state["positions"]:
+            tick = self.tick_provider(str(row.get("symbol", "") or "")) if self.tick_provider else None
+            if not isinstance(tick, dict):
+                continue
+            marked = board_price(
+                tick.get("price", tick.get("lastPrice", tick.get("matchPrice", 0.0)))
+            )
+            if marked > 0 and marked != float(row.get("marketPrice", 0.0) or 0.0):
+                row["marketPrice"] = marked
+                changed = True
+        if changed:
+            self.store.write(state)
         market_value = sum(
             float(row.get("marketPrice", row.get("costPrice", 0.0)) or 0.0)
             * int(row.get("openQuantity", 0) or 0)
@@ -146,9 +161,19 @@ class PaperBroker:
             cash = float(state.get("cash", 0.0) or 0.0)
             if cash < gross + fee:
                 return BrokerOrderResult(False, "REJECTED", message="PAPER không đủ tiền.", error="INSUFFICIENT_CASH")
-            state["cash"] = cash - gross - fee
             working_dates = self.working_dates_provider() if self.working_dates_provider else None
-            settle = _next_business_day(datetime.fromtimestamp(self._now()), working_dates=working_dates).strftime("%Y-%m-%d")
+            try:
+                settle = _next_business_day(
+                    datetime.fromtimestamp(self._now(), VN_TZ), working_dates=working_dates,
+                ).strftime("%Y-%m-%d")
+            except ValueError as exc:
+                return BrokerOrderResult(
+                    False,
+                    "REJECTED",
+                    message=str(exc),
+                    error="TRADING_CALENDAR_UNAVAILABLE",
+                )
+            state["cash"] = cash - gross - fee
             state["positions"].append(
                 {
                     "positionId": order_id,
@@ -181,10 +206,13 @@ class PaperBroker:
                     survivors.append(row)
                     continue
                 available = int(row.get("tradeQuantity", 0) or 0)
+                open_before = max(0, int(row.get("openQuantity", 0) or 0))
                 take = min(available, remaining)
                 row["tradeQuantity"] = available - take
-                row["openQuantity"] = int(row.get("openQuantity", 0) or 0) - take
-                allocated_buy_fee = float(row.get("buyFee", 0.0) or 0.0) * (take / max(1, int(row.get("openQuantity", take) or take)))
+                row["openQuantity"] = open_before - take
+                allocated_buy_fee = float(row.get("buyFee", 0.0) or 0.0) * (
+                    take / max(1, open_before)
+                )
                 row["buyFee"] = max(0.0, float(row.get("buyFee", 0.0) or 0.0) - allocated_buy_fee)
                 realized += (price - float(row.get("costPrice", price) or price)) * take * 1000.0 - allocated_buy_fee
                 remaining -= take
@@ -198,7 +226,7 @@ class PaperBroker:
             "orderId": order_id,
             "symbol": intent.symbol,
             "side": "NB" if intent.side == "BUY" else "NS",
-            "orderType": "MOK" if intent.order_type == "MARKET" else intent.order_type,
+            "orderType": intent.order_type,
             "orderStatus": "Filled",
             "price": price,
             "averagePrice": price,

@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable
 
 import customtkinter as ctk
@@ -26,6 +26,7 @@ from .models import (
     BacktestSettings,
 )
 from .report import common_label, export_run_excel, workbook_name
+from .replay import infer_resolution, infer_symbol
 
 
 COL_BG = PALETTE["PANEL"]
@@ -50,7 +51,13 @@ MONO = "Cascadia Mono"
 MODE_1 = "MODE 1"
 MODE_2 = "MODE 2"
 MODE_SETTING = "THAM SỐ"
-NO_PHASE_LABEL = "KHÔNG DÙNG PHASE 1"
+NO_PHASE_LABEL = "TỰ NHẬP TỶ TRỌNG"
+
+SIMULATION_MODE_HELP = {
+    "DAILY": "Dùng nến 1D, kiểm tra sau khi đóng ngày. Chạy nhanh nhưng có thể vào chậm hoặc mất tín hiệu trong phiên.",
+    "REPLAY": "Phát lại từng nến intraday để bắt tín hiệu trong phiên. Thiếu dữ liệu của mã/ngày nào thì dừng.",
+    "AUTO_HYBRID": "Có intraday thì dùng REPLAY; ngày thiếu hoặc PARTIAL tự dùng DAILY và ghi cảnh báo.",
+}
 
 PHASE_NAMES = (
     ("UPTREND", "UPTREND · TĂNG"),
@@ -59,12 +66,9 @@ PHASE_NAMES = (
     ("DOWNTREND", "DOWNTREND · GIẢM"),
 )
 
-DEFAULT_SCENARIOS = (
-    {"name": "HSG · GIAI ĐOẠN 1", "symbols": ["HSG"], "start_date": "2019-01-02", "end_date": "2020-03-31", "market_phase": "ACCUMULATION"},
-    {"name": "HSG · GIAI ĐOẠN 2", "symbols": ["HSG"], "start_date": "2020-04-03", "end_date": "2021-10-15", "market_phase": "UPTREND"},
-    {"name": "HSG · GIAI ĐOẠN 3", "symbols": ["HSG"], "start_date": "2021-10-19", "end_date": "2022-11-17", "market_phase": "DOWNTREND"},
-    {"name": "HSG · GIAI ĐOẠN 4", "symbols": ["HSG"], "start_date": "2022-11-17", "end_date": "2025-04-25", "market_phase": "ACCUMULATION"},
-)
+# Do not silently repopulate the user's scenario table with demo HSG rows after
+# they intentionally clear it.  Real scenarios are persisted in scenarios.json.
+DEFAULT_SCENARIOS: tuple[dict[str, Any], ...] = ()
 
 # Rule parameters grouped the way the business rule is written, so a field is
 # looked up where the operator already expects it to live.
@@ -131,6 +135,7 @@ class BacktestPopup:
         self.on_visibility_changed = on_visibility_changed
         self.data = HistoricalDataStore(client)
         self.engine = BacktestEngine(self.data)
+        self.replay = self.engine.replay
         self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="viking-backtest")
         self.cancel_event = threading.Event()
         self.running = False
@@ -362,7 +367,8 @@ class BacktestPopup:
         self._label(self.fixed_block, "DÙNG TRẠNG THÁI", 14).grid(row=0, column=0, sticky="w")
         self.fixed_phase = ctk.CTkOptionMenu(
             self.fixed_block, values=sorted(VALID_PHASES), height=38, font=(FONT, 15),
-            fg_color=COL_BLUE, width=230, command=lambda _v: self._refresh_capital_hint(),
+            fg_color=COL_BLUE, width=230, dynamic_resizing=False,
+            command=lambda _v: self._refresh_capital_hint(),
         )
         self.fixed_phase.set(self.config.fixed_market_phase)
         self.fixed_phase.grid(row=0, column=1, sticky="w", padx=12)
@@ -433,12 +439,20 @@ class BacktestPopup:
 
     def _mode2_tab(self, frame: ctk.CTkFrame) -> None:
         frame.grid_columnconfigure(0, weight=1)
-        # The table keeps the spare height and never shrinks past a
-        # readable size, however tall the editor below grows.
-        frame.grid_rowconfigure(1, weight=1, minsize=300)
-        # The how-to lives behind ! so the table gets the vertical space.
+        frame.grid_rowconfigure(0, weight=1)
+        body = ctk.CTkScrollableFrame(
+            frame, fg_color="transparent", scrollbar_button_color=COL_BORDER,
+        )
+        body.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_rowconfigure(2, minsize=380)
+        frame = body
+
+        # Keep the explanation visible; the detailed accounting rules remain
+        # behind the hint so they do not consume the table's space.
         note = ctk.CTkFrame(frame, fg_color="transparent")
-        note.grid(row=0, column=0, sticky="w", padx=14, pady=(10, 6))
+        note.grid(row=1, column=0, sticky="ew", padx=14, pady=(8, 6))
+        note.grid_columnconfigure(2, weight=1)
         self._hint(
             note,
             "Mỗi dòng là một giai đoạn liên tiếp của cùng một tài khoản.\n"
@@ -446,17 +460,26 @@ class BacktestPopup:
             "Hệ thống chạy theo thời gian; vốn, vị thế, lệnh chờ, chuỗi LOSS và thời hạn khóa "
             "được chuyển sang dòng kế tiếp. Mỗi dòng vẫn có kết quả riêng trong cùng file Excel.",
             mark="!", color=COL_BLUE,
-        ).grid(row=0, column=0)
-        self._label(note, "CÁCH DÙNG", 13, bold=True, color=COL_MUTED).grid(row=0, column=1, padx=10)
+        ).grid(row=0, column=0, rowspan=2, sticky="w")
+        self._label(note, "KỊCH BẢN MODE 2", 14, bold=True).grid(
+            row=0, column=1, sticky="w", padx=(10, 16),
+        )
+        self._label(
+            note,
+            "Chọn một hoặc nhiều dòng bên dưới. Các dòng chạy tuần tự và dùng chung vốn, vị thế, lệnh chờ.",
+            13, color=COL_MUTED,
+        ).grid(row=1, column=1, columnspan=2, sticky="w", padx=(10, 0))
 
         holder = ctk.CTkFrame(frame, fg_color="transparent")
-        holder.grid(row=1, column=0, sticky="nsew", padx=14)
+        holder.grid(row=2, column=0, sticky="nsew", padx=14)
+        holder.configure(height=380)
+        holder.grid_propagate(False)
         holder.grid_columnconfigure(0, weight=1)
         holder.grid_rowconfigure(0, weight=1)
         # Text columns read left aligned; fixed widths plus a horizontal bar so
         # the last column is never silently clipped.
         spec = (
-            ("name", "TÊN", 260, "w"), ("symbol", "MÃ", 150, "w"),
+            ("name", "TÊN", 340, "w"), ("symbol", "MÃ", 110, "w"),
             ("start", "TỪ", 118, "center"), ("end", "ĐẾN", 118, "center"),
             ("phase", "TRẠNG THÁI", 170, "w"), ("exposure", "TỶ TRỌNG", 115, "center"),
             ("slots", "SỐ MÃ", 90, "center"), ("guard", "BẢO VỆ", 190, "center"),
@@ -483,10 +506,14 @@ class BacktestPopup:
         self._refresh_scenarios()
         self._refresh_selection_preview()
 
+        self._replay_panel(frame)
+
         edit = ctk.CTkFrame(frame, fg_color=COL_SURFACE, corner_radius=8, border_width=1, border_color=COL_BORDER)
         edit.grid(row=3, column=0, sticky="ew", padx=14, pady=10)
         for col in range(5):
-            edit.grid_columnconfigure(col, weight=1)
+            edit.grid_columnconfigure(col, weight=1, uniform="scenario_fields")
+        edit.grid_columnconfigure(3, minsize=230)
+        edit.grid_columnconfigure(4, minsize=170)
         self.scenario_name = self._entry(edit, "Giai đoạn mới")
         self.scenario_start = self._entry(edit, "2020-01-01", 150)
         today = date.today()
@@ -498,13 +525,16 @@ class BacktestPopup:
         )
         self.scenario_end.set(today.isoformat())
         self.scenario_phase = ctk.CTkOptionMenu(
-            edit, values=[*sorted(VALID_PHASES), NO_PHASE_LABEL], height=38,
-            font=(FONT, 15), fg_color=COL_BLUE, command=lambda _v: self._sync_scenario_phase(),
+            edit, values=[*sorted(VALID_PHASES), NO_PHASE_LABEL], width=230, height=38,
+            font=(FONT, 15), dropdown_font=(FONT, 14), fg_color=COL_BLUE,
+            dynamic_resizing=False, command=lambda _v: self._sync_scenario_phase(),
         )
         self.scenario_exposure = self._entry(edit, "60", 90)
+        self._scenario_manual_exposure = "60"
+        self._scenario_phase_was_manual = False
         self.scenario_exposure.bind("<KeyRelease>", lambda _e: self._refresh_scenario_preview())
         for col, (label, widget) in enumerate(zip(
-            ("TÊN", "TỪ", "ĐẾN", "TRẠNG THÁI", "TỶ TRỌNG %"),
+            ("TÊN", "TỪ", "ĐẾN", "TRẠNG THÁI", "TỶ TRỌNG (%)"),
             (self.scenario_name, self.scenario_start, self.scenario_end,
              self.scenario_phase, self.scenario_exposure),
         )):
@@ -512,13 +542,20 @@ class BacktestPopup:
                 row=0, column=col, sticky="w", padx=(16 if col == 0 else 6, 6), pady=(12, 3),
             )
             widget.grid(row=1, column=col, sticky="ew", padx=(14 if col == 0 else 5, 5), pady=(0, 8))
-        self.scenario_exposure_note = self._hint(edit, "", mark="?")
-        self.scenario_exposure_note.grid(row=1, column=5, sticky="w", padx=(4, 12), pady=(0, 8))
+        self.scenario_exposure_note = self._label(
+            edit,
+            "Tỷ trọng lấy từ tab THAM SỐ; chỉ nhập tại đây khi chọn TỰ NHẬP TỶ TRỌNG.",
+            12, color=COL_MUTED,
+        )
+        self.scenario_exposure_note.configure(width=1, justify="left", wraplength=620)
+        self.scenario_exposure_note.grid(
+            row=2, column=3, columnspan=2, sticky="w", padx=6, pady=(0, 6),
+        )
 
         # Switches belong to the row, not to the shared settings, so two rows can
         # test two configurations over the same window.
         guards = ctk.CTkFrame(edit, fg_color="transparent")
-        guards.grid(row=2, column=0, columnspan=6, sticky="ew", padx=16, pady=(2, 6))
+        guards.grid(row=3, column=0, columnspan=5, sticky="ew", padx=16, pady=(2, 6))
         self._label(guards, "TỐI ĐA SỐ MÃ", 13, bold=True).grid(row=0, column=0, sticky="w")
         self.scenario_slots = self._entry(guards, "5", 80)
         self.scenario_slots.grid(row=0, column=1, sticky="w", padx=(8, 10))
@@ -554,7 +591,7 @@ class BacktestPopup:
             edit, [], columns=8, compact=True,
             placeholder="MÃ TRONG KỊCH BẢN — ví dụ HSG, HPG",
         )
-        self.scenario_symbols.grid(row=3, column=0, columnspan=6, sticky="ew", padx=16, pady=(0, 10))
+        self.scenario_symbols.grid(row=4, column=0, columnspan=5, sticky="ew", padx=16, pady=(0, 10))
         self._sync_scenario_phase()
 
         # Says out loud what CHẠY MODE 2 is about to do and what file it writes.
@@ -563,7 +600,7 @@ class BacktestPopup:
         self.selection_file = self.selection_preview
 
         actions = ctk.CTkFrame(frame, fg_color="transparent")
-        actions.grid(row=6, column=0, sticky="ew", padx=14, pady=(0, 10))
+        actions.grid(row=5, column=0, sticky="ew", padx=14, pady=(0, 10))
         self._refresh_selection_preview()
         actions.grid_columnconfigure(1, weight=1)
         # A one-symbol scenario only fills one slot, so the run deploys a
@@ -582,6 +619,267 @@ class BacktestPopup:
             fg_color=COL_SLATE, hover_color=COL_RED, command=self._delete_scenario,
         ).grid(row=0, column=3, padx=5)
 
+    def _replay_panel(self, frame: ctk.CTkFrame) -> None:
+        panel = ctk.CTkFrame(
+            frame, fg_color=COL_SURFACE, corner_radius=8,
+            border_width=1, border_color=COL_BORDER,
+        )
+        panel.grid(row=0, column=0, sticky="ew", padx=14, pady=(2, 8))
+        panel.grid_columnconfigure(2, weight=1)
+        self._label(panel, "CÁCH CHẠY", 14, bold=True).grid(
+            row=0, column=0, sticky="w", padx=(14, 8), pady=(10, 5),
+        )
+        self.simulation_mode = ctk.StringVar(value=self.config.simulation_mode.replace("_", " "))
+        self.replay_mode_menu = ctk.CTkOptionMenu(
+            panel, values=["DAILY", "REPLAY", "AUTO HYBRID"],
+            variable=self.simulation_mode, width=175, height=32,
+            font=(FONT, 13, "bold"), fg_color=COL_BLUE, dynamic_resizing=False,
+            command=lambda _value: self._sync_replay_mode(),
+        )
+        self.replay_mode_menu.grid(row=0, column=1, sticky="w", padx=8, pady=(10, 5))
+        self.replay_mode_help = self._label(
+            panel, "Áp dụng cho toàn bộ kịch bản đã chọn", 13, color=COL_MUTED,
+        )
+        self.replay_mode_help.grid(row=0, column=2, sticky="ew", padx=12, pady=(10, 5))
+        self.replay_import_button = ctk.CTkButton(
+            panel, text="IMPORT FILE", width=130, height=32,
+            font=(FONT, 12, "bold"), fg_color=COL_GREEN,
+            hover_color=COL_GREEN_HOVER, command=self.import_replay_file,
+        )
+        self.replay_import_button.grid(row=0, column=3, padx=5, pady=(10, 5))
+        self.replay_delete_button = ctk.CTkButton(
+            panel, text="XÓA", width=80, height=32,
+            font=(FONT, 12, "bold"), fg_color=COL_SLATE,
+            hover_color=COL_RED, command=self.delete_replay_data,
+        )
+        self.replay_delete_button.grid(row=0, column=4, padx=(5, 12), pady=(10, 5))
+
+        legend = ctk.CTkFrame(panel, fg_color="transparent")
+        legend.grid(row=1, column=0, columnspan=5, sticky="ew", padx=12, pady=(5, 4))
+        self.replay_mode_cards: dict[str, tuple[Any, Any]] = {}
+        for column, (mode, title) in enumerate((
+            ("DAILY", "DAILY · NẾN NGÀY"),
+            ("REPLAY", "REPLAY · INTRADAY"),
+            ("AUTO_HYBRID", "AUTO HYBRID · TỰ CHỌN"),
+        )):
+            legend.grid_columnconfigure(column, weight=1, uniform="replay_help")
+            card = ctk.CTkFrame(
+                legend, height=78, fg_color=COL_SURFACE_2, corner_radius=6,
+                border_width=1, border_color=COL_BORDER,
+            )
+            card.grid(row=0, column=column, sticky="nsew", padx=4)
+            card.grid_propagate(False)
+            card.grid_columnconfigure(0, weight=1)
+            title_widget = self._label(card, title, 12, bold=True, color="#60A5FA")
+            title_widget.grid(row=0, column=0, sticky="w", padx=10, pady=(7, 1))
+            ctk.CTkLabel(
+                card, text=SIMULATION_MODE_HELP[mode], width=1,
+                font=(FONT, 11), text_color=COL_MUTED,
+                anchor="w", justify="left", wraplength=320,
+            ).grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 7))
+            self.replay_mode_cards[mode] = (card, title_widget)
+
+        columns = (
+            ("symbol", "MÃ", 75), ("resolution", "RES", 65),
+            ("bars", "SỐ NẾN", 110), ("start", "TỪ", 135), ("end", "ĐẾN", 135),
+            ("full", "FULL", 75), ("partial", "PARTIAL", 90),
+            ("source", "FILE NGUỒN", 360),
+        )
+        holder = ctk.CTkFrame(panel, fg_color="transparent")
+        holder.grid(row=2, column=0, columnspan=5, sticky="ew", padx=12, pady=(4, 3))
+        holder.grid_columnconfigure(0, weight=1)
+        self.replay_tree = ttk.Treeview(
+            holder, columns=[key for key, _, _ in columns], show="headings",
+            height=3, selectmode="browse", style="Backtest.Treeview",
+        )
+        for key, heading, width in columns:
+            self.replay_tree.heading(
+                key, text=heading, anchor="w" if key == "source" else "center",
+            )
+            self.replay_tree.column(
+                key, width=width, minwidth=width,
+                anchor="w" if key == "source" else "center", stretch=key == "source",
+            )
+        self.replay_tree.grid(row=0, column=0, sticky="ew")
+        replay_scroll = ttk.Scrollbar(holder, orient="vertical", command=self.replay_tree.yview)
+        replay_scroll.grid(row=0, column=1, sticky="ns")
+        self.replay_tree.configure(yscrollcommand=replay_scroll.set)
+        self._label(
+            panel,
+            "RES = độ phân giải · FULL = ngày đủ phiên · PARTIAL = ngày thiếu đầu hoặc cuối phiên",
+            11, color=COL_MUTED,
+        ).grid(row=3, column=0, columnspan=5, sticky="w", padx=14, pady=(0, 8))
+        self._refresh_replay_datasets()
+        self._sync_replay_mode()
+
+    def _sync_replay_mode(self) -> None:
+        mode = self.simulation_mode.get().strip().upper().replace(" ", "_")
+        for key, (card, title) in getattr(self, "replay_mode_cards", {}).items():
+            selected = key == mode
+            card.configure(
+                fg_color="#173A5E" if selected else COL_SURFACE_2,
+                border_color=COL_BLUE if selected else COL_BORDER,
+            )
+            title.configure(text_color=COL_TEXT if selected else "#60A5FA")
+        if hasattr(self, "run_mode2"):
+            self.run_mode2.configure(text="CHẠY MODE 2", width=140)
+        if hasattr(self, "selection_preview"):
+            self._refresh_selection_preview()
+
+    def _refresh_replay_datasets(self) -> None:
+        if not hasattr(self, "replay_tree"):
+            return
+        for item in self.replay_tree.get_children():
+            self.replay_tree.delete(item)
+        for dataset in self.replay.list_datasets():
+            key = f"{dataset.symbol}:{dataset.resolution}"
+            self.replay_tree.insert("", "end", iid=key, values=(
+                dataset.symbol, dataset.resolution, f"{dataset.bar_count:,}",
+                dataset.coverage_start, dataset.coverage_end,
+                dataset.full_days, dataset.partial_days, dataset.source_name,
+            ))
+
+    def _replay_import_options(self, path: str) -> dict[str, Any] | None:
+        dialog = ctk.CTkToplevel(self.top)
+        dialog.title("IMPORT DỮ LIỆU REPLAY")
+        dialog.geometry("620x390")
+        dialog.resizable(False, False)
+        dialog.transient(self.top)
+        dialog.grab_set()
+        dialog.grid_columnconfigure(1, weight=1)
+        values = {
+            "symbol": ctk.StringVar(value=infer_symbol(path)),
+            "resolution": ctk.StringVar(value=infer_resolution(path)),
+            "timezone_name": ctk.StringVar(value="Asia/Ho_Chi_Minh"),
+            "price_scale": ctk.StringVar(value="AUTO"),
+        }
+        labels = (
+            ("MÃ", "symbol"), ("RESOLUTION", "resolution"),
+            ("TIMEZONE", "timezone_name"), ("HỆ SỐ GIÁ", "price_scale"),
+        )
+        self._label(dialog, "KIỂM TRA TRƯỚC KHI IMPORT", 17, bold=True).grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=18, pady=(18, 12),
+        )
+        for row, (label, key) in enumerate(labels, start=1):
+            self._label(dialog, label, 13, bold=True).grid(
+                row=row, column=0, sticky="w", padx=18, pady=6,
+            )
+            ctk.CTkEntry(
+                dialog, textvariable=values[key], height=36, font=(FONT, 14),
+                fg_color=COL_SURFACE_2, border_color=COL_BORDER,
+            ).grid(row=row, column=1, sticky="ew", padx=(8, 18), pady=6)
+        stats = self._label(dialog, "Đang kiểm tra file…", 13, color=COL_MUTED)
+        stats.grid(row=5, column=0, columnspan=2, sticky="w", padx=18, pady=(12, 8))
+        result: dict[str, Any] = {}
+
+        def inspect() -> Any | None:
+            try:
+                raw_scale = values["price_scale"].get().strip().upper()
+                scale = None if raw_scale in {"", "AUTO"} else float(raw_scale)
+                preview = self.replay.inspect_file(
+                    path, symbol=values["symbol"].get(),
+                    resolution=values["resolution"].get(),
+                    timezone_name=values["timezone_name"].get(), price_scale=scale,
+                )
+            except Exception as exc:
+                stats.configure(text=f"Lỗi: {exc}", text_color=COL_RED)
+                return None
+            partial = ", ".join(preview.partial_dates[:4]) or "không"
+            stats.configure(
+                text=(
+                    f"{preview.symbol} · {preview.resolution} · {preview.bar_count:,} nến\n"
+                    f"{preview.coverage_start} → {preview.coverage_end} · "
+                    f"FULL {preview.full_days} · PARTIAL {preview.partial_days}: {partial}\n"
+                    f"Giá chia {preview.price_scale:g} · UTC được đổi sang giờ Việt Nam"
+                ),
+                text_color=COL_GREEN,
+            )
+            return preview
+
+        def accept() -> None:
+            preview = inspect()
+            if preview is None:
+                return
+            result.update(
+                symbol=preview.symbol, resolution=preview.resolution,
+                timezone_name=preview.timezone, price_scale=preview.price_scale,
+            )
+            dialog.destroy()
+
+        buttons = ctk.CTkFrame(dialog, fg_color="transparent")
+        buttons.grid(row=6, column=0, columnspan=2, sticky="e", padx=18, pady=14)
+        ctk.CTkButton(
+            buttons, text="KIỂM TRA", width=125, height=36,
+            fg_color=COL_SLATE, hover_color=COL_BLUE, command=inspect,
+        ).grid(row=0, column=0, padx=5)
+        ctk.CTkButton(
+            buttons, text="IMPORT", width=125, height=36,
+            fg_color=COL_GREEN, hover_color=COL_GREEN_HOVER, command=accept,
+        ).grid(row=0, column=1, padx=5)
+        ctk.CTkButton(
+            buttons, text="HỦY", width=90, height=36,
+            fg_color=COL_SLATE, hover_color=COL_RED, command=dialog.destroy,
+        ).grid(row=0, column=2, padx=5)
+        dialog.after(50, inspect)
+        self.top.wait_window(dialog)
+        return result or None
+
+    def import_replay_file(self) -> None:
+        if self.running:
+            return
+        path = filedialog.askopenfilename(
+            parent=self.top, title="Chọn dữ liệu TradingView",
+            filetypes=[("TradingView", "*.csv *.xlsx"), ("CSV", "*.csv"), ("Excel", "*.xlsx")],
+        )
+        if not path:
+            return
+        options = self._replay_import_options(path)
+        if not options:
+            return
+        self.running = True
+        self.replay_import_button.configure(state="disabled")
+        self.replay_delete_button.configure(state="disabled")
+        self.run_mode2.configure(state="disabled")
+        self._say("Đang import dữ liệu REPLAY…", "busy")
+
+        def done(task: Any) -> None:
+            self.running = False
+            self.replay_import_button.configure(state="normal")
+            self.replay_delete_button.configure(state="normal")
+            self.run_mode2.configure(state="normal")
+            try:
+                preview = task.result()
+            except Exception as exc:
+                self._say(str(exc), "error")
+                return
+            self._refresh_replay_datasets()
+            self._say(
+                f"Đã import {preview.symbol} · {preview.resolution}: "
+                f"mới {preview.inserted:,}, thay {preview.replaced:,}, trùng {preview.unchanged:,}",
+                "ok",
+            )
+
+        task = self.worker.submit(lambda: self.replay.import_file(path, **options))
+        task.add_done_callback(lambda future: self._post(lambda: done(future)))
+
+    def delete_replay_data(self) -> None:
+        if self.running:
+            return
+        selected = self.replay_tree.selection()
+        if not selected:
+            messagebox.showinfo("REPLAY", "Chọn một dòng dữ liệu cần xóa.", parent=self.top)
+            return
+        symbol, resolution = selected[0].split(":", 1)
+        if not messagebox.askyesno(
+            "Xóa dữ liệu REPLAY",
+            f"Xóa toàn bộ nến {symbol} · {resolution}?\n\nCache DNSE, scenario và kết quả không bị ảnh hưởng.",
+            parent=self.top,
+        ):
+            return
+        deleted = self.replay.delete_dataset(symbol, resolution)
+        self._refresh_replay_datasets()
+        self._say(f"Đã xóa {deleted:,} nến REPLAY của {symbol} · {resolution}.", "ok")
+
     def _refresh_scenarios(self) -> None:
         for item in self.scenario_tree.get_children():
             self.scenario_tree.delete(item)
@@ -591,8 +889,8 @@ class BacktestPopup:
                 tags=("even" if index % 2 == 0 else "odd",),
                 values=(
                     row.name, ", ".join(row.symbols), row.start_date, row.end_date,
-                    row.market_phase if row.uses_market_phase else "KHÔNG DÙNG PHASE 1",
-                    "theo bảng" if row.uses_market_phase else f"{row.exposure_pct:g}%",
+                    row.market_phase if row.uses_market_phase else NO_PHASE_LABEL,
+                    "THEO THAM SỐ" if row.uses_market_phase else f"TỰ NHẬP · {row.exposure_pct:g}%",
                     row.max_positions,
                     "+".join(m.replace("IND_EXIT", "EXIT") for m in row.em_modes) or "không",
                     "BẬT" if row.whipsaw_enabled else "TẮT",
@@ -607,10 +905,15 @@ class BacktestPopup:
         """Name the rows that will run and the file they will land in."""
         if not hasattr(self, "selection_preview"):
             return
+        mode = (
+            self.simulation_mode.get().strip().upper()
+            if hasattr(self, "simulation_mode") else "DAILY"
+        )
         rows = self._selected_scenarios()
         if not rows:
             self.selection_preview.configure(
-                text="CHƯA CHỌN DÒNG NÀO — bấm một dòng ở bảng trên", text_color=COL_WARN,
+                text=f"{mode} · CHƯA CHỌN KỊCH BẢN — bấm một hoặc nhiều dòng ở bảng trên",
+                text_color=COL_WARN,
             )
             return
         names = ", ".join(row.name for row in rows)
@@ -623,7 +926,7 @@ class BacktestPopup:
             label=common_label([row.name for row in rows]),
         )
         self.selection_preview.configure(
-            text=f"CHẠY MODE 2 sẽ chạy {len(rows)} kịch bản: {names}   →   1 file: {target}",
+            text=f"{mode} · {len(rows)} kịch bản: {names}   →   1 file: {target}",
             text_color=COL_GREEN,
         )
 
@@ -637,10 +940,10 @@ class BacktestPopup:
             phase = self.scenario_phase.get()
             if phase == NO_PHASE_LABEL:
                 pct = float(self.scenario_exposure.get().strip() or 0)
-                source = "tỷ trọng tự nhập"
+                source = "TỰ NHẬP"
             else:
                 pct = float(self.exposure_entries[phase].get().strip() or 0)
-                source = phase
+                source = f"THEO {phase}"
         except (TypeError, ValueError, KeyError):
             self.scenario_slots_preview.configure(text="")
             return
@@ -650,14 +953,23 @@ class BacktestPopup:
         )
 
     def _sync_scenario_phase(self) -> None:
-        """Only a row that opted out of Phase 1 types its own exposure."""
-        off = self.scenario_phase.get() == NO_PHASE_LABEL
-        self.scenario_exposure.configure(state="normal" if off else "disabled")
-        self.scenario_exposure_note.hover.text = (
-            "Không dùng Phase 1: dòng này giữ nguyên tỷ trọng bạn điền suốt giai đoạn."
-            if off else
-            "Tỷ trọng lấy từ bảng bốn trạng thái ở tab THAM SỐ, không nhập ở đây."
-        )
+        """Show the effective exposure without losing the manual draft."""
+        phase = self.scenario_phase.get()
+        manual = phase == NO_PHASE_LABEL
+        if getattr(self, "_scenario_phase_was_manual", False):
+            current = self.scenario_exposure.get().strip()
+            if current:
+                self._scenario_manual_exposure = current
+
+        value = self._scenario_manual_exposure
+        if not manual:
+            value = self.exposure_entries.get(phase).get().strip() if phase in self.exposure_entries else "0"
+
+        self.scenario_exposure.configure(state="normal")
+        self.scenario_exposure.delete(0, "end")
+        self.scenario_exposure.insert(0, value)
+        self.scenario_exposure.configure(state="normal" if manual else "disabled")
+        self._scenario_phase_was_manual = manual
         self._refresh_scenario_preview()
 
     def _load_selected_scenario(self, _event: Any = None) -> None:
@@ -676,10 +988,12 @@ class BacktestPopup:
         for key, var in self.scenario_em.items():
             var.set(key in row.em_modes)
         self.scenario_whipsaw.set(row.whipsaw_enabled)
+        self._scenario_manual_exposure = f"{row.exposure_pct:g}"
+        self._scenario_phase_was_manual = False
         self.scenario_phase.set(row.market_phase if row.uses_market_phase else NO_PHASE_LABEL)
         self.scenario_exposure.configure(state="normal")
         self.scenario_exposure.delete(0, "end")
-        self.scenario_exposure.insert(0, f"{row.exposure_pct:g}")
+        self.scenario_exposure.insert(0, self._scenario_manual_exposure)
         self._sync_scenario_phase()
 
     def _save_scenario(self) -> None:
@@ -901,6 +1215,7 @@ class BacktestPopup:
         self.fill_session = ctk.CTkOptionMenu(
             fill_row, values=["CHO PHÉP · khớp giá mở cửa", "KHÔNG · khớp sau 9h15"],
             height=38, font=(FONT, 14), fg_color=COL_BLUE, width=265,
+            dynamic_resizing=False,
         )
         self.fill_session.set(
             "KHÔNG · khớp sau 9h15" if self.config.fill_session == "CONTINUOUS"
@@ -922,12 +1237,13 @@ class BacktestPopup:
         self.sell_wait = ctk.CTkOptionMenu(
             sell_row, values=["KIỂM TRA LẠI ĐIỀU KIỆN", "BÁN THEO YÊU CẦU CŨ"],
             height=38, font=(FONT, 14), fg_color=COL_BLUE, width=265,
+            dynamic_resizing=False,
         )
         self.sell_wait.set("BÁN THEO YÊU CẦU CŨ" if self.config.sell_wait_policy == "KEEP" else "KIỂM TRA LẠI ĐIỀU KIỆN")
         self.sell_wait.grid(row=0, column=1, sticky="w")
         self._hint(
             sell_row,
-            "Cổ phiếu mua hôm nay phải hai phiên sau mới bán được.\n"
+            "Cổ phiếu chỉ bán được từ phiên chiều (13:00) ngày T+2; cuối tuần và ngày nghỉ không được tính.\n"
             "KIỂM TRA LẠI: tới lúc bán được thì xem điều kiện thoát còn đúng không, hết đúng thì thôi.\n"
             "BÁN THEO YÊU CẦU CŨ: đã ra lệnh bán thì cổ về bao nhiêu bán bấy nhiêu.",
         ).grid(row=0, column=2, padx=10)
@@ -995,30 +1311,36 @@ class BacktestPopup:
         self.progress_bar.grid(row=0, column=1, padx=12)
         self.progress_bar.grid_remove()
         self.open_button = ctk.CTkButton(
-            bar, text="MỞ THƯ MỤC", width=160, height=40, font=(FONT, 14, "bold"),
+            bar, text="MỞ THƯ MỤC", width=125, height=34, font=(FONT, 12, "bold"),
             fg_color=COL_SLATE, hover_color=COL_BLUE, command=self._open_output,
         )
         self.open_button.grid(row=0, column=2, padx=5)
+        self.clear_cache_button = ctk.CTkButton(
+            bar, text="XÓA CACHE", width=105, height=34, font=(FONT, 12, "bold"),
+            fg_color=COL_SLATE, hover_color=COL_RED, command=self.clear_downloaded_data,
+        )
+        self.clear_cache_button.grid(row=0, column=3, padx=5)
         self.cancel_button = ctk.CTkButton(
-            bar, text="DỪNG", width=95, height=40, font=(FONT, 14, "bold"),
+            bar, text="DỪNG", width=75, height=34, font=(FONT, 12, "bold"),
             fg_color=COL_SLATE, hover_color=COL_RED, state="disabled", command=self.cancel,
         )
-        self.cancel_button.grid(row=0, column=3, padx=5)
+        self.cancel_button.grid(row=0, column=4, padx=5)
         self.download_button = ctk.CTkButton(
-            bar, text="TẢI DỮ LIỆU", width=155, height=40, font=(FONT, 14, "bold"),
+            bar, text="TẢI DỮ LIỆU", width=125, height=34, font=(FONT, 12, "bold"),
             fg_color=COL_BLUE, hover_color=COL_BLUE_HOVER, command=self.download_data,
         )
-        self.download_button.grid(row=0, column=4, padx=5)
+        self.download_button.grid(row=0, column=5, padx=5)
         self.run_mode1 = ctk.CTkButton(
-            bar, text="CHẠY MODE 1", width=175, height=40, font=(FONT, 15, "bold"),
+            bar, text="CHẠY MODE 1", width=140, height=34, font=(FONT, 13, "bold"),
             fg_color=COL_GREEN, hover_color=COL_GREEN_HOVER, command=self.run_mode_1,
         )
-        self.run_mode1.grid(row=0, column=5, padx=5)
+        self.run_mode1.grid(row=0, column=6, padx=5)
         self.run_mode2 = ctk.CTkButton(
-            bar, text="CHẠY MODE 2", width=175, height=40, font=(FONT, 15, "bold"),
+            bar, text="CHẠY MODE 2", width=140, height=34, font=(FONT, 13, "bold"),
             fg_color=COL_BLUE, hover_color=COL_BLUE_HOVER, command=self.run_mode_2,
         )
-        self.run_mode2.grid(row=0, column=6, padx=5)
+        self.run_mode2.grid(row=0, column=7, padx=5)
+        self._sync_replay_mode()
 
     # ------------------------------------------------------------ read state
 
@@ -1072,6 +1394,7 @@ class BacktestPopup:
             sell_fee_pct=float(self.cost_entries["sell_fee_pct"].get().strip() or 0),
             sell_tax_pct=float(self.cost_entries["sell_tax_pct"].get().strip() or 0),
             rule_parameters=params,
+            simulation_mode=self.simulation_mode.get().strip().upper().replace(" ", "_"),
         )
         self.config = values
         self.data.save_settings(values.to_dict())
@@ -1138,6 +1461,7 @@ class BacktestPopup:
                     buy_fee_rate=values.buy_fee_pct / 100.0,
                     sell_fee_rate=values.sell_fee_pct / 100.0,
                     sell_tax_rate=values.sell_tax_pct / 100.0,
+                    simulation_mode=values.simulation_mode,
                     progress=self._progress, cancelled=self.cancel_event.is_set,
                 )
                 carry["capital"] = result.final_equity
@@ -1153,7 +1477,8 @@ class BacktestPopup:
         self._running_mode = mode
         self.running = True
         self.cancel_event.clear()
-        for button in (self.download_button, self.run_mode1, self.run_mode2):
+        for button in (self.clear_cache_button, self.download_button, self.run_mode1, self.run_mode2,
+                       self.replay_import_button, self.replay_delete_button):
             button.configure(state="disabled")
         self.cancel_button.configure(state="normal")
         self.progress_bar.set(0)
@@ -1176,7 +1501,8 @@ class BacktestPopup:
 
     def _finished(self, task: Any) -> None:
         self.running = False
-        for button in (self.download_button, self.run_mode1, self.run_mode2):
+        for button in (self.clear_cache_button, self.download_button, self.run_mode1, self.run_mode2,
+                       self.replay_import_button, self.replay_delete_button):
             button.configure(state="normal")
         self.cancel_button.configure(state="disabled")
         self.progress_bar.grid_remove()
@@ -1238,8 +1564,11 @@ class BacktestPopup:
             messagebox.showerror("Backtest", str(exc), parent=self.top)
             return
         # Cover both modes in one fetch: MODE 1's list plus every scenario symbol.
+        # Execution bars matter to MODE 2 as well (SL/TP/NORMAL fills), so a
+        # symbol that exists only in a scenario must not be limited to 1D data.
         scenario_symbols = [s for row in self.scenarios for s in row.symbols]
-        symbols = list(dict.fromkeys(["VNINDEX", *values.symbols, *scenario_symbols]))
+        execution_symbols = list(dict.fromkeys([*values.symbols, *scenario_symbols]))
+        symbols = ["VNINDEX", *execution_symbols]
         if len(symbols) <= 1:
             messagebox.showinfo(
                 "Backtest", "Chưa có mã nào ở tab MODE 1 lẫn kịch bản MODE 2.", parent=self.top,
@@ -1250,7 +1579,8 @@ class BacktestPopup:
         last = max([values.end_date] + [row.end_date for row in self.scenarios])
         self.running = True
         self.cancel_event.clear()
-        for button in (self.download_button, self.run_mode1, self.run_mode2):
+        for button in (self.clear_cache_button, self.download_button, self.run_mode1, self.run_mode2,
+                       self.replay_import_button, self.replay_delete_button):
             button.configure(state="disabled")
         self.cancel_button.configure(state="normal")
         self.progress_bar.set(0)
@@ -1263,11 +1593,11 @@ class BacktestPopup:
                     raise RuntimeError("Đã dừng tải dữ liệu.")
                 self._progress((index - 1) / len(symbols) * .5, f"Nến ngày · {symbol} ({index}/{len(symbols)})")
                 bars += len(self.data.load_daily(symbol, first, last, warmup_sessions=250))
-            for index, symbol in enumerate(values.symbols, start=1):
+            for index, symbol in enumerate(execution_symbols, start=1):
                 if self.cancel_event.is_set():
                     raise RuntimeError("Đã dừng tải dữ liệu.")
-                self._progress(.5 + index / max(1, len(values.symbols)) * .5,
-                               f"Nến thực thi · {symbol} ({index}/{len(values.symbols)})")
+                self._progress(.5 + index / max(1, len(execution_symbols)) * .5,
+                               f"Nến thực thi · {symbol} ({index}/{len(execution_symbols)})")
                 rows, _resolution, _warnings = self.data.load_execution(
                     symbol, first, last, resolution="AUTO",
                 )
@@ -1276,7 +1606,8 @@ class BacktestPopup:
 
         def done(task: Any) -> None:
             self.running = False
-            for button in (self.download_button, self.run_mode1, self.run_mode2):
+            for button in (self.clear_cache_button, self.download_button, self.run_mode1, self.run_mode2,
+                           self.replay_import_button, self.replay_delete_button):
                 button.configure(state="normal")
             self.cancel_button.configure(state="disabled")
             self.progress_bar.grid_remove()
@@ -1288,6 +1619,40 @@ class BacktestPopup:
             self._say(f"Đã có dữ liệu · {count} mã · {bars:,} nến", "ok")
 
         self.worker.submit(fetch).add_done_callback(lambda task: self._post(lambda: done(task)))
+
+    def clear_downloaded_data(self) -> None:
+        """Delete downloaded OHLC caches only; preserve settings, scenarios and reports."""
+        if self.running:
+            return
+        cache_root = self.data.cache_dir.resolve()
+        files = [
+            path for path in self.data.cache_dir.glob("*.json")
+            if path.is_file() and path.resolve().parent == cache_root
+        ]
+        if not files:
+            messagebox.showinfo("Backtest", "Cache dữ liệu đang trống.", parent=self.top)
+            return
+        total_bytes = sum(path.stat().st_size for path in files)
+        size_mb = total_bytes / (1024 * 1024)
+        if not messagebox.askyesno(
+            "Xóa cache backtest",
+            f"Xóa {len(files)} file dữ liệu ({size_mb:.1f} MB)?\n\n"
+            "Scenario, thiết lập và file Excel kết quả vẫn được giữ nguyên.",
+            parent=self.top,
+        ):
+            return
+        deleted = 0
+        failures: list[str] = []
+        for path in files:
+            try:
+                path.unlink()
+                deleted += 1
+            except OSError as exc:
+                failures.append(f"{path.name}: {exc}")
+        if failures:
+            self._say(f"Đã xóa {deleted}/{len(files)} file; lỗi {len(failures)} file.", "error")
+            return
+        self._say(f"Đã xóa {deleted} file cache ({size_mb:.1f} MB).", "ok")
 
     def _open_output(self) -> None:
         """Open the results folder, highlighting the file the last run wrote."""

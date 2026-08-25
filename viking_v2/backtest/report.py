@@ -25,6 +25,18 @@ ROUND_HEADERS = (
     "PHÍ+THUẾ", "LÃI/LỖ", "%", "KẾT QUẢ",
 )
 
+SIGNAL_HEADERS = (
+    "LẦN CHẠY", "THỜI ĐIỂM", "MÃ", "TÍN HIỆU", "QUYẾT ĐỊNH", "SỰ KIỆN",
+    "LÝ DO", "EMA NHANH", "EMA CHẬM", "RSI", "THỊ TRƯỜNG", "CHẾ ĐỘ",
+    "NGUỒN", "CHẤT LƯỢNG",
+)
+
+FILL_HEADERS = (
+    "LẦN CHẠY", "TÍN HIỆU LÚC", "KHỚP LÚC", "MÃ", "MUA/BÁN", "SỰ KIỆN",
+    "KHỐI LƯỢNG", "GIÁ", "PHÍ", "THUẾ", "EMA NHANH", "EMA CHẬM", "RSI",
+    "CHẾ ĐỘ", "NGUỒN", "CHẤT LƯỢNG", "LÝ DO",
+)
+
 
 def event_name(event: str) -> str:
     parts = [_EVENT_NAMES.get(value.strip().upper(), value.strip())
@@ -103,6 +115,9 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
         return f"{s.fixed_market_phase} · {s.fixed_exposure_pct:g}%"
 
     line("Giai đoạn", lambda r: f"{r.config.start_date} → {r.config.end_date}")
+    line("Chế độ mô phỏng", lambda r: r.config.simulation_mode)
+    line("Fallback 1D", lambda r: int((r.data_quality or {}).get("fallback_count", 0) or 0))
+    line("Cảnh báo dữ liệu", lambda r: " | ".join(r.warnings) or "—")
     line("Phase 1 · tỷ trọng", phase_of)
     line("Vốn đầu", lambda r: round(r.initial_capital))
     line("Vốn cuối", lambda r: round(r.final_equity))
@@ -157,13 +172,24 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
         ("Chống nhiễu (whipsaw)", f"EMA cắt qua lại {params.get('whipsaw_n')} lần trong"
                         f" {params.get('whipsaw_x')} phiên thì khóa mua"
                         if first.whipsaw_enabled else "OFF"),
-        ("Bán khi cổ về T+2", "kiểm tra lại điều kiện" if first.sell_wait_policy == "RECHECK" else "vẫn bán"),
+        (
+            "Bán khi cổ về T+2",
+            "từ 13:00 phiên chiều · "
+            + ("kiểm tra lại điều kiện" if first.sell_wait_policy == "RECHECK" else "vẫn bán"),
+        ),
         ("Không compound", "ON" if params.get("no_compound_enabled") else "OFF"),
-        ("Nến tín hiệu", "1D đã đóng cửa"),
-        ("Thời điểm khớp",
-         "phiên kế tiếp, sau 9h15 như bot thật (ATO tắt)"
-         if first.fill_session == "CONTINUOUS"
-         else "phiên kế tiếp, giá mở cửa — tức giá đợt ATO"),
+        ("Nến tín hiệu", (
+            "1D đang chạy, dựng lại sau từng nến nguồn"
+            if first.simulation_mode in {"REPLAY", "AUTO_HYBRID"}
+            else "1D đã đóng cửa"
+        )),
+        ("Thời điểm khớp", (
+            "Open nến nguồn hợp lệ kế tiếp sau khi tín hiệu xuất hiện"
+            if first.simulation_mode in {"REPLAY", "AUTO_HYBRID"}
+            else (
+                "Open phiên kế tiếp; SELL chờ T+2 sang phiên kế tiếp vì DAILY không có giá chiều T+2"
+            )
+        )),
         ("Khối lượng", "bội 100, làm tròn xuống"),
         ("Trượt giá", "không mô phỏng"),
         ("Phí mua / phí bán / thuế bán",
@@ -248,6 +274,37 @@ def export_run_excel(results: BacktestResult | list[BacktestResult], directory: 
         sheet.append(ROUND_HEADERS[1:])
         for row in round_rows([item]):
             sheet.append(row[1:])
+
+    replay_items = [
+        item for item in items if item.config.simulation_mode in {"REPLAY", "AUTO_HYBRID"}
+    ]
+    if replay_items:
+        signals = book.create_sheet("TÍN HIỆU")
+        signals.append(SIGNAL_HEADERS)
+        for item in replay_items:
+            label = item.config.run_name or item.run_id
+            for row in item.signals:
+                indicators = (row.get("details") or {}).get("indicators") or {}
+                signals.append((
+                    label, row.get("signal_time") or row.get("time") or row.get("date"),
+                    row.get("symbol"), row.get("signal"), row.get("action"), row.get("event"),
+                    row.get("reason"), indicators.get("ema_fast", 0.0),
+                    indicators.get("ema_slow", 0.0), indicators.get("rsi", 0.0),
+                    row.get("market_state"), row.get("simulation_mode"),
+                    row.get("source_resolution"), row.get("data_quality"),
+                ))
+        fills = book.create_sheet("KHỚP LỆNH")
+        fills.append(FILL_HEADERS)
+        for item in replay_items:
+            label = item.config.run_name or item.run_id
+            for event in item.events:
+                fills.append((
+                    label, event.signal_time or event.signal_date, event.fill_time or event.date,
+                    event.symbol, event.side, event.event, event.quantity, event.price,
+                    event.fee, event.tax, event.ema_fast, event.ema_slow, event.rsi,
+                    event.simulation_mode, event.source_resolution, event.data_quality,
+                    event.reason,
+                ))
 
     info = book.create_sheet("THÔNG TIN")
     for row in info_rows(items):

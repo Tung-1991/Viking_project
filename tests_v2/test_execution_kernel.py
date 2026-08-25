@@ -124,6 +124,33 @@ def test_sell_waits_for_t2_and_executes_sequentially(tmp_path):
     assert int(csv_rows[-1]["remaining_quantity"]) == 0
 
 
+def test_real_sell_fails_closed_when_dnse_omits_trade_quantity(tmp_path):
+    class RealWithoutSellableQuantity:
+        @staticmethod
+        def has_trading_token():
+            return True
+
+        @staticmethod
+        def get_positions(*, force=False):
+            return [{"symbol": "FPT", "openQuantity": 100}]
+
+        @staticmethod
+        def place_order(_intent):
+            raise AssertionError("REAL SELL must not be sent without tradeQuantity")
+
+    paper = PaperBroker(tmp_path / "paper-real-guard.json")
+    queue = OrderQueue(tmp_path / "orders-real-guard.json")
+    sell = queue.add(OrderIntent.create(
+        "FPT", "SELL", 100, "MARKET", execution_mode="REAL", action="CLOSE",
+    ))
+    service = ExecutionService(
+        RealWithoutSellableQuantity(), paper, queue,
+        JSONLineJournal(tmp_path / "journal-real-guard.jsonl"),
+    )
+    assert service.process_due(phase="OPEN", execution_mode="REAL") == []
+    assert queue.get(sell.id).status == "WAITING_SETTLEMENT"
+
+
 def test_trade_cycle_reentry_loss_lock_and_win_reset(tmp_path):
     store = TradeStateStore(tmp_path / "trades.json")
     for _index in range(3):
@@ -140,6 +167,24 @@ def test_trade_cycle_reentry_loss_lock_and_win_reset(tmp_path):
     store.record_buy_fill(cycle.id, 100, 100)
     closed = store.record_sell_fill(cycle.id, 100, 101)
     assert closed and closed.outcome == "WIN"
+    assert store.loss_streak("FPT", "PAPER") == 0
+
+
+def test_trade_loss_lock_expires_after_24_wall_clock_hours(tmp_path):
+    store = TradeStateStore(tmp_path / "trades-expiry.json")
+    base = 1_800_000_000.0
+    for index in range(3):
+        cycle = store.create("FPT", "PAPER")
+        store.record_buy_fill(cycle.id, 100, 100)
+        store.record_sell_fill(cycle.id, 100, 99, closed_at=base + index)
+
+    lock_started = base + 2
+    assert store.is_loss_locked(
+        "FPT", "PAPER", lock_hours=24, now=lock_started + 24 * 3600 - 1,
+    )
+    assert not store.is_loss_locked(
+        "FPT", "PAPER", lock_hours=24, now=lock_started + 24 * 3600,
+    )
     assert store.loss_streak("FPT", "PAPER") == 0
 
 
@@ -167,7 +212,7 @@ def test_t2_recheck_cancels_rule_sell_when_condition_is_gone(tmp_path):
     broker = _paper_with_unsettled_position(tmp_path)
     queue = OrderQueue(tmp_path / "orders-recheck.json")
     rule_state = RuleStateStore(tmp_path / "rule-recheck.json")
-    assert rule_state.claim_signal("FPT", "SELL", "D1")
+    assert rule_state.claim_signal("FPT", "SELL", "D1", stream="PAPER")
     sell = queue.add(OrderIntent.create(
         "FPT", "SELL", 100, "MARKET", action="CLOSE", source="EM",
         reason="INDICATOR_EXIT", sell_wait_policy="RECHECK", signal="SELL", candle_key="D1",
@@ -184,7 +229,7 @@ def test_t2_recheck_cancels_rule_sell_when_condition_is_gone(tmp_path):
     broker.store.write(state)
     service.process_due(phase="OPEN", execution_mode="PAPER")
     assert queue.get(sell.id).status == "CANCELLED"
-    assert rule_state.claim_signal("FPT", "SELL", "D1") is True
+    assert rule_state.claim_signal("FPT", "SELL", "D1", stream="PAPER") is True
 
 
 def test_t2_keep_policy_sells_when_stock_arrives_without_rechecking(tmp_path):

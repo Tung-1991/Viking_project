@@ -25,6 +25,7 @@ def test_execution_defaults_are_explicit_and_minimal():
     assert AppSettings(sell_wait_policy="unknown").normalize().sell_wait_policy == "RECHECK"
     assert StaticRuleParameters().whipsaw_n == 3
     assert StaticRuleParameters().whipsaw_x == 7
+    assert StaticRuleParameters().loss_lock_hours == 24
 
 
 def test_default_watchlist_keeps_the_40_legacy_ckcs_symbols(monkeypatch):
@@ -261,3 +262,195 @@ def test_signal_log_records_a_change_not_every_loop(tmp_path):
     ]
     # The reason the bot stood still is the whole point of keeping this.
     assert rows[0]["blocked_by"] == "MAX_POSITIONS"
+
+
+def test_signal_history_groups_detailed_rows_by_day_and_hides_restart_duplicates():
+    from viking_v2.dashboard.windows import signal_rows_by_day
+
+    def row(timestamp, symbol, *, acted="BUY", blocked=""):
+        return {
+            "timestamp": timestamp,
+            "symbol": symbol,
+            "signal": "BUY",
+            "price": "10.5",
+            "ema_fast": "10.2",
+            "ema_slow": "10.1",
+            "rsi": "55",
+            "market_state": "ACCUMULATION",
+            "acted": acted,
+            "blocked_by": blocked,
+        }
+
+    rows = [
+        row("2026-08-21 19:29:52", "VIX"),
+        row("2026-08-21 19:29:52", "QCG", acted="WAIT", blocked="WHIPSAW_LOCK"),
+        row("2026-08-21 20:29:52", "VIX"),
+        row("2026-08-21 20:29:52", "QCG", acted="WAIT", blocked="WHIPSAW_LOCK"),
+        row("2026-08-22 10:51:45", "VIX"),
+        row("2026-08-22 10:51:45", "QCG", acted="WAIT", blocked="WHIPSAW_LOCK"),
+    ]
+
+    days = signal_rows_by_day(rows)
+    assert [group["date"] for group in days] == ["2026-08-22", "2026-08-21"]
+    assert len(days[0]["rows"]) == 2
+    assert len(days[1]["rows"]) == 2
+    assert days[1]["allowed_count"] == 1
+    assert days[1]["blocked_count"] == 1
+    vix = next(row for row in days[1]["rows"] if row["symbol"] == "VIX")
+    qcg = next(row for row in days[1]["rows"] if row["symbol"] == "QCG")
+    assert vix["suggestion"] == "CÓ THỂ MUA"
+    assert vix["reason"] == "EMA cắt lên · RSI tăng"
+    assert vix["repeat_count"] == 2
+    assert qcg["suggestion"] == "KHÔNG MUA"
+    assert qcg["reason"] == "EMA nhiễu, khóa mua"
+
+
+def test_signal_log_keeps_candle_dedupe_across_daemon_restart(tmp_path):
+    from viking_v2.storage import SignalLog
+
+    path = tmp_path / "signal_log.csv"
+    row = {
+        "timestamp": "2026-08-21 10:00:00", "symbol": "HSG", "signal": "BUY",
+        "price": 10.5, "ema_fast": 10.2, "ema_slow": 10.1, "rsi": 55,
+        "market_state": "ACCUMULATION", "acted": "BUY", "blocked_by": "",
+        "candle_key": "2026-08-21",
+    }
+    assert SignalLog(path).record(row)
+    assert not SignalLog(path).record({**row, "timestamp": "2026-08-21 10:05:00"})
+    assert SignalLog(path).record({
+        **row, "timestamp": "2026-08-24 10:00:00", "candle_key": "2026-08-24",
+    })
+    assert len(SignalLog(path).read_all()) == 2
+
+
+def test_main_click_minimizes_popup_without_withdrawing_or_destroying_it():
+    from types import SimpleNamespace
+
+    from viking_v2.dashboard.actions import DashboardActionsMixin
+
+    visibility = []
+
+    class FakeTop:
+        def __init__(self):
+            self.window_state = "normal"
+            self.iconify_calls = 0
+
+        def winfo_exists(self):
+            return True
+
+        def state(self):
+            return self.window_state
+
+        def iconify(self):
+            self.iconify_calls += 1
+            self.window_state = "iconic"
+
+    popup = SimpleNamespace(
+        top=FakeTop(),
+        on_visibility_changed=lambda visible: visibility.append(visible),
+    )
+    dashboard = SimpleNamespace(
+        _rule_settings_popup=popup,
+        _advanced_popup=None,
+        _backtest_popup=None,
+        _info_popup=None,
+        _history_popup=None,
+        _data_popups={},
+    )
+    event = SimpleNamespace(widget=SimpleNamespace(master=None))
+
+    DashboardActionsMixin._minimize_popups_from_main_click(dashboard, event)
+    DashboardActionsMixin._minimize_popups_from_main_click(dashboard, event)
+
+    assert popup.top.window_state == "iconic"
+    assert popup.top.iconify_calls == 1
+    assert visibility == [False]
+
+
+def test_history_is_archived_to_monthly_excel_without_manual_export(tmp_path):
+    from openpyxl import load_workbook
+
+    from viking_v2.dashboard.windows import HistoryPopup
+    from viking_v2.storage import CSVOrderJournal, SignalLog
+
+    signal = SignalLog(tmp_path / "signal_log.csv")
+    assert signal.record({
+        "timestamp": "2026-08-22 11:00:00", "symbol": "CTS", "signal": "BUY",
+        "price": 32.5, "ema_fast": 32.1, "ema_slow": 31.9, "rsi": 55,
+        "market_state": "ACCUMULATION", "acted": "BUY", "blocked_by": "",
+        "candle_key": "2026-08-22",
+    })
+    signal_book_path = tmp_path / "excel_archive" / "signal_log_2026-08.xlsx"
+    assert signal_book_path.exists()
+    signal_book = load_workbook(signal_book_path, read_only=True)
+    assert signal_book["TÍN HIỆU"].max_row == 2
+    signal_book.close()
+
+    orders = CSVOrderJournal(tmp_path / "order_history.csv")
+    orders.append_event({
+        "ts": "2026-08-22 11:01:00",
+        "intent": {
+            "id": "cache-1", "symbol": "CTS", "side": "BUY", "action": "BUY",
+            "execution_mode": "PAPER", "order_type": "MARKET", "quantity": 100,
+        },
+        "result": {"order_id": "order-1", "status": "FILLED"},
+    })
+    order_book_path = tmp_path / "excel_archive" / "order_history_2026-08.xlsx"
+    assert order_book_path.exists()
+    order_book = load_workbook(order_book_path, read_only=True)
+    assert order_book["LỆNH"].max_row == 2
+    order_book.close()
+
+    assert not hasattr(HistoryPopup, "_export_signals")
+
+
+def test_signal_history_limit_reads_only_latest_rows(tmp_path):
+    import csv
+
+    from viking_v2.storage import SignalLog
+
+    path = tmp_path / "signal_log.csv"
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SignalLog.FIELDS)
+        writer.writeheader()
+        for index in range(20):
+            writer.writerow({
+                "timestamp": f"2026-08-{index + 1:02d} 10:00:00",
+                "symbol": f"S{index:02d}", "signal": "BUY",
+            })
+
+    rows = SignalLog(path).read_all(limit=3)
+
+    assert [row["symbol"] for row in rows] == ["S17", "S18", "S19"]
+
+
+def test_legacy_signal_csv_is_archived_before_recent_file_is_compacted(tmp_path, monkeypatch):
+    import csv
+
+    from openpyxl import load_workbook
+
+    from viking_v2.storage import SignalLog
+
+    monkeypatch.setattr(SignalLog, "RECENT_CSV_ROWS", 3)
+    path = tmp_path / "signal_log.csv"
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SignalLog.FIELDS)
+        writer.writeheader()
+        for index in range(5):
+            writer.writerow({
+                "timestamp": f"2026-08-{index + 1:02d} 10:00:00",
+                "symbol": f"OLD{index}", "signal": "BUY",
+            })
+
+    log = SignalLog(path)
+    assert log.record({
+        "timestamp": "2026-08-06 10:00:00", "symbol": "NEW", "signal": "SELL",
+        "candle_key": "2026-08-06",
+    })
+
+    assert [row["symbol"] for row in log.read_all()] == ["OLD3", "OLD4", "NEW"]
+    book = load_workbook(
+        tmp_path / "excel_archive" / "signal_log_2026-08.xlsx", read_only=True,
+    )
+    assert book["TÍN HIỆU"].max_row == 7
+    book.close()

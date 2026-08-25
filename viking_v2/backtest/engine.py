@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Any, Callable
 import uuid
 
@@ -13,8 +13,13 @@ from ..rules.business import (
     indicator_snapshot,
 )
 from ..trading.portfolio import order_budget, round_lot_down, size_buy_order
+from ..trading.market import stock_is_sellable_after_settlement
 from .data import HistoricalDataStore, VN_TZ, bar_date
 from .models import BacktestConfig, BacktestEvent, BacktestResult, BacktestScenario, BacktestTrade
+from .replay import ReplayDataStore
+
+
+UNKNOWN_SETTLE_DATE = "9999-12-31"
 
 
 def _indicator_columns(details: dict[str, Any] | None) -> dict[str, float]:
@@ -83,6 +88,7 @@ class _Position:
     entry_ema_fast: float = 0.0
     entry_ema_slow: float = 0.0
     entry_rsi: float = 0.0
+    opened_at: str = ""
 
 
 @dataclass(slots=True)
@@ -98,6 +104,9 @@ class _Pending:
     settlement_waited: bool = False
     reason: str = ""
     details: dict[str, Any] = field(default_factory=dict)
+    created_time: str = ""
+    source_resolution: str = "1D"
+    data_quality: str = "FULL"
 
 
 class _MarketConfirmation:
@@ -157,8 +166,9 @@ def _normal_trail_fill(
 class BacktestEngine:
     """Deterministic daily replay; it never touches live queue, token or state."""
 
-    def __init__(self, data: HistoricalDataStore):
+    def __init__(self, data: HistoricalDataStore, replay: ReplayDataStore | None = None):
         self.data = data
+        self.replay = replay or ReplayDataStore(self.data.root / "replay")
 
     def run_scenario(
         self,
@@ -217,6 +227,10 @@ class BacktestEngine:
         open positions, queued orders and protection state the previous one
         ended with, so the account behaves like one trader moving through time.
         """
+        if settings.simulation_mode in {"REPLAY", "AUTO_HYBRID"}:
+            return self._run_replay(
+                settings, progress=progress, cancelled=cancelled, save=save, carry=carry,
+            )
         started = datetime.now().astimezone().isoformat()
         carried = carry or {}
         carried_positions: dict[str, _Position] = dict(carried.get("positions") or {})
@@ -245,13 +259,16 @@ class BacktestEngine:
         rule = StaticRule(params)
         all_symbols = ["VNINDEX", *managed_symbols]
         loaded: dict[str, list[dict[str, Any]]] = {}
+        settlement_end = (
+            datetime.strptime(settings.end_date, "%Y-%m-%d").date() + timedelta(days=14)
+        ).isoformat()
         for offset, symbol in enumerate(all_symbols):
             if cancelled and cancelled():
                 raise RuntimeError("Backtest đã hủy.")
             loaded[symbol] = self.data.load_daily(
                 symbol,
                 settings.start_date,
-                settings.end_date,
+                settlement_end,
                 warmup_sessions=settings.warmup_sessions,
                 progress=(lambda message, n=offset: progress(n / max(1, len(all_symbols)) * .15, message)) if progress else None,
             )
@@ -310,6 +327,22 @@ class BacktestEngine:
         if not calendar:
             raise RuntimeError("Khoảng ngày đã chọn không có phiên giao dịch.")
         calendar_index = {value: index for index, value in enumerate(calendar)}
+        settlement_anchor = min(
+            [settings.start_date, *(position.opened_date for position in carried_positions.values())]
+        )
+        settlement_calendar = sorted({
+            key
+            for symbol in managed_symbols
+            for key in rows_by_symbol.get(symbol, {})
+            if key >= settlement_anchor
+        })
+        settlement_index = {value: index for index, value in enumerate(settlement_calendar)}
+        for position in carried_positions.values():
+            if position.settle_date != UNKNOWN_SETTLE_DATE or position.opened_date not in settlement_index:
+                continue
+            due_index = settlement_index[position.opened_date] + 2
+            if due_index < len(settlement_calendar):
+                position.settle_date = settlement_calendar[due_index]
         history: dict[str, list[dict[str, Any]]] = {symbol: [] for symbol in all_symbols}
         for symbol, rows in loaded.items():
             history[symbol] = [row for row in rows if bar_date(row).isoformat() < settings.start_date]
@@ -576,8 +609,12 @@ class BacktestEngine:
                         fee = gross * settings.buy_fee_rate
                         if quantity > 0 and gross + fee <= cash:
                             cash -= gross + fee
-                            settle_index = min(len(calendar) - 1, calendar_index[day] + 2)
-                            settle_day = calendar[settle_index]
+                            due_index = settlement_index[day] + 2
+                            settle_day = (
+                                settlement_calendar[due_index]
+                                if due_index < len(settlement_calendar)
+                                else UNKNOWN_SETTLE_DATE
+                            )
                             principal = gross + fee
                             ledger = capital_ledgers.setdefault(symbol, {"principal": principal, "available": principal})
                             principal = min(principal, ledger["available"]) if params.no_compound_enabled else principal
@@ -625,7 +662,10 @@ class BacktestEngine:
                         if not position or position.trade_id != order.trade_id:
                             pending.pop(symbol, None)
                             continue
-                        if day < position.settle_date:
+                        # DAILY has no afternoon price.  On T+2 it must not use
+                        # the morning Open, so it waits for the next session;
+                        # REPLAY handles the legal 13:00 boundary precisely.
+                        if day <= position.settle_date:
                             order.settlement_waited = True
                             continue
                         quantity = round_lot_down(position.quantity * order.fraction)
@@ -670,7 +710,7 @@ class BacktestEngine:
                         "sl_value": sl_pct,
                         "stop_price": stop_price,
                     }
-                    if day >= position.settle_date:
+                    if day > position.settle_date:
                         sell_position(
                             position, round_lot_down(position.quantity), fill, day,
                             "STOP_LOSS", current_phase, signal_date=day,
@@ -698,7 +738,7 @@ class BacktestEngine:
                             "take_profit_pct": params.take_profit_pct,
                             "target_price": target,
                         }
-                        if day >= position.settle_date:
+                        if day > position.settle_date:
                             sell_position(
                                 position, round_lot_down(position.quantity), fill, day,
                                 "TAKE_PROFIT", current_phase, signal_date=day,
@@ -731,7 +771,7 @@ class BacktestEngine:
                             "execution_resolution": execution_resolution.get(symbol),
                         }
                         share = min(1.0, max(0.0, params.normal_sell_pct / 100.0))
-                        if day >= position.settle_date:
+                        if day > position.settle_date:
                             quantity = (
                                 round_lot_down(position.quantity) if share >= 1.0
                                 else round_lot_down(position.quantity * share)
@@ -857,7 +897,7 @@ class BacktestEngine:
                     pending[symbol] = _Pending(
                         "SELL", symbol, day, decision.event or decision.reason,
                         float(decision.quantity_fraction or 1.0), position.trade_id,
-                        current_phase, list(triggered or []), day < position.settle_date,
+                        current_phase, list(triggered or []), day <= position.settle_date,
                         decision.reason,
                         dict(decision.details or {}) if isinstance(decision.details, dict) else {},
                     )
@@ -976,6 +1016,797 @@ class BacktestEngine:
                 "Không áp dụng thêm điều chỉnh chốt quyền ngoài dữ liệu giá DNSE trả về.",
                 *data_warnings,
             ],
+        )
+        if save:
+            self.data.save_run(result)
+        return result
+
+    def _run_replay(
+        self,
+        settings: BacktestConfig,
+        *,
+        progress: Callable[[float, str], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
+        save: bool = False,
+        carry: dict[str, Any] | None = None,
+    ) -> BacktestResult:
+        """Replay imported intraday bars while indicators remain daily.
+
+        A temporary, unfinished 1D candle is rebuilt after every source bar.
+        Decisions therefore see exactly the history known at that close; only a
+        later bar may fill the order.
+        """
+        if settings.auto_market_phase:
+            raise RuntimeError("MODE 2 · REPLAY cần trạng thái thị trường cố định theo scenario.")
+        started = datetime.now().astimezone().isoformat()
+        carried = carry or {}
+        carried_positions: dict[str, _Position] = dict(carried.get("positions") or {})
+        carried_pending: dict[str, _Pending] = dict(carried.get("pending") or {})
+        active_symbols = list(settings.symbols)
+        managed_symbols = list(dict.fromkeys([
+            *active_symbols, *carried_positions.keys(), *carried_pending.keys(),
+        ]))
+        params = StaticRuleParameters.from_dict(settings.rule_parameters)
+        params.whipsaw_enabled = settings.whipsaw_enabled
+        if not settings.loss_lock_enabled:
+            params.loss_lock_count = 10**9
+        params.exposure = {
+            key: settings.fixed_exposure_pct / 100.0 for key in EXPOSURE_DEFAULTS
+        }
+        settings.rule_parameters = params.to_dict()
+        rule = StaticRule(params)
+
+        loaded: dict[str, list[dict[str, Any]]] = {}
+        settlement_end = (
+            datetime.strptime(settings.end_date, "%Y-%m-%d").date() + timedelta(days=14)
+        ).isoformat()
+        for offset, symbol in enumerate(managed_symbols):
+            if cancelled and cancelled():
+                raise RuntimeError("Backtest đã hủy.")
+            loaded[symbol] = self.data.load_daily(
+                symbol, settings.start_date, settlement_end,
+                warmup_sessions=settings.warmup_sessions,
+                progress=(
+                    lambda message, n=offset: progress(
+                        n / max(1, len(managed_symbols)) * .15, message,
+                    )
+                ) if progress else None,
+            )
+            if not loaded[symbol]:
+                raise RuntimeError(f"Không có dữ liệu 1D warm-up cho {symbol}.")
+        rows_by_symbol = {
+            symbol: {bar_date(row).isoformat(): dict(row) for row in rows}
+            for symbol, rows in loaded.items()
+        }
+        calendar = sorted({
+            day
+            for values in rows_by_symbol.values()
+            for day in values
+            if settings.start_date <= day <= settings.end_date
+            and day > str(carried.get("last_processed_date") or "")
+        })
+        if not calendar:
+            raise RuntimeError("Khoảng ngày đã chọn không có phiên giao dịch mới.")
+        calendar_index = {day: index for index, day in enumerate(calendar)}
+        settlement_anchor = min(
+            [settings.start_date, *(position.opened_date for position in carried_positions.values())]
+        )
+        settlement_calendar = sorted({
+            day for values in rows_by_symbol.values() for day in values if day >= settlement_anchor
+        })
+        settlement_index = {day: index for index, day in enumerate(settlement_calendar)}
+        for position in carried_positions.values():
+            if position.settle_date != UNKNOWN_SETTLE_DATE or position.opened_date not in settlement_index:
+                continue
+            due_index = settlement_index[position.opened_date] + 2
+            if due_index < len(settlement_calendar):
+                position.settle_date = settlement_calendar[due_index]
+
+        replay_days: dict[str, dict[str, list[dict[str, Any]]]] = {
+            symbol: {} for symbol in managed_symbols
+        }
+        source_resolution: dict[str, dict[str, str]] = {symbol: {} for symbol in managed_symbols}
+        source_quality: dict[str, dict[str, str]] = {symbol: {} for symbol in managed_symbols}
+        missing: list[str] = []
+        fallback_days: list[str] = []
+        for symbol in managed_symbols:
+            for day in calendar:
+                daily = rows_by_symbol.get(symbol, {}).get(day)
+                if daily is None:
+                    continue
+                bars, resolution, status = self.replay.load_day(symbol, day, complete_only=True)
+                if bars:
+                    replay_days[symbol][day] = bars
+                    source_resolution[symbol][day] = resolution
+                    source_quality[symbol][day] = status
+                elif settings.simulation_mode == "REPLAY":
+                    missing.append(f"{symbol} {day}")
+                else:
+                    source_resolution[symbol][day] = "1D"
+                    source_quality[symbol][day] = "FALLBACK_1D"
+                    fallback_days.append(f"{symbol} {day}")
+        if missing:
+            sample = ", ".join(missing[:12])
+            suffix = f" và {len(missing) - 12} ngày/mã khác" if len(missing) > 12 else ""
+            raise RuntimeError(f"REPLAY thiếu dữ liệu FULL: {sample}{suffix}.")
+
+        history: dict[str, list[dict[str, Any]]] = {
+            symbol: [dict(row) for row in rows if bar_date(row).isoformat() < settings.start_date]
+            for symbol, rows in loaded.items()
+        }
+        indicator_streams: dict[str, dict[str, Any]] = {
+            symbol: indicator_snapshot(
+                values,
+                params.buy_ema_fast,
+                params.buy_ema_slow,
+                params.rsi_period,
+                sell_fast=params.sell_ema_fast,
+                sell_slow=params.sell_ema_slow,
+            )
+            for symbol, values in history.items()
+        }
+        marks = {
+            symbol: float(values[-1].get("close", 0.0) or 0.0) if values else 0.0
+            for symbol, values in history.items()
+        }
+        positions: dict[str, _Position] = carried_positions
+        pending: dict[str, _Pending] = carried_pending
+        cash = float(carried.get("cash", settings.initial_capital))
+        loss_streaks = {symbol: 0 for symbol in managed_symbols}
+        loss_streaks.update(carried.get("loss_streaks") or {})
+        loss_locked_until: dict[str, datetime | None] = {symbol: None for symbol in managed_symbols}
+        loss_locked_until.update(carried.get("loss_locked_until") or {})
+        capital_ledgers: dict[str, dict[str, float]] = dict(carried.get("capital_ledgers") or {})
+        cycle_numbers = {symbol: 0 for symbol in managed_symbols}
+        cycle_numbers.update(carried.get("cycle_numbers") or {})
+        last_decisions: dict[str, str] = dict(carried.get("last_decisions") or {})
+        events: list[BacktestEvent] = []
+        completed: list[BacktestTrade] = []
+        equity_curve: list[dict[str, Any]] = []
+        phase_history: list[dict[str, Any]] = []
+        signal_history: list[dict[str, Any]] = []
+        signal_dedupe: dict[tuple[str, str], tuple[str, str, str]] = {}
+        total_fees = total_tax = 0.0
+        buy_count = sell_count = 0
+        current_phase = settings.fixed_market_phase
+
+        def iso_time(stamp: int) -> str:
+            return datetime.fromtimestamp(int(stamp), VN_TZ).isoformat()
+
+        def portfolio_value() -> tuple[float, float]:
+            stock = sum(
+                marks.get(symbol, position.avg_price) * position.quantity * 1000.0
+                for symbol, position in positions.items()
+            )
+            return cash + stock, stock
+
+        def sell_position(
+            position: _Position,
+            quantity: int,
+            price: float,
+            day: str,
+            event: str,
+            *,
+            stamp: int,
+            signal_time: str = "",
+            reason: str = "",
+            details: dict[str, Any] | None = None,
+            triggered: list[str] | None = None,
+            resolution: str = "1D",
+            quality: str = "FULL",
+        ) -> None:
+            nonlocal cash, total_fees, total_tax, sell_count
+            quantity = min(max(0, int(quantity)), position.quantity)
+            if quantity <= 0 or price <= 0:
+                return
+            gross = price * quantity * 1000.0
+            fee = gross * settings.sell_fee_rate
+            tax = gross * settings.sell_tax_rate
+            cash += gross - fee - tax
+            pnl = (price - position.avg_price) * quantity * 1000.0 - fee - tax
+            position.quantity -= quantity
+            position.sold_quantity += quantity
+            position.exit_value += gross
+            position.fees += fee
+            position.tax += tax
+            position.net_pnl += pnl
+            total_fees += fee
+            total_tax += tax
+            sell_count += 1
+            names = list(triggered or []) or [event]
+            for name in names:
+                if name and name not in position.exit_events:
+                    position.exit_events.append(name)
+            if "NORMAL_PROTECTION" in names:
+                position.normal_done = True
+            if "HIGH_PROFIT_PROTECTION" in names:
+                position.high_done = True
+            detail_values = dict(details or {})
+            indicators = _indicator_columns(detail_values)
+            position.exit_fills.append({
+                "event": "+".join(names), "quantity": quantity, "price": price,
+                "fill_time": iso_time(stamp), "source_resolution": resolution,
+            })
+            position.exit_ema_fast = indicators["ema_fast"]
+            position.exit_ema_slow = indicators["ema_slow"]
+            position.exit_rsi = indicators["rsi"]
+            profit_pct = (price / position.avg_price - 1.0) * 100.0 if position.avg_price else 0.0
+            events.append(BacktestEvent(
+                day, position.trade_id, position.symbol, "SELL", event, quantity, price,
+                gross, fee, tax, cash, current_phase, pnl,
+                signal_date=(signal_time or day)[:10], reason=reason or event,
+                details=detail_values, cycle_id=position.cycle_id,
+                profit_pct=profit_pct, peak_profit_pct=position.peak_profit_pct,
+                equity_after=portfolio_value()[0],
+                signal_time=signal_time, decision_time=signal_time,
+                fill_time=iso_time(stamp), simulation_mode=settings.simulation_mode,
+                source_resolution=resolution, data_quality=quality,
+                **indicators,
+            ))
+            if position.quantity > 0:
+                return
+            avg_exit = position.exit_value / max(1, position.sold_quantity) / 1000.0
+            outcome = "WIN" if position.net_pnl >= 0 else "LOSS"
+            equity_after = portfolio_value()[0]
+            completed.append(BacktestTrade(
+                trade_id=position.trade_id, symbol=position.symbol,
+                opened_date=position.opened_date, closed_date=day,
+                entry_quantity=position.entry_quantity, remaining_quantity=0,
+                avg_entry_price=position.avg_price, avg_exit_price=avg_exit,
+                fees=position.fees, tax=position.tax, net_pnl=position.net_pnl,
+                outcome=outcome, exit_events=list(position.exit_events),
+                entry_market_state=position.entry_market_state,
+                entry_exposure_pct=position.entry_exposure_pct,
+                entry_reason=position.entry_reason,
+                entry_signal_date=position.entry_signal_date,
+                entry_rule=position.entry_rule, cycle_id=position.cycle_id,
+                sessions_held=max(0, calendar_index.get(day, 0) - calendar_index.get(position.opened_date, 0)),
+                entry_value=position.entry_value, sl_pct=position.sl_pct,
+                peak_profit_pct=position.peak_profit_pct,
+                pnl_pct=(position.net_pnl / position.entry_value * 100.0) if position.entry_value else 0.0,
+                equity_after=equity_after,
+                entry_ema_fast=position.entry_ema_fast,
+                entry_ema_slow=position.entry_ema_slow, entry_rsi=position.entry_rsi,
+                exit_ema_fast=position.exit_ema_fast,
+                exit_ema_slow=position.exit_ema_slow, exit_rsi=position.exit_rsi,
+                exit_fills=list(position.exit_fills),
+            ))
+            if outcome == "WIN":
+                loss_streaks[position.symbol] = 0
+                loss_locked_until[position.symbol] = None
+            else:
+                loss_streaks[position.symbol] += 1
+                if settings.loss_lock_enabled and loss_streaks[position.symbol] >= params.loss_lock_count:
+                    loss_locked_until[position.symbol] = datetime.fromtimestamp(stamp, VN_TZ) + timedelta(
+                        hours=settings.loss_lock_hours
+                    )
+            ledger = capital_ledgers.get(position.symbol)
+            if params.no_compound_enabled and ledger:
+                ledger["available"] = min(
+                    ledger["principal"], max(0.0, ledger["available"] + position.net_pnl),
+                )
+            positions.pop(position.symbol, None)
+
+        def fill_is_eligible(order: _Pending, stamp: int, *, fallback_open: bool) -> bool:
+            local = datetime.fromtimestamp(stamp, VN_TZ)
+            if order.created_time:
+                try:
+                    if stamp <= int(datetime.fromisoformat(order.created_time).timestamp()):
+                        return False
+                except ValueError:
+                    pass
+            if fallback_open:
+                return order.created_date < local.date().isoformat()
+            minute = local.hour * 60 + local.minute
+            if minute == 14 * 60 + 45:
+                return False
+            if order.created_date == local.date().isoformat():
+                return 9 * 60 + 16 <= minute <= 14 * 60 + 29
+            if settings.fill_session == "ATO":
+                return minute == 9 * 60 + 15
+            return 9 * 60 + 16 <= minute <= 14 * 60 + 29
+
+        def fill_pending_symbol(
+            symbol: str,
+            day: str,
+            stamp: int,
+            price: float,
+            resolution: str,
+            quality: str,
+            *,
+            fallback_open: bool = False,
+        ) -> None:
+            nonlocal cash, total_fees, buy_count
+            order = pending.get(symbol)
+            if not order or not fill_is_eligible(order, stamp, fallback_open=fallback_open):
+                return
+            if order.side == "BUY":
+                if symbol in positions or len(positions) >= params.max_positions:
+                    pending.pop(symbol, None)
+                    return
+                nav, stock_value = portfolio_value()
+                entry_phase = order.market_state if order.market_state in EXPOSURE_DEFAULTS else current_phase
+                exposure = params.exposure.get(entry_phase, 0.0)
+                budget = order_budget(
+                    nav=nav, exposure=exposure, max_positions=params.max_positions,
+                    current_stock_value=stock_value, pending_buy_value=0.0,
+                    available_cash=cash, fee_rate=settings.buy_fee_rate,
+                )
+                if params.no_compound_enabled and symbol in capital_ledgers:
+                    budget = min(budget, capital_ledgers[symbol]["available"])
+                sizing = size_buy_order(
+                    budget_vnd=budget, price_board=price, available_cash=cash,
+                    nav=nav, force_min_lot_enabled=params.force_min_lot_enabled,
+                )
+                quantity = sizing.quantity
+                gross = price * quantity * 1000.0
+                fee = gross * settings.buy_fee_rate
+                if quantity > 0 and gross + fee <= cash:
+                    cash -= gross + fee
+                    due_index = settlement_index.get(day, 0) + 2
+                    settle_day = (
+                        settlement_calendar[due_index]
+                        if day in settlement_index and due_index < len(settlement_calendar)
+                        else UNKNOWN_SETTLE_DATE
+                    )
+                    principal = gross + fee
+                    ledger = capital_ledgers.setdefault(symbol, {"principal": principal, "available": principal})
+                    principal = min(principal, ledger["available"]) if params.no_compound_enabled else principal
+                    attempt = loss_streaks[symbol]
+                    if attempt == 0:
+                        cycle_numbers[symbol] += 1
+                    cycle_id = f"{symbol}-{cycle_numbers[symbol]:02d}" + (f".{attempt}" if attempt else "")
+                    indicators = _indicator_columns(order.details)
+                    position = _Position(
+                        uuid.uuid4().hex, symbol, quantity, quantity, price, day, settle_day,
+                        fee, principal, list(settings.em_modes), is_reentry=attempt > 0,
+                        highest_close=price, fees=fee, net_pnl=-fee,
+                        entry_market_state=entry_phase, entry_exposure_pct=exposure * 100.0,
+                        entry_reason=order.reason or order.event,
+                        entry_signal_date=order.created_date,
+                        entry_rule=f"EMA {params.buy_ema_fast}/{params.buy_ema_slow} + RSI{params.rsi_period} tăng",
+                        cycle_id=cycle_id, entry_value=gross + fee,
+                        sl_pct=params.reentry_sl_pct if attempt else params.initial_sl_pct,
+                        entry_ema_fast=indicators["ema_fast"],
+                        entry_ema_slow=indicators["ema_slow"], entry_rsi=indicators["rsi"],
+                        opened_at=iso_time(stamp),
+                    )
+                    positions[symbol] = position
+                    total_fees += fee
+                    buy_count += 1
+                    events.append(BacktestEvent(
+                        day, position.trade_id, symbol, "BUY", "ENTRY_BUY", quantity,
+                        price, gross, fee, 0.0, cash, entry_phase, -fee,
+                        signal_date=order.created_date, reason=order.reason or "Tín hiệu BUY",
+                        details=dict(order.details), cycle_id=cycle_id,
+                        equity_after=portfolio_value()[0], signal_time=order.created_time,
+                        decision_time=order.created_time, fill_time=iso_time(stamp),
+                        simulation_mode=settings.simulation_mode,
+                        source_resolution=resolution, data_quality=quality, **indicators,
+                    ))
+                pending.pop(symbol, None)
+                return
+            position = positions.get(symbol)
+            if not position or position.trade_id != order.trade_id:
+                pending.pop(symbol, None)
+                return
+            if not stock_is_sellable_after_settlement(
+                position.settle_date, datetime.fromtimestamp(stamp, VN_TZ),
+            ):
+                order.settlement_waited = True
+                return
+            if (
+                order.settlement_waited and settings.sell_wait_policy == "RECHECK"
+                and last_decisions.get(symbol) != "SELL"
+            ):
+                pending.pop(symbol, None)
+                return
+            quantity = round_lot_down(position.quantity if order.fraction >= 1.0 else position.quantity * order.fraction)
+            if quantity > 0:
+                sell_position(
+                    position, quantity, price, day, order.event, stamp=stamp,
+                    signal_time=order.created_time, reason=order.reason,
+                    details=order.details, triggered=order.triggered_events,
+                    resolution=resolution, quality=quality,
+                )
+            pending.pop(symbol, None)
+
+        partials: dict[str, dict[str, Any]] = {}
+        total_source_bars = sum(
+            len(bars) for values in replay_days.values() for bars in values.values()
+        ) + len(fallback_days)
+        processed_source_bars = 0
+        # A long 1-minute replay can contain tens of thousands of bars.  Posting
+        # one Tk callback per bar makes the popup spend longer repainting than
+        # the engine spends calculating, so only publish each whole-percent
+        # milestone.  Cancellation is still checked for every source timestamp.
+        last_progress_bucket = -1
+        for day_number, day in enumerate(calendar):
+            if cancelled and cancelled():
+                raise RuntimeError("Backtest đã hủy.")
+            phase_history.append({"date": day, "candidate": current_phase, "confirmed": current_phase})
+            partials.clear()
+
+            # DAILY fallback can only fill an overnight order at its known day
+            # open. It never pretends to know an intraday path.
+            fallback_stamp = int(datetime.combine(
+                datetime.strptime(day, "%Y-%m-%d").date(), time(9, 15), VN_TZ,
+            ).timestamp())
+            for symbol in managed_symbols:
+                if source_quality[symbol].get(day) != "FALLBACK_1D":
+                    continue
+                daily = rows_by_symbol[symbol][day]
+                opened = float(daily.get("open", 0.0) or daily.get("close", 0.0) or 0.0)
+                marks[symbol] = opened
+                fill_pending_symbol(
+                    symbol, day, fallback_stamp, opened, "1D", "FALLBACK_1D", fallback_open=True,
+                )
+
+            by_time: dict[int, dict[str, dict[str, Any]]] = {}
+            for symbol in managed_symbols:
+                bars = replay_days[symbol].get(day)
+                if bars:
+                    for bar in bars:
+                        by_time.setdefault(int(bar["time"]), {})[symbol] = bar
+                else:
+                    daily = rows_by_symbol.get(symbol, {}).get(day)
+                    if daily is not None:
+                        close_stamp = int(datetime.combine(
+                            datetime.strptime(day, "%Y-%m-%d").date(), time(14, 45), VN_TZ,
+                        ).timestamp())
+                        fallback = dict(daily)
+                        fallback["time"] = close_stamp
+                        fallback["_fallback"] = True
+                        by_time.setdefault(close_stamp, {})[symbol] = fallback
+
+            for stamp in sorted(by_time):
+                current = by_time[stamp]
+                for symbol in managed_symbols:
+                    bar = current.get(symbol)
+                    if not bar or bar.get("_fallback"):
+                        continue
+                    opened = float(bar.get("open", 0.0) or 0.0)
+                    marks[symbol] = opened
+                    fill_pending_symbol(
+                        symbol, day, stamp, opened,
+                        source_resolution[symbol][day], source_quality[symbol][day],
+                    )
+
+                for symbol in managed_symbols:
+                    bar = current.get(symbol)
+                    if not bar:
+                        continue
+                    previous = partials.get(symbol)
+                    if previous is None:
+                        partial = {
+                            "time": stamp, "open": float(bar.get("open", 0.0) or 0.0),
+                            "high": float(bar.get("high", 0.0) or 0.0),
+                            "low": float(bar.get("low", 0.0) or 0.0),
+                            "close": float(bar.get("close", 0.0) or 0.0),
+                            "volume": float(bar.get("volume", 0.0) or 0.0), "closed": False,
+                        }
+                    else:
+                        partial = dict(previous)
+                        partial["time"] = stamp
+                        partial["high"] = max(float(partial["high"]), float(bar.get("high", 0.0) or 0.0))
+                        partial["low"] = min(float(partial["low"]), float(bar.get("low", 0.0) or 0.0))
+                        partial["close"] = float(bar.get("close", 0.0) or 0.0)
+                        partial["volume"] = float(partial["volume"]) + float(bar.get("volume", 0.0) or 0.0)
+                    partials[symbol] = partial
+                    marks[symbol] = float(partial["close"])
+
+                for symbol in managed_symbols:
+                    bar = current.get(symbol)
+                    partial = partials.get(symbol)
+                    if not bar or not partial:
+                        continue
+                    resolution = source_resolution[symbol].get(day, "1D")
+                    quality = source_quality[symbol].get(day, "FALLBACK_1D")
+                    previous_indicators = indicator_streams.get(symbol, {})
+                    current_indicators = indicator_snapshot(
+                        [*history[symbol], partial],
+                        params.buy_ema_fast,
+                        params.buy_ema_slow,
+                        params.rsi_period,
+                        sell_fast=params.sell_ema_fast,
+                        sell_slow=params.sell_ema_slow,
+                    )
+                    # Advance on every source bar, including a bar consumed by
+                    # a fill or protection exit.  The next comparison must
+                    # never jump back over a processed minute.
+                    indicator_streams[symbol] = current_indicators
+                    position = positions.get(symbol)
+                    event_count_before_exit = len(events)
+                    if position and symbol not in pending:
+                        stop_pct = params.reentry_sl_pct if position.is_reentry else params.initial_sl_pct
+                        stop = position.avg_price * (1.0 + stop_pct / 100.0)
+                        opened = float(bar.get("open", 0.0) or 0.0)
+                        low = float(bar.get("low", 0.0) or 0.0)
+                        high = float(bar.get("high", 0.0) or 0.0)
+                        details = {"indicators": indicator_snapshot(
+                            [*history[symbol], partial], params.buy_ema_fast, params.buy_ema_slow,
+                            params.rsi_period, sell_fast=params.sell_ema_fast,
+                            sell_slow=params.sell_ema_slow,
+                        )}
+                        if low > 0 and low <= stop:
+                            fill = opened if 0 < opened < stop else stop
+                            details.update(sl_value=stop_pct, stop_price=stop)
+                            if stock_is_sellable_after_settlement(
+                                position.settle_date, datetime.fromtimestamp(stamp, VN_TZ),
+                            ):
+                                sell_position(
+                                    position, round_lot_down(position.quantity), fill, day,
+                                    "STOP_LOSS", stamp=stamp, signal_time=iso_time(stamp),
+                                    reason="STOP_LOSS", details=details,
+                                    resolution=resolution, quality=quality,
+                                )
+                            else:
+                                pending[symbol] = _Pending(
+                                    "SELL", symbol, day, "STOP_LOSS", 1.0, position.trade_id,
+                                    current_phase, settlement_waited=True, reason="STOP_LOSS",
+                                    details=details, created_time=iso_time(stamp),
+                                    source_resolution=resolution, data_quality=quality,
+                                )
+                            position = positions.get(symbol)
+                        elif (
+                            position and "TP" in position.em_modes and params.take_profit_pct > 0
+                            and high >= position.avg_price * (1.0 + params.take_profit_pct / 100.0)
+                        ):
+                            target = position.avg_price * (1.0 + params.take_profit_pct / 100.0)
+                            fill = opened if opened > target else target
+                            details.update(take_profit_pct=params.take_profit_pct, target_price=target)
+                            if stock_is_sellable_after_settlement(
+                                position.settle_date, datetime.fromtimestamp(stamp, VN_TZ),
+                            ):
+                                sell_position(
+                                    position, round_lot_down(position.quantity), fill, day,
+                                    "TAKE_PROFIT", stamp=stamp, signal_time=iso_time(stamp),
+                                    reason="TAKE_PROFIT", details=details,
+                                    resolution=resolution, quality=quality,
+                                )
+                            else:
+                                pending[symbol] = _Pending(
+                                    "SELL", symbol, day, "TAKE_PROFIT", 1.0, position.trade_id,
+                                    current_phase, settlement_waited=True, reason="TAKE_PROFIT",
+                                    details=details, created_time=iso_time(stamp),
+                                    source_resolution=resolution, data_quality=quality,
+                                )
+                            position = positions.get(symbol)
+                        elif (
+                            position and not bar.get("_fallback")
+                            and "NORMAL" in position.em_modes and not position.normal_done
+                        ):
+                            fill, peak = _normal_trail_fill(
+                                [bar], entry_price=position.avg_price,
+                                peak_profit_pct=position.peak_profit_pct,
+                                arm_pct=params.normal_arm_pct,
+                                giveback_pct=params.normal_giveback_pct,
+                            )
+                            position.peak_profit_pct = max(position.peak_profit_pct, peak)
+                            if fill > 0:
+                                share = min(1.0, max(0.0, params.normal_sell_pct / 100.0))
+                                quantity = round_lot_down(position.quantity if share >= 1 else position.quantity * share)
+                                details.update(triggered_events=["NORMAL_PROTECTION"], peak_profit_pct=peak)
+                                if quantity > 0 and stock_is_sellable_after_settlement(
+                                    position.settle_date, datetime.fromtimestamp(stamp, VN_TZ),
+                                ):
+                                    sell_position(
+                                        position, quantity, fill, day, "PRICE_PROTECTION",
+                                        stamp=stamp, signal_time=iso_time(stamp), reason="NORMAL_PROTECTION",
+                                        details=details, triggered=["NORMAL_PROTECTION"],
+                                        resolution=resolution, quality=quality,
+                                    )
+                                elif quantity > 0:
+                                    pending[symbol] = _Pending(
+                                        "SELL", symbol, day, "PRICE_PROTECTION", share,
+                                        position.trade_id, current_phase, ["NORMAL_PROTECTION"], True,
+                                        "NORMAL_PROTECTION", details, iso_time(stamp), resolution, quality,
+                                    )
+                        position = positions.get(symbol)
+                        if position and position.avg_price > 0:
+                            position.peak_profit_pct = max(
+                                position.peak_profit_pct,
+                                (float(bar.get("high", 0.0) or 0.0) / position.avg_price - 1.0) * 100.0,
+                            )
+
+                    # A real fill already consumed this bar. Do not use the
+                    # same close to immediately re-enter or trigger another exit.
+                    if len(events) != event_count_before_exit:
+                        continue
+
+                    nav, stock_value = portfolio_value()
+                    position = positions.get(symbol)
+                    now = datetime.fromtimestamp(stamp, VN_TZ)
+                    until = loss_locked_until.get(symbol)
+                    locked = bool(until and now < until)
+                    if until and not locked:
+                        loss_streaks[symbol] = 0
+                        loss_locked_until[symbol] = None
+                    open_positions = len(positions) + sum(1 for item in pending.values() if item.side == "BUY")
+                    exposure = params.exposure.get(current_phase, 0.0)
+                    budget = order_budget(
+                        nav=nav, exposure=exposure, max_positions=params.max_positions,
+                        current_stock_value=stock_value, pending_buy_value=0.0, available_cash=cash,
+                    )
+                    if params.no_compound_enabled and symbol in capital_ledgers:
+                        budget = min(budget, capital_ledgers[symbol]["available"])
+                    decision = rule.evaluate({
+                        "symbol": symbol,
+                        "bars": [*history[symbol], partial],
+                        "vnindex_bars": [],
+                        "signal_mode": "REALTIME",
+                        "previous_market_state": current_phase,
+                        "confirmed_market_state": current_phase,
+                        "precomputed_market": {"candidate": current_phase, "state": current_phase, "details": {}},
+                        "previous_indicators": previous_indicators,
+                    }, {
+                        "nav": nav, "available_cash": cash,
+                        "available_capital": max(0.0, budget), "order_budget": max(0.0, budget),
+                        "open_positions": open_positions,
+                        "pending_buy": symbol in pending and pending[symbol].side == "BUY",
+                        "loss_streak": params.loss_lock_count if locked else loss_streaks[symbol],
+                        "position_quantity": position.quantity if position else 0,
+                        "position": ({
+                            "quantity": position.quantity, "avg_price": position.avg_price,
+                            "current_price": float(partial["close"]),
+                            "peak_profit_pct": position.peak_profit_pct,
+                            "highest_close": position.highest_close,
+                            "is_reentry": position.is_reentry, "em_modes": position.em_modes,
+                            "normal_protection_done": position.normal_done,
+                            "high_profit_protection_done": position.high_done,
+                            "managed_by_app": True, "managed_by_bot": True,
+                        } if position else {}),
+                    })
+                    last_decisions[symbol] = decision.action
+                    details = dict(decision.details or {}) if isinstance(decision.details, dict) else {}
+                    signal_value = str(getattr(decision, "signal", "") or "")
+                    signature = (decision.action, decision.event, decision.reason)
+                    dedupe_key = (symbol, day)
+                    if (
+                        (settings.export_signals or decision.action != "WAIT" or signal_value in {"BUY", "SELL"})
+                        and signal_dedupe.get(dedupe_key) != signature
+                    ):
+                        signal_history.append({
+                            "date": day, "time": iso_time(stamp), "signal_time": iso_time(stamp),
+                            "decision_time": iso_time(stamp), "fill_time": "",
+                            "symbol": symbol, "action": decision.action,
+                            "signal": signal_value, "event": decision.event, "reason": decision.reason,
+                            "market_state": current_phase,
+                            "buy_ema": f"{params.buy_ema_fast}/{params.buy_ema_slow}",
+                            "sell_ema": f"{params.sell_ema_fast}/{params.sell_ema_slow}",
+                            "rsi_period": params.rsi_period, "details": details,
+                            "simulation_mode": settings.simulation_mode,
+                            "source_resolution": resolution, "data_quality": quality,
+                        })
+                        signal_dedupe[dedupe_key] = signature
+                    existing = pending.get(symbol)
+                    if existing:
+                        continue
+                    if decision.action == "BUY" and position is None and not locked:
+                        pending[symbol] = _Pending(
+                            "BUY", symbol, day, decision.event or decision.reason, 1.0,
+                            market_state=current_phase, reason=decision.reason, details=details,
+                            created_time=iso_time(stamp), source_resolution=resolution,
+                            data_quality=quality,
+                        )
+                    elif decision.action == "SELL" and position is not None:
+                        triggered = details.get("triggered_events", [])
+                        pending[symbol] = _Pending(
+                            "SELL", symbol, day, decision.event or decision.reason,
+                            float(decision.quantity_fraction or 1.0), position.trade_id,
+                            current_phase, list(triggered or []), not stock_is_sellable_after_settlement(
+                                position.settle_date, datetime.fromtimestamp(stamp, VN_TZ),
+                            ),
+                            decision.reason, details, iso_time(stamp), resolution, quality,
+                        )
+                processed_source_bars += len(current)
+                if progress and total_source_bars:
+                    ratio = min(1.0, processed_source_bars / total_source_bars)
+                    bucket = int(ratio * 100.0)
+                    if bucket != last_progress_bucket:
+                        progress(
+                            .15 + .80 * ratio,
+                            f"REPLAY {datetime.fromtimestamp(stamp, VN_TZ):%d/%m/%Y %H:%M}",
+                        )
+                        last_progress_bucket = bucket
+
+            for symbol in managed_symbols:
+                partial = partials.get(symbol)
+                if not partial:
+                    continue
+                final = dict(partial)
+                final["closed"] = True
+                history[symbol].append(final)
+                position = positions.get(symbol)
+                if position:
+                    position.highest_close = max(position.highest_close, float(final["close"]))
+            nav, stock_value = portfolio_value()
+            equity_curve.append({
+                "date": day, "equity": nav, "cash": cash, "market_value": stock_value,
+                "simulation_mode": settings.simulation_mode,
+            })
+
+        last_day = calendar[-1]
+        final_equity, market_value = portfolio_value()
+        if carry is not None:
+            carry.update(
+                cash=cash, positions=positions, cycle_numbers=cycle_numbers,
+                pending=pending, loss_streaks=loss_streaks,
+                loss_locked_until=loss_locked_until, capital_ledgers=capital_ledgers,
+                last_decisions=last_decisions, last_processed_date=last_day,
+            )
+        open_trades = [
+            BacktestTrade(
+                position.trade_id, position.symbol, position.opened_date,
+                entry_quantity=position.entry_quantity, remaining_quantity=position.quantity,
+                avg_entry_price=position.avg_price, fees=position.fees, tax=position.tax,
+                net_pnl=position.net_pnl + (marks.get(position.symbol, position.avg_price) - position.avg_price)
+                * position.quantity * 1000.0,
+                outcome="OPEN", exit_events=list(position.exit_events),
+                entry_market_state=position.entry_market_state,
+                entry_exposure_pct=position.entry_exposure_pct,
+                entry_reason=position.entry_reason, entry_signal_date=position.entry_signal_date,
+                entry_rule=position.entry_rule, cycle_id=position.cycle_id,
+                sessions_held=max(0, len(calendar) - 1 - calendar_index.get(position.opened_date, 0)),
+                entry_value=position.entry_value, sl_pct=position.sl_pct,
+                peak_profit_pct=position.peak_profit_pct,
+                entry_ema_fast=position.entry_ema_fast,
+                entry_ema_slow=position.entry_ema_slow, entry_rsi=position.entry_rsi,
+                exit_ema_fast=position.exit_ema_fast,
+                exit_ema_slow=position.exit_ema_slow, exit_rsi=position.exit_rsi,
+                exit_fills=list(position.exit_fills),
+                avg_exit_price=(position.exit_value / (position.sold_quantity * 1000.0)
+                                if position.sold_quantity else 0.0),
+            ) for position in positions.values()
+        ]
+        peak = max_drawdown = 0.0
+        for point in equity_curve:
+            equity = float(point["equity"])
+            peak = max(peak, equity)
+            drawdown = ((equity / peak) - 1.0) * 100.0 if peak else 0.0
+            point["drawdown_pct"] = drawdown
+            max_drawdown = min(max_drawdown, drawdown)
+        wins = sum(1 for trade in completed if trade.outcome == "WIN")
+        losses = sum(1 for trade in completed if trade.outcome == "LOSS")
+        net_pnl = final_equity - settings.initial_capital
+        coverage = {
+            symbol: {
+                day: {
+                    "source_resolution": source_resolution[symbol].get(day, ""),
+                    "data_quality": source_quality[symbol].get(day, "MISSING"),
+                } for day in calendar if day in rows_by_symbol.get(symbol, {})
+            } for symbol in managed_symbols
+        }
+        warnings = [
+            "REPLAY không có bid/ask, order book, trượt giá hoặc thanh khoản khớp lệnh.",
+            "Không biết thứ tự High/Low trong cùng một nến; khi SL và TP cùng chạm, SL được ưu tiên.",
+        ]
+        if fallback_days:
+            warnings.append(
+                f"AUTO HYBRID đã dùng FALLBACK 1D cho {len(fallback_days)} ngày/mã; "
+                "các ngày này không có tín hiệu intraday."
+            )
+        result = BacktestResult(
+            run_id=f"BT-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6].upper()}",
+            config=settings, started_at=started,
+            completed_at=datetime.now().astimezone().isoformat(),
+            initial_capital=settings.initial_capital, final_equity=final_equity,
+            cash=cash, market_value=market_value, net_pnl=net_pnl,
+            return_pct=(net_pnl / settings.initial_capital * 100.0),
+            total_fees=total_fees, total_tax=total_tax,
+            max_drawdown_pct=abs(max_drawdown), buy_count=buy_count, sell_count=sell_count,
+            closed_trades=len(completed), win_count=wins, loss_count=losses,
+            win_rate_pct=(wins / len(completed) * 100.0 if completed else 0.0),
+            events=events, trades=[*completed, *open_trades], equity_curve=equity_curve,
+            phase_history=phase_history, signals=signal_history,
+            data_quality={
+                "simulation_mode": settings.simulation_mode,
+                "signal_resolution": "1D_REALTIME",
+                "source_coverage": coverage,
+                "fallback_count": len(fallback_days),
+                "order_timing": "signal after source close; fill at next eligible source open",
+            },
+            warnings=warnings,
         )
         if save:
             self.data.save_run(result)

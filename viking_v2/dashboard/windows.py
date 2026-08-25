@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 import re
 import tkinter as tk
 from tkinter import ttk
@@ -29,6 +28,97 @@ PALETTE = {
     "RED": "#EF4444",
     "WARN": "#F59E0B",
 }
+
+
+_SIGNAL_REASONS = {
+    "WHIPSAW_LOCK": "EMA nhiễu, khóa mua",
+    "MAX_POSITIONS": "Đã đủ số vị thế",
+    "LOCKED_AFTER_3_LOSSES": "Khóa sau chuỗi 3 lệnh lỗ",
+    "NO_AVAILABLE_CAPITAL": "Không còn vốn khả dụng",
+    "BUY_ALREADY_PENDING": "Đã có lệnh mua chờ",
+    "CORPORATE_ACTION_BLOCK": "Đang chặn vì sự kiện quyền",
+    "MARKET_STATE_UNKNOWN": "Chưa xác nhận trạng thái thị trường",
+    "NO_NEW_BUY_SIGNAL": "Chỉ là tín hiệu thoát, không mua",
+    "HOLD_POSITION": "Tiếp tục giữ vị thế",
+    "MANUAL_OR_EXTERNAL_POSITION": "Vị thế ngoài bot quản lý",
+}
+
+
+def signal_advice(row: dict[str, Any]) -> tuple[str, str]:
+    """Translate raw rule fields into a short operator-facing suggestion."""
+    signal = str(row.get("signal", "") or "").upper()
+    acted = str(row.get("acted", "") or "").upper()
+    blocked = str(row.get("blocked_by", "") or "").upper()
+    if blocked or acted == "WAIT":
+        suggestion = "KHÔNG MUA" if signal == "BUY" else "KHÔNG THOÁT"
+        return suggestion, _SIGNAL_REASONS.get(blocked, blocked.replace("_", " ") or "Rule chưa cho phép")
+    if signal == "BUY" and acted == "BUY":
+        return "CÓ THỂ MUA", "EMA cắt lên · RSI tăng"
+    if signal == "SELL" and acted == "SELL":
+        return "THOÁT VỊ THẾ", "EMA cắt xuống · RSI giảm"
+    return "THEO DÕI", "Có tín hiệu nhưng chưa hành động"
+
+
+def signal_rows_by_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group detailed signals by date while hiding exact restart duplicates."""
+    days: dict[str, list[dict[str, Any]]] = {}
+    seen: dict[str, dict[tuple[Any, ...], int]] = {}
+    for raw in rows or []:
+        if not isinstance(raw, dict):
+            continue
+        timestamp = str(raw.get("timestamp", "") or "")
+        signal = str(raw.get("signal", "") or "").upper()
+        if len(timestamp) < 10 or not signal:
+            continue
+        day = timestamp[:10]
+        signature = (
+            str(raw.get("symbol", "") or "").upper(), signal,
+            str(raw.get("price", "") or ""), str(raw.get("ema_fast", "") or ""),
+            str(raw.get("ema_slow", "") or ""), str(raw.get("rsi", "") or ""),
+            str(raw.get("market_state", "") or "").upper(),
+            str(raw.get("acted", "") or "").upper(),
+            str(raw.get("blocked_by", "") or "").upper(),
+        )
+        suggestion, reason = signal_advice(raw)
+        detail = {
+            **raw,
+            "timestamp": timestamp,
+            "time": timestamp[11:19] if len(timestamp) >= 19 else timestamp,
+            "symbol": signature[0],
+            "signal": signal,
+            "suggestion": suggestion,
+            "reason": reason,
+            "repeat_count": 1,
+        }
+        previous = seen.setdefault(day, {}).get(signature)
+        if previous is not None:
+            days[day][previous]["timestamp"] = timestamp
+            days[day][previous]["time"] = detail["time"]
+            days[day][previous]["repeat_count"] += 1
+            continue
+        seen[day][signature] = len(days.setdefault(day, []))
+        days[day].append(detail)
+
+    output: list[dict[str, Any]] = []
+    for day, details in days.items():
+        details.sort(key=lambda row: str(row.get("timestamp", "")), reverse=True)
+        output.append({
+            "date": day,
+            "rows": details,
+            "buy_count": sum(str(row.get("signal", "")).upper() == "BUY" for row in details),
+            "sell_count": sum(str(row.get("signal", "")).upper() == "SELL" for row in details),
+            "allowed_count": sum(
+                str(row.get("acted", "") or "").upper() != "WAIT"
+                and not str(row.get("blocked_by", "") or "")
+                for row in details
+            ),
+            "blocked_count": sum(
+                str(row.get("acted", "") or "").upper() == "WAIT"
+                or bool(str(row.get("blocked_by", "") or ""))
+                for row in details
+            ),
+        })
+    return sorted(output, key=lambda group: str(group.get("date", "")), reverse=True)
 
 
 def install_fast_scroll(root: ctk.CTk, pixels: int = 300) -> None:
@@ -180,10 +270,23 @@ def _window(parent: ctk.CTk, title: str, geometry: str = "560x420") -> ctk.CTkTo
     top = _StableToplevel(parent)
     top.title(title)
     top.geometry(geometry)
-    top.transient(parent)
-    top.grab_set()
     top.grid_columnconfigure(0, weight=1)
     return top
+
+
+def minimize_popup(popup: Any) -> bool:
+    """Minimize a persistent popup without destroying or withdrawing it."""
+    top = getattr(popup, "top", None)
+    if top is None or not top.winfo_exists():
+        return False
+    if str(top.state()).lower() in {"iconic", "withdrawn"}:
+        return False
+    top.iconify()
+    on_visibility_changed = getattr(popup, "on_visibility_changed", None)
+    if callable(on_visibility_changed):
+        on_visibility_changed(False)
+    return True
+
 
 class _HoverHint:
     def __init__(self, widget: Any, text: str, placement: str = "side"):
@@ -242,9 +345,9 @@ class _HoverHint:
 class DataTablePopup:
     """Reusable, non-modal CKCS viewer used by the main toolbar.
 
-    The window is deliberately detached from Tk's transient-window lifecycle:
-    clicking the dashboard only withdraws it, and opening it again restores the
-    same instance.  This matches the RULE/CONNECTION popup behaviour.
+    The window is deliberately detached from Tk's transient-window lifecycle.
+    Clicking the dashboard minimizes it, and opening it again restores the same
+    instance. This matches the RULE/CONNECTION popup behaviour.
     """
 
     def __init__(
@@ -600,15 +703,15 @@ class HistoryPopup:
         self.show()
 
     SIGNAL_COLUMNS = (
-        ("timestamp", "THỜI GIAN", 190, "center"),
-        ("symbol", "MÃ", 100, "center"),
-        ("signal", "TÍN HIỆU", 130, "center"),
-        ("price", "GIÁ", 120, "center"),
-        ("ema_fast", "EMA NHANH", 140, "center"),
-        ("ema_slow", "EMA CHẬM", 140, "center"),
-        ("rsi", "RSI", 100, "center"),
-        ("market_state", "THỊ TRƯỜNG", 175, "center"),
-        ("blocked_by", "BOT KHÔNG VÀO VÌ", 300, "w"),
+        ("symbol", "MÃ", 95, "center"),
+        ("suggestion", "GỢI Ý", 180, "center"),
+        ("signal", "TÍN HIỆU EMA", 150, "center"),
+        ("price", "GIÁ", 100, "center"),
+        ("ema_fast", "EMA NHANH", 150, "center"),
+        ("ema_slow", "EMA CHẬM", 150, "center"),
+        ("rsi", "RSI", 90, "center"),
+        ("market_state", "THỊ TRƯỜNG", 210, "center"),
+        ("reason", "LÝ DO", 360, "w"),
     )
 
     def _build_signal_tab(self) -> None:
@@ -618,84 +721,99 @@ class HistoryPopup:
         frame.grid_rowconfigure(0, weight=1)
         keys = tuple(item[0] for item in self.SIGNAL_COLUMNS)
         tree = ttk.Treeview(
-            frame, columns=keys, show="headings", selectmode="browse",
-            style="History.Treeview",
+            frame, columns=keys, show="tree headings", selectmode="browse",
+            style="Signal.Treeview",
         )
+        style = ttk.Style()
+        style.configure(
+            "Signal.Treeview", background=PALETTE["SURFACE"], foreground=PALETTE["TEXT"],
+            fieldbackground=PALETTE["SURFACE"], rowheight=64,
+            font=("Segoe UI", 19), borderwidth=0,
+        )
+        style.configure(
+            "Signal.Treeview.Heading", background=PALETTE["SURFACE_2"],
+            foreground=PALETTE["TEXT"], font=("Segoe UI", 17, "bold"),
+            relief="flat", padding=(10, 13),
+        )
+        tree.heading("#0", text="NGÀY / GIỜ", anchor="w")
+        tree.column("#0", width=320, minwidth=270, anchor="w", stretch=True)
         for key, title, width_px, anchor in self.SIGNAL_COLUMNS:
             tree.heading(key, text=title, anchor=anchor)
-            tree.column(key, width=width_px, minwidth=min(width_px, 90), anchor=anchor, stretch=True)
+            tree.column(
+                key, width=width_px, minwidth=min(width_px, 85), anchor=anchor,
+                stretch=True,
+            )
         tree.tag_configure("buy", foreground="#65D991")
         tree.tag_configure("sell", foreground="#FF8A8A")
+        tree.tag_configure("blocked", foreground="#F6C35B")
+        tree.tag_configure(
+            "signal_day", background=PALETTE["SURFACE_2"], foreground=PALETTE["TEXT"],
+            font=("Segoe UI", 20, "bold"),
+        )
         tree.grid(row=0, column=0, sticky="nsew", padx=(5, 0), pady=(5, 0))
         yscroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
         xscroll = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
         yscroll.grid(row=0, column=1, sticky="ns", pady=(5, 0))
         xscroll.grid(row=1, column=0, sticky="ew", padx=(5, 0))
-        tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+
+        def update_xscroll(first: str, last: str) -> None:
+            xscroll.set(first, last)
+            if float(first) <= 0.0 and float(last) >= 0.999:
+                xscroll.grid_remove()
+            else:
+                xscroll.grid()
+
+        tree.configure(yscrollcommand=yscroll.set, xscrollcommand=update_xscroll)
         self.signal_tree = tree
+        footer = ctk.CTkFrame(frame, fg_color="transparent")
+        footer.grid(row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 4))
+        footer.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            footer,
+            text="Chỉ hiện 7 ngày gần nhất · Excel tự lưu theo tháng trong excel_archive",
+            font=("Segoe UI", 14), text_color=PALETTE["MUTED"], anchor="w",
+        ).grid(row=0, column=0, sticky="w")
         self.signal_empty = ctk.CTkLabel(
             frame, text="CHƯA GHI ĐƯỢC TÍN HIỆU NÀO", font=("Segoe UI", 18, "bold"),
             text_color=PALETTE["DIM"], fg_color=PALETTE["SURFACE"],
         )
-        ctk.CTkButton(
-            frame, text="XUẤT EXCEL", width=150, height=36,
-            font=("Segoe UI", 13, "bold"), fg_color=PALETTE["BLUE"],
-            command=self._export_signals,
-        ).grid(row=2, column=0, sticky="e", padx=(0, 6), pady=(6, 4))
-
-    def _export_signals(self) -> None:
-        """Write the signal log to a workbook next to the CSV it came from."""
-        rows = list(self.signals_provider() if self.signals_provider else [])
-        if not rows:
-            return
-        try:
-            from openpyxl import Workbook
-            from openpyxl.styles import Alignment, Font, PatternFill
-            from openpyxl.utils import get_column_letter
-        except ImportError:
-            return
-        titles = [title for _key, title, *_rest in self.SIGNAL_COLUMNS]
-        keys = [key for key, *_rest in self.SIGNAL_COLUMNS]
-        book = Workbook()
-        sheet = book.active
-        sheet.title = "TÍN HIỆU"
-        sheet.append(titles)
-        for row in rows:
-            sheet.append([row.get(key, "") for key in keys])
-        head_fill = PatternFill("solid", fgColor="1B1F25")
-        for cell in sheet[1]:
-            cell.fill = head_fill
-            cell.font = Font(color="FFFFFF", bold=True)
-            cell.alignment = Alignment(horizontal="center")
-        sheet.freeze_panes = "A2"
-        for column in range(1, sheet.max_column + 1):
-            widest = max(
-                (len(str(sheet.cell(row=r, column=column).value or ""))
-                 for r in range(1, min(sheet.max_row, 400) + 1)),
-                default=12,
-            )
-            sheet.column_dimensions[get_column_letter(column)].width = min(40, max(12, widest + 2))
-        stamp = datetime.now().strftime("%Y%m%d-%H%M")
-        path = Path.home() / "Downloads" / f"VIKING · TÍN HIỆU · {stamp}.xlsx"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        book.save(path)
-        self.subtitle.configure(text=f"Đã xuất {len(rows)} dòng ra {path}")
-
-
     def _refresh_signals(self) -> None:
         tree = getattr(self, "signal_tree", None)
         if tree is None or not tree.winfo_exists():
             return
         tree.delete(*tree.get_children())
-        rows = list(self.signals_provider() if self.signals_provider else [])
-        for row in reversed(rows):
-            signal = str(row.get("signal", "")).upper()
-            tag = "buy" if signal == "BUY" else "sell" if signal == "SELL" else ""
-            tree.insert(
-                "", "end", tags=(tag,) if tag else (),
-                values=tuple(row.get(key, "") for key, *_ in self.SIGNAL_COLUMNS),
+        raw_rows = list(self.signals_provider() if self.signals_provider else [])
+        days = signal_rows_by_day(raw_rows)
+        for index, group in enumerate(days):
+            day = str(group.get("date", "") or "")
+            try:
+                day_label = datetime.strptime(day, "%Y-%m-%d").strftime("%d/%m/%Y")
+            except ValueError:
+                day_label = day
+            details = list(group.get("rows") or [])
+            raw_count = int(group.get("buy_count", 0)) + int(group.get("sell_count", 0))
+            group_values = (
+                "",
+                f"{int(group.get('allowed_count', 0))} CÓ THỂ VÀO",
+                f"{int(group.get('blocked_count', 0))} BỊ CHẶN",
+                "", "", "", "", "", "",
             )
-        if rows:
+            parent = tree.insert(
+                "", "end", text=f"  {day_label} · {raw_count} TÍN HIỆU",
+                open=index == 0, tags=("signal_day",),
+                values=group_values,
+            )
+            for row in details:
+                signal = str(row.get("signal", "") or "").upper()
+                acted = str(row.get("acted", "") or "").upper()
+                blocked = str(row.get("blocked_by", "") or "")
+                tag = "blocked" if blocked or acted == "WAIT" else "buy" if signal == "BUY" else "sell"
+                values = dict(row)
+                tree.insert(
+                    parent, "end", text=f"    {row.get('time', '')}", tags=(tag,),
+                    values=tuple(values.get(key, "") for key, *_ in self.SIGNAL_COLUMNS),
+                )
+        if days:
             self.signal_empty.place_forget()
         else:
             self.signal_empty.place(relx=0.5, rely=0.5, anchor="center")

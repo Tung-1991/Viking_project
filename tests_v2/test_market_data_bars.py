@@ -51,6 +51,28 @@ def test_invalid_ohlc_shape_is_rejected():
     assert MarketDataService._normalize_ohlc({"t": [1], "o": [], "h": [], "l": [], "c": [], "v": []}) == []
 
 
+def test_today_daily_bar_is_not_closed_during_lunch(monkeypatch):
+    now = datetime(2026, 8, 24, 12, 0, tzinfo=VN_TZ)
+    monkeypatch.setattr("viking_v2.trading.market.market_now", lambda: now)
+    stamp = int(datetime(2026, 8, 24, 9, 0, tzinfo=VN_TZ).timestamp())
+    rows = MarketDataService._normalize_ohlc({
+        "t": [stamp], "o": [100], "h": [101], "l": [99],
+        "c": [100.5], "v": [1000],
+    })
+    assert rows[0]["closed"] is False
+
+
+def test_today_daily_bar_closes_only_after_atc(monkeypatch):
+    now = datetime(2026, 8, 24, 15, 0, tzinfo=VN_TZ)
+    monkeypatch.setattr("viking_v2.trading.market.market_now", lambda: now)
+    stamp = int(datetime(2026, 8, 24, 9, 0, tzinfo=VN_TZ).timestamp())
+    rows = MarketDataService._normalize_ohlc({
+        "t": [stamp], "o": [100], "h": [101], "l": [99],
+        "c": [100.5], "v": [1000],
+    })
+    assert rows[0]["closed"] is True
+
+
 def test_last_daily_close_becomes_a_frozen_tick_outside_session():
     tick = MarketDataService.frozen_tick_from_bars(
         "fpt",

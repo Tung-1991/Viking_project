@@ -494,7 +494,7 @@ class DashboardPanelsMixin:
             pass
 
         log_frame = ctk.CTkFrame(
-            self.right, height=300, fg_color=COL_SURFACE, corner_radius=10,
+            self.right, height=320, fg_color=COL_SURFACE, corner_radius=10,
             border_width=1, border_color=COL_BORDER,
         )
         self.info_panel = log_frame
@@ -633,16 +633,16 @@ class DashboardPanelsMixin:
 
     def _build_order_preview_tab(self, parent: ctk.CTkFrame) -> None:
         parent.grid_columnconfigure(0, weight=1)
-        parent.grid_rowconfigure(0, weight=1)
-        # 260px is the compact height required by P1/P2/P3 plus HEALTH.  The
-        # old 230px canvas clipped the second P3 line when the compact tab
-        # dropdown was active.
+        parent.grid_rowconfigure(0, weight=0)
+        # Keep enough real height for P1/P2/P3 and the decision reason. The
+        # parent is scrollable, so a short viewport scrolls instead of clipping
+        # the final guard/status lines.
         panel = ctk.CTkFrame(parent, height=260, fg_color=COL_SURFACE_2, corner_radius=8)
-        panel.grid(row=0, column=0, sticky="nsew")
+        panel.grid(row=0, column=0, sticky="ew")
         panel.grid_propagate(False)
         self.preview_focus_panel = panel
-        panel.grid_columnconfigure(0, weight=7, uniform="preview_groups")
-        panel.grid_columnconfigure(1, weight=3, uniform="preview_groups")
+        panel.grid_columnconfigure(0, weight=3, uniform="preview_groups")
+        panel.grid_columnconfigure(1, weight=2, uniform="preview_groups")
         panel.grid_rowconfigure(0, weight=1)
         panel.grid_rowconfigure(1, weight=0)
 
@@ -801,10 +801,10 @@ class DashboardPanelsMixin:
             card.grid_columnconfigure(0, weight=0)
             card.grid_columnconfigure(1, weight=1)
             title_widget = ctk.CTkLabel(
-                card, text=f"{title}{'  ⓘ' if hint else ''}", font=("Segoe UI", 9, "bold"),
+                card, text=f"{title}{'  ⓘ' if hint else ''}", font=("Segoe UI", 10, "bold"),
                 text_color="#60A5FA", anchor="w",
             )
-            title_widget.grid(row=0, column=0, sticky="w", padx=(8, 6), pady=4)
+            title_widget.grid(row=0, column=0, sticky="w", padx=(8, 6), pady=(3, 1))
             if hint:
                 _HoverHint(title_widget, hint, placement="inside")
             return card
@@ -812,8 +812,8 @@ class DashboardPanelsMixin:
         phase1 = phase_card(1, "P1 · VNINDEX")
         self.preview_rule_market = ctk.CTkLabel(
             phase1, text="VNINDEX --", width=1, height=16,
-            font=("Cascadia Mono", 10, "bold"), text_color=COL_PREVIEW_TEXT,
-            anchor="w", justify="left", wraplength=300,
+            font=("Cascadia Mono", 11, "bold"), text_color=COL_PREVIEW_TEXT,
+            anchor="e", justify="right",
         )
         self.preview_rule_market.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=4)
         self.preview_rule_market_detail = ctk.CTkLabel(
@@ -829,29 +829,31 @@ class DashboardPanelsMixin:
             "RSI hiển thị giá trị hiện tại và chiều thay đổi so với phiên trước.\n"
             "WAIT nghĩa là hiện chưa xuất hiện điểm cắt đủ điều kiện BUY hoặc SELL.",
         )
+        for column in range(3):
+            phase2.grid_columnconfigure(column, weight=1, uniform="rule_phase2")
         self.preview_rule_ema = ctk.CTkLabel(
-            phase2, text="BUY EMA 3/6 · --/--", width=1, height=14,
-            font=("Cascadia Mono", 10), text_color=COL_PREVIEW_TEXT,
-            anchor="w", justify="left", wraplength=300,
+            phase2, text="BUY EMA 3/6 · --/--", width=1, height=22,
+            font=("Cascadia Mono", 10, "bold"), text_color=COL_PREVIEW_TEXT,
+            anchor="w", justify="left",
         )
         self.preview_rule_ema.grid(
-            row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=0
+            row=1, column=0, sticky="ew", padx=(8, 5), pady=(0, 3)
         )
         self.preview_rule_sell_ema = ctk.CTkLabel(
-            phase2, text="SELL EMA 3/6 · --/--", width=1, height=14,
-            font=("Cascadia Mono", 10), text_color=COL_PREVIEW_TEXT,
-            anchor="w", justify="left", wraplength=300,
+            phase2, text="SELL EMA 3/6 · --/--", width=1, height=22,
+            font=("Cascadia Mono", 10, "bold"), text_color=COL_PREVIEW_TEXT,
+            anchor="center", justify="center",
         )
         self.preview_rule_sell_ema.grid(
-            row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=0
+            row=1, column=1, sticky="ew", padx=5, pady=(0, 3)
         )
         self.preview_rule_rsi = ctk.CTkLabel(
-            phase2, text="RSI14 -- · WAIT", width=1, height=14,
-            font=("Cascadia Mono", 10), text_color=COL_PREVIEW_TEXT,
-            anchor="w", justify="left", wraplength=300,
+            phase2, text="RSI14 -- · WAIT", width=1, height=22,
+            font=("Cascadia Mono", 10, "bold"), text_color=COL_PREVIEW_TEXT,
+            anchor="e", justify="right",
         )
         self.preview_rule_rsi.grid(
-            row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 3)
+            row=1, column=2, sticky="ew", padx=(5, 8), pady=(0, 3)
         )
 
         phase3 = phase_card(
@@ -866,18 +868,19 @@ class DashboardPanelsMixin:
             "LỖ: số lệnh lỗ liên tiếp / mức khóa mã.",
         )
         self.preview_rule_phase3 = ctk.CTkLabel(
-            phase3, text="--/-- · --/MÃ", width=1, font=("Cascadia Mono", 10, "bold"),
-            text_color=COL_PREVIEW_TEXT, anchor="w",
+            phase3, text="--/-- · --/MÃ", width=1, font=("Cascadia Mono", 11, "bold"),
+            text_color=COL_PREVIEW_TEXT, anchor="e",
         )
         self.preview_rule_phase3.grid(
-            row=0, column=1, sticky="ew", padx=(0, 8), pady=4
+            row=0, column=1, sticky="ew", padx=(0, 8), pady=(3, 1)
         )
+        phase3.grid_columnconfigure(2, weight=1)
         self.preview_rule_phase3_detail = ctk.CTkLabel(
-            phase3, text="AUTO --", font=("Segoe UI", 9, "bold"),
-            text_color=COL_PREVIEW_TEXT, anchor="w",
+            phase3, text="AUTO --", font=("Segoe UI", 10, "bold"),
+            text_color=COL_PREVIEW_TEXT, anchor="e",
         )
         self.preview_rule_phase3_detail.grid(
-            row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 4)
+            row=0, column=2, sticky="ew", padx=(8, 10), pady=(3, 1)
         )
         self.preview_rule_phase3_guard = ctk.CTkLabel(
             phase3, text="WHIPSAW -- · LOSS --", font=("Segoe UI", 9),
@@ -886,17 +889,17 @@ class DashboardPanelsMixin:
         self.preview_rule_phase3_guard.grid_remove()
 
         self.preview_rule_reason = ctk.CTkLabel(
-            rule_group, text="CHỜ DỮ LIỆU", width=1, height=24,
-            font=("Segoe UI", 10, "bold"), text_color=COL_WARN,
+            rule_group, text="CHỜ DỮ LIỆU", width=1, height=26,
+            font=("Segoe UI", 11, "bold"), text_color=COL_WARN,
             fg_color=COL_SURFACE_2, corner_radius=6,
-            anchor="w", justify="left", wraplength=300,
+            anchor="w", justify="left",
         )
         self.preview_rule_reason.grid(row=4, column=0, sticky="ew", padx=8, pady=(2, 6))
 
         health_group = ctk.CTkFrame(panel, fg_color=COL_SURFACE, corner_radius=7, height=36)
         health_group.grid(row=1, column=0, columnspan=2, sticky="ew", padx=7, pady=(3, 7))
         health_group.grid_propagate(False)
-        for column in range(8):
+        for column in range(7):
             health_group.grid_columnconfigure(column, weight=1, uniform="health_pills")
         self.preview_health_title = ctk.CTkLabel(
             health_group, text="HEALTH ⓘ", width=1, font=("Segoe UI", 10, "bold"),
@@ -926,11 +929,6 @@ class DashboardPanelsMixin:
         self.preview_health_rest = health_cell(4, "REST --")
         self.preview_health_token = health_cell(5, "TOKEN --")
         self.preview_health_trade = health_cell(6, "GIÁ --")
-        self.preview_health_error = ctk.CTkLabel(
-            health_group, text="", width=1, height=24, font=("Segoe UI", 9),
-            text_color=COL_RED, fg_color=COL_SURFACE_2, corner_radius=5,
-        )
-        self.preview_health_error.grid(row=0, column=7, sticky="ew", padx=(3, 7), pady=5)
 
     @staticmethod
     def _preview_level_details(
@@ -1483,9 +1481,9 @@ class DashboardPanelsMixin:
             self.info_collapse_button.configure(text="⌄")
         else:
             self.log_tabview.grid()
-            self.info_panel.configure(height=300)
+            self.info_panel.configure(height=320)
             self.info_panel.grid_rowconfigure(1, weight=1, minsize=0)
-            self.right.grid_rowconfigure(2, weight=0, minsize=300)
+            self.right.grid_rowconfigure(2, weight=0, minsize=320)
             self.info_collapse_button.configure(text="⌃")
 
     def _render_exit_sell_preview(
@@ -1679,12 +1677,8 @@ class DashboardPanelsMixin:
 
         error_text = str(ws.get("last_error") or last_error or status.get("error") or "")
         self.preview_health_title.configure(
-            text="HEALTH ⓘ",
+            text="HEALTH LỖI ⓘ" if error_text else "HEALTH ⓘ",
             text_color=COL_RED if error_text else "#60A5FA",
-        )
-        self.preview_health_error.configure(
-            text="CÓ LỖI" if error_text else "KHÔNG LỖI",
-            text_color=COL_RED if error_text else COL_GREEN,
         )
 
     def _show_running_legend(self) -> None:

@@ -217,7 +217,7 @@ class InfoPopup:
             signal_mode=settings.signal_mode,
             em_modes=settings.bot_em_modes,
             whipsaw_enabled=p.whipsaw_enabled,
-            loss_lock=f"{p.loss_lock_count} LOSS",
+            loss_lock=f"{p.loss_lock_count} LOSS · {p.loss_lock_hours} GIỜ",
         )
         self._section(body, row, "THỰC THI", [
             ("LỆNH BOT", "LO LOCAL" if settings.bot_order_mode == "LO_LOCAL" else "MARKET", PALETTE["TEXT"]),
