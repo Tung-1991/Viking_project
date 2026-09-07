@@ -9,7 +9,7 @@ from viking_v2.backtest.data import HistoricalDataStore
 from viking_v2 import config as app_config
 from viking_v2.backtest.engine import BacktestEngine, _normal_trail_fill, _opening_fill_price
 from viking_v2.backtest.models import BacktestConfig, BacktestScenario, BacktestSettings, BacktestTrade
-from viking_v2.backtest.report import ROUND_HEADERS, exit_detail, export_run_excel
+from viking_v2.backtest.report import exit_detail, export_run_excel, round_headers, workbook_name
 from viking_v2.backtest.replay import ReplayDataStore
 from viking_v2.rules.business import StrategyDecision
 
@@ -166,6 +166,31 @@ def test_backtest_defaults_are_neutral_and_independent():
     assert BacktestSettings().simulation_mode == "AUTO_HYBRID"
 
 
+def test_backtest_can_lock_replay_to_two_minute_source():
+    config = BacktestConfig(
+        ["VIX"], "2026-03-02", "2026-09-03",
+        simulation_mode="REPLAY", execution_resolution="2",
+    )
+    assert config.execution_resolution == "2"
+
+
+def test_backtest_settings_migrate_legacy_ema_pair_to_both_directions():
+    settings = BacktestSettings(rule_parameters={"ema_fast": 5, "ema_slow": 9})
+
+    assert settings.rule_parameters["buy_ema_fast"] == 5
+    assert settings.rule_parameters["buy_ema_slow"] == 9
+    assert settings.rule_parameters["sell_ema_fast"] == 5
+    assert settings.rule_parameters["sell_ema_slow"] == 9
+
+
+def test_multi_scenario_workbook_name_keeps_single_symbol():
+    name = workbook_name(
+        "MODE 2 - E ONLY", symbols=["CTS", "CTS"], start="2026-03-14",
+        end="2026-08-20", runs=2, stamp="AUDIT",
+    )
+    assert "CTS" in name and "2 kich ban" in name
+
+
 def test_continuous_fill_uses_first_candle_open_at_or_after_0915():
     day = datetime(2026, 8, 20, tzinfo=VN_TZ)
     bars = [
@@ -279,10 +304,10 @@ def test_excel_export_gives_each_run_its_own_sheet(tmp_path):
     # Both modes keep the same shape so their sheets can be compared or pasted
     # together; no blended average exit price anywhere.
     # The run name is the sheet tab now, so that column is gone from the rows.
-    assert headers == list(ROUND_HEADERS[1:])
+    assert headers == list(round_headers(result)[1:])
     assert headers[0] == "LƯỢT"
     assert "GIÁ RA" not in headers
-    assert {"CẮT LỖ", "PHIÊN", "THOÁT BỞI", "EMA RA", "RSI RA"} <= set(headers)
+    assert {"CẮT LỖ", "PHIÊN", "THOÁT BỞI", "EMA3 / EMA6 RA", "RSI RA"} <= set(headers)
 
 
 def test_exit_detail_names_every_sell_with_its_own_price():
@@ -381,6 +406,85 @@ def test_mode2_replay_catches_intraday_daily_ema_cross_and_fills_next_bar(tmp_pa
                          "max_positions": 1, "no_compound_enabled": False},
     ), save=False)
     assert [event for event in daily.events if event.side == "BUY"] == []
+
+
+def test_replay_confirms_buy_for_five_exchange_minutes_then_fills_next_bar(tmp_path):
+    start = datetime(2025, 12, 1, tzinfo=VN_TZ)
+    values = [8.0] * 221
+    test_day = (start + timedelta(days=220)).date().isoformat()
+    payload = _payload(values, start)
+    store = HistoricalDataStore(
+        root=tmp_path / "confirm-replay",
+        fetcher=lambda _symbol, resolution, _from, _to: payload if resolution == "1D" else None,
+    )
+    replay = ReplayDataStore(store.root / "replay")
+    source = tmp_path / "HOSE_DLY_FPT, 1.csv"
+    intraday = [
+        f"{test_day}T02:{minute:02d}:00Z,9,9,9,9,100"
+        for minute in range(15, 22)
+    ]
+    source.write_text(
+        "time,open,high,low,close,Volume\n" + "\n".join([
+            *intraday,
+            f"{test_day}T07:45:00Z,9,9,9,9,100",
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    replay.import_file(source, price_scale=1)
+    result = BacktestEngine(store, replay).run(BacktestConfig(
+        ["FPT"], test_day, test_day, initial_capital=100_000_000,
+        fixed_market_phase="UPTREND", fixed_exposure_pct=100,
+        fill_session="CONTINUOUS", simulation_mode="REPLAY",
+        rule_parameters={
+            "buy_ema_fast": 2, "buy_ema_slow": 3, "rsi_period": 2,
+            "max_positions": 1, "no_compound_enabled": False,
+            "buy_confirmation_enabled": True, "buy_confirmation_minutes": 5,
+            "buy_confirmation_require_ema": True, "buy_confirmation_require_rsi": True,
+        },
+    ), save=False)
+    buy = next(event for event in result.events if event.side == "BUY")
+    assert datetime.fromisoformat(buy.signal_time).strftime("%H:%M") == "09:15"
+    assert datetime.fromisoformat(buy.decision_time).strftime("%H:%M") == "09:20"
+    assert datetime.fromisoformat(buy.fill_time).strftime("%H:%M") == "09:21"
+    assert any(row["reason"] == "BUY_CONFIRMATION_WAIT" for row in result.signals)
+
+
+@pytest.mark.parametrize("window_on,confirmation_on,expected_fill", [
+    (False, False, "09:16"), (True, False, "14:02"), (True, True, "14:08"),
+])
+def test_replay_buy_window_with_two_minute_data_and_confirmation(tmp_path, window_on, confirmation_on, expected_fill):
+    start = datetime(2025, 12, 1, tzinfo=VN_TZ)
+    test_day = (start + timedelta(days=220)).date().isoformat()
+    payload = _payload([8.0] * 221, start)
+    store = HistoricalDataStore(root=tmp_path / "data", fetcher=lambda _s, res, *_: payload if res == "1D" else None)
+    replay = ReplayDataStore(tmp_path / "replay")
+    source = tmp_path / "HOSE_DLY_FPT, 2.csv"
+    times = ["02:14", "02:16", "06:58", "07:00", "07:02", "07:04", "07:06", "07:08", "07:30", "07:44"]
+    source.write_text("time,open,high,low,close,Volume\n" + "\n".join(
+        f"{test_day}T{stamp}:00Z,9,9,9,9,100" for stamp in times
+    ) + "\n", encoding="utf-8")
+    replay.import_file(source, price_scale=1)
+    result = BacktestEngine(store, replay).run(BacktestConfig(
+        ["FPT"], test_day, test_day, initial_capital=100_000_000,
+        fixed_market_phase="UPTREND", fixed_exposure_pct=100,
+        fill_session="CONTINUOUS", simulation_mode="REPLAY",
+        rule_parameters={"buy_ema_fast": 2, "buy_ema_slow": 3, "rsi_period": 2,
+                         "max_positions": 1, "buy_window_enabled": window_on,
+                         "buy_confirmation_enabled": confirmation_on},
+    ), save=False)
+    buys = [event for event in result.events if event.side == "BUY"]
+    assert len(buys) == 1
+    assert datetime.fromisoformat(buys[0].fill_time).strftime("%H:%M") == expected_fill
+    assert datetime.fromisoformat(buys[0].signal_time).strftime("%H:%M") == "09:14"
+    if window_on:
+        assert any(row["reason"] == "BUY_WINDOW_WAIT" for row in result.signals)
+        from openpyxl import load_workbook
+        report = export_run_excel(result, tmp_path / "exports", mode="MODE 2", stamp="window")
+        book = load_workbook(report, read_only=True)
+        info = list(book["THÔNG TIN"].values)
+        assert any(row[0] == "Khung giờ mua" and "14:00" in str(row[1]) for row in info)
+        assert "KHUNG GIỜ MUA" in next(book["TÍN HIỆU"].values)
+        book.close()
 
 
 def test_replay_uses_previous_source_bar_not_previous_daily_close_for_ema(tmp_path):

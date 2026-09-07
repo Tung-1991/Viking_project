@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from .market import order_is_due
+from .market import order_is_due, VN_TZ, in_buy_window
 from ..models import BrokerOrderResult, OrderIntent
 from .portfolio import validate_quantity
 from ..storage import AtomicJSONStore
@@ -127,9 +128,10 @@ class OrderQueue:
                     continue
                 if bool(row.get("defer_expiry_until_eligible", False)) and not bool(row.get("eligible_session_seen", False)):
                     continue
-                if float(row.get("expires_at", 0.0) or 0.0) <= now:
+                if (float(row.get("expires_at", 0.0) or 0.0) <= now
+                        and (not row.get("buy_window_end") or status in CLAIMABLE_STATUSES)):
                     row["status"] = "EXPIRED"
-                    row["result"] = "Expired after 24 hours"
+                    row["result"] = "Hết khung giờ mua" if row.get("buy_window_end") else "Expired after 24 hours"
                     expired.append(OrderIntent.from_dict(row))
                     changed = True
                 elif str(row.get("status", "")).upper() == "SENDING":
@@ -163,6 +165,14 @@ class OrderQueue:
             return False
         return price <= intent.limit_price if intent.side == "BUY" else price >= intent.limit_price
 
+    def buy_window_is_due(self, intent: OrderIntent) -> bool:
+        if intent.side != "BUY" or not intent.buy_window_start:
+            return True
+        local = datetime.fromtimestamp(self._now(), VN_TZ)
+        return local.date().isoformat() == intent.buy_window_date and in_buy_window(
+            local, intent.buy_window_start, intent.buy_window_end,
+        )
+
     def claim_due(
         self,
         *,
@@ -171,6 +181,7 @@ class OrderQueue:
         token_ready: bool,
         limit: int = 20,
         quote_provider: Callable[[str], dict[str, Any] | None] | None = None,
+        phase_provider: Callable[[str], str] | None = None,
     ) -> list[OrderIntent]:
         self.expire()
         claimed: list[OrderIntent] = []
@@ -185,7 +196,10 @@ class OrderQueue:
                 intent = OrderIntent.from_dict(row)
                 if intent.execution_mode != str(execution_mode).upper():
                     continue
-                if not self._phase_is_due(intent, phase):
+                if not self.buy_window_is_due(intent):
+                    continue
+                intent_phase = phase_provider(intent.symbol) if phase_provider else phase
+                if not self._phase_is_due(intent, intent_phase):
                     continue
                 if intent.defer_expiry_until_eligible and not intent.eligible_session_seen:
                     row["eligible_session_seen"] = True

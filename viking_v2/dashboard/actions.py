@@ -24,7 +24,7 @@ from ..connections.window import ConnectionPopup
 from ..models import OrderIntent, RuntimeConfig, StrategyDecision, TradeCycle
 from ..rules.window import RuleSettingsPopup
 from ..storage import CSVOrderJournal, SignalLog
-from ..trading.market import market_phase, market_session_clock
+from ..trading.market import market_phase, market_session_clock, normalize_exchange
 from .view import (
     COL_GRAY, COL_GREEN, COL_MUTED, COL_PREVIEW_TEXT, COL_RED, COL_SURFACE_2,
     COL_TEXT, COL_WARN, _cash, _compact_vnd, _display_price, _equity, _number,
@@ -1233,6 +1233,16 @@ class DashboardActionsMixin:
             messagebox.showerror("Manual order", "Take Profit không hợp lệ.", parent=self)
             return
         trade_id = uuid.uuid4().hex if side == "BUY" else ""
+        exchange = self._symbol_exchange(symbol)
+        if not exchange:
+            messagebox.showerror("Order", f"Chưa xác định sàn của {symbol}.", parent=self)
+            return
+        if kind == "ATO" and exchange != "HOSE":
+            messagebox.showerror("Order", f"{exchange} không dùng ATO.", parent=self)
+            return
+        if kind == "ATC" and exchange == "UPCOM":
+            messagebox.showerror("Order", "UPCOM không có ATC.", parent=self)
+            return
         runtime_status = self.bridge.read_status()
         runtime_decisions = (
             runtime_status.get("decisions")
@@ -1256,8 +1266,8 @@ class DashboardActionsMixin:
             trade_id=trade_id, action="OPEN" if side == "BUY" else "CLOSE",
             em_modes=em_modes, sl_mode=sl_mode, sl_value=sl_value,
             tp_mode=tp_mode, tp_value=tp_value,
-            allow_ato=self.settings.allow_ato,
-            allow_atc=self.settings.allow_atc,
+            allow_ato=self.settings.allow_ato and self._symbol_exchange(symbol) == "HOSE",
+            allow_atc=self.settings.allow_atc and exchange != "UPCOM",
             entry_market_state=str(entry_decision.get("market_state", "UNKNOWN") or "UNKNOWN"),
             entry_exposure=float(entry_details.get("exposure", 0.0) or 0.0),
             entry_budget=float(entry_checks.get("order_budget", 0.0) or 0.0),
@@ -1407,7 +1417,7 @@ class DashboardActionsMixin:
         ctk.CTkLabel(
             top,
             text=f"{action.get('symbol', '')} · {order_type} · {action.get('mode', '')}",
-            font=("Segoe UI", 16, "bold"),
+            font=("Segoe UI", 15, "bold"),
         ).grid(row=0, column=0, columnspan=2, sticky="w", padx=18, pady=(16, 10))
         ctk.CTkLabel(top, text="Khối lượng", font=("Segoe UI", 11, "bold")).grid(
             row=1, column=0, sticky="w", padx=18, pady=7
@@ -1514,7 +1524,7 @@ class DashboardActionsMixin:
         top.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             top, text=f"{symbol} · {mode} · {quantity:,} CP",
-            font=("Segoe UI", 20, "bold"), text_color=COL_TEXT,
+            font=("Segoe UI", 18, "bold"), text_color=COL_TEXT,
         ).grid(row=0, column=0, sticky="w", padx=20, pady=(18, 4))
         ctk.CTkLabel(
             top,
@@ -1522,7 +1532,7 @@ class DashboardActionsMixin:
                 f"ID #{cycle.id[:12]} · Mở {self._row_time(opened_at)}" if cycle
                 else "Vị thế ngoài hệ thống · cần xác nhận bắt đầu quản lý"
             ),
-            font=("Segoe UI", 13), text_color=COL_WARN if not cycle else COL_TEXT,
+            font=("Segoe UI", 11), text_color=COL_WARN if not cycle else COL_TEXT,
         ).grid(row=1, column=0, sticky="w", padx=20, pady=(0, 10))
 
         summary = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
@@ -1553,7 +1563,7 @@ class DashboardActionsMixin:
                 text_color=COL_MUTED,
             ).pack(anchor="w", padx=12, pady=(9, 3))
             ctk.CTkLabel(
-                card, text=value, font=("Cascadia Mono", 14, "bold"),
+                card, text=value, font=("Cascadia Mono", 12, "bold"),
                 text_color=color,
             ).pack(anchor="w", padx=12, pady=(0, 10))
 
@@ -1580,7 +1590,7 @@ class DashboardActionsMixin:
             active = key in selected
             button = ctk.CTkButton(
                 mode_frame, text=f"{label} · {'ON' if active else 'OFF'}",
-                height=46, font=("Segoe UI", 13, "bold"), corner_radius=7,
+                height=42, font=("Segoe UI", 11, "bold"), corner_radius=7,
                 fg_color="#168A47" if active else "#282D34",
                 hover_color="#1EA45A" if active else "#363C45",
                 text_color=COL_TEXT if active else COL_MUTED,
@@ -1593,7 +1603,7 @@ class DashboardActionsMixin:
         targets.grid(row=4, column=0, sticky="ew", padx=20, pady=8)
         targets.grid_columnconfigure((1, 3), weight=1)
         ctk.CTkLabel(targets, text="TAKE PROFIT", font=("Segoe UI", 12, "bold"), text_color=COL_GREEN).grid(row=0, column=0, sticky="w", padx=(12, 8), pady=(10, 5))
-        tp_entry = ctk.CTkEntry(targets, font=("Cascadia Mono", 14), height=38)
+        tp_entry = ctk.CTkEntry(targets, font=("Cascadia Mono", 12), height=38)
         if cycle and cycle.tp_mode == "PRICE":
             tp_entry.insert(0, _display_price(cycle.tp_value))
         elif cycle and cycle.tp_mode == "PERCENT":
@@ -1604,7 +1614,7 @@ class DashboardActionsMixin:
             tp_entry.insert(0, "AUTO")
         tp_entry.grid(row=0, column=1, sticky="ew", padx=(0, 14), pady=(10, 5))
         ctk.CTkLabel(targets, text="STOP LOSS", font=("Segoe UI", 12, "bold"), text_color=COL_RED).grid(row=0, column=2, sticky="w", padx=(12, 8), pady=(10, 5))
-        sl_entry = ctk.CTkEntry(targets, font=("Cascadia Mono", 14), height=38)
+        sl_entry = ctk.CTkEntry(targets, font=("Cascadia Mono", 12), height=38)
         if cycle and cycle.sl_mode == "PRICE":
             sl_entry.insert(0, _display_price(cycle.sl_value))
         elif cycle and cycle.sl_mode == "PERCENT":
@@ -1612,9 +1622,9 @@ class DashboardActionsMixin:
         else:
             sl_entry.insert(0, "AUTO")
         sl_entry.grid(row=0, column=3, sticky="ew", padx=(0, 12), pady=(10, 5))
-        tp_preview = ctk.CTkLabel(targets, text="", font=("Segoe UI", 13), text_color=COL_GREEN)
+        tp_preview = ctk.CTkLabel(targets, text="", font=("Segoe UI", 11), text_color=COL_GREEN)
         tp_preview.grid(row=1, column=0, columnspan=2, sticky="w", padx=12, pady=(2, 10))
-        sl_preview = ctk.CTkLabel(targets, text="", font=("Segoe UI", 13), text_color=COL_RED)
+        sl_preview = ctk.CTkLabel(targets, text="", font=("Segoe UI", 11), text_color=COL_RED)
         sl_preview.grid(row=1, column=2, columnspan=2, sticky="w", padx=12, pady=(2, 10))
 
         details = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
@@ -1633,7 +1643,7 @@ class DashboardActionsMixin:
             ctk.CTkLabel(card, text=title, font=("Segoe UI", 12, "bold"), text_color=COL_TEXT).pack(anchor="w", padx=12, pady=(9, 3))
             ctk.CTkLabel(card, text=value, font=("Segoe UI", 12), text_color=COL_TEXT, wraplength=300, justify="left").pack(anchor="w", padx=12, pady=(0, 10))
 
-        status = ctk.CTkLabel(top, text="", font=("Segoe UI", 13), text_color=COL_WARN)
+        status = ctk.CTkLabel(top, text="", font=("Segoe UI", 11), text_color=COL_WARN)
         status.grid(row=6, column=0, sticky="w", padx=20, pady=(2, 0))
 
         def parse_target(raw: str, *, stop: bool) -> tuple[str, float, float]:
@@ -1757,13 +1767,24 @@ class DashboardActionsMixin:
         tick = ticks.get(str(symbol).upper())
         return tick if isinstance(tick, dict) else None
 
+    def _symbol_exchange(self, symbol: str | None = None) -> str:
+        selected = str(symbol or self.symbol.get() or "").strip().upper()
+        status = self.bridge.read_status()
+        detected = (status.get("symbol_exchanges") or {}).get(selected, "")
+        return normalize_exchange(detected or self.settings.symbol_exchanges.get(selected, ""))
+
     def _current_market_phase(self) -> str:
-        working_dates = self.bridge.read_status().get("working_dates") or []
+        status = self.bridge.read_status()
+        working_dates = status.get("working_dates") or []
         if self.mode.get() == "REAL" and self.real.configured() and not working_dates:
             return "CALENDAR_UNKNOWN"
+        exchange = self._symbol_exchange()
+        if not exchange:
+            return "UNKNOWN_EXCHANGE"
         return market_phase(
             working_dates=working_dates or None,
             holidays=self.settings.trading_holidays,
+            exchange=exchange,
         )[0]
 
     def _poll_runtime(self) -> None:
@@ -1811,6 +1832,9 @@ class DashboardActionsMixin:
         elif age > 8:
             daemon = "STALE"
         market = str(status.get("market_status", "OFFLINE"))
+        symbol = self.symbol.get().strip().upper()
+        selected_exchange = self._symbol_exchange(symbol)
+        selected_phase = str((status.get("symbol_phases") or {}).get(symbol, market) or market)
         healthy_daemon = daemon == "RUNNING"
         if healthy_daemon and now - self._daemon_started_at >= 60.0:
             self._daemon_crash_times.clear()
@@ -1821,7 +1845,12 @@ class DashboardActionsMixin:
             session_text, active_market = market_session_clock(
                 working_dates=status.get("working_dates") or None,
                 holidays=self.settings.trading_holidays,
+                exchange=selected_exchange,
             )
+        if selected_exchange:
+            session_text = f"{symbol} · {selected_exchange}\n{session_text}"
+        elif symbol:
+            session_text, active_market = f"{symbol} · CHƯA XÁC ĐỊNH SÀN", False
         self.lbl_session.configure(
             text=session_text,
             text_color=COL_GREEN if active_market else COL_RED,
@@ -1831,7 +1860,6 @@ class DashboardActionsMixin:
             text_color=COL_GREEN if healthy_daemon else COL_WARN if daemon == "SYNC" else COL_RED,
         )
         self._paint_bot(bool(status.get("bot_enabled", False)))
-        symbol = self.symbol.get().strip().upper()
         tick = (status.get("ticks") or {}).get(symbol) or {}
         raw_price = (
             tick.get("price")
@@ -1846,7 +1874,7 @@ class DashboardActionsMixin:
         price = _price_unit(raw_price)
         self._current_tick_price = price
         self._current_tick = dict(tick) if isinstance(tick, dict) else {}
-        self._current_market_status = market.upper()
+        self._current_market_status = selected_phase.upper()
         if self.order_type.get() == "LO":
             self._populate_default_lo()
         self._update_order_preview()
@@ -1896,8 +1924,8 @@ class DashboardActionsMixin:
                         "position_quantity": details.get("position_quantity", 0),
                     },
                     candle_key=str(details.get("candle_key", "") or ""),
-                    allow_ato=self.settings.allow_ato,
-                    allow_atc=self.settings.allow_atc,
+                    allow_ato=self.settings.allow_ato and self._symbol_exchange(symbol) == "HOSE",
+                    allow_atc=self.settings.allow_atc and self._symbol_exchange(symbol) != "UPCOM",
                     bot_em_modes=self.settings.bot_em_modes,
                     sell_wait_policy=self.settings.sell_wait_policy,
                 )
@@ -1951,6 +1979,11 @@ class DashboardActionsMixin:
             return
         self._order_worker_busy = True
         phase = self._current_market_phase()
+        runtime_status = self.bridge.read_status()
+        symbol_phases = dict(runtime_status.get("symbol_phases") or {})
+
+        def phase_for(symbol: str) -> str:
+            return str(symbol_phases.get(str(symbol).upper(), "UNKNOWN_EXCHANGE") or "UNKNOWN_EXCHANGE")
 
         def work() -> list[tuple[str, OrderIntent, Any]]:
             self.execution.reconcile_working("REAL")
@@ -1959,6 +1992,7 @@ class DashboardActionsMixin:
                 for intent, result in self.execution.process_due(
                     phase=phase,
                     execution_mode=selected_mode,
+                    phase_provider=phase_for,
                 ):
                     completed.append((selected_mode, intent, result))
             return completed

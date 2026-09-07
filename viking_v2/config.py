@@ -148,6 +148,8 @@ def update_env(values: dict[str, str | None], path: str | Path = ENV_PATH) -> No
 @dataclass(slots=True)
 class AppSettings:
     watchlist: list[str] = field(default_factory=_watchlist_from_env)
+    # Manual fallback only. LIVE/PAPER normally learns the exchange from DNSE.
+    symbol_exchanges: dict[str, str] = field(default_factory=dict)
     paper_mode: bool = True
     paper_initial_balance: float = 100_000_000.0
     confirm_real_orders: bool = True
@@ -187,6 +189,13 @@ class AppSettings:
         )
         if not self.watchlist:
             self.watchlist = list(DEFAULT_CKCS_WATCHLIST)
+        aliases = {"HOSE": "HOSE", "HSX": "HOSE", "STO": "HOSE",
+                   "HNX": "HNX", "STX": "HNX", "UPCOM": "UPCOM", "UPX": "UPCOM"}
+        self.symbol_exchanges = {
+            str(symbol).strip().upper(): aliases[str(exchange).strip().upper()]
+            for symbol, exchange in (self.symbol_exchanges or {}).items()
+            if str(symbol).strip() and str(exchange).strip().upper() in aliases
+        }
         self.paper_initial_balance = max(0.0, float(self.paper_initial_balance or 0.0))
         self.telegram_signal_alerts = bool(self.telegram_signal_alerts)
         self.telegram_chat_id = str(self.telegram_chat_id or "").strip()

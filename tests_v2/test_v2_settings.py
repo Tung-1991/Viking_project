@@ -148,7 +148,7 @@ def test_env_store_can_remove_only_selected_secret(tmp_path, monkeypatch):
     assert "DNSE_TRADING_TOKEN_EXPIRES_AT" not in os.environ
 
 
-def test_no_two_cards_ever_share_a_grid_cell():
+def test_no_two_cards_ever_share_a_grid_cell(ui_root):
     """A card gridded onto an occupied cell is drawn over and never seen.
 
     This has bitten twice already, so the layout is checked instead of eyeballed.
@@ -158,8 +158,7 @@ def test_no_two_cards_ever_share_a_grid_cell():
     from viking_v2.rules.window import RuleSettingsPopup
     from viking_v2.backtest.window import BacktestPopup
 
-    root = ctk.CTk()
-    root.withdraw()
+    root = ui_root
     try:
         clashes = []
 
@@ -197,10 +196,13 @@ def test_no_two_cards_ever_share_a_grid_cell():
 
         assert not clashes, "thẻ chồng lên nhau: " + ", ".join(clashes)
     finally:
-        root.destroy()
+        if 'back' in locals() and back.top.winfo_exists():
+            back.close()
+        if 'rules' in locals() and rules.top.winfo_exists():
+            rules._close()
 
 
-def test_no_tab_is_wider_than_the_window_it_lives_in():
+def test_no_tab_is_wider_than_the_window_it_lives_in(ui_root):
     """A tab that needs more width than it has gets its right edge cut off.
 
     Both popups sized themselves past the window twice already, hiding a whole
@@ -211,8 +213,7 @@ def test_no_tab_is_wider_than_the_window_it_lives_in():
     from viking_v2.rules.window import RuleSettingsPopup
     from viking_v2.backtest.window import BacktestPopup
 
-    root = ctk.CTk()
-    root.withdraw()
+    root = ui_root
     try:
         too_wide = []
         settings = load_settings("PAPER")
@@ -237,7 +238,10 @@ def test_no_tab_is_wider_than_the_window_it_lives_in():
                     )
         assert not too_wide, "tab tràn khỏi cửa sổ: " + ", ".join(too_wide)
     finally:
-        root.destroy()
+        for _label, popup, _names in locals().get("pages", ()):
+            closer = getattr(popup, "close", None) or getattr(popup, "_close", None)
+            if callable(closer) and popup.top.winfo_exists():
+                closer()
 
 
 def test_signal_log_records_a_change_not_every_loop(tmp_path):
@@ -299,7 +303,7 @@ def test_signal_history_groups_detailed_rows_by_day_and_hides_restart_duplicates
     vix = next(row for row in days[1]["rows"] if row["symbol"] == "VIX")
     qcg = next(row for row in days[1]["rows"] if row["symbol"] == "QCG")
     assert vix["suggestion"] == "CÓ THỂ MUA"
-    assert vix["reason"] == "EMA cắt lên · RSI tăng"
+    assert vix["reason"] == "Đủ điều kiện tín hiệu BUY đang bật"
     assert vix["repeat_count"] == 2
     assert qcg["suggestion"] == "KHÔNG MUA"
     assert qcg["reason"] == "EMA nhiễu, khóa mua"

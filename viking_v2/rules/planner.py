@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import uuid
 from typing import Any
 
 from ..models import OrderIntent, StrategyDecision
 from ..trading.orders import OrderQueue
-from ..trading.portfolio import round_lot_down, size_buy_order
+from ..trading.portfolio import sell_quantity_for_fraction, size_buy_order
 from ..trading.state import TradeStateStore
+from ..trading.market import VN_TZ, in_buy_window, parse_clock_minute
 from .state import RuleStateStore
 
 
@@ -50,6 +52,13 @@ class StrategyOrderPlanner:
             return PlanResult(None, "NO_LIVE_EXECUTION_PRICE")
 
         if side == "BUY":
+            window = decision.details.get("buy_window") or {}
+            if window:
+                now = datetime.now(VN_TZ)
+                if window.get("date") != now.date().isoformat() or not in_buy_window(
+                    now, window["start"], window["end"],
+                ):
+                    return PlanResult(None, "BUY_WINDOW_EXPIRED")
             if self.queue.find_active(symbol, side="BUY", execution_mode=execution_mode):
                 return PlanResult(None, "BUY_ALREADY_PENDING")
             checks = (
@@ -62,12 +71,21 @@ class StrategyOrderPlanner:
                 portfolio.get("available_cash", checks.get("available_cash", 0.0)) or 0.0
             )
             nav = float(portfolio.get("nav", checks.get("nav", 0.0)) or 0.0)
+            minimum_room = portfolio.get(
+                "minimum_order_room", checks.get("minimum_order_room")
+            )
+            if minimum_room is None:
+                minimum_room = nav
             sizing = size_buy_order(
                 budget_vnd=float(portfolio.get("order_budget", 0.0) or 0.0),
                 price_board=price,
                 available_cash=available_cash,
                 nav=nav,
                 force_min_lot_enabled=bool(checks.get("force_min_lot_enabled", False)),
+                minimum_order_room_vnd=float(minimum_room or 0.0),
+                buy_fee_rate=float(
+                    portfolio.get("buy_fee_rate", checks.get("buy_fee_rate", 0.0)) or 0.0
+                ),
             )
             quantity = sizing.quantity
             if quantity <= 0:
@@ -85,7 +103,9 @@ class StrategyOrderPlanner:
         else:
             trade_id = str(portfolio.get("trade_id", "") or "")
             remaining = max(0, int(portfolio.get("position_quantity", 0) or 0))
-            quantity = round_lot_down(remaining * float(decision.quantity_fraction or 1.0))
+            quantity = sell_quantity_for_fraction(
+                remaining, float(decision.quantity_fraction or 1.0)
+            )
             if quantity <= 0:
                 return PlanResult(None, "ODD_LOT_REMAINDER")
             active_sell = [
@@ -136,5 +156,14 @@ class StrategyOrderPlanner:
                 if side == "BUY" else 0.0
             ),
         )
+        if side == "BUY" and window:
+            intent.buy_window_start = window["start"]
+            intent.buy_window_end = window["end"]
+            intent.buy_window_date = window["date"]
+            end_minute = parse_clock_minute(window["end"])
+            deadline = datetime.fromisoformat(window["date"]).replace(
+                hour=end_minute // 60, minute=end_minute % 60, tzinfo=VN_TZ,
+            ).timestamp()
+            intent.expires_at = min(intent.expires_at, deadline)
         self.queue.add(intent)
         return PlanResult(intent, "PLANNED")

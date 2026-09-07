@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import pytest
 
 from viking_v2.rules.business import (
     crossover_signal,
@@ -41,6 +42,16 @@ def test_phase2_can_use_independent_buy_and_sell_ema_pairs():
     ) == "SELL"
 
 
+def test_long_sell_ema_history_does_not_suppress_a_ready_buy_signal():
+    assert crossover_signal(
+        _bars(M_VALUES), 3, 6, 14,
+        sell_fast=100, sell_slow=200,
+        buy_use_ema=True, buy_use_rsi=True,
+        sell_use_ema=True, sell_use_rsi=True,
+        prefer="BUY",
+    ) == "BUY"
+
+
 def test_realtime_crossover_compares_two_consecutive_observations():
     previous = {
         "buy_ema_fast": 9.9, "buy_ema_slow": 10.0,
@@ -63,6 +74,37 @@ def test_realtime_crossover_compares_two_consecutive_observations():
         "rsi": 45.0, "rsi_previous": 50.0,
     }
     assert crossover_signal_from_snapshots(current, previous, prefer="SELL") == "SELL"
+
+
+def test_phase2_only_requires_the_indicators_enabled_for_each_signal():
+    previous = {
+        "buy_ema_fast": 9.9, "buy_ema_slow": 10.0,
+        "sell_ema_fast": 9.9, "sell_ema_slow": 10.0,
+    }
+    current = {
+        "buy_ema_fast": 10.1, "buy_ema_slow": 10.0,
+        "sell_ema_fast": 10.1, "sell_ema_slow": 10.0,
+        "rsi": 45.0, "rsi_previous": 50.0,
+    }
+
+    assert crossover_signal_from_snapshots(
+        current, previous, buy_use_ema=True, buy_use_rsi=False,
+    ) == "BUY"
+    assert crossover_signal_from_snapshots(
+        current, previous, buy_use_ema=True, buy_use_rsi=True,
+    ) == ""
+
+    no_cross = {
+        **current,
+        "buy_ema_fast": 9.9,
+        "rsi": 55.0,
+    }
+    assert crossover_signal_from_snapshots(
+        no_cross, previous, buy_use_ema=False, buy_use_rsi=True,
+    ) == "BUY"
+    assert crossover_signal_from_snapshots(
+        no_cross, previous, buy_use_ema=False, buy_use_rsi=False,
+    ) == ""
 
 
 def test_indicator_snapshot_exposes_the_exact_preview_values():
@@ -163,7 +205,7 @@ def test_entry_respects_pending_loss_lock_capacity_and_capital():
     rule = StaticRule()
     context = {"symbol": "FPT", "bars": _bars(M_VALUES), "previous_market_state": "UPTREND"}
     assert rule.evaluate(context, {"pending_buy": True, "available_capital": 1}).reason == "BUY_ALREADY_PENDING"
-    assert rule.evaluate(context, {"loss_streak": 3, "available_capital": 1}).reason == "LOCKED_AFTER_3_LOSSES"
+    assert rule.evaluate(context, {"loss_streak": 3, "available_capital": 1}).reason == "LOCKED_AFTER_LOSSES"
     assert rule.evaluate(context, {"open_positions": 5, "available_capital": 1}).reason == "MAX_POSITIONS"
     assert rule.evaluate(context, {"open_positions": 0, "available_capital": 0}).reason == "NO_AVAILABLE_CAPITAL"
 
@@ -246,9 +288,45 @@ def test_volume_is_confidence_metadata_not_a_separate_state_or_signal():
     values = [100 + index * 0.25 + math.sin(index / 3) * 3 for index in range(240)]
     rows = _bars(values)
     rows[-1]["volume"] = 10_000_000
-    state, details = classify_market_state(rows)
+    state, details = classify_market_state(
+        rows, params=StaticRuleParameters(volume_confirmation=True)
+    )
     assert state == "UPTREND"
     assert details["volume_confidence"] == "HIGH"
+    _, disabled = classify_market_state(rows)
+    assert disabled["volume_confidence"] == "OFF"
+
+
+def test_high_protection_never_uses_an_unfinished_daily_close():
+    params = StaticRuleParameters(
+        high_profit_arm_pct=10,
+        high_profit_close_drawdown_pct=5,
+    )
+    position = {
+        "quantity": 300,
+        "avg_price": 100,
+        "current_price": 100,
+        "peak_profit_pct": 20,
+        "highest_close": 110,
+        "em_modes": ["HIGH"],
+    }
+    bars = _bars([108] * 19 + [100], last_closed=False)
+    live = StaticRule(params).evaluate(
+        {"symbol": "FPT", "bars": bars, "confirmed_market_state": "UPTREND", "signal_mode": "REALTIME"},
+        {"position": position},
+    )
+    assert live.action == "WAIT"
+    bars[-1]["closed"] = True
+    closed = StaticRule(params).evaluate(
+        {"symbol": "FPT", "bars": bars, "confirmed_market_state": "UPTREND", "signal_mode": "REALTIME"},
+        {"position": position},
+    )
+    assert closed.details["triggered_events"] == ["HIGH_PROFIT_PROTECTION"]
+
+
+def test_rule_validation_rejects_a_zero_percent_exit():
+    with pytest.raises(ValueError, match="Tỷ lệ bán"):
+        StaticRuleParameters(normal_sell_pct=0).validate()
 
 
 def test_corporate_action_is_not_executed_before_execution_rule_exists():

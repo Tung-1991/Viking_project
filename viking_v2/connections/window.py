@@ -97,6 +97,8 @@ class ConnectionPopup:
     def hide(self) -> None:
         if self.top.winfo_exists():
             self.top.withdraw()
+        if self.on_visibility_changed:
+            self.on_visibility_changed(False)
 
     def _post_ui(self, callback: Callable[[], None]) -> None:
         """Render a worker result through the dashboard's Tk callback queue."""
@@ -131,6 +133,20 @@ class ConnectionPopup:
         body.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
         body.grid_columnconfigure(0, weight=1)
         return body
+
+    def _hint_icon(self, parent: Any, text: str) -> ctk.CTkButton:
+        button = ctk.CTkButton(
+            parent,
+            text="?",
+            width=24,
+            height=24,
+            corner_radius=12,
+            fg_color=self.BLUE,
+            hover_color="#245C92",
+            font=("Segoe UI", 11, "bold"),
+        )
+        _HoverHint(button, text)
+        return button
 
     def _card(self, parent: ctk.CTkFrame, title: str, hint: str = "") -> ctk.CTkFrame:
         card = ctk.CTkFrame(
@@ -415,8 +431,43 @@ class ConnectionPopup:
             on_change=lambda values: setattr(self, "_watchlist_draft", list(values)),
         )
         self.watchlist_picker.grid(row=1, column=0, rowspan=3, sticky="ew", padx=12, pady=(2, 4))
+        exchange_row = ctk.CTkFrame(card, fg_color="transparent")
+        exchange_row.grid(row=4, column=0, sticky="ew", padx=12, pady=(5, 3))
+        exchange_row.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(
+            exchange_row, text="SÀN DỰ PHÒNG", font=("Segoe UI", 12, "bold"),
+            text_color=self.TEXT,
+        ).grid(row=0, column=0, sticky="w", padx=(0, 10))
+        self.exchange_symbol = ctk.CTkOptionMenu(
+            exchange_row, values=self._watchlist_draft or [""], width=110, height=32,
+            font=("Segoe UI", 12), fg_color=self.BLUE, dynamic_resizing=False,
+            command=lambda symbol: self.exchange_choice.set(
+                self.settings.symbol_exchanges.get(str(symbol).upper(), "TỰ ĐỘNG")
+            ),
+        )
+        self.exchange_symbol.grid(row=0, column=1, sticky="w")
+        first_exchange_symbol = self._watchlist_draft[0] if self._watchlist_draft else ""
+        self.exchange_choice = ctk.StringVar(
+            value=self.settings.symbol_exchanges.get(first_exchange_symbol, "TỰ ĐỘNG")
+        )
+        self.exchange_menu = ctk.CTkOptionMenu(
+            exchange_row, values=["TỰ ĐỘNG", "HOSE", "HNX", "UPCOM"],
+            variable=self.exchange_choice, width=120, height=32,
+            font=("Segoe UI", 12), fg_color=self.BLUE, dynamic_resizing=False,
+        )
+        self.exchange_menu.grid(row=0, column=2, padx=8)
+        self._hint_icon(
+            exchange_row,
+            "Daemon ưu tiên sàn DNSE tự nhận diện và cache lại. Chỉ chọn tay khi trạng thái báo CHƯA XÁC ĐỊNH SÀN; TỰ ĐỘNG sẽ xóa lựa chọn tay.",
+        ).grid(row=0, column=3, padx=(0, 8))
+        ctk.CTkButton(
+            exchange_row, text="LƯU SÀN", width=90, height=32,
+            font=("Segoe UI", 11, "bold"), fg_color=self.BLUE,
+            hover_color="#245C92", command=self._save_exchange_override,
+        ).grid(row=0, column=4)
+
         save_row = ctk.CTkFrame(card, fg_color="transparent")
-        save_row.grid(row=4, column=0, sticky="ew", padx=12, pady=(5, 10))
+        save_row.grid(row=5, column=0, sticky="ew", padx=12, pady=(5, 10))
         save_row.grid_columnconfigure(0, weight=1)
         ctk.CTkButton(
             save_row, text="LƯU DANH SÁCH", width=140, height=32,
@@ -528,7 +579,7 @@ class ConnectionPopup:
             card, text="",
             font=("Segoe UI", 11), text_color=self.MUTED, anchor="w",
         )
-        self.tele_status.grid(row=6, column=0, columnspan=3, sticky="ew", padx=12, pady=(1, 10))
+        self.tele_status.grid(row=8, column=0, columnspan=3, sticky="ew", padx=12, pady=(1, 10))
 
     @staticmethod
     def _account_payload(data: Any) -> tuple[list[dict[str, Any]], str, str]:
@@ -843,10 +894,29 @@ class ConnectionPopup:
             self.watchlist_picker.status.configure(text="CẦN ÍT NHẤT 1 MÃ CKCS", text_color=self.RED)
             return
         self.settings.watchlist = symbols
+        self.exchange_symbol.configure(values=symbols)
+        if self.exchange_symbol.get() not in symbols:
+            self.exchange_symbol.set(symbols[0])
+            self.exchange_choice.set(self.settings.symbol_exchanges.get(symbols[0], "TỰ ĐỘNG"))
         save_settings(self.settings, self.account_id)
         self.on_saved()
         self.watchlist_picker.status.configure(
             text=f"ĐÃ ÁP DỤNG {len(symbols)} MÃ · DAEMON TỰ NHẬN", text_color=self.GREEN,
+        )
+
+    def _save_exchange_override(self) -> None:
+        symbol = str(self.exchange_symbol.get() or "").strip().upper()
+        if not symbol:
+            return
+        exchange = str(self.exchange_choice.get() or "TỰ ĐỘNG").strip().upper()
+        if exchange == "TỰ ĐỘNG":
+            self.settings.symbol_exchanges.pop(symbol, None)
+        else:
+            self.settings.symbol_exchanges[symbol] = exchange
+        save_settings(self.settings, self.account_id)
+        self.on_saved()
+        self.watchlist_picker.status.configure(
+            text=f"{symbol} · {exchange} · DAEMON TỰ NHẬN", text_color=self.GREEN,
         )
 
     def _save_telegram(self) -> None:

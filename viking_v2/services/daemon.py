@@ -13,8 +13,8 @@ from ..connections.dnse.client import DNSEClient
 from ..connections.dnse.websocket import DNSEMarketWS
 from .runtime import setup_logging
 from ..trading.market import MarketDataService
-from ..trading.market import VN_TZ, market_phase, merge_tick_into_daily_bars
-from ..models import RuntimeStatus
+from ..trading.market import VN_TZ, market_phase, merge_tick_into_daily_bars, normalize_exchange
+from ..models import RuntimeStatus, StrategyDecision
 from ..trading.orders import OrderQueue
 from ..trading.portfolio import PortfolioContextBuilder
 from .runtime import RuntimeBridge
@@ -26,6 +26,7 @@ from ..rules.business import (
     classify_market_state,
     indicator_snapshot,
 )
+from ..rules.entry_filters import apply_buy_filters
 from ..trading.state import TradeStateStore
 
 
@@ -176,6 +177,12 @@ def run(account_id: str | None = None) -> int:
         if isinstance(value, list)
     }
     vnindex_bars: list[dict] = list(saved_market.get("vnindex") or [])
+    cached_exchanges: dict[str, str] = {
+        str(key).upper(): normalize_exchange(value)
+        for key, value in (saved_market.get("exchanges") or {}).items()
+        if normalize_exchange(value)
+    }
+    exchange_retry_after: dict[str, float] = {}
     last_vnindex_refresh = 0.0
     last_symbol_history_refresh = 0.0
     settings_fingerprint = ""
@@ -210,22 +217,52 @@ def run(account_id: str | None = None) -> int:
                     value for value in cached_working_dates
                     if str(value)[:10] not in blocked_dates
                 ]
+            exchange_cache_changed = False
+            resolved_exchanges = dict(cached_exchanges)
             if connected and not working_dates:
                 # Never guess a tradable weekday when the DNSE calendar is
                 # unavailable and no last-known-good calendar exists.
                 phase = "CALENDAR_UNKNOWN"
+                symbol_phases = {symbol: phase for symbol in symbols}
             else:
-                phase, _label = market_phase(
-                    working_dates=working_dates if connected else None,
-                    holidays=settings.trading_holidays,
-                )
+                now_market = datetime.now(VN_TZ)
+                for symbol in symbols:
+                    if cached_exchanges.get(symbol):
+                        continue
+                    detected = ""
+                    if connected and time.time() >= exchange_retry_after.get(symbol, 0.0):
+                        secdef = client.get_secdef(symbol) or {}
+                        detected = normalize_exchange(
+                            secdef.get("marketId", secdef.get("market", secdef.get("exchange", "")))
+                        )
+                    if detected:
+                        cached_exchanges[symbol] = detected
+                        resolved_exchanges[symbol] = detected
+                        exchange_cache_changed = True
+                    elif connected:
+                        exchange_retry_after[symbol] = time.time() + 300.0
+                    if not detected:
+                        manual = normalize_exchange(settings.symbol_exchanges.get(symbol))
+                        if manual:
+                            resolved_exchanges[symbol] = manual
+                symbol_phases = {
+                    symbol: market_phase(
+                        now_market,
+                        working_dates=working_dates if connected else None,
+                        holidays=settings.trading_holidays,
+                        exchange=resolved_exchanges.get(symbol, ""),
+                    )[0]
+                    for symbol in symbols
+                }
+                active = [value for value in symbol_phases.values() if value in {"ATO", "OPEN", "ATC"}]
+                phase = active[0] if active else next(iter(symbol_phases.values()), "CLOSED")
             if connected:
-                live_phase = phase in {"ATO", "OPEN", "ATC"}
+                live_phase = any(value in {"ATO", "OPEN", "ATC"} for value in symbol_phases.values())
                 now_ts = time.time()
-                cache_changed = False
+                cache_changed = exchange_cache_changed
                 vnindex_refresh_after = 30.0 if live_phase else 1800.0
                 if not vnindex_bars or now_ts - last_vnindex_refresh >= vnindex_refresh_after:
-                    vnindex_bars = market.get_daily_bars("VNINDEX", count=260)
+                    vnindex_bars = market.get_daily_bars("VNINDEX", count=260, exchange="HOSE")
                     last_vnindex_refresh = now_ts
                     cache_changed = True
                 missing_symbols = [symbol for symbol in symbols if not bars_by_symbol.get(symbol)]
@@ -236,13 +273,16 @@ def run(account_id: str | None = None) -> int:
                 if refresh_symbol_history:
                     targets = symbols if now_ts - last_symbol_history_refresh >= 1800.0 else missing_symbols
                     for symbol in targets:
-                        bars_by_symbol[symbol] = market.get_daily_bars(symbol, count=260)
+                        bars_by_symbol[symbol] = market.get_daily_bars(
+                            symbol, count=260, exchange=cached_exchanges.get(symbol, ""),
+                        )
                     last_symbol_history_refresh = now_ts
                     cache_changed = True
                 if cache_changed:
                     market_cache.write({
                         "updated_at": now_ts,
                         "working_dates": cached_working_dates,
+                        "exchanges": cached_exchanges,
                         "vnindex": vnindex_bars,
                         "symbols": bars_by_symbol,
                     })
@@ -291,7 +331,10 @@ def run(account_id: str | None = None) -> int:
                     positions = client.get_positions()
                 for symbol in symbols:
                     try:
-                        if phase in {"ATO", "OPEN", "ATC"}:
+                        symbol_phase = symbol_phases.get(symbol, "UNKNOWN_EXCHANGE")
+                        symbol_exchange = resolved_exchanges.get(symbol, "")
+                        symbol_live = symbol_phase in {"ATO", "OPEN", "ATC"}
+                        if symbol_live:
                             live_tick = market.get_tick(symbol)
                             if live_tick:
                                 fallback_tick = market.frozen_tick_from_bars(
@@ -310,7 +353,7 @@ def run(account_id: str | None = None) -> int:
                                 tick = market.frozen_tick_from_bars(symbol, bars_by_symbol.get(symbol, []))
                         if tick:
                             ticks[symbol] = tick
-                            if live_phase:
+                            if symbol_live:
                                 bars_by_symbol[symbol] = merge_tick_into_daily_bars(
                                     bars_by_symbol.get(symbol, []),
                                     tick,
@@ -321,7 +364,8 @@ def run(account_id: str | None = None) -> int:
                                 portfolio_tick["daily_close"] = float(bars[-1].get("close", 0.0) or 0.0)
                                 portfolio_tick["daily_bar_closed"] = bool(bars[-1].get("closed", False))
                             context = dict(tick)
-                            context["market_phase"] = phase
+                            context["market_phase"] = symbol_phase
+                            context["exchange"] = symbol_exchange
                             context["bars"] = bars_by_symbol.get(symbol, [])
                             context["vnindex_bars"] = vnindex_bars
                             context["signal_mode"] = settings.signal_mode
@@ -359,7 +403,25 @@ def run(account_id: str | None = None) -> int:
                                 corporate_actions=settings.corporate_actions,
                                 working_dates=working_dates,
                             )
-                            decision = rule.evaluate(context, portfolio)
+                            if not symbol_exchange:
+                                decision = StrategyDecision(
+                                    "WAIT", symbol, "UNKNOWN_EXCHANGE",
+                                    market_state=confirmed_market_state,
+                                    details={"indicators": current_indicators if settings.signal_mode == "REALTIME" and bars else {}},
+                                )
+                            else:
+                                decision = rule.evaluate(context, portfolio)
+                            stream = "PAPER" if runtime.paper_mode else "REAL"
+                            next_filters, decision = apply_buy_filters(
+                                rule, decision, context, portfolio,
+                                rule_state.buy_confirmation(symbol, stream),
+                                observed_at=datetime.now(VN_TZ), exchange=symbol_exchange,
+                                working_dates=working_dates, holidays=settings.trading_holidays,
+                            )
+                            rule_state.save_buy_confirmation(symbol, stream, next_filters)
+                            confirmation_details = decision.details.get("buy_confirmation") or {}
+                            confirmation_status = confirmation_details.get("state", "BYPASS")
+                            window_details = decision.details.get("buy_window") or {}
                             decision.details["candle_key"] = candle_key
                             decision.details["order_budget"] = portfolio.get("order_budget", 0.0)
                             decision.details["trade_id"] = portfolio.get("trade_id", "")
@@ -380,6 +442,16 @@ def run(account_id: str | None = None) -> int:
                                 "acted": decision.action,
                                 "blocked_by": "" if decision.action != "WAIT" else decision.reason,
                                 "candle_key": candle_key,
+                                "exchange": symbol_exchange,
+                                "signal_time": window_details.get("signal_time") or confirmation_details.get("signal_time", ""),
+                                "decision_time": confirmation_details.get("observed_time", ""),
+                                "confirmation_state": confirmation_status,
+                                "confirmation_minutes": int(confirmation_details.get("minutes_held", 0) or 0),
+                                "confirmation_required": confirmation_details.get("minutes_required", ""),
+                                "confirmation_ema": confirmation_details.get("ema_ok", ""),
+                                "confirmation_rsi": confirmation_details.get("rsi_ok", ""),
+                                "buy_window": (f"{window_details['start']}–{window_details['end']}" if window_details else ""),
+                                "buy_window_state": window_details.get("state", ""),
                             })
                     except Exception as exc:
                         cycle_error = str(exc)
@@ -396,6 +468,8 @@ def run(account_id: str | None = None) -> int:
                     api_health=market.health(),
                     error=cycle_error,
                     working_dates=working_dates,
+                    symbol_exchanges={symbol: resolved_exchanges.get(symbol, "") for symbol in symbols},
+                    symbol_phases=symbol_phases,
                 )
             )
             elapsed = time.time() - started

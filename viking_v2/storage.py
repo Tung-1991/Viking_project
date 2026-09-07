@@ -104,6 +104,22 @@ class MonthlyExcelArchive:
                 if target.exists():
                     book = load_workbook(target)
                     sheet = book[self.sheet] if self.sheet in book.sheetnames else book.active
+                    existing_headers = tuple(
+                        str(cell.value or "") for cell in sheet[1]
+                    )
+                    if existing_headers != self.fields:
+                        if existing_headers != self.fields[:len(existing_headers)]:
+                            raise ValueError("Excel archive schema does not match current fields")
+                        header_fill = PatternFill("solid", fgColor="1B1F25")
+                        for index, field in enumerate(
+                            self.fields[len(existing_headers):], start=len(existing_headers) + 1,
+                        ):
+                            cell = sheet.cell(row=1, column=index, value=field)
+                            cell.fill = header_fill
+                            cell.font = Font(color="FFFFFF", bold=True)
+                            sheet.column_dimensions[get_column_letter(index)].width = min(
+                                32, max(12, len(field) + 2),
+                            )
                 else:
                     book = Workbook()
                     sheet = book.active
@@ -274,7 +290,11 @@ class SignalLog:
 
     FIELDS = (
         "timestamp", "symbol", "signal", "price", "ema_fast", "ema_slow",
-        "rsi", "market_state", "acted", "blocked_by",
+        "rsi", "market_state", "acted", "blocked_by", "exchange",
+        "signal_time", "decision_time", "confirmation_state",
+        "confirmation_minutes", "confirmation_required",
+        "confirmation_ema", "confirmation_rsi",
+        "buy_window", "buy_window_state",
     )
     RECENT_CSV_ROWS = 500
 
@@ -289,6 +309,7 @@ class SignalLog:
             str(symbol): str(value)
             for symbol, value in (raw_state.items() if isinstance(raw_state, dict) else [])
         }
+        self._ensure_schema()
         self.excel_archive = MonthlyExcelArchive(self.path, self.FIELDS, "TÍN HIỆU")
         self._recent_count: int | None = None
 
@@ -297,7 +318,12 @@ class SignalLog:
         symbol = str(row.get("symbol", "") or "")
         signal = str(row.get("signal", "") or "")
         candle_key = str(row.get("candle_key", "") or "")
-        state_key = f"{signal}|{candle_key}" if candle_key else signal
+        confirmation_state = str(row.get("confirmation_state", "") or "")
+        confirmation_minutes = str(row.get("confirmation_minutes", "") or "")
+        state_key = "|".join(value for value in (
+            signal, candle_key, confirmation_state, confirmation_minutes,
+            str(row.get("buy_window_state", "") or ""),
+        ) if value)
         with self._lock:
             if not symbol or self._last.get(symbol) == state_key:
                 return False
@@ -326,6 +352,23 @@ class SignalLog:
             elif not archived:
                 self.excel_archive.invalidate_bootstrap()
         return True
+
+    def _ensure_schema(self) -> None:
+        """Upgrade the short recent CSV when new audit columns are introduced."""
+        if not self.path.exists() or self.path.stat().st_size == 0:
+            return
+        try:
+            with self.path.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.DictReader(handle)
+                if tuple(reader.fieldnames or ()) == self.FIELDS:
+                    return
+                rows = list(reader)
+            _rewrite_csv(
+                self.path, self.FIELDS,
+                [{key: row.get(key, "") for key in self.FIELDS} for row in rows],
+            )
+        except (OSError, UnicodeError, csv.Error):
+            return
 
     def read_all(self, limit: int = 0) -> list[dict[str, Any]]:
         try:

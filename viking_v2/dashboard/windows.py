@@ -29,16 +29,28 @@ PALETTE = {
     "WARN": "#F59E0B",
 }
 
+HINT_FONT = ("Segoe UI", 14)
+
 
 _SIGNAL_REASONS = {
     "WHIPSAW_LOCK": "EMA nhiễu, khóa mua",
     "MAX_POSITIONS": "Đã đủ số vị thế",
     "LOCKED_AFTER_3_LOSSES": "Khóa sau chuỗi 3 lệnh lỗ",
+    "LOCKED_AFTER_LOSSES": "Khóa sau chuỗi lệnh lỗ",
     "NO_AVAILABLE_CAPITAL": "Không còn vốn khả dụng",
     "BUY_ALREADY_PENDING": "Đã có lệnh mua chờ",
     "CORPORATE_ACTION_BLOCK": "Đang chặn vì sự kiện quyền",
     "MARKET_STATE_UNKNOWN": "Chưa xác nhận trạng thái thị trường",
     "NO_NEW_BUY_SIGNAL": "Chỉ là tín hiệu thoát, không mua",
+    "BUY_CONFIRMATION_WAIT": "Đang giữ điều kiện BUY đủ số phút đã đặt",
+    "BUY_WINDOW_WAIT": "Tín hiệu đang chờ đến khung giờ mua",
+    "BUY_WINDOW_BROKEN": "Điều kiện BUY mất trong khi chờ giờ mua",
+    "BUY_WINDOW_EXPIRED": "Đã hết khung giờ mua trong ngày",
+    "BUY_WINDOW_MARKET_CLOSED": "Ngoài phiên giao dịch của sàn",
+    "BUY_FILTER_NEEDS_REALTIME": "Bộ lọc BUY theo giờ cần chế độ REALTIME",
+    "BUY_CONFIRMATION_BROKEN": "Tín hiệu BUY không giữ đủ thời gian",
+    "BUY_CONFIRMATION_NEEDS_REALTIME": "Xác nhận theo phút cần chế độ REALTIME",
+    "UNKNOWN_EXCHANGE": "Chưa xác định sàn của mã",
     "HOLD_POSITION": "Tiếp tục giữ vị thế",
     "MANUAL_OR_EXTERNAL_POSITION": "Vị thế ngoài bot quản lý",
 }
@@ -49,13 +61,17 @@ def signal_advice(row: dict[str, Any]) -> tuple[str, str]:
     signal = str(row.get("signal", "") or "").upper()
     acted = str(row.get("acted", "") or "").upper()
     blocked = str(row.get("blocked_by", "") or "").upper()
+    if blocked == "BUY_CONFIRMATION_WAIT":
+        held = str(row.get("confirmation_minutes", "0") or "0")
+        required = str(row.get("confirmation_required", "") or "")
+        return "CHỜ BUY", f"Xác nhận {held}/{required} phút"
     if blocked or acted == "WAIT":
         suggestion = "KHÔNG MUA" if signal == "BUY" else "KHÔNG THOÁT"
         return suggestion, _SIGNAL_REASONS.get(blocked, blocked.replace("_", " ") or "Rule chưa cho phép")
     if signal == "BUY" and acted == "BUY":
-        return "CÓ THỂ MUA", "EMA cắt lên · RSI tăng"
+        return "CÓ THỂ MUA", "Đủ điều kiện tín hiệu BUY đang bật"
     if signal == "SELL" and acted == "SELL":
-        return "THOÁT VỊ THẾ", "EMA cắt xuống · RSI giảm"
+        return "THOÁT VỊ THẾ", "Đủ điều kiện tín hiệu SELL đang bật"
     return "THEO DÕI", "Có tín hiệu nhưng chưa hành động"
 
 
@@ -198,12 +214,12 @@ class SymbolPicker(ctk.CTkFrame):
         self.entry = ctk.CTkEntry(
             add_row, height=38, placeholder_text=placeholder,
             fg_color=self.SURFACE_2, border_color=self.BORDER,
-            font=("Cascadia Mono", 15),
+            font=("Cascadia Mono", 12),
         )
         self.entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
         self.entry.bind("<Return>", lambda _event: self.add_from_entry(), add="+")
         ctk.CTkButton(
-            add_row, text="+ THÊM", width=100, height=38, font=("Segoe UI", 13, "bold"),
+            add_row, text="+ THÊM", width=100, height=38, font=("Segoe UI", 11, "bold"),
             fg_color=self.BLUE, hover_color=PALETTE["BLUE_HOVER"], command=self.add_from_entry,
         ).grid(row=0, column=1)
 
@@ -211,7 +227,7 @@ class SymbolPicker(ctk.CTkFrame):
         self.chips.grid(row=1, column=0, sticky="ew")
         self.chips.grid_columnconfigure(tuple(range(self.columns)), weight=1)
         self.status = ctk.CTkLabel(
-            self, text="", font=("Segoe UI", 13), text_color=self.MUTED, anchor="w",
+            self, text="", font=("Segoe UI", 11), text_color=self.MUTED, anchor="w",
         )
         if not self.compact:
             self.status.grid(row=2, column=0, sticky="w", pady=(3, 0))
@@ -245,13 +261,13 @@ class SymbolPicker(ctk.CTkFrame):
             child.destroy()
         if not self._symbols:
             ctk.CTkLabel(
-                self.chips, text="CHƯA CÓ MÃ", font=("Segoe UI", 13, "bold"), text_color=self.WARN,
+                self.chips, text="CHƯA CÓ MÃ", font=("Segoe UI", 11, "bold"), text_color=self.WARN,
             ).grid(row=0, column=0, sticky="w", padx=10, pady=10)
         for index, symbol in enumerate(self._symbols):
             ctk.CTkButton(
                 self.chips, text=f"{symbol}  ×", width=98, height=30 if self.compact else 36,
                 fg_color=PALETTE["BORDER"], hover_color=PALETTE["SLATE_HOVER"],
-                font=("Cascadia Mono", 13, "bold"),
+                font=("Cascadia Mono", 11, "bold"),
                 command=lambda value=symbol: self.remove(value),
             ).grid(row=index // self.columns, column=index % self.columns,
                    sticky="ew", padx=4, pady=2 if self.compact else 5)
@@ -303,9 +319,9 @@ class _HoverHint:
         # hundreds of pixels away from its icon.
         host = self.widget.winfo_toplevel()
         self.popup = tk.Label(
-            host, text=self.text, justify="left", wraplength=460,
-            bg="#252A31", fg="#F5F7FA", padx=20, pady=16,
-            font=("Segoe UI", 20), relief="solid", borderwidth=1,
+            host, text=self.text, justify="left", wraplength=560,
+            bg="#252A31", fg="#F5F7FA", padx=12, pady=10,
+            font=HINT_FONT, relief="solid", borderwidth=1,
         )
         self.popup.update_idletasks()
         width, height = self.popup.winfo_reqwidth(), self.popup.winfo_reqheight()
@@ -393,12 +409,12 @@ class DataTablePopup:
         header.grid(row=0, column=0, sticky="ew", padx=18, pady=(14, 5))
         header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            header, text=title.upper(), font=("Segoe UI", 22, "bold"),
+            header, text=title.upper(), font=("Segoe UI", 18, "bold"),
             text_color=PALETTE["TEXT"], anchor="w",
         ).grid(row=0, column=0, sticky="w")
         ctk.CTkButton(
             header, text="↻  LÀM MỚI", width=126, height=36,
-            font=("Segoe UI", 13, "bold"), fg_color=PALETTE["BLUE"],
+            font=("Segoe UI", 11, "bold"), fg_color=PALETTE["BLUE"],
             hover_color=PALETTE["BLUE_HOVER"], command=self.refresh,
         ).grid(row=0, column=1, sticky="e")
 
@@ -414,12 +430,12 @@ class DataTablePopup:
             cell = ctk.CTkFrame(self.summary, fg_color="transparent")
             cell.grid(row=0, column=column, sticky="nsew", padx=8, pady=8)
             label = ctk.CTkLabel(
-                cell, text="--", font=("Segoe UI", 12, "bold"),
+                cell, text="--", font=("Segoe UI", 10, "bold"),
                 text_color=PALETTE["MUTED"], anchor="center",
             )
             label.pack(fill="x")
             value = ctk.CTkLabel(
-                cell, text="--", font=("Cascadia Mono", 16, "bold"),
+                cell, text="--", font=("Cascadia Mono", 12, "bold"),
                 text_color=PALETTE["TEXT"], anchor="center",
             )
             value.pack(fill="x", pady=(2, 0))
@@ -437,7 +453,7 @@ class DataTablePopup:
         )
         self.tabs.grid(row=2, column=0, sticky="nsew", padx=14, pady=(2, 14))
         try:
-            self.tabs._segmented_button.configure(font=("Segoe UI", 14, "bold"))
+            self.tabs._segmented_button.configure(font=("Segoe UI", 11, "bold"))
         except AttributeError:
             pass
 
@@ -445,14 +461,14 @@ class DataTablePopup:
         style.theme_use("clam")
         style.configure(
             "V2Popup.Treeview", background=PALETTE["SURFACE"], foreground=PALETTE["TEXT"],
-            fieldbackground=PALETTE["SURFACE"], rowheight=48, font=("Segoe UI", 15),
+            fieldbackground=PALETTE["SURFACE"], rowheight=38, font=("Segoe UI", 11),
             borderwidth=0, relief="flat",
         )
         style.layout("V2Popup.Treeview", [("V2Popup.Treeview.treearea", {"sticky": "nswe"})])
         style.configure(
             "V2Popup.Treeview.Heading", background=PALETTE["SURFACE_2"],
-            foreground=PALETTE["TEXT"], font=("Segoe UI", 15, "bold"),
-            relief="flat", padding=(10, 11),
+            foreground=PALETTE["TEXT"], font=("Segoe UI", 11, "bold"),
+            relief="flat", padding=(8, 7),
         )
         style.map(
             "V2Popup.Treeview",
@@ -500,7 +516,7 @@ class DataTablePopup:
             tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
             self.trees[mode] = tree
             empty = ctk.CTkLabel(
-                frame, text="CHƯA CÓ DỮ LIỆU", font=("Segoe UI", 14, "bold"),
+                frame, text="CHƯA CÓ DỮ LIỆU", font=("Segoe UI", 12, "bold"),
                 text_color="#667085", fg_color="#22262D",
             )
             self.empty_labels[mode] = empty
@@ -616,17 +632,17 @@ class HistoryPopup:
         header.grid(row=0, column=0, sticky="ew", padx=18, pady=(14, 4))
         header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            header, text="LỊCH SỬ GIAO DỊCH", font=("Segoe UI", 24, "bold"),
+            header, text="LỊCH SỬ GIAO DỊCH", font=("Segoe UI", 18, "bold"),
             text_color=PALETTE["TEXT"], anchor="w",
         ).grid(row=0, column=0, sticky="w")
         self.subtitle = ctk.CTkLabel(
             header, text="Mỗi ngày → mỗi giao dịch → các lần đặt/hủy/khớp",
-            font=("Segoe UI", 15), text_color=PALETTE["MUTED"], anchor="w",
+            font=("Segoe UI", 11), text_color=PALETTE["MUTED"], anchor="w",
         )
         self.subtitle.grid(row=1, column=0, sticky="w", pady=(2, 0))
         ctk.CTkButton(
             header, text="↻  LÀM MỚI", width=126, height=36,
-            font=("Segoe UI", 13, "bold"), fg_color=PALETTE["BLUE"],
+            font=("Segoe UI", 11, "bold"), fg_color=PALETTE["BLUE"],
             hover_color=PALETTE["BLUE_HOVER"], command=self.refresh,
         ).grid(row=0, column=1, rowspan=2, sticky="e")
 
@@ -640,7 +656,7 @@ class HistoryPopup:
         )
         self.tabs.grid(row=1, column=0, sticky="nsew", padx=14, pady=(4, 14))
         try:
-            self.tabs._segmented_button.configure(font=("Segoe UI", 16, "bold"))
+            self.tabs._segmented_button.configure(font=("Segoe UI", 11, "bold"))
         except AttributeError:
             pass
 
@@ -648,14 +664,14 @@ class HistoryPopup:
         style.theme_use("clam")
         style.configure(
             "History.Treeview", background=PALETTE["SURFACE"], foreground=PALETTE["TEXT"],
-            fieldbackground=PALETTE["SURFACE"], rowheight=56,
-            font=("Segoe UI", 17), borderwidth=0,
+            fieldbackground=PALETTE["SURFACE"], rowheight=40,
+            font=("Segoe UI", 11), borderwidth=0,
         )
         style.layout("History.Treeview", [("History.Treeview.treearea", {"sticky": "nswe"})])
         style.configure(
             "History.Treeview.Heading", background=PALETTE["SURFACE_2"],
-            foreground=PALETTE["TEXT"], font=("Segoe UI", 17, "bold"),
-            relief="flat", padding=(10, 11),
+            foreground=PALETTE["TEXT"], font=("Segoe UI", 11, "bold"),
+            relief="flat", padding=(8, 7),
         )
         style.map(
             "History.Treeview",
@@ -678,10 +694,10 @@ class HistoryPopup:
             for key, title, width_px, anchor in self.COLUMNS:
                 tree.heading(key, text=title, anchor=anchor)
                 tree.column(key, width=width_px, minwidth=min(width_px, 100), anchor=anchor, stretch=True)
-            tree.tag_configure("day", background="#171B20", foreground="#FFFFFF", font=("Segoe UI", 18, "bold"))
-            tree.tag_configure("trade_win", background="#173322", foreground="#EAFBF0", font=("Segoe UI", 17, "bold"))
-            tree.tag_configure("trade_loss", background="#382126", foreground="#FFF1F2", font=("Segoe UI", 17, "bold"))
-            tree.tag_configure("trade_open", background="#3C321B", foreground="#FEF3C7", font=("Segoe UI", 17, "bold"))
+            tree.tag_configure("day", background="#171B20", foreground="#FFFFFF", font=("Segoe UI", 12, "bold"))
+            tree.tag_configure("trade_win", background="#173322", foreground="#EAFBF0", font=("Segoe UI", 11, "bold"))
+            tree.tag_configure("trade_loss", background="#382126", foreground="#FFF1F2", font=("Segoe UI", 11, "bold"))
+            tree.tag_configure("trade_open", background="#3C321B", foreground="#FEF3C7", font=("Segoe UI", 11, "bold"))
             tree.tag_configure("buy", foreground="#65D991")
             tree.tag_configure("sell", foreground="#FF8A8A")
             tree.tag_configure("cancelled", foreground="#F6C35B")
@@ -694,7 +710,7 @@ class HistoryPopup:
             tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
             self.trees[mode] = tree
             self.empty_labels[mode] = ctk.CTkLabel(
-                frame, text="CHƯA CÓ GIAO DỊCH", font=("Segoe UI", 18, "bold"),
+                frame, text="CHƯA CÓ GIAO DỊCH", font=("Segoe UI", 12, "bold"),
                 text_color=PALETTE["DIM"], fg_color=PALETTE["SURFACE"],
             )
         self._build_signal_tab()
@@ -727,13 +743,13 @@ class HistoryPopup:
         style = ttk.Style()
         style.configure(
             "Signal.Treeview", background=PALETTE["SURFACE"], foreground=PALETTE["TEXT"],
-            fieldbackground=PALETTE["SURFACE"], rowheight=64,
-            font=("Segoe UI", 19), borderwidth=0,
+            fieldbackground=PALETTE["SURFACE"], rowheight=40,
+            font=("Segoe UI", 11), borderwidth=0,
         )
         style.configure(
             "Signal.Treeview.Heading", background=PALETTE["SURFACE_2"],
-            foreground=PALETTE["TEXT"], font=("Segoe UI", 17, "bold"),
-            relief="flat", padding=(10, 13),
+            foreground=PALETTE["TEXT"], font=("Segoe UI", 11, "bold"),
+            relief="flat", padding=(8, 7),
         )
         tree.heading("#0", text="NGÀY / GIỜ", anchor="w")
         tree.column("#0", width=320, minwidth=270, anchor="w", stretch=True)
@@ -748,7 +764,7 @@ class HistoryPopup:
         tree.tag_configure("blocked", foreground="#F6C35B")
         tree.tag_configure(
             "signal_day", background=PALETTE["SURFACE_2"], foreground=PALETTE["TEXT"],
-            font=("Segoe UI", 20, "bold"),
+            font=("Segoe UI", 12, "bold"),
         )
         tree.grid(row=0, column=0, sticky="nsew", padx=(5, 0), pady=(5, 0))
         yscroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
@@ -771,10 +787,10 @@ class HistoryPopup:
         ctk.CTkLabel(
             footer,
             text="Chỉ hiện 7 ngày gần nhất · Excel tự lưu theo tháng trong excel_archive",
-            font=("Segoe UI", 14), text_color=PALETTE["MUTED"], anchor="w",
+            font=("Segoe UI", 10), text_color=PALETTE["MUTED"], anchor="w",
         ).grid(row=0, column=0, sticky="w")
         self.signal_empty = ctk.CTkLabel(
-            frame, text="CHƯA GHI ĐƯỢC TÍN HIỆU NÀO", font=("Segoe UI", 18, "bold"),
+            frame, text="CHƯA GHI ĐƯỢC TÍN HIỆU NÀO", font=("Segoe UI", 12, "bold"),
             text_color=PALETTE["DIM"], fg_color=PALETTE["SURFACE"],
         )
     def _refresh_signals(self) -> None:
@@ -827,6 +843,9 @@ class HistoryPopup:
     def hide(self) -> None:
         if self.top.winfo_exists():
             self.top.withdraw()
+
+        if self.on_visibility_changed:
+            self.on_visibility_changed(False)
 
     def close(self) -> None:
         if self.on_visibility_changed:

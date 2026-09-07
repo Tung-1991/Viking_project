@@ -106,3 +106,61 @@ def test_xlsx_import_finds_ohlcv_sheet_and_uses_local_time_for_naive_cells(tmp_p
     rows, _, status = store.load_day("CTS", "2026-08-20")
     assert status == "FULL"
     assert datetime.fromtimestamp(rows[0]["time"], VN_TZ).strftime("%H:%M") == "09:15"
+
+
+def test_two_minute_tradingview_buckets_cover_ato_and_atc(tmp_path):
+    source = _csv(tmp_path / "HOSE_DLY_VIX, 2.csv", [
+        "2026-03-02T02:14:00Z,17000,17100,16900,17050,100",
+        "2026-03-02T02:16:00Z,17050,17100,17000,17050,200",
+        "2026-03-02T07:44:00Z,17050,17050,17000,17000,300",
+    ])
+    store = ReplayDataStore(tmp_path / "replay")
+    preview = store.import_file(source)
+
+    assert preview.resolution == "2"
+    assert preview.full_days == 1
+    assert preview.partial_days == 0
+    rows, resolution, status = store.load_day("VIX", "2026-03-02")
+    assert resolution == "2" and status == "FULL"
+    assert datetime.fromtimestamp(rows[0]["time"], VN_TZ).strftime("%H:%M") == "09:14"
+    assert datetime.fromtimestamp(rows[-1]["time"], VN_TZ).strftime("%H:%M") == "14:44"
+
+
+def test_missing_opening_bucket_is_allowed_when_next_real_bar_exists(tmp_path):
+    source = _csv(tmp_path / "HOSE_DLY_VIX, 2.csv", [
+        "2026-03-09T02:16:00Z,17000,17100,16900,17050,100",
+        "2026-03-09T07:44:00Z,17050,17050,17000,17000,300",
+    ])
+    preview = ReplayDataStore(tmp_path / "replay").import_file(source)
+    assert preview.full_days == 1
+    assert preview.partial_days == 0
+
+
+def test_full_day_can_start_on_first_trade_a_few_minutes_after_open(tmp_path):
+    source = _csv(tmp_path / "HOSE_DLY_CTS, 1.csv", [
+        "2026-05-06T02:18:00Z,20500,20500,20500,20500,100",
+        "2026-05-06T07:45:00Z,21100,21100,21100,21100,200",
+    ])
+    preview = ReplayDataStore(tmp_path / "replay").import_file(source)
+    assert preview.full_days == 1
+    assert preview.partial_days == 0
+
+
+def test_replay_can_aggregate_full_intraday_days_for_indicator_warmup(tmp_path):
+    source = _csv(tmp_path / "HOSE_DLY_FPT, 2.csv", [
+        "2026-03-02T02:14:00Z,10000,10100,9900,10050,100",
+        "2026-03-02T07:44:00Z,10050,10300,10000,10200,200",
+        "2026-03-03T02:14:00Z,10200,10200,10100,10150,300",
+        "2026-03-03T07:44:00Z,10150,10400,10100,10300,400",
+    ])
+    store = ReplayDataStore(tmp_path / "replay")
+    store.import_file(source)
+
+    rows = store.load_daily_aggregates("FPT", before="2026-03-04")
+
+    assert len(rows) == 2
+    assert rows[0]["open"] == pytest.approx(10.0)
+    assert rows[0]["high"] == pytest.approx(10.3)
+    assert rows[0]["low"] == pytest.approx(9.9)
+    assert rows[0]["close"] == pytest.approx(10.2)
+    assert rows[0]["volume"] == pytest.approx(300)

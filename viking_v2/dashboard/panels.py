@@ -27,18 +27,21 @@ class DashboardPanelsMixin:
         )
         account.pack(fill="x", pady=(4, 5), padx=6)
         account.grid_columnconfigure(0, weight=1)
-        account.grid_columnconfigure(1, weight=0, minsize=142)
+        account.grid_columnconfigure(1, weight=0, minsize=180)
 
         self.lbl_equity = ctk.CTkLabel(
             account, text="----", font=("Segoe UI", 30, "bold"),
             text_color=COL_GREEN, anchor="w",
         )
         self.lbl_equity.grid(row=0, column=0, sticky="w", padx=(11, 5), pady=(6, 0))
-        session_box = ctk.CTkFrame(account, fg_color="transparent")
+        session_box = ctk.CTkFrame(
+            account, width=180, height=54, fg_color="transparent",
+        )
         session_box.grid(row=0, column=1, sticky="ne", padx=(3, 11), pady=(8, 0))
+        session_box.pack_propagate(False)
         self.lbl_session = ctk.CTkLabel(
             session_box, text="PHIÊN: --", font=("Segoe UI", 10, "bold"),
-            text_color=COL_MUTED, anchor="e", width=140,
+            text_color=COL_MUTED, anchor="e", justify="right", width=176,
         )
         self.lbl_session.pack(fill="x")
         self.lbl_brain = ctk.CTkLabel(
@@ -50,9 +53,12 @@ class DashboardPanelsMixin:
         self.lbl_account = ctk.CTkLabel(
             account, text=f"ID: {self.account_id}  ·  PAPER",
             font=("Segoe UI", 10), text_color=COL_TEXT, anchor="w",
-            wraplength=245, justify="left",
+            justify="left",
         )
-        self.lbl_account.grid(row=1, column=0, sticky="ew", padx=(11, 5), pady=(0, 2))
+        self.lbl_account.grid(
+            row=1, column=0, columnspan=2, sticky="ew",
+            padx=(11, 11), pady=(0, 2),
+        )
         account_footer = ctk.CTkFrame(account, fg_color="transparent")
         account_footer.grid(row=2, column=0, columnspan=2, sticky="ew", padx=11, pady=(2, 7))
         account_footer.grid_columnconfigure(0, minsize=82)
@@ -90,8 +96,11 @@ class DashboardPanelsMixin:
                 control, text=label, font=("Segoe UI", 10, "bold"),
                 text_color=COL_MUTED, anchor="e",
             ).grid(row=index, column=0, sticky="e", padx=(7, 6), pady=3)
-            frame = ctk.CTkFrame(control, fg_color="transparent")
+            frame = ctk.CTkFrame(control, width=1, height=36, fg_color="transparent")
             frame.grid(row=index, column=1, sticky="ew", padx=(0, 7), pady=3)
+            # Child buttons must consume the available panel width, not enlarge
+            # the whole left dashboard column from their requested widths.
+            frame.grid_propagate(False)
             return frame
 
         symbol_row = setting_row(0, "MÃ CK")
@@ -115,6 +124,7 @@ class DashboardPanelsMixin:
         ctk.CTkSegmentedButton(
             mode_row, values=["REAL", "PAPER"], variable=self.mode,
             command=self._mode_changed, height=32, font=("Segoe UI", 11),
+            width=1,
             selected_color=COL_GREEN, selected_hover_color="#16A34A",
             unselected_color=COL_GRAY, unselected_hover_color="#4B515B",
             text_color=COL_TEXT,
@@ -122,6 +132,7 @@ class DashboardPanelsMixin:
         ).grid(row=0, column=0, sticky="ew", padx=(0, 5))
         self.bot_button = ctk.CTkButton(
             mode_row, text="BOT · OFF", height=32, font=("Segoe UI", 10, "bold"),
+            width=1,
             fg_color=COL_GRAY, hover_color="#4B515B", corner_radius=7,
             command=self._toggle_bot,
         )
@@ -136,6 +147,7 @@ class DashboardPanelsMixin:
             tools_row.grid_columnconfigure(column, weight=1, uniform="tool")
             button = ctk.CTkButton(
                 tools_row, text=text, height=32, font=("Segoe UI", 10, "bold"),
+                width=1,
                 fg_color=COL_GRAY, hover_color="#4B515B", corner_radius=7,
                 command=command,
             )
@@ -159,6 +171,7 @@ class DashboardPanelsMixin:
             button = ctk.CTkButton(
                 em_row, text=f"{title} · OFF", height=36,
                 font=("Segoe UI", 10, "bold"),
+                width=1,
                 fg_color="#282D34", hover_color="#363C45",
                 text_color=COL_MUTED, corner_radius=7,
                 command=lambda name=key: self._toggle_em_frontend(name),
@@ -253,17 +266,20 @@ class DashboardPanelsMixin:
         )
         self.lbl_order_value.grid(row=0, column=1, sticky="e", padx=(6, 12), pady=2)
 
-        action = ctk.CTkFrame(order, fg_color="transparent")
+        action = ctk.CTkFrame(order, width=1, height=42, fg_color="transparent")
         action.pack(fill="x", padx=9, pady=(1, 5))
+        action.grid_propagate(False)
         action.grid_columnconfigure(1, weight=1)
         self.order_type = tk.StringVar(value="MARKET")
-        ctk.CTkOptionMenu(
+        self.order_type_menu = ctk.CTkOptionMenu(
             action, values=["MARKET", "LO", "ATO", "ATC"],
             variable=self.order_type, command=self._order_type_changed,
             width=115, height=42, font=("Segoe UI", 11, "bold"),
             fg_color=COL_GRAY, button_color="#4B515B",
             button_hover_color="#59616D", corner_radius=8,
-        ).grid(row=0, column=0, sticky="ew", padx=(0, 7))
+            dynamic_resizing=False,
+        )
+        self.order_type_menu.grid(row=0, column=0, sticky="ew", padx=(0, 7))
         self.execute_button = ctk.CTkButton(
             action, text="CACHE", font=("Segoe UI", 13, "bold"),
             height=42, fg_color="#16A34A", hover_color="#15803D",
@@ -384,7 +400,7 @@ class DashboardPanelsMixin:
         header = ctk.CTkFrame(self.right, fg_color="transparent", height=36)
         header.grid(row=0, column=0, sticky="ew", pady=(0, 5))
         self.table_title = ctk.CTkLabel(
-            header, text="LỆNH ĐANG CHẠY", font=("Segoe UI", 21, "bold"),
+            header, text="LỆNH ĐANG CHẠY", font=("Segoe UI", 17, "bold"),
             text_color=COL_TEXT,
         )
         self.table_title.pack(side="left")
@@ -442,12 +458,13 @@ class DashboardPanelsMixin:
         style.theme_use("clam")
         style.configure(
             "Running.Treeview", background=COL_SURFACE_2, foreground=COL_TEXT,
-            fieldbackground=COL_SURFACE_2, rowheight=56, font=("Segoe UI", 18),
-            borderwidth=0,
+            fieldbackground=COL_SURFACE_2, rowheight=38, font=("Segoe UI", 11),
+            borderwidth=0, relief="flat", bordercolor=COL_BORDER,
+            lightcolor=COL_BORDER, darkcolor=COL_BORDER,
         )
         style.configure(
             "Running.Treeview.Heading", background=COL_SURFACE, foreground=COL_TEXT,
-            font=("Segoe UI", 20, "bold"), relief="flat", padding=(10, 10),
+            font=("Segoe UI", 11, "bold"), relief="flat", padding=(8, 7),
         )
         style.map(
             "Running.Treeview.Heading",
@@ -479,6 +496,7 @@ class DashboardPanelsMixin:
             tree.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
             tree.bind("<<TreeviewSelect>>", lambda _event: self._sync_cancel_button())
             tree.bind("<Button-1>", self._clear_running_selection_on_blank, add="+")
+            tree.bind("<ButtonRelease-1>", self._running_action_click, add="+")
             tree.bind("<Escape>", lambda _event, widget=tree: self._clear_running_selection(widget), add="+")
             tree.bind("<Button-3>", self._running_right_click)
             scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
@@ -658,12 +676,12 @@ class DashboardPanelsMixin:
         order_group.grid_rowconfigure(2, weight=1)
         order_header = ctk.CTkFrame(order_group, width=1, height=32, fg_color="transparent")
         order_header.grid(row=0, column=0, sticky="ew", padx=10, pady=(5, 1))
-        order_header.grid_columnconfigure(0, weight=0)
+        order_header.grid_columnconfigure(0, weight=0, minsize=230)
         order_header.grid_columnconfigure(1, weight=1)
         order_header.grid_columnconfigure(2, weight=0)
         self.preview_order_title = ctk.CTkLabel(
             order_header, text="--- · PAPER · BUY · MARKET",
-            width=1, height=22, font=("Segoe UI", 13, "bold"), text_color=COL_TEXT, anchor="w",
+            width=230, height=22, font=("Segoe UI", 13, "bold"), text_color=COL_TEXT, anchor="w",
         )
         self.preview_order_title.grid(
             row=0, column=0, sticky="ew", padx=(2, 5)
@@ -784,7 +802,7 @@ class DashboardPanelsMixin:
         _HoverHint(
             rule_hint,
             "P1: trạng thái VNINDEX từ dữ liệu 1D DNSE.\n"
-            "P2: tín hiệu BUY/SELL từ EMA và RSI.\n"
+            "P2: tín hiệu BUY/SELL từ các chỉ báo EMA/RSI đang bật.\n"
             "P3: vốn, số position và khóa bảo vệ.\n"
             "Bán 1/3 chỉ thuộc NORMAL/HIGH trong Exit Manager.",
         )
@@ -801,10 +819,10 @@ class DashboardPanelsMixin:
             card.grid_columnconfigure(0, weight=0)
             card.grid_columnconfigure(1, weight=1)
             title_widget = ctk.CTkLabel(
-                card, text=f"{title}{'  ⓘ' if hint else ''}", font=("Segoe UI", 10, "bold"),
+                card, text=f"{title}{'  ⓘ' if hint else ''}", font=("Segoe UI", 9, "bold"),
                 text_color="#60A5FA", anchor="w",
             )
-            title_widget.grid(row=0, column=0, sticky="w", padx=(8, 6), pady=(3, 1))
+            title_widget.grid(row=0, column=0, sticky="w", padx=(8, 6), pady=4)
             if hint:
                 _HoverHint(title_widget, hint, placement="inside")
             return card
@@ -812,8 +830,8 @@ class DashboardPanelsMixin:
         phase1 = phase_card(1, "P1 · VNINDEX")
         self.preview_rule_market = ctk.CTkLabel(
             phase1, text="VNINDEX --", width=1, height=16,
-            font=("Cascadia Mono", 11, "bold"), text_color=COL_PREVIEW_TEXT,
-            anchor="e", justify="right",
+            font=("Cascadia Mono", 10, "bold"), text_color=COL_PREVIEW_TEXT,
+            anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_market.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=4)
         self.preview_rule_market_detail = ctk.CTkLabel(
@@ -829,31 +847,29 @@ class DashboardPanelsMixin:
             "RSI hiển thị giá trị hiện tại và chiều thay đổi so với phiên trước.\n"
             "WAIT nghĩa là hiện chưa xuất hiện điểm cắt đủ điều kiện BUY hoặc SELL.",
         )
-        for column in range(3):
-            phase2.grid_columnconfigure(column, weight=1, uniform="rule_phase2")
         self.preview_rule_ema = ctk.CTkLabel(
-            phase2, text="BUY EMA 3/6 · --/--", width=1, height=22,
-            font=("Cascadia Mono", 10, "bold"), text_color=COL_PREVIEW_TEXT,
-            anchor="w", justify="left",
+            phase2, text="BUY EMA 3/6 · --/--", width=1, height=14,
+            font=("Cascadia Mono", 10), text_color=COL_PREVIEW_TEXT,
+            anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_ema.grid(
-            row=1, column=0, sticky="ew", padx=(8, 5), pady=(0, 3)
+            row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=0
         )
         self.preview_rule_sell_ema = ctk.CTkLabel(
-            phase2, text="SELL EMA 3/6 · --/--", width=1, height=22,
-            font=("Cascadia Mono", 10, "bold"), text_color=COL_PREVIEW_TEXT,
-            anchor="center", justify="center",
+            phase2, text="SELL EMA 3/6 · --/--", width=1, height=14,
+            font=("Cascadia Mono", 10), text_color=COL_PREVIEW_TEXT,
+            anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_sell_ema.grid(
-            row=1, column=1, sticky="ew", padx=5, pady=(0, 3)
+            row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=0
         )
         self.preview_rule_rsi = ctk.CTkLabel(
-            phase2, text="RSI14 -- · WAIT", width=1, height=22,
-            font=("Cascadia Mono", 10, "bold"), text_color=COL_PREVIEW_TEXT,
-            anchor="e", justify="right",
+            phase2, text="RSI14 -- · WAIT", width=1, height=14,
+            font=("Cascadia Mono", 10), text_color=COL_PREVIEW_TEXT,
+            anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_rsi.grid(
-            row=1, column=2, sticky="ew", padx=(5, 8), pady=(0, 3)
+            row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 3)
         )
 
         phase3 = phase_card(
@@ -861,26 +877,25 @@ class DashboardPanelsMixin:
             "P3 · GIỚI HẠN",
             "VỊ THẾ: số mã đang giữ / số mã tối đa. VỐN/MÃ là mức vốn mục tiêu do Phase 1 chia.\n"
             "AUTO 100 CP: hệ thống luôn tính theo vốn Phase 1 trước. Nếu vốn/mã không mua đủ "
-            "một lô nhưng NAV và cash còn đủ, hệ thống fallback sang 100 CP.\n"
+            "một lô, hệ thống chỉ fallback sang 100 CP khi room Phase 1, vốn no-compound và cash gồm phí đều còn đủ.\n"
             "WHIPSAW GUARD: đếm số lần EMA cắt qua lại trong cửa sổ thời gian đã cấu hình. "
             "Ví dụ 1 lần; khóa từ 3 lần trong 7 phiên. Chỉ khóa BUY mới, "
             "không ảnh hưởng position đang giữ.\n"
             "LỖ: số lệnh lỗ liên tiếp / mức khóa mã.",
         )
         self.preview_rule_phase3 = ctk.CTkLabel(
-            phase3, text="--/-- · --/MÃ", width=1, font=("Cascadia Mono", 11, "bold"),
-            text_color=COL_PREVIEW_TEXT, anchor="e",
+            phase3, text="--/-- · --/MÃ", width=1, font=("Cascadia Mono", 10, "bold"),
+            text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_phase3.grid(
-            row=0, column=1, sticky="ew", padx=(0, 8), pady=(3, 1)
+            row=0, column=1, sticky="ew", padx=(0, 8), pady=4
         )
-        phase3.grid_columnconfigure(2, weight=1)
         self.preview_rule_phase3_detail = ctk.CTkLabel(
-            phase3, text="AUTO --", font=("Segoe UI", 10, "bold"),
-            text_color=COL_PREVIEW_TEXT, anchor="e",
+            phase3, text="AUTO --", font=("Segoe UI", 9, "bold"),
+            text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_phase3_detail.grid(
-            row=0, column=2, sticky="ew", padx=(8, 10), pady=(3, 1)
+            row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 4)
         )
         self.preview_rule_phase3_guard = ctk.CTkLabel(
             phase3, text="WHIPSAW -- · LOSS --", font=("Segoe UI", 9),
@@ -889,10 +904,10 @@ class DashboardPanelsMixin:
         self.preview_rule_phase3_guard.grid_remove()
 
         self.preview_rule_reason = ctk.CTkLabel(
-            rule_group, text="CHỜ DỮ LIỆU", width=1, height=26,
-            font=("Segoe UI", 11, "bold"), text_color=COL_WARN,
+            rule_group, text="CHỜ DỮ LIỆU", width=1, height=24,
+            font=("Segoe UI", 10, "bold"), text_color=COL_WARN,
             fg_color=COL_SURFACE_2, corner_radius=6,
-            anchor="w", justify="left",
+            anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_reason.grid(row=4, column=0, sticky="ew", padx=8, pady=(2, 6))
 
@@ -985,6 +1000,8 @@ class DashboardPanelsMixin:
             available_cash=available_cash,
             nav=nav,
             force_min_lot_enabled=bool(checks.get("force_min_lot_enabled", False)),
+            minimum_order_room_vnd=_number(checks.get("minimum_order_room")),
+            buy_fee_rate=_number(checks.get("buy_fee_rate")),
         )
         quantity = sizing.quantity
         forced_minimum = sizing.used_minimum
@@ -1054,12 +1071,14 @@ class DashboardPanelsMixin:
         phase, phase_label = market_phase(
             working_dates=working_dates,
             holidays=self.settings.trading_holidays,
+            exchange=self._symbol_exchange(symbol),
         )
         expected_phase = "OPEN" if order_type in {"MARKET", "LO"} else order_type
         due = phase == expected_phase
         if order_type == "MARKET":
-            due = due or (phase == "ATO" and self.settings.allow_ato)
-            due = due or (phase == "ATC" and self.settings.allow_atc)
+            exchange = self._symbol_exchange(symbol)
+            due = due or (phase == "ATO" and self.settings.allow_ato and exchange == "HOSE")
+            due = due or (phase == "ATC" and self.settings.allow_atc and exchange != "UPCOM")
         token_ready = mode == "PAPER" or self.real.has_trading_token()
         invalid_reason = quantity_error or (
             quantity_reason if not auto_quantity and not valid_quantity else ""
@@ -1266,6 +1285,11 @@ class DashboardPanelsMixin:
         decision = decisions.get(symbol) if isinstance(decisions.get(symbol), dict) else {}
         details = decision.get("details") if isinstance(decision.get("details"), dict) else {}
         indicators = details.get("indicators") if isinstance(details.get("indicators"), dict) else {}
+        rule_params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
+        buy_ema_enabled = bool(rule_params.get("buy_signal_use_ema", True))
+        buy_rsi_enabled = bool(rule_params.get("buy_signal_use_rsi", True))
+        sell_ema_enabled = bool(rule_params.get("sell_signal_use_ema", True))
+        sell_rsi_enabled = bool(rule_params.get("sell_signal_use_rsi", True))
 
         action = str(decision.get("action") or "WAIT").upper()
         market_state = str(decision.get("market_state") or "UNKNOWN").upper()
@@ -1311,8 +1335,14 @@ class DashboardPanelsMixin:
             text=f"{state_label} ({exposure_pct:g}/{cash_pct:g})",
             text_color=market_color,
         )
+        market_notes: list[str] = []
+        if pending_confirmation:
+            market_notes.append("ĐANG XÁC NHẬN")
+        volume_confidence = str(market_details.get("volume_confidence") or "OFF").upper()
+        if volume_confidence != "OFF":
+            market_notes.append(f"VOLUME {volume_confidence}")
         self.preview_rule_market_detail.configure(
-            text="ĐANG XÁC NHẬN" if pending_confirmation else "",
+            text=" · ".join(market_notes),
             text_color=COL_WARN if pending_confirmation else COL_PREVIEW_TEXT,
         )
 
@@ -1334,6 +1364,10 @@ class DashboardPanelsMixin:
 
         buy_ema_text, buy_ema_color = ema_preview("BUY", "buy")
         sell_ema_text, sell_ema_color = ema_preview("SELL", "sell")
+        if not buy_ema_enabled:
+            buy_ema_text, buy_ema_color = buy_ema_text.replace("BUY EMA", "BUY EMA OFF", 1), COL_MUTED
+        if not sell_ema_enabled:
+            sell_ema_text, sell_ema_color = sell_ema_text.replace("SELL EMA", "SELL EMA OFF", 1), COL_MUTED
         rsi_period = int(indicators.get("rsi_period", 14) or 14)
         current_rsi = indicators.get("rsi")
         previous_rsi = indicators.get("rsi_previous")
@@ -1346,7 +1380,11 @@ class DashboardPanelsMixin:
             rsi_text, rsi_color = f"RSI{rsi_period} -- · {signal_label}", COL_PREVIEW_TEXT
         else:
             arrow = "↑" if previous_number is not None and rsi_number > previous_number else "↓" if previous_number is not None and rsi_number < previous_number else "→"
-            rsi_text = f"RSI{rsi_period} {rsi_number:.1f} {arrow} · {signal_label}"
+            rsi_text = (
+                f"RSI{rsi_period} {rsi_number:.1f} {arrow} · "
+                f"BUY {'ON' if buy_rsi_enabled else 'OFF'} / SELL {'ON' if sell_rsi_enabled else 'OFF'} · "
+                f"{signal_label}"
+            )
             rsi_color = COL_GREEN if signal == "BUY" else COL_RED if signal == "SELL" else (
                 COL_GREEN if previous_number is not None and rsi_number > previous_number
                 else COL_RED if previous_number is not None and rsi_number < previous_number
@@ -1396,6 +1434,8 @@ class DashboardPanelsMixin:
             available_cash=available_cash,
             nav=nav,
             force_min_lot_enabled=force_min_lot,
+            minimum_order_room_vnd=_number(checks.get("minimum_order_room")),
+            buy_fee_rate=_number(checks.get("buy_fee_rate")),
         )
         forced_minimum = phase3_sizing.used_minimum
         whipsaw_status = (
@@ -1431,6 +1471,7 @@ class DashboardPanelsMixin:
             "MARKET_STATE_UNKNOWN": "CHỜ · STATE CHƯA XÁC NHẬN",
             "WHIPSAW_LOCK": "TẠM KHÓA DO NHIỄU",
             "LOCKED_AFTER_3_LOSSES": "KHÓA SAU 3 LỆNH LỖ",
+            "LOCKED_AFTER_LOSSES": "KHÓA SAU CHUỖI LỖ",
             "MANUAL_OR_EXTERNAL_POSITION": "VỊ THẾ MANUAL",
             "POSITION_MANAGED_SL_ONLY": "CHỈ THEO DÕI SL",
             "STOP_LOSS": "KÍCH HOẠT SL",
@@ -1438,8 +1479,20 @@ class DashboardPanelsMixin:
             "PRICE_PROTECTION": "KÍCH HOẠT BẢO VỆ GIÁ",
             "NORMAL_PROTECTION": "NORMAL",
             "HIGH_PROFIT_PROTECTION": "HIGH",
+            "BUY_CONFIRMATION_WAIT": "CHỜ XÁC NHẬN BUY",
+            "BUY_WINDOW_WAIT": "CHỜ KHUNG GIỜ MUA",
+            "BUY_WINDOW_BROKEN": "HỦY CHỜ GIỜ · ĐIỀU KIỆN BUY KHÔNG CÒN ĐẠT",
+            "BUY_WINDOW_EXPIRED": "HẾT KHUNG GIỜ MUA",
+            "BUY_WINDOW_MARKET_CLOSED": "CHỜ PHIÊN GIAO DỊCH",
+            "BUY_FILTER_NEEDS_REALTIME": "LỌC BUY THEO GIỜ CẦN REALTIME",
+            "BUY_CONFIRMATION_BROKEN": "HỦY BUY · TÍN HIỆU KHÔNG GIỮ ĐỦ",
+            "BUY_CONFIRMATION_NEEDS_REALTIME": "XÁC NHẬN BUY CẦN REALTIME",
+            "BUY_CONFIRMATION_NO_CONDITION": "XÁC NHẬN BUY CHƯA CHỌN CHỈ BÁO",
+            "UNKNOWN_EXCHANGE": "CHƯA XÁC ĐỊNH SÀN",
         }
-        reason_text = reason_labels.get(reason, reason.replace("_", " ") if reason else "CHỜ DỮ LIỆU")
+        reason_text = str(details.get("status_text") or "") or reason_labels.get(
+            reason, reason.replace("_", " ") if reason else "CHỜ DỮ LIỆU"
+        )
         if action == "WAIT" and signal == "SELL":
             reason_text = "CHỜ BUY"
         if reason == "BUY_SIGNAL":
@@ -1568,7 +1621,6 @@ class DashboardPanelsMixin:
             selected = next((value for value in values if value.removesuffix(" *") == active), active)
             dropdown.set(selected)
 
-    @staticmethod
     def _refresh_api_health_panel(self, status: dict[str, Any] | None = None) -> None:
         if not hasattr(self, "preview_health_core"):
             return

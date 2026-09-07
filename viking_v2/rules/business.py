@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Iterable
 
 from ..models import StrategyDecision
+from ..trading.market import active_trading_minutes, normalize_exchange, validate_buy_window
 
 
 def closes(rows: Iterable[dict[str, Any]]) -> list[float]:
@@ -74,6 +76,10 @@ def crossover_signal(
     sell_fast: int | None = None,
     sell_slow: int | None = None,
     prefer: str = "BUY",
+    buy_use_ema: bool = True,
+    buy_use_rsi: bool = True,
+    sell_use_ema: bool = True,
+    sell_use_rsi: bool = True,
 ) -> str:
     rows = list(rows or [])
     values = closes(rows)
@@ -81,7 +87,7 @@ def crossover_signal(
     buy_slow = max(1, int(slow or 6))
     exit_fast = max(1, int(sell_fast if sell_fast is not None else buy_fast))
     exit_slow = max(1, int(sell_slow if sell_slow is not None else buy_slow))
-    if len(values) < max(buy_slow + 1, exit_slow + 1, rsi_period + 2):
+    if len(values) < 2:
         return ""
     current = indicator_snapshot(
         rows, buy_fast, buy_slow, rsi_period,
@@ -91,7 +97,15 @@ def crossover_signal(
         rows[:-1], buy_fast, buy_slow, rsi_period,
         sell_fast=exit_fast, sell_slow=exit_slow,
     )
-    return crossover_signal_from_snapshots(current, previous, prefer=prefer)
+    return crossover_signal_from_snapshots(
+        current,
+        previous,
+        prefer=prefer,
+        buy_use_ema=buy_use_ema,
+        buy_use_rsi=buy_use_rsi,
+        sell_use_ema=sell_use_ema,
+        sell_use_rsi=sell_use_rsi,
+    )
 
 
 def crossover_signal_from_snapshots(
@@ -99,6 +113,10 @@ def crossover_signal_from_snapshots(
     previous: dict[str, Any] | None,
     *,
     prefer: str = "BUY",
+    buy_use_ema: bool = True,
+    buy_use_rsi: bool = True,
+    sell_use_ema: bool = True,
+    sell_use_rsi: bool = True,
 ) -> str:
     """Evaluate one EMA transition between two consecutive observations.
 
@@ -127,18 +145,48 @@ def crossover_signal_from_snapshots(
     current_sell_slow = number(current, "sell_ema_slow")
     previous_sell_fast = number(previous, "sell_ema_fast")
     previous_sell_slow = number(previous, "sell_ema_slow")
-    required = (
-        current_rsi, previous_daily_rsi,
-        current_buy_fast, current_buy_slow, previous_buy_fast, previous_buy_slow,
-        current_sell_fast, current_sell_slow, previous_sell_fast, previous_sell_slow,
-    )
-    if any(value is None for value in required):
-        return ""
+    sample_count = current.get("sample_count")
+    try:
+        count = int(sample_count) if sample_count is not None else None
+    except (TypeError, ValueError):
+        count = None
+    buy_slow_period = int(current.get("buy_ema_slow_period", 1) or 1)
+    sell_slow_period = int(current.get("sell_ema_slow_period", 1) or 1)
+    period = int(current.get("rsi_period", 1) or 1)
 
-    crossed_up = previous_buy_fast <= previous_buy_slow and current_buy_fast > current_buy_slow
-    crossed_down = previous_sell_fast >= previous_sell_slow and current_sell_fast < current_sell_slow
-    buy_signal = crossed_up and current_rsi > previous_daily_rsi
-    sell_signal = crossed_down and current_rsi < previous_daily_rsi
+    def side_ready(*, use_ema: bool, use_rsi: bool, slow_period: int,
+                   ema_values: tuple[float | None, ...]) -> bool:
+        required: list[float | None] = []
+        if use_rsi:
+            required.extend((current_rsi, previous_daily_rsi))
+        if use_ema:
+            required.extend(ema_values)
+        history = max(2, slow_period + 1 if use_ema else 2, period + 2 if use_rsi else 2)
+        return (count is None or count >= history) and not any(value is None for value in required)
+
+    buy_ready = side_ready(
+        use_ema=buy_use_ema, use_rsi=buy_use_rsi, slow_period=buy_slow_period,
+        ema_values=(current_buy_fast, current_buy_slow, previous_buy_fast, previous_buy_slow),
+    )
+    sell_ready = side_ready(
+        use_ema=sell_use_ema, use_rsi=sell_use_rsi, slow_period=sell_slow_period,
+        ema_values=(current_sell_fast, current_sell_slow, previous_sell_fast, previous_sell_slow),
+    )
+
+    crossed_up = not buy_use_ema or (
+        previous_buy_fast <= previous_buy_slow and current_buy_fast > current_buy_slow
+    )
+    crossed_down = not sell_use_ema or (
+        previous_sell_fast >= previous_sell_slow and current_sell_fast < current_sell_slow
+    )
+    buy_signal = buy_ready and bool(buy_use_ema or buy_use_rsi) and (
+        (not buy_use_ema or crossed_up)
+        and (not buy_use_rsi or current_rsi > previous_daily_rsi)
+    )
+    sell_signal = sell_ready and bool(sell_use_ema or sell_use_rsi) and (
+        (not sell_use_ema or crossed_down)
+        and (not sell_use_rsi or current_rsi < previous_daily_rsi)
+    )
     if str(prefer or "BUY").upper() == "SELL":
         if sell_signal:
             return "SELL"
@@ -175,6 +223,7 @@ def indicator_snapshot(
     current_rsi = rsi_values[-1] if rsi_values else None
     previous_rsi = rsi_values[-2] if len(rsi_values) >= 2 else None
     return {
+        "sample_count": len(values),
         "ema_fast_period": fast,
         "ema_slow_period": slow,
         "rsi_period": rsi_period,
@@ -251,6 +300,10 @@ class StaticRuleParameters:
     sell_ema_fast: int = 3
     sell_ema_slow: int = 6
     rsi_period: int = 14
+    buy_signal_use_ema: bool = True
+    buy_signal_use_rsi: bool = True
+    sell_signal_use_ema: bool = True
+    sell_signal_use_rsi: bool = True
     max_positions: int = 5
     initial_sl_pct: float = -3.0
     reentry_sl_pct: float = -2.1
@@ -268,7 +321,29 @@ class StaticRuleParameters:
     whipsaw_enabled: bool = True
     whipsaw_n: int = 3
     whipsaw_x: int = 7
+    buy_confirmation_enabled: bool = False
+    buy_confirmation_minutes: int = 5
+    buy_confirmation_require_ema: bool = True
+    buy_confirmation_require_rsi: bool = True
+    buy_window_enabled: bool = False
+    buy_window_start: str = "14:00"
     exposure: dict[str, float] = field(default_factory=lambda: dict(EXPOSURE_DEFAULTS))
+
+    def __post_init__(self) -> None:
+        self.buy_confirmation_enabled = bool(self.buy_confirmation_enabled)
+        self.buy_signal_use_ema = bool(self.buy_signal_use_ema)
+        self.buy_signal_use_rsi = bool(self.buy_signal_use_rsi)
+        self.sell_signal_use_ema = bool(self.sell_signal_use_ema)
+        self.sell_signal_use_rsi = bool(self.sell_signal_use_rsi)
+        try:
+            self.buy_confirmation_minutes = max(1, min(120, int(self.buy_confirmation_minutes or 5)))
+        except (TypeError, ValueError):
+            self.buy_confirmation_minutes = 5
+        self.buy_confirmation_require_ema = bool(self.buy_confirmation_require_ema)
+        self.buy_confirmation_require_rsi = bool(self.buy_confirmation_require_rsi)
+        self.buy_window_enabled = bool(self.buy_window_enabled)
+        self.buy_window_start = str(self.buy_window_start).strip()
+        validate_buy_window(self.buy_window_start, "15:00")
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> "StaticRuleParameters":
@@ -296,6 +371,62 @@ class StaticRuleParameters:
     def to_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}
 
+    def validate(self) -> "StaticRuleParameters":
+        """Reject settings the engine cannot execute as the UI describes."""
+        positive_integers = {
+            "MA dài hạn": self.ma_period,
+            "Pivot trái": self.pivot_left,
+            "Pivot phải": self.pivot_right,
+            "Số phiên xác nhận": self.confirm_sessions,
+            "Volume trung bình": self.volume_average_sessions,
+            "BUY EMA nhanh": self.buy_ema_fast,
+            "BUY EMA chậm": self.buy_ema_slow,
+            "SELL EMA nhanh": self.sell_ema_fast,
+            "SELL EMA chậm": self.sell_ema_slow,
+            "RSI": self.rsi_period,
+            "Số position": self.max_positions,
+            "Số LOSS khóa": self.loss_lock_count,
+            "Giờ khóa": self.loss_lock_hours,
+            "Whipsaw N": self.whipsaw_n,
+            "Whipsaw X": self.whipsaw_x,
+        }
+        invalid = next((name for name, value in positive_integers.items() if int(value) < 1), "")
+        if invalid:
+            raise ValueError(f"{invalid} phải lớn hơn 0")
+        if self.buy_ema_slow <= self.buy_ema_fast:
+            raise ValueError("BUY EMA chậm phải lớn hơn BUY EMA nhanh")
+        if self.sell_ema_slow <= self.sell_ema_fast:
+            raise ValueError("SELL EMA chậm phải lớn hơn SELL EMA nhanh")
+        if self.whipsaw_x < 2:
+            raise ValueError("Whipsaw X phải từ 2 phiên")
+        if not (self.buy_signal_use_ema or self.buy_signal_use_rsi):
+            raise ValueError("Tín hiệu BUY phải bật ít nhất EMA hoặc RSI")
+        if not (self.sell_signal_use_ema or self.sell_signal_use_rsi):
+            raise ValueError("Tín hiệu SELL phải bật ít nhất EMA hoặc RSI")
+        if self.initial_sl_pct >= 0 or self.reentry_sl_pct >= 0:
+            raise ValueError("Stop Loss phải là số âm")
+        if not 0 < self.normal_sell_pct <= 100 or not 0 < self.high_sell_pct <= 100:
+            raise ValueError("Tỷ lệ bán NORMAL/HIGH phải lớn hơn 0 và không quá 100%")
+        if not 0 < self.normal_giveback_pct <= 100:
+            raise ValueError("Mức giảm NORMAL phải lớn hơn 0 và không quá 100%")
+        if not 0 < self.high_profit_close_drawdown_pct <= 100:
+            raise ValueError("Mức giảm HIGH phải lớn hơn 0 và không quá 100%")
+        if min(self.take_profit_pct, self.normal_arm_pct, self.high_profit_arm_pct) < 0:
+            raise ValueError("Ngưỡng lợi nhuận không được là số âm")
+        if min(self.pivot_horizontal_pct, self.ma_zone_pct) < 0:
+            raise ValueError("Sai số Pivot và vùng MA không được là số âm")
+        if self.high_volume_ratio < self.low_volume_ratio or self.low_volume_ratio < 0:
+            raise ValueError("Volume cao phải lớn hơn hoặc bằng Volume thấp")
+        if any(not 0 <= float(value) <= 1 for value in self.exposure.values()):
+            raise ValueError("Tỷ trọng thị trường phải nằm trong 0–100%")
+        if self.buy_confirmation_enabled:
+            if not (self.buy_confirmation_require_ema or self.buy_confirmation_require_rsi):
+                raise ValueError("Xác nhận BUY phải chọn ít nhất EMA hoặc RSI")
+            if not 1 <= self.buy_confirmation_minutes <= 120:
+                raise ValueError("Xác nhận BUY phải từ 1 đến 120 phút")
+        validate_buy_window(self.buy_window_start, "15:00")
+        return self
+
     @property
     def ema_fast(self) -> int:
         """Compatibility alias for callers that still mean the BUY pair."""
@@ -313,6 +444,94 @@ class StaticRuleParameters:
     @ema_slow.setter
     def ema_slow(self, value: int) -> None:
         self.buy_ema_slow = int(value)
+
+
+def buy_confirmation_conditions(
+    indicators: dict[str, Any] | None,
+    params: StaticRuleParameters,
+) -> dict[str, bool]:
+    """Current hold conditions layered on the enabled base BUY conditions."""
+    values = indicators if isinstance(indicators, dict) else {}
+    try:
+        ema_ok = float(values.get("buy_ema_fast")) > float(values.get("buy_ema_slow"))
+    except (TypeError, ValueError):
+        ema_ok = False
+    try:
+        rsi_ok = float(values.get("rsi")) > float(values.get("rsi_previous"))
+    except (TypeError, ValueError):
+        rsi_ok = False
+    selected_ok = (
+        (not params.buy_confirmation_require_ema or ema_ok)
+        and (not params.buy_confirmation_require_rsi or rsi_ok)
+    )
+    return {"ema": ema_ok, "rsi": rsi_ok, "selected": selected_ok}
+
+
+def advance_buy_confirmation(
+    state: dict[str, Any] | None,
+    *,
+    raw_trigger: bool,
+    indicators: dict[str, Any] | None,
+    observed_at: datetime,
+    exchange: str,
+    params: StaticRuleParameters,
+    working_dates: Iterable[str] | None = None,
+    holidays: Iterable[str] | None = None,
+) -> tuple[dict[str, Any], str, dict[str, Any]]:
+    """Advance one BUY candidate using only active minutes of its exchange."""
+    if not params.buy_confirmation_enabled:
+        return {}, "BYPASS", {}
+    if not (params.buy_confirmation_require_ema or params.buy_confirmation_require_rsi):
+        return {}, "INVALID", {"reason": "BUY_CONFIRMATION_NO_CONDITION"}
+    market = normalize_exchange(exchange)
+    if not market:
+        return {}, "INVALID", {"reason": "UNKNOWN_EXCHANGE"}
+    current = dict(state or {})
+    rule_signature = (
+        f"{params.buy_confirmation_minutes}:"
+        f"{int(params.buy_confirmation_require_ema)}:"
+        f"{int(params.buy_confirmation_require_rsi)}"
+    )
+    if current and current.get("rule_signature") != rule_signature:
+        current = {}
+    started_now = False
+    if not current.get("active"):
+        if not raw_trigger:
+            return {}, "IDLE", {}
+        current = {
+            "active": True,
+            "started_at": observed_at.isoformat(),
+            "exchange": market,
+            "rule_signature": rule_signature,
+        }
+        started_now = True
+    try:
+        started_at = datetime.fromisoformat(str(current.get("started_at") or ""))
+    except ValueError:
+        return {}, "CANCELLED", {"reason": "BUY_CONFIRMATION_STATE_INVALID"}
+    checks = buy_confirmation_conditions(indicators, params)
+    held = active_trading_minutes(
+        started_at, observed_at, market,
+        working_dates=working_dates, holidays=holidays,
+    )
+    details = {
+        "signal_time": started_at.isoformat(),
+        "observed_time": observed_at.isoformat(),
+        "minutes_held": min(float(params.buy_confirmation_minutes), max(0.0, held)),
+        "minutes_required": params.buy_confirmation_minutes,
+        "require_ema": params.buy_confirmation_require_ema,
+        "require_rsi": params.buy_confirmation_require_rsi,
+        "ema_ok": checks["ema"],
+        "rsi_ok": checks["rsi"],
+    }
+    if not checks["selected"]:
+        details["reason"] = "BUY_CONFIRMATION_BROKEN"
+        return {}, "CANCELLED", details
+    if held >= params.buy_confirmation_minutes and not started_now:
+        details["confirmed_time"] = observed_at.isoformat()
+        return {}, "CONFIRMED", details
+    current["updated_at"] = observed_at.isoformat()
+    return current, "WAITING", details
 
 def _working_bars(rows: list[dict[str, Any]], signal_mode: str) -> list[dict[str, Any]]:
     values = [dict(row) for row in rows or [] if isinstance(row, dict)]
@@ -348,7 +567,8 @@ def classify_market_state(
         volume_average=average_volume,
         volume_ratio=volume_ratio,
         volume_confidence=(
-            "HIGH" if volume_ratio >= params.high_volume_ratio
+            "OFF" if not params.volume_confirmation
+            else "HIGH" if volume_ratio >= params.high_volume_ratio
             else "LOW" if 0 < volume_ratio < params.low_volume_ratio
             else "NORMAL"
         ),
@@ -428,6 +648,10 @@ class StaticRule:
                 indicators,
                 previous_indicators,
                 prefer="SELL" if quantity > 0 else "BUY",
+                buy_use_ema=self.params.buy_signal_use_ema,
+                buy_use_rsi=self.params.buy_signal_use_rsi,
+                sell_use_ema=self.params.sell_signal_use_ema,
+                sell_use_rsi=self.params.sell_signal_use_rsi,
             )
         else:
             signal = crossover_signal(
@@ -438,18 +662,29 @@ class StaticRule:
                 sell_fast=self.params.sell_ema_fast,
                 sell_slow=self.params.sell_ema_slow,
                 prefer="SELL" if quantity > 0 else "BUY",
+                buy_use_ema=self.params.buy_signal_use_ema,
+                buy_use_rsi=self.params.buy_signal_use_rsi,
+                sell_use_ema=self.params.sell_signal_use_ema,
+                sell_use_rsi=self.params.sell_signal_use_rsi,
             )
+        if quantity <= 0 and bool(context.get("confirmed_buy")):
+            signal = "BUY"
         # Whipsaw is an entry guard, so it follows the BUY EMA pair only.
-        crosses = crossover_count(
-            bars,
-            self.params.buy_ema_fast,
-            self.params.buy_ema_slow,
-            self.params.whipsaw_x,
+        crosses = (
+            crossover_count(
+                bars,
+                self.params.buy_ema_fast,
+                self.params.buy_ema_slow,
+                self.params.whipsaw_x,
+            )
+            if self.params.buy_signal_use_ema else 0
         )
         details = {
+            "exchange": normalize_exchange(context.get("exchange")),
             "market": market_details,
             "exposure": self.params.exposure.get(market_state, 0.0),
             "indicators": indicators,
+            "buy_confirmation_forced": bool(context.get("confirmed_buy")),
             "entry_checks": {
                 "nav": float(portfolio.get("nav", 0.0) or 0.0),
                 "available_cash": float(portfolio.get("available_cash", 0.0) or 0.0),
@@ -457,6 +692,8 @@ class StaticRule:
                 "max_positions": self.params.max_positions,
                 "available_capital": float(portfolio.get("available_capital", 0.0) or 0.0),
                 "order_budget": float(portfolio.get("order_budget", 0.0) or 0.0),
+                "minimum_order_room": float(portfolio.get("minimum_order_room", 0.0) or 0.0),
+                "buy_fee_rate": float(portfolio.get("buy_fee_rate", 0.0) or 0.0),
                 "force_min_lot_enabled": self.params.force_min_lot_enabled,
                 "loss_streak": int(portfolio.get("loss_streak", 0) or 0),
                 "loss_lock_count": self.params.loss_lock_count,
@@ -491,7 +728,7 @@ class StaticRule:
         if bool(portfolio.get("pending_buy")):
             return StrategyDecision("WAIT", symbol, "BUY_ALREADY_PENDING", signal=signal, market_state=market_state, details=details)
         if int(portfolio.get("loss_streak", 0) or 0) >= self.params.loss_lock_count:
-            return StrategyDecision("WAIT", symbol, "LOCKED_AFTER_3_LOSSES", signal=signal, market_state=market_state, details=details)
+            return StrategyDecision("WAIT", symbol, "LOCKED_AFTER_LOSSES", signal=signal, market_state=market_state, details=details)
         details["whipsaw_crossovers"] = crosses
         if self.params.whipsaw_enabled and crosses >= self.params.whipsaw_n:
             return StrategyDecision("WAIT", symbol, "WHIPSAW_LOCK", signal=signal, market_state=market_state, details=details)
@@ -591,7 +828,10 @@ class StaticRule:
             if peak_profit >= self.params.normal_arm_pct and current <= trigger:
                 triggered.append("NORMAL_PROTECTION")
         highest_close = float(position.get("highest_close", 0.0) or 0.0)
-        latest_close = closes(bars)[-1] if closes(bars) else 0.0
+        closed_values = closes(
+            row for row in bars if isinstance(row, dict) and bool(row.get("closed", True))
+        )
+        latest_close = closed_values[-1] if closed_values else 0.0
         high_profit_armed = peak_profit >= self.params.high_profit_arm_pct
         if "HIGH" in em_modes and not bool(position.get("high_profit_protection_done")):
             if high_profit_armed and highest_close > 0 and latest_close <= highest_close * (1.0 - self.params.high_profit_close_drawdown_pct / 100.0):

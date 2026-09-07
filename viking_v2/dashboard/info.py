@@ -51,16 +51,16 @@ class InfoPopup:
         head.grid(row=0, column=0, sticky="ew", padx=16, pady=(8, 2))
         head.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            head, text="INFO", font=(self.FONT, 22, "bold"),
+            head, text="INFO", font=(self.FONT, 18, "bold"),
             text_color=PALETTE["TEXT"], anchor="w",
         ).grid(row=0, column=0, sticky="w")
         ctk.CTkLabel(
             head, text="Cùng bố cục · cấu hình độc lập",
-            font=(self.FONT, 13), text_color=PALETTE["MUTED"], anchor="w",
+            font=(self.FONT, 11), text_color=PALETTE["MUTED"], anchor="w",
         ).grid(row=1, column=0, sticky="w")
         ctk.CTkButton(
             head, text="↻  LÀM MỚI", width=118, height=34,
-            font=(self.FONT, 13, "bold"), fg_color=PALETTE["BLUE"],
+            font=(self.FONT, 11, "bold"), fg_color=PALETTE["BLUE"],
             hover_color=PALETTE["BLUE_HOVER"], command=self.refresh,
         ).grid(row=0, column=1, rowspan=2)
 
@@ -74,7 +74,7 @@ class InfoPopup:
         )
         self.tabs.grid(row=1, column=0, sticky="nsew", padx=10, pady=(2, 10))
         try:
-            self.tabs._segmented_button.configure(font=(self.FONT, 15, "bold"))
+            self.tabs._segmented_button.configure(font=(self.FONT, 11, "bold"))
         except AttributeError:
             pass
 
@@ -138,7 +138,7 @@ class InfoPopup:
             section.grid_columnconfigure(column, weight=1, uniform=f"info-{row}")
 
         ctk.CTkLabel(
-            section, text=title, font=(self.FONT, 15, "bold"),
+            section, text=title, font=(self.FONT, 12, "bold"),
             text_color="#60A5FA", anchor="w",
         ).grid(row=0, column=0, columnspan=columns, sticky="ew", pady=(2, 2))
 
@@ -151,11 +151,11 @@ class InfoPopup:
             )
             cell.grid_columnconfigure(1, weight=1)
             ctk.CTkLabel(
-                cell, text=label, font=(self.FONT, 12, "bold"),
+                cell, text=label, font=(self.FONT, 10, "bold"),
                 text_color=PALETTE["MUTED"], anchor="w",
             ).grid(row=0, column=0, sticky="w", padx=(0, 10))
             ctk.CTkLabel(
-                cell, text=value, font=(self.FONT, 14, "bold"),
+                cell, text=value, font=(self.FONT, 11, "bold"),
                 text_color=color, anchor="w", justify="left",
             ).grid(row=0, column=1, sticky="w")
 
@@ -185,10 +185,37 @@ class InfoPopup:
             ("ACC", f"{exposure.get('ACCUMULATION', .6) * 100:g}%", PALETTE["TEXT"]),
             ("DIS / DOWN", f"{exposure.get('DISTRIBUTION', .5) * 100:g}% / {exposure.get('DOWNTREND', .1) * 100:g}%", PALETTE["WARN"]),
         ])
+        buy_conditions = " + ".join(
+            label for enabled, label in (
+                (p.buy_signal_use_ema, f"EMA {p.buy_ema_fast}/{p.buy_ema_slow}"),
+                (p.buy_signal_use_rsi, f"RSI{p.rsi_period} ↑"),
+            ) if enabled
+        ) or "OFF"
+        sell_conditions = " + ".join(
+            label for enabled, label in (
+                (p.sell_signal_use_ema, f"EMA {p.sell_ema_fast}/{p.sell_ema_slow}"),
+                (p.sell_signal_use_rsi, f"RSI{p.rsi_period} ↓"),
+            ) if enabled
+        ) or "OFF"
         row = self._section(body, row, "PHASE 2 · BUY / EXIT", [
-            ("BUY", f"EMA {p.buy_ema_fast}/{p.buy_ema_slow} + RSI{p.rsi_period} ↑", PALETTE["GREEN"]),
-            ("EXIT", f"EMA {p.sell_ema_fast}/{p.sell_ema_slow} + RSI{p.rsi_period} ↓", PALETTE["RED"]),
+            ("BUY", buy_conditions, PALETTE["GREEN"]),
+            ("EXIT", sell_conditions, PALETTE["RED"]),
             ("TÍN HIỆU", signal_mode, PALETTE["TEXT"]),
+            (
+                "XÁC NHẬN BUY",
+                (
+                    f"{p.buy_confirmation_minutes} PHÚT · "
+                    f"{'EMA ' if p.buy_confirmation_require_ema else ''}"
+                    f"{'RSI' if p.buy_confirmation_require_rsi else ''}"
+                    if p.buy_confirmation_enabled else "OFF"
+                ),
+                PALETTE["TEXT"],
+            ),
+            (
+                "KHUNG MUA",
+                f"TỪ {p.buy_window_start}" if p.buy_window_enabled else "OFF",
+                PALETTE["TEXT"],
+            ),
         ])
         return self._section(body, row, "PHASE 3 · VỐN / THOÁT", [
             ("VỊ THẾ", str(p.max_positions), PALETTE["TEXT"]),
@@ -335,6 +362,8 @@ class InfoPopup:
     def hide(self) -> None:
         if self.top.winfo_exists():
             self.top.withdraw()
+        if self.on_visibility_changed:
+            self.on_visibility_changed(False)
 
     def close(self) -> None:
         if self.on_visibility_changed:

@@ -25,14 +25,27 @@ ROUND_HEADERS = (
     "PHÍ+THUẾ", "LÃI/LỖ", "%", "KẾT QUẢ",
 )
 
+
+def round_headers(result: BacktestResult) -> tuple[str, ...]:
+    """Label the two EMA values with the configured fast/slow periods."""
+    params = result.config.rule_parameters
+    buy_fast = int(params.get("buy_ema_fast", params.get("ema_fast", 3)))
+    buy_slow = int(params.get("buy_ema_slow", params.get("ema_slow", 6)))
+    sell_fast = int(params.get("sell_ema_fast", buy_fast))
+    sell_slow = int(params.get("sell_ema_slow", buy_slow))
+    headers = list(ROUND_HEADERS)
+    headers[8] = f"EMA{buy_fast} / EMA{buy_slow} VÀO"
+    headers[13] = f"EMA{sell_fast} / EMA{sell_slow} RA"
+    return tuple(headers)
+
 SIGNAL_HEADERS = (
-    "LẦN CHẠY", "THỜI ĐIỂM", "MÃ", "TÍN HIỆU", "QUYẾT ĐỊNH", "SỰ KIỆN",
+    "LẦN CHẠY", "TÍN HIỆU LÚC", "TRẠNG THÁI LÚC", "MÃ", "TÍN HIỆU", "QUYẾT ĐỊNH", "SỰ KIỆN",
     "LÝ DO", "EMA NHANH", "EMA CHẬM", "RSI", "THỊ TRƯỜNG", "CHẾ ĐỘ",
-    "NGUỒN", "CHẤT LƯỢNG",
+    "NGUỒN", "CHẤT LƯỢNG", "XÁC NHẬN BUY", "KHUNG GIỜ MUA",
 )
 
 FILL_HEADERS = (
-    "LẦN CHẠY", "TÍN HIỆU LÚC", "KHỚP LÚC", "MÃ", "MUA/BÁN", "SỰ KIỆN",
+    "LẦN CHẠY", "TÍN HIỆU LÚC", "XÁC NHẬN LÚC", "KHỚP LÚC", "MÃ", "MUA/BÁN", "SỰ KIỆN",
     "KHỐI LƯỢNG", "GIÁ", "PHÍ", "THUẾ", "EMA NHANH", "EMA CHẬM", "RSI",
     "CHẾ ĐỘ", "NGUỒN", "CHẤT LƯỢNG", "LÝ DO",
 )
@@ -119,6 +132,21 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
     line("Fallback 1D", lambda r: int((r.data_quality or {}).get("fallback_count", 0) or 0))
     line("Cảnh báo dữ liệu", lambda r: " | ".join(r.warnings) or "—")
     line("Phase 1 · tỷ trọng", phase_of)
+    line("Mã", lambda r: ", ".join(r.config.symbols))
+    line("Sàn", lambda r: " · ".join(
+        f"{symbol}:{r.config.symbol_exchanges.get(symbol, '?')}" for symbol in r.config.symbols
+    ))
+    line("Tối đa số mã", lambda r: (r.config.rule_parameters or {}).get("max_positions"))
+    line("Bảo vệ", lambda r: ", ".join(r.config.em_modes) or "chỉ cắt lỗ")
+    line("Khóa sau LOSS", lambda r: (
+        f"{(r.config.rule_parameters or {}).get('loss_lock_count')} LOSS · {r.config.loss_lock_hours} giờ"
+        if r.config.loss_lock_enabled else "OFF"
+    ))
+    line("Whipsaw", lambda r: (
+        f"{(r.config.rule_parameters or {}).get('whipsaw_n')} lần / "
+        f"{(r.config.rule_parameters or {}).get('whipsaw_x')} phiên"
+        if r.config.whipsaw_enabled else "OFF"
+    ))
     line("Vốn đầu", lambda r: round(r.initial_capital))
     line("Vốn cuối", lambda r: round(r.final_equity))
     line("Lãi/lỗ", lambda r: f"{round(r.net_pnl):,} ({r.return_pct:+.2f}%)")
@@ -144,40 +172,64 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
 
     first = results[0].config
     params = first.rule_parameters or {}
-    em = first.em_modes
+    buy_terms = [
+        value for enabled, value in (
+            (params.get("buy_signal_use_ema", True), f"EMA{params.get('buy_ema_fast')} cắt lên EMA{params.get('buy_ema_slow')}"),
+            (params.get("buy_signal_use_rsi", True), f"RSI{params.get('rsi_period')} tăng"),
+        ) if enabled
+    ]
+    sell_terms = [
+        value for enabled, value in (
+            (params.get("sell_signal_use_ema", True), f"EMA{params.get('sell_ema_fast')} cắt xuống EMA{params.get('sell_ema_slow')}"),
+            (params.get("sell_signal_use_rsi", True), f"RSI{params.get('rsi_period')} giảm"),
+        ) if enabled
+    ]
     rows.append(("", ))
     rows.append(("GIỐNG NHAU Ở MỌI LẦN CHẠY", ))
     shared = [
-        ("Mã", ", ".join(first.symbols)),
-        ("Tối đa số mã", params.get("max_positions")),
-        ("Bảo vệ đang bật", ", ".join(em) or "không, chỉ có cắt lỗ"),
-        ("Mua", f"EMA{params.get('buy_ema_fast')} cắt lên EMA{params.get('buy_ema_slow')}"
-                f" và RSI{params.get('rsi_period')} tăng"),
+        ("Đọc VNINDEX", f"MA{params.get('ma_period')} · vùng MA {params.get('ma_zone_pct')}% · "
+                         f"xác nhận {params.get('confirm_sessions')} phiên"),
+        ("Pivot", f"trái {params.get('pivot_left')} · phải {params.get('pivot_right')} · "
+                  f"ngang {params.get('pivot_horizontal_pct')}%"),
+        ("Tỷ trọng 4 state", " · ".join(
+            f"{state} {float(value) * 100:g}%"
+            for state, value in (params.get("exposure") or {}).items()
+        )),
+        ("Volume", (
+            f"HIỆN ĐỘ TIN CẬY · TB {params.get('volume_average_sessions')} phiên · "
+            f"cao {params.get('high_volume_ratio')} · thấp {params.get('low_volume_ratio')}"
+            if params.get("volume_confirmation") else "OFF"
+        )),
+        ("Mua", " và ".join(buy_terms) or "OFF"),
         ("Cắt lỗ", f"{params.get('initial_sl_pct')}% · vào lại {params.get('reentry_sl_pct')}%"
                    f" · bán sạch · luôn bật"),
-        ("Chốt lời TP", f"lãi ≥ {params.get('take_profit_pct')}% · bán sạch"
-                        if "TP" in em else "OFF"),
-        ("Normal", f"lãi từng ≥ {params.get('normal_arm_pct')}% rồi giá giảm"
-                   f" {params.get('normal_giveback_pct')}% khỏi đỉnh · bán"
-                   f" {params.get('normal_sell_pct', 33)}% · một lần"
-                   if "NORMAL" in em else "OFF"),
-        ("High", f"lãi từng ≥ {params.get('high_profit_arm_pct')}% rồi close giảm"
-                 f" {params.get('high_profit_close_drawdown_pct')}% khỏi đỉnh close · bán"
-                 f" {params.get('high_sell_pct', 33)}% · một lần"
-                 if "HIGH" in em else "OFF"),
-        ("Exit", f"EMA{params.get('sell_ema_fast')} cắt xuống EMA{params.get('sell_ema_slow')}"
-                 f" và RSI{params.get('rsi_period')} giảm · bán hết phần còn lại"
-                 if "IND_EXIT" in em else "OFF"),
-        ("Khóa sau 3 lệnh thua", f"{first.loss_lock_hours} giờ" if first.loss_lock_enabled else "OFF"),
-        ("Chống nhiễu (whipsaw)", f"EMA cắt qua lại {params.get('whipsaw_n')} lần trong"
-                        f" {params.get('whipsaw_x')} phiên thì khóa mua"
-                        if first.whipsaw_enabled else "OFF"),
+        ("Ngưỡng TP", f"{params.get('take_profit_pct')}% · bán sạch nếu tactic TP bật"),
+        ("Ngưỡng Normal", f"lãi từng ≥ {params.get('normal_arm_pct')}% rồi giá giảm"
+                          f" {params.get('normal_giveback_pct')}% khỏi đỉnh · bán"
+                          f" {params.get('normal_sell_pct', 33)}% một lần nếu tactic bật"),
+        ("Ngưỡng High", f"lãi từng ≥ {params.get('high_profit_arm_pct')}% rồi close giảm"
+                        f" {params.get('high_profit_close_drawdown_pct')}% khỏi đỉnh close · bán"
+                        f" {params.get('high_sell_pct', 33)}% một lần nếu tactic bật"),
+        ("Điều kiện Exit", f"{' và '.join(sell_terms) or 'OFF'} · bán hết phần còn lại nếu tactic bật"),
+        ("Khung giờ mua", (
+            f"Từ {params.get('buy_window_start', '14:00')} đến hết phiên hợp lệ · giờ Việt Nam"
+            if params.get("buy_window_enabled") else "OFF"
+        )),
+        ("Xác nhận BUY", (
+            f"{params.get('buy_confirmation_minutes', 5)} phút · "
+            + "+".join(name for name, enabled in (
+                ("EMA", params.get("buy_confirmation_require_ema", True)),
+                ("RSI", params.get("buy_confirmation_require_rsi", True)),
+            ) if enabled)
+            if params.get("buy_confirmation_enabled") else "OFF"
+        )),
         (
             "Bán khi cổ về T+2",
             "từ 13:00 phiên chiều · "
             + ("kiểm tra lại điều kiện" if first.sell_wait_policy == "RECHECK" else "vẫn bán"),
         ),
         ("Không compound", "ON" if params.get("no_compound_enabled") else "OFF"),
+        ("Auto 100 CP", "ON" if params.get("force_min_lot_enabled") else "OFF"),
         ("Nến tín hiệu", (
             "1D đang chạy, dựng lại sau từng nến nguồn"
             if first.simulation_mode in {"REPLAY", "AUTO_HYBRID"}
@@ -233,7 +285,7 @@ def workbook_name(
     unique = list(dict.fromkeys(symbols))
     who = unique[0] if len(unique) == 1 else f"{len(unique)}ma"
     if runs > 1:
-        who = f"{runs} kich ban"
+        who = f"{unique[0]} · {runs} kich ban" if len(unique) == 1 else f"{runs} kich ban"
     raw = f"{mode} · {label + ' · ' if label else ''}{who} · {start} den {end} · {stamp}"
     return re.sub(r"[^0-9A-Za-z·\- _]", "", raw).strip() + ".xlsx"
 
@@ -271,7 +323,7 @@ def export_run_excel(results: BacktestResult | list[BacktestResult], directory: 
     for item in items:
         name = sheet_name(item.config.run_name or item.run_id, used)
         sheet = book.create_sheet(name)
-        sheet.append(ROUND_HEADERS[1:])
+        sheet.append(round_headers(item)[1:])
         for row in round_rows([item]):
             sheet.append(row[1:])
 
@@ -285,13 +337,25 @@ def export_run_excel(results: BacktestResult | list[BacktestResult], directory: 
             label = item.config.run_name or item.run_id
             for row in item.signals:
                 indicators = (row.get("details") or {}).get("indicators") or {}
+                confirmation = (row.get("details") or {}).get("buy_confirmation") or {}
+                window = (row.get("details") or {}).get("buy_window") or {}
+                confirmation_text = ""
+                if confirmation:
+                    confirmation_text = (
+                        f"{int(float(confirmation.get('minutes_held', 0) or 0))}/"
+                        f"{int(float(confirmation.get('minutes_required', 0) or 0))}P · "
+                        f"EMA{'✓' if confirmation.get('ema_ok') else '×'} "
+                        f"RSI{'✓' if confirmation.get('rsi_ok') else '×'}"
+                    )
                 signals.append((
                     label, row.get("signal_time") or row.get("time") or row.get("date"),
+                    row.get("decision_time") or row.get("time") or row.get("date"),
                     row.get("symbol"), row.get("signal"), row.get("action"), row.get("event"),
-                    row.get("reason"), indicators.get("ema_fast", 0.0),
-                    indicators.get("ema_slow", 0.0), indicators.get("rsi", 0.0),
+                    row.get("reason"), indicators.get("buy_ema_fast", indicators.get("ema_fast", 0.0)),
+                    indicators.get("buy_ema_slow", indicators.get("ema_slow", 0.0)), indicators.get("rsi", 0.0),
                     row.get("market_state"), row.get("simulation_mode"),
-                    row.get("source_resolution"), row.get("data_quality"),
+                    row.get("source_resolution"), row.get("data_quality"), confirmation_text,
+                    f"{window['start']}–{window['end']}" if window else "",
                 ))
         fills = book.create_sheet("KHỚP LỆNH")
         fills.append(FILL_HEADERS)
@@ -299,7 +363,9 @@ def export_run_excel(results: BacktestResult | list[BacktestResult], directory: 
             label = item.config.run_name or item.run_id
             for event in item.events:
                 fills.append((
-                    label, event.signal_time or event.signal_date, event.fill_time or event.date,
+                    label, event.signal_time or event.signal_date,
+                    event.decision_time or event.signal_time or event.signal_date,
+                    event.fill_time or event.date,
                     event.symbol, event.side, event.event, event.quantity, event.price,
                     event.fee, event.tax, event.ema_fast, event.ema_slow, event.rsi,
                     event.simulation_mode, event.source_resolution, event.data_quality,

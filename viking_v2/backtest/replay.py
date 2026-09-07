@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from contextlib import closing
-from datetime import date, datetime, time
+from datetime import date, datetime
 from hashlib import sha256
 from pathlib import Path
 import csv
@@ -10,6 +10,12 @@ import re
 import sqlite3
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
+
+from ..trading.market import (
+    exchange_close_minute,
+    exchange_open_minute,
+    normalize_exchange,
+)
 
 
 VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
@@ -20,6 +26,7 @@ REQUIRED_COLUMNS = ("time", "open", "high", "low", "close", "volume")
 class ReplayDataset:
     symbol: str
     resolution: str
+    exchange: str
     bar_count: int
     coverage_start: str
     coverage_end: str
@@ -40,6 +47,7 @@ class ReplayImportPreview:
     path: str
     symbol: str
     resolution: str
+    exchange: str
     timezone: str
     price_scale: float
     bar_count: int
@@ -64,6 +72,13 @@ def infer_symbol(path: str | Path) -> str:
     tokens = [token for token in re.split(r"[_\s.-]+", before_resolution.upper()) if token]
     candidate = tokens[-1] if tokens else ""
     return candidate if re.fullmatch(r"[A-Z0-9]{2,12}", candidate) else ""
+
+
+def infer_exchange(path: str | Path) -> str:
+    """Infer HOSE/HNX/UPCOM from the TradingView file prefix."""
+    stem = Path(path).stem.strip().upper()
+    first = next((token for token in re.split(r"[_\s.-]+", stem) if token), "")
+    return normalize_exchange(first)
 
 
 def normalize_resolution(value: str | int | None) -> str:
@@ -159,18 +174,58 @@ def _timestamp(raw: Any, timezone_name: str) -> int:
     return int(value.timestamp())
 
 
-def _inside_session(stamp: datetime) -> bool:
-    current = stamp.time().replace(second=0, microsecond=0)
+def _minute_of_day(value: datetime) -> int:
+    return value.hour * 60 + value.minute
+
+
+def _bucket_start(minute: int, resolution: str) -> int:
+    size = max(1, resolution_minutes(resolution))
+    return minute - minute % size
+
+
+def _inside_session(stamp: datetime, resolution: str, exchange: str = "HOSE") -> bool:
+    """Accept TradingView's bar-open timestamp for any intraday resolution.
+
+    A two-minute bar containing the 09:15 ATO print is labelled 09:14 and the
+    bar containing the 14:45 ATC print is labelled 14:44.  Requiring literal
+    09:15/14:45 therefore rejected valid non-1m exports.
+    """
+    current = _minute_of_day(stamp)
+    opening = _bucket_start(9 * 60, resolution)
+    closing = _bucket_start(exchange_close_minute(exchange), resolution)
     return (
-        time(9, 15) <= current <= time(11, 30)
-        or time(13, 0) <= current <= time(14, 30)
-        or current == time(14, 45)
+        opening <= current <= 11 * 60 + 30
+        or 13 * 60 <= current <= closing
+    )
+
+
+def _day_is_full(first: datetime, last: datetime, resolution: str, exchange: str = "HOSE") -> bool:
+    size = max(1, resolution_minutes(resolution))
+    first_minute = _minute_of_day(first)
+    last_minute = _minute_of_day(last)
+    opening = _bucket_start(9 * 60, resolution)
+    # TradingView only emits a candle when the symbol actually trades.  A
+    # complete file can therefore start a few minutes after the continuous
+    # session opens (CTS did so at 09:17/09:18) without missing market data.
+    # Keep the tolerance narrow so genuinely mid-session first days remain
+    # PARTIAL.
+    opening_grace = max(size, 15) if exchange == "HOSE" else size
+    latest_opening = _bucket_start(exchange_open_minute(exchange), resolution) + opening_grace
+    closing = exchange_close_minute(exchange)
+    return (
+        # A file can legitimately omit the opening bucket when the symbol has
+        # no ATO print.  The immediately following bucket is still complete
+        # market data; execution already waits for the first real bar.
+        opening <= first_minute <= latest_opening
+        and last_minute <= closing < last_minute + size
     )
 
 
 def _normalized_rows(
     path: Path,
     *,
+    resolution: str,
+    exchange: str,
     timezone_name: str,
     price_scale: float | None,
 ) -> tuple[list[dict[str, Any]], float]:
@@ -196,7 +251,7 @@ def _normalized_rows(
         try:
             stamp = _timestamp(raw.get("time"), timezone_name)
             local = datetime.fromtimestamp(stamp, VN_TZ)
-            if not _inside_session(local):
+            if not _inside_session(local, resolution, exchange):
                 raise ValueError(f"ngoài giờ giao dịch ({local:%H:%M})")
             opened = float(raw.get("open")) / scale
             high = float(raw.get("high")) / scale
@@ -227,7 +282,9 @@ def _normalized_rows(
     return [normalized[key] for key in sorted(normalized)], scale
 
 
-def _day_summary(rows: list[dict[str, Any]]) -> tuple[str, str, int, int, list[str]]:
+def _day_summary(
+    rows: list[dict[str, Any]], resolution: str, exchange: str,
+) -> tuple[str, str, int, int, list[str]]:
     grouped: dict[str, list[datetime]] = {}
     for row in rows:
         local = datetime.fromtimestamp(int(row["time"]), VN_TZ)
@@ -235,7 +292,7 @@ def _day_summary(rows: list[dict[str, Any]]) -> tuple[str, str, int, int, list[s
     partial: list[str] = []
     for day, stamps in grouped.items():
         first, last = min(stamps), max(stamps)
-        if first.time() > time(9, 15) or last.time() < time(14, 45):
+        if not _day_is_full(first, last, resolution, exchange):
             partial.append(day)
     days = sorted(grouped)
     return days[0], days[-1], len(days) - len(partial), len(partial), partial
@@ -281,6 +338,7 @@ class ReplayDataStore:
             CREATE TABLE IF NOT EXISTS replay_datasets (
                 symbol TEXT NOT NULL,
                 resolution TEXT NOT NULL,
+                exchange TEXT NOT NULL DEFAULT '',
                 source_name TEXT NOT NULL,
                 source_hash TEXT NOT NULL,
                 timezone TEXT NOT NULL,
@@ -290,6 +348,25 @@ class ReplayDataStore:
             );
             """
         )
+        columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(replay_datasets)")}
+        migrated = False
+        if "exchange" not in columns:
+            connection.execute("ALTER TABLE replay_datasets ADD COLUMN exchange TEXT NOT NULL DEFAULT ''")
+            migrated = True
+        changed: list[tuple[str, str, str]] = []
+        for row in connection.execute(
+            "SELECT symbol,resolution,source_name,exchange FROM replay_datasets"
+        ):
+            exchange = normalize_exchange(row["exchange"]) or infer_exchange(row["source_name"])
+            if exchange and exchange != str(row["exchange"] or ""):
+                connection.execute(
+                    "UPDATE replay_datasets SET exchange=? WHERE symbol=? AND resolution=?",
+                    (exchange, row["symbol"], row["resolution"]),
+                )
+                changed.append((row["symbol"], row["resolution"], exchange))
+        if migrated or changed:
+            for symbol, resolution, exchange in changed:
+                self._refresh_days(connection, symbol, resolution, exchange)
         return connection
 
     def inspect_file(
@@ -298,6 +375,7 @@ class ReplayDataStore:
         *,
         symbol: str | None = None,
         resolution: str | None = None,
+        exchange: str | None = None,
         timezone_name: str = "Asia/Ho_Chi_Minh",
         price_scale: float | None = None,
     ) -> ReplayImportPreview:
@@ -310,18 +388,31 @@ class ReplayDataStore:
         chosen_resolution = normalize_resolution(resolution or infer_resolution(source))
         if not chosen_resolution or resolution_minutes(chosen_resolution) >= 24 * 60:
             raise ValueError("Không xác định được resolution intraday.")
-        rows, scale = _normalized_rows(source, timezone_name=timezone_name, price_scale=price_scale)
-        first, last, full, partial_count, partial = _day_summary(rows)
+        chosen_exchange = normalize_exchange(exchange or infer_exchange(source))
+        if not chosen_exchange:
+            raise ValueError("Không xác định được sàn; hãy chọn HOSE, HNX hoặc UPCOM trước khi lưu.")
+        rows, scale = _normalized_rows(
+            source,
+            resolution=chosen_resolution,
+            exchange=chosen_exchange,
+            timezone_name=timezone_name,
+            price_scale=price_scale,
+        )
+        first, last, full, partial_count, partial = _day_summary(
+            rows, chosen_resolution, chosen_exchange,
+        )
         digest = sha256(source.read_bytes()).hexdigest()
         return ReplayImportPreview(
-            str(source), chosen_symbol, chosen_resolution, timezone_name, scale,
+            str(source), chosen_symbol, chosen_resolution, chosen_exchange, timezone_name, scale,
             len(rows), first, last, full, partial_count, partial, digest,
         )
 
     def import_file(self, path: str | Path, **kwargs: Any) -> ReplayImportPreview:
         preview = self.inspect_file(path, **kwargs)
         rows, _ = _normalized_rows(
-            Path(path), timezone_name=preview.timezone, price_scale=preview.price_scale,
+            Path(path), resolution=preview.resolution,
+            exchange=preview.exchange,
+            timezone_name=preview.timezone, price_scale=preview.price_scale,
         )
         now = datetime.now().astimezone().isoformat()
         with closing(self._connect()) as connection, connection:
@@ -352,19 +443,21 @@ class ReplayDataStore:
                 values,
             )
             connection.execute(
-                "INSERT INTO replay_datasets(symbol,resolution,source_name,source_hash,timezone,price_scale,imported_at) "
-                "VALUES(?,?,?,?,?,?,?) ON CONFLICT(symbol,resolution) DO UPDATE SET "
-                "source_name=excluded.source_name,source_hash=excluded.source_hash,timezone=excluded.timezone,"
+                "INSERT INTO replay_datasets(symbol,resolution,exchange,source_name,source_hash,timezone,price_scale,imported_at) "
+                "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(symbol,resolution) DO UPDATE SET "
+                "exchange=excluded.exchange,source_name=excluded.source_name,source_hash=excluded.source_hash,timezone=excluded.timezone,"
                 "price_scale=excluded.price_scale,imported_at=excluded.imported_at",
-                (preview.symbol, preview.resolution, Path(path).name, preview.source_hash,
+                (preview.symbol, preview.resolution, preview.exchange, Path(path).name, preview.source_hash,
                  preview.timezone, preview.price_scale, now),
             )
-            self._refresh_days(connection, preview.symbol, preview.resolution)
+            self._refresh_days(connection, preview.symbol, preview.resolution, preview.exchange)
         preview.inserted, preview.replaced, preview.unchanged = inserted, replaced, unchanged
         return preview
 
     @staticmethod
-    def _refresh_days(connection: sqlite3.Connection, symbol: str, resolution: str) -> None:
+    def _refresh_days(
+        connection: sqlite3.Connection, symbol: str, resolution: str, exchange: str = "HOSE",
+    ) -> None:
         connection.execute("DELETE FROM replay_days WHERE symbol=? AND resolution=?", (symbol, resolution))
         grouped: dict[str, list[int]] = {}
         for row in connection.execute(
@@ -377,7 +470,7 @@ class ReplayDataStore:
         for day, stamps in grouped.items():
             first = datetime.fromtimestamp(stamps[0], VN_TZ)
             last = datetime.fromtimestamp(stamps[-1], VN_TZ)
-            status = "FULL" if first.time() <= time(9, 15) and last.time() >= time(14, 45) else "PARTIAL"
+            status = "FULL" if _day_is_full(first, last, resolution, exchange) else "PARTIAL"
             values.append((symbol, resolution, day, status, len(stamps), stamps[0], stamps[-1]))
         connection.executemany(
             "INSERT INTO replay_days(symbol,resolution,day,status,bar_count,first_timestamp,last_timestamp) "
@@ -390,7 +483,7 @@ class ReplayDataStore:
             return []
         with closing(self._connect()) as connection, connection:
             rows = connection.execute(
-                "SELECT symbol,resolution,source_name,source_hash,timezone,price_scale,imported_at "
+                "SELECT symbol,resolution,exchange,source_name,source_hash,timezone,price_scale,imported_at "
                 "FROM replay_datasets ORDER BY symbol,resolution"
             ).fetchall()
         result: list[ReplayDataset] = []
@@ -406,13 +499,32 @@ class ReplayDataStore:
                     (row["symbol"], row["resolution"]),
                 ).fetchone()
                 result.append(ReplayDataset(
-                    row["symbol"], row["resolution"], int(bar_count or 0),
+                    row["symbol"], row["resolution"], str(row["exchange"] or ""), int(bar_count or 0),
                     str(day_counts[0] or ""), str(day_counts[1] or ""),
                     int(day_counts[2] or 0), int(day_counts[3] or 0),
                     row["source_name"], row["source_hash"], row["timezone"],
                     float(row["price_scale"]), row["imported_at"],
                 ))
         return result
+
+    def exchange_for(self, symbol: str, resolution: str | None = None) -> str:
+        """Return one unambiguous exchange for a replay symbol."""
+        if not self.path.exists():
+            return ""
+        symbol = str(symbol or "").strip().upper()
+        with closing(self._connect()) as connection, connection:
+            if resolution:
+                rows = connection.execute(
+                    "SELECT exchange FROM replay_datasets WHERE symbol=? AND resolution=?",
+                    (symbol, normalize_resolution(resolution)),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT DISTINCT exchange FROM replay_datasets WHERE symbol=?", (symbol,),
+                ).fetchall()
+        values = {normalize_exchange(row[0]) for row in rows}
+        values.discard("")
+        return next(iter(values)) if len(values) == 1 else ""
 
     def delete_dataset(self, symbol: str, resolution: str) -> int:
         symbol = str(symbol).strip().upper()
@@ -427,6 +539,26 @@ class ReplayDataStore:
             connection.execute("DELETE FROM replay_days WHERE symbol=? AND resolution=?", (symbol, resolution))
             connection.execute("DELETE FROM replay_datasets WHERE symbol=? AND resolution=?", (symbol, resolution))
         return int(count or 0)
+
+    def set_exchange(self, symbol: str, resolution: str, exchange: str) -> None:
+        """Resolve exchange metadata for an already imported legacy dataset."""
+        symbol = str(symbol or "").strip().upper()
+        resolution = normalize_resolution(resolution)
+        market = normalize_exchange(exchange)
+        if not symbol or not resolution or not market:
+            raise ValueError("Cần chọn mã, resolution và sàn hợp lệ.")
+        with closing(self._connect()) as connection, connection:
+            found = connection.execute(
+                "SELECT 1 FROM replay_datasets WHERE symbol=? AND resolution=?",
+                (symbol, resolution),
+            ).fetchone()
+            if not found:
+                raise ValueError("Không tìm thấy bộ dữ liệu cần cập nhật sàn.")
+            connection.execute(
+                "UPDATE replay_datasets SET exchange=? WHERE symbol=? AND resolution=?",
+                (market, symbol, resolution),
+            )
+            self._refresh_days(connection, symbol, resolution, market)
 
     def day_status(self, symbol: str, resolution: str, day: str | date) -> str:
         if not self.path.exists():
@@ -480,3 +612,63 @@ class ReplayDataStore:
                     row["closed"] = True
                 return rows, candidate, status
         return [], "", "MISSING"
+
+    def load_daily_aggregates(
+        self,
+        symbol: str,
+        *,
+        before: str | date | None = None,
+        resolution: str | None = None,
+        complete_only: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Aggregate imported intraday bars into daily candles.
+
+        This is primarily used to warm up EMA/RSI in strict replay mode.  It
+        keeps the warm-up and the simulated session on the same price basis;
+        daily bars from another vendor may use different corporate-action
+        adjustments.
+        """
+        if not self.path.exists():
+            return []
+        symbol = str(symbol or "").strip().upper()
+        before_text = before.isoformat() if isinstance(before, date) else str(before or "")[:10]
+        with closing(self._connect()) as connection, connection:
+            query = "SELECT day,resolution,status FROM replay_days WHERE symbol=?"
+            values: list[Any] = [symbol]
+            if before_text:
+                query += " AND day<?"
+                values.append(before_text)
+            if resolution:
+                query += " AND resolution=?"
+                values.append(normalize_resolution(resolution))
+            if complete_only:
+                query += " AND status='FULL'"
+            day_rows = connection.execute(query + " ORDER BY day,resolution", values).fetchall()
+
+            selected: dict[str, str] = {}
+            for row in day_rows:
+                candidate = str(row["resolution"])
+                current = selected.get(str(row["day"]))
+                if current is None or resolution_minutes(candidate) < resolution_minutes(current):
+                    selected[str(row["day"])] = candidate
+
+            result: list[dict[str, Any]] = []
+            for day_text, chosen in sorted(selected.items()):
+                bars = connection.execute(
+                    "SELECT timestamp,open,high,low,close,volume FROM replay_bars "
+                    "WHERE symbol=? AND resolution=? AND date(timestamp,'unixepoch','+7 hours')=? "
+                    "ORDER BY timestamp",
+                    (symbol, chosen, day_text),
+                ).fetchall()
+                if not bars:
+                    continue
+                result.append({
+                    "time": int(bars[-1]["timestamp"]),
+                    "open": float(bars[0]["open"]),
+                    "high": max(float(row["high"]) for row in bars),
+                    "low": min(float(row["low"]) for row in bars),
+                    "close": float(bars[-1]["close"]),
+                    "volume": sum(float(row["volume"]) for row in bars),
+                    "closed": True,
+                })
+        return result

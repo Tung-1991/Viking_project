@@ -118,6 +118,23 @@ def test_price_protection_sells_one_third_rounded_down(tmp_path):
     assert result.intent.reason == "NORMAL_PROTECTION"
 
 
+def test_price_protection_still_sells_one_lot_from_300_shares(tmp_path):
+    planner, _queue = _planner(tmp_path)
+    result = planner.plan(
+        StrategyDecision(
+            "SELL", "FPT", "NORMAL_PROTECTION", event="PRICE_PROTECTION",
+            quantity_fraction=0.33,
+        ),
+        execution_mode="PAPER",
+        execution_style="MARKET",
+        tick={"bid": 100},
+        portfolio={"position_quantity": 300, "trade_id": "T1"},
+        candle_key="small-position",
+    )
+    assert result.intent is not None
+    assert result.intent.quantity == 100
+
+
 def test_full_exit_leaves_odd_lot_for_operator(tmp_path):
     planner, _queue = _planner(tmp_path)
     decision = StrategyDecision("SELL", "FPT", "SELL_SIGNAL", event="INDICATOR_EXIT", signal="SELL", quantity_fraction=1)

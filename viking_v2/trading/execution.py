@@ -63,19 +63,24 @@ class ExecutionService:
             self.process_due(phase=phase, execution_mode=intent.execution_mode)
         return self.queue.get(intent.id) or intent
 
-    def process_due(self, *, phase: str, execution_mode: str) -> list[tuple[OrderIntent, BrokerOrderResult]]:
+    def process_due(
+        self, *, phase: str, execution_mode: str,
+        phase_provider: Callable[[str], str] | None = None,
+    ) -> list[tuple[OrderIntent, BrokerOrderResult]]:
         mode = str(execution_mode).upper()
         token_ready = True if mode == "PAPER" else self.real.has_trading_token()
         broker: Any = self.paper if mode == "PAPER" else self.real
-        self._revalidate_waiting_sells(phase, mode, broker)
+        self._revalidate_waiting_sells(phase, mode, broker, phase_provider)
         due = self.queue.claim_due(
             phase=phase,
             execution_mode=mode,
             token_ready=token_ready,
             quote_provider=self.quote_provider,
+            phase_provider=phase_provider,
         )
         completed: list[tuple[OrderIntent, BrokerOrderResult]] = []
         for intent in due:
+            intent_phase = phase_provider(intent.symbol) if phase_provider else phase
             send_quantity = intent.remaining_quantity or intent.quantity
             if intent.side == "SELL":
                 try:
@@ -92,10 +97,17 @@ class ExecutionService:
                 quantity=send_quantity,
                 filled_quantity=0,
                 remaining_quantity=send_quantity,
-                order_type=phase if intent.order_type == "MARKET" and phase in {"ATO", "ATC"} else intent.order_type,
+                order_type=intent_phase if intent.order_type == "MARKET" and intent_phase in {"ATO", "ATC"} else intent.order_type,
             )
             try:
-                result = broker.place_order(send_intent)
+                # Earlier broker calls in this batch may have crossed the
+                # deadline. Check again immediately before sending each BUY.
+                if not self.queue.buy_window_is_due(send_intent):
+                    result = BrokerOrderResult(
+                        False, "EXPIRED", message="Hết khung giờ mua", error="BUY_WINDOW_EXPIRED",
+                    )
+                else:
+                    result = broker.place_order(send_intent)
             except Exception as exc:
                 result = BrokerOrderResult(False, "FAILED", message=str(exc), error="EXECUTION_EXCEPTION")
             persisted = self.queue.finish(
@@ -152,7 +164,10 @@ class ExecutionService:
         requested = {value for value in str(intent.reason or "").upper().split("+") if value}
         return bool(requested & current) if requested else True
 
-    def _revalidate_waiting_sells(self, phase: str, mode: str, broker: Any) -> None:
+    def _revalidate_waiting_sells(
+        self, phase: str, mode: str, broker: Any,
+        phase_provider: Callable[[str], str] | None = None,
+    ) -> None:
         candidates = [
             item for item in self.queue.list_all()
             if item.execution_mode == mode
@@ -161,7 +176,9 @@ class ExecutionService:
             and item.status in {"PENDING", "WAITING_SETTLEMENT"}
             and item.settlement_waited
             and item.sell_wait_policy == "RECHECK"
-            and self.queue._phase_is_due(item, phase)
+            and self.queue._phase_is_due(
+                item, phase_provider(item.symbol) if phase_provider else phase,
+            )
         ]
         if not candidates or not self.sell_decision_provider:
             return

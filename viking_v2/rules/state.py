@@ -38,6 +38,7 @@ class RuleStateStore:
                 "processed_alerts": {},
                 "telegram_signals": {},
                 "indicator_streams": {},
+                "buy_confirmations": {},
             },
         )
         self._lock = threading.RLock()
@@ -55,7 +56,30 @@ class RuleStateStore:
         raw["processed_alerts"] = raw.get("processed_alerts") if isinstance(raw.get("processed_alerts"), dict) else {}
         raw["telegram_signals"] = raw.get("telegram_signals") if isinstance(raw.get("telegram_signals"), dict) else {}
         raw["indicator_streams"] = raw.get("indicator_streams") if isinstance(raw.get("indicator_streams"), dict) else {}
+        raw["buy_confirmations"] = raw.get("buy_confirmations") if isinstance(raw.get("buy_confirmations"), dict) else {}
         return raw
+
+    @staticmethod
+    def _buy_confirmation_key(symbol: str, stream: str) -> str:
+        return f"{str(stream or '').strip().upper()}|{str(symbol or '').strip().upper()}"
+
+    def buy_confirmation(self, symbol: str, stream: str) -> dict[str, Any]:
+        key = self._buy_confirmation_key(symbol, stream)
+        with self._lock:
+            value = self._read()["buy_confirmations"].get(key)
+            return dict(value) if isinstance(value, dict) else {}
+
+    def save_buy_confirmation(self, symbol: str, stream: str, value: dict[str, Any]) -> None:
+        key = self._buy_confirmation_key(symbol, stream)
+        with self._lock:
+            raw = self._read()
+            if raw["buy_confirmations"].get(key, {}) == (value or {}):
+                return
+            if value:
+                raw["buy_confirmations"][key] = dict(value)
+            else:
+                raw["buy_confirmations"].pop(key, None)
+            self.store.write(raw)
 
     def observe_indicators(
         self,

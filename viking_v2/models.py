@@ -61,6 +61,9 @@ class OrderIntent:
     entry_market_state: str = "UNKNOWN"
     entry_exposure: float = 0.0
     entry_budget: float = 0.0
+    buy_window_start: str = ""
+    buy_window_end: str = ""
+    buy_window_date: str = ""
 
     def __post_init__(self) -> None:
         self.symbol = str(self.symbol or "").strip().upper()
@@ -379,6 +382,8 @@ class RuntimeStatus:
     api_health: dict[str, Any] = field(default_factory=dict)
     error: str = ""
     working_dates: list[str] = field(default_factory=list)
+    symbol_exchanges: dict[str, str] = field(default_factory=dict)
+    symbol_phases: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

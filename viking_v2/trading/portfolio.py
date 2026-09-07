@@ -22,6 +22,29 @@ def round_lot_down(quantity: Any, lot: int = STOCK_ROUND_LOT) -> int:
     lot = max(1, int(lot or STOCK_ROUND_LOT))
     return value - (value % lot)
 
+
+def sell_quantity_for_fraction(
+    remaining: Any,
+    fraction: Any,
+    lot: int = STOCK_ROUND_LOT,
+) -> int:
+    """Return a tradable partial-sale quantity, with one lot as the minimum.
+
+    A configured 33% exit must still do something for a 100–300 share
+    position; simple floor rounding turns 300 × 33% into zero shares.
+    """
+    available = max(0, int(float(remaining or 0)))
+    share = min(1.0, max(0.0, float(fraction or 0.0)))
+    minimum = max(1, int(lot or STOCK_ROUND_LOT))
+    if available < minimum or share <= 0:
+        return 0
+    if share >= 1.0:
+        return round_lot_down(available, minimum)
+    return min(round_lot_down(available, minimum), max(
+        minimum,
+        round_lot_down(available * share, minimum),
+    ))
+
 def validate_quantity(quantity: Any, lot: int = STOCK_ROUND_LOT) -> tuple[bool, str, int]:
     normalized = round_lot_down(quantity, lot)
     if normalized < lot:
@@ -129,6 +152,8 @@ def size_buy_order(
     available_cash: float = 0.0,
     nav: float = 0.0,
     force_min_lot_enabled: bool = False,
+    minimum_order_room_vnd: float | None = None,
+    buy_fee_rate: float = 0.0,
     lot: int = STOCK_ROUND_LOT,
 ) -> BuySizing:
     """Single sizing source used by rule planning and every UI preview.
@@ -139,14 +164,19 @@ def size_buy_order(
     price = max(0.0, float(price_board or 0.0))
     minimum_lot = max(1, int(lot or STOCK_ROUND_LOT))
     minimum_value = price * minimum_lot * 1000.0
+    minimum_total = minimum_value * (1.0 + max(0.0, float(buy_fee_rate or 0.0)))
+    minimum_room = (
+        max(0.0, float(minimum_order_room_vnd))
+        if minimum_order_room_vnd is not None else max(0.0, float(nav or 0.0))
+    )
     if price <= 0:
         return BuySizing(0, budget, 0.0, False, "NO_EXECUTION_PRICE")
     quantity = affordable_quantity(budget, price)
     used_minimum = bool(
         quantity <= 0
         and force_min_lot_enabled
-        and float(available_cash or 0.0) >= minimum_value
-        and float(nav or 0.0) >= minimum_value
+        and float(available_cash or 0.0) >= minimum_total
+        and minimum_room >= minimum_value
     )
     if used_minimum:
         quantity = minimum_lot
@@ -238,8 +268,21 @@ class PortfolioContextBuilder:
             available_cash=cash,
             fee_rate=self.buy_fee_rate(),
         )
+        exposure_room = max(
+            0.0,
+            stock_exposure_limit(nav, exposure) - current_value - pending_value,
+        )
+        minimum_order_room = min(
+            exposure_room,
+            cash / (1.0 + max(0.0, float(self.buy_fee_rate() or 0.0))),
+        )
         if no_compound_enabled:
             budget = self.trades.capital_available(symbol, mode, budget)
+            minimum_order_room = min(
+                minimum_order_room,
+                self.trades.capital_available(symbol, mode, float("inf"))
+                / (1.0 + max(0.0, float(self.buy_fee_rate() or 0.0))),
+            )
         matching_rows = [
             row for row in rows
             if str(row.get("symbol", "") or "").upper() == symbol
@@ -260,7 +303,12 @@ class PortfolioContextBuilder:
             "pending_buy_value": pending_value,
             "available_capital": budget,
             "order_budget": budget,
-            "open_positions": len({str(row.get("symbol", "") or "").upper() for row in rows if position_quantity(row) > 0}),
+            "minimum_order_room": minimum_order_room,
+            "buy_fee_rate": max(0.0, float(self.buy_fee_rate() or 0.0)),
+            "open_positions": len(
+                {str(row.get("symbol", "") or "").upper() for row in rows if position_quantity(row) > 0}
+                | {str(item.symbol or "").upper() for item in pending_buys}
+            ),
             "pending_buy": bool(self.queue.find_active(symbol, side="BUY", execution_mode=mode)),
             "loss_streak": active_loss_streak,
         }

@@ -9,6 +9,7 @@ import customtkinter as ctk
 from ..config import AppSettings, save_settings
 from ..dashboard.windows import _HoverHint, _window
 from .business import StaticRuleParameters
+from ..trading.market import validate_buy_window
 
 
 class RuleSettingsPopup:
@@ -47,6 +48,7 @@ class RuleSettingsPopup:
         self.top.resizable(True, True)
         self.top.minsize(900, 600)
         self.top.configure(fg_color="#111318")
+        self.top.grid_columnconfigure(0, weight=1)
         self.top.grid_rowconfigure(0, weight=1)
         self.top.protocol("WM_DELETE_WINDOW", self._close)
         self.top.bind("<Escape>", lambda _event: self.hide(), add="+")
@@ -88,6 +90,8 @@ class RuleSettingsPopup:
     def hide(self) -> None:
         if self.top.winfo_exists():
             self.top.withdraw()
+        if self.on_visibility_changed:
+            self.on_visibility_changed(False)
 
     def _close(self) -> None:
         if self.on_visibility_changed:
@@ -120,13 +124,27 @@ class RuleSettingsPopup:
         self._phase2(phases.add("PHASE 2 · TÍN HIỆU"))
         self._phase3(phases.add("PHASE 3 · VỐN & BẢO VỆ"))
 
-    def _content(self, parent: ctk.CTkFrame, columns: int = 3) -> ctk.CTkFrame:
+    def _content(
+        self,
+        parent: ctk.CTkFrame,
+        columns: int = 3,
+        *,
+        weights: tuple[int, ...] | None = None,
+    ) -> ctk.CTkScrollableFrame:
         parent.grid_columnconfigure(0, weight=1)
         parent.grid_rowconfigure(0, weight=1)
-        body = ctk.CTkFrame(parent, fg_color="transparent")
+        body = ctk.CTkScrollableFrame(
+            parent,
+            fg_color="transparent",
+            scrollbar_button_color=self.BORDER,
+            scrollbar_button_hover_color="#4B515B",
+        )
         body.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
         for column in range(columns):
-            body.grid_columnconfigure(column, weight=1, uniform="rule")
+            if weights:
+                body.grid_columnconfigure(column, weight=weights[column])
+            else:
+                body.grid_columnconfigure(column, weight=1, uniform="rule")
         body.grid_rowconfigure(1, weight=0)
         return body
 
@@ -153,16 +171,17 @@ class RuleSettingsPopup:
             border_width=1, border_color=self.BORDER,
         )
         box.grid(row=0, column=0, columnspan=columns, sticky="ew", padx=5, pady=(4, 6))
-        box.grid_columnconfigure(1, weight=1)
+        line = ctk.CTkFrame(box, fg_color="transparent")
+        line.pack(fill="x", padx=13, pady=10)
         ctk.CTkLabel(
-            box, text=title, font=("Segoe UI", 15, "bold"),
+            line, text=title, font=("Segoe UI", 15, "bold"),
             text_color=self.TEXT, anchor="w",
-        ).grid(row=0, column=0, sticky="w", padx=(13, 12), pady=10)
+        ).pack(side="left", padx=(0, 12))
         ctk.CTkLabel(
-            box, text=text, font=("Segoe UI", 12),
+            line, text=text, font=("Segoe UI", 12),
             text_color=self.TEXT, anchor="w", justify="left", wraplength=650,
-        ).grid(row=0, column=1, sticky="w", pady=10)
-        self._hint_icon(box, hint).grid(row=0, column=2, padx=12, pady=8)
+        ).pack(side="left")
+        self._hint_icon(line, hint).pack(side="left", padx=(10, 0))
         return box
 
     def _card(
@@ -180,13 +199,12 @@ class RuleSettingsPopup:
         card.grid_columnconfigure(0, weight=1)
         header = ctk.CTkFrame(card, fg_color="transparent")
         header.pack(fill="x", padx=12, pady=(9, 5))
-        header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             header, text=title, font=("Segoe UI", 15, "bold"),
             text_color=self.TEXT, anchor="w",
-        ).grid(row=0, column=0, sticky="w")
+        ).pack(side="left")
         if description:
-            self._hint_icon(header, description).grid(row=0, column=1, padx=(8, 0))
+            self._hint_icon(header, description).pack(side="left", padx=(8, 0))
         return card
 
     def _field(self, card: ctk.CTkFrame, label: str, value: Any, hint: str) -> ctk.CTkEntry:
@@ -203,8 +221,7 @@ class RuleSettingsPopup:
         )
         entry.insert(0, str(value))
         entry.grid(row=0, column=1, padx=(8, 5))
-        info = self._hint_icon(row, hint)
-        info.grid(row=0, column=2)
+        self._hint_icon(row, hint).grid(row=0, column=2)
         return entry
 
     def _switch(self, card: ctk.CTkFrame, label: str, value: bool, hint: str) -> tk.BooleanVar:
@@ -216,8 +233,7 @@ class RuleSettingsPopup:
             row, text=label, variable=variable, font=("Segoe UI", 12),
             progress_color=self.GREEN, button_color=self.TEXT, text_color=self.TEXT,
         ).grid(row=0, column=0, sticky="w")
-        info = self._hint_icon(row, hint)
-        info.grid(row=0, column=1)
+        self._hint_icon(row, hint).grid(row=0, column=1)
         return variable
 
     def _phase1(self, frame: ctk.CTkFrame) -> None:
@@ -244,10 +260,13 @@ class RuleSettingsPopup:
 
         volume = self._card(
             body, "KHỐI LƯỢNG",
-            "Volume chỉ bổ sung độ tin cậy cho trạng thái thị trường; không tạo tín hiệu BUY hoặc SELL.",
+            "Volume chỉ tính nhãn độ tin cậy cho trạng thái thị trường; không đổi state và không tạo tín hiệu BUY/SELL.",
             1, 1,
         )
-        self.volume_confirmation = self._switch(volume, "Xác nhận Volume", self.params.volume_confirmation, "Mặc định OFF. ON để phân loại độ tin cậy HIGH/NORMAL/LOW theo volume.")
+        self.volume_confirmation = self._switch(
+            volume, "HIỆN ĐỘ TIN CẬY", self.params.volume_confirmation,
+            "Mặc định OFF. ON để tính và hiện nhãn HIGH/NORMAL/LOW theo volume; nhãn này không thay đổi quyết định của bot.",
+        )
         self.volume_average = self._field(volume, "Trung bình (phiên)", self.params.volume_average_sessions, "Mặc định 20 phiên dùng tính volume trung bình.")
         self.high_volume = self._field(volume, "Volume cao (%)", self.params.high_volume_ratio * 100, "Mặc định 150%. Từ mức này trở lên được coi là volume cao.")
         self.low_volume = self._field(volume, "Volume thấp (%)", self.params.low_volume_ratio * 100, "Mặc định 80%. Dưới mức này được coi là volume thấp.")
@@ -263,16 +282,23 @@ class RuleSettingsPopup:
         self.exp_dist = self._field(exposure, "Phân phối (%)", self.params.exposure["DISTRIBUTION"] * 100, "DISTRIBUTION. Mặc định tối đa 50% NAV.")
 
     def _phase2(self, frame: ctk.CTkFrame) -> None:
-        body = self._content(frame)
+        body = self._content(frame, columns=2, weights=(3, 2))
         self._summary(
             body,
             "TÍN HIỆU 1D",
-            "BUY · EMA cắt lên + RSI tăng     |     SELL · EMA cắt xuống + RSI giảm",
+            "BUY / SELL dùng đúng các chỉ báo đang bật; bật EMA + RSI thì phải đạt cả hai",
             "BUY mở position mới. SELL thoát position khi EXIT SELL được bật cho trade. "
-            "Hai cặp EMA điều chỉnh độc lập; RSI dùng chung.",
+            "Hai cặp EMA điều chỉnh độc lập; RSI dùng chung và có thể bật/tắt riêng cho BUY/SELL.",
+            columns=2,
         )
 
         signal = self._card(body, "CHỈ BÁO", "BUY và SELL dùng hai cặp EMA riêng; RSI dùng chung.", 1, 0)
+        self.phase2_signal_card = signal
+
+        right_column = ctk.CTkFrame(body, fg_color="transparent")
+        right_column.grid(row=1, column=1, sticky="new")
+        right_column.grid_columnconfigure(0, weight=1)
+        self.phase2_right_column = right_column
 
         def indicator_group(title: str, color: str) -> ctk.CTkFrame:
             group = ctk.CTkFrame(
@@ -289,15 +315,41 @@ class RuleSettingsPopup:
         buy_group = indicator_group("BUY", self.GREEN)
         self.buy_ema_fast = self._field(buy_group, "EMA nhanh", self.params.buy_ema_fast, "Mặc định EMA3 dùng riêng cho tín hiệu BUY.")
         self.buy_ema_slow = self._field(buy_group, "EMA chậm", self.params.buy_ema_slow, "Mặc định EMA6; phải lớn hơn BUY EMA nhanh.")
+        self.buy_signal_ema = tk.BooleanVar(value=self.params.buy_signal_use_ema)
+        self.buy_signal_rsi = tk.BooleanVar(value=self.params.buy_signal_use_rsi)
+        buy_conditions = ctk.CTkFrame(buy_group, fg_color="transparent")
+        buy_conditions.pack(fill="x", padx=12, pady=(3, 8))
+        for label, variable in (("DÙNG EMA", self.buy_signal_ema), ("DÙNG RSI", self.buy_signal_rsi)):
+            ctk.CTkCheckBox(
+                buy_conditions, text=label, variable=variable, width=105,
+                font=("Segoe UI", 11, "bold"), fg_color=self.GREEN,
+                text_color=self.TEXT,
+            ).pack(side="left", padx=(0, 12))
 
         sell_group = indicator_group("SELL", "#EF4444")
         self.sell_ema_fast = self._field(sell_group, "EMA nhanh", self.params.sell_ema_fast, "Mặc định EMA3 dùng riêng cho tín hiệu SELL.")
         self.sell_ema_slow = self._field(sell_group, "EMA chậm", self.params.sell_ema_slow, "Mặc định EMA6; phải lớn hơn SELL EMA nhanh.")
+        self.sell_signal_ema = tk.BooleanVar(value=self.params.sell_signal_use_ema)
+        self.sell_signal_rsi = tk.BooleanVar(value=self.params.sell_signal_use_rsi)
+        sell_conditions = ctk.CTkFrame(sell_group, fg_color="transparent")
+        sell_conditions.pack(fill="x", padx=12, pady=(3, 8))
+        for label, variable in (("DÙNG EMA", self.sell_signal_ema), ("DÙNG RSI", self.sell_signal_rsi)):
+            ctk.CTkCheckBox(
+                sell_conditions, text=label, variable=variable, width=105,
+                font=("Segoe UI", 11, "bold"), fg_color="#EF4444",
+                text_color=self.TEXT,
+                command=self._refresh_exit_b_signal,
+            ).pack(side="left", padx=(0, 12))
 
         rsi_group = indicator_group("RSI", "#60A5FA")
-        self.rsi_period = self._field(rsi_group, "Chu kỳ", self.params.rsi_period, "Mặc định RSI14; BUY cần RSI tăng, SELL cần RSI giảm.")
+        self.rsi_period = self._field(rsi_group, "Chu kỳ", self.params.rsi_period, "Mặc định RSI14; hướng RSI chỉ được xét khi bật RSI cho BUY/SELL.")
 
-        mode = self._card(body, "CÁCH ĐỌC NẾN", "Chọn dùng nến 1D đang chạy hay chỉ dùng nến đã đóng.", 1, 1)
+        mode = self._card(
+            right_column, "CÁCH ĐỌC NẾN & GIỜ MUA",
+            "REALTIME dùng nến đang chạy; CLOSED chỉ dùng nến đã đóng. Khung giờ chỉ chặn BUY, không chặn SELL/SL.",
+            0, 0,
+        )
+        self.phase2_mode_card = mode
         self.signal_mode = tk.StringVar(value=self.settings.signal_mode)
         mode_row = ctk.CTkFrame(mode, fg_color="transparent")
         mode_row.pack(fill="x", padx=12, pady=6)
@@ -308,31 +360,74 @@ class RuleSettingsPopup:
             button_color="#245C92", button_hover_color="#1D4D7B",
         )
         menu.grid(row=0, column=0, sticky="ew")
-        info = self._hint_icon(
-            mode_row,
-            "Mặc định REALTIME. REALTIME dùng cả nến hôm nay đang chạy. CLOSED bỏ nến chưa đóng và chỉ dùng dữ liệu đã hoàn tất.",
-        )
-        info.grid(row=0, column=1, padx=(7, 0))
         ctk.CTkLabel(
             mode,
             text="REALTIME  ·  phản ứng trong phiên\nCLOSED    ·  chờ nến ngày đóng",
             justify="left", anchor="w", font=("Segoe UI", 12), text_color=self.TEXT,
         ).pack(fill="x", padx=12, pady=(8, 10))
 
-        limits = self._card(body, "NGUYÊN TẮC CỐ ĐỊNH", "Các giới hạn này luôn áp dụng và không tạo thêm setting.", 1, 2)
-        ctk.CTkLabel(
-            limits,
-            text="✓  1 position / mã\n✓  Không DCA\n✓  Không averaging\n✓  Không pyramiding",
-            font=("Segoe UI", 12), text_color=self.TEXT,
-            justify="left", anchor="w",
-        ).pack(fill="x", padx=14, pady=(6, 12))
+        self.buy_window_enabled = tk.BooleanVar(value=self.params.buy_window_enabled)
+        window_row = ctk.CTkFrame(mode, fg_color="transparent")
+        window_row.pack(fill="x", padx=12, pady=(7, 10))
+        ctk.CTkSwitch(
+            window_row, text="CHỈ MUA TỪ", variable=self.buy_window_enabled,
+            font=("Segoe UI", 12, "bold"), progress_color=self.GREEN,
+            text_color=self.TEXT,
+        ).pack(side="left")
+        for _label, key in (("GIỜ", "start"),):
+            entry = ctk.CTkEntry(window_row, width=65, height=32, font=("Segoe UI", 12))
+            entry.insert(0, getattr(self.params, f"buy_window_{key}"))
+            entry.pack(side="left", padx=(10, 7))
+            setattr(self, f"buy_window_{key}", entry)
+        self._hint_icon(
+            window_row,
+            "Mặc định OFF, giờ bắt đầu 14:00 (giờ Việt Nam), chỉnh được. BUY từ giờ này đến hết phiên hợp lệ của sàn. "
+            "Không có giờ kết thúc tự đặt; quyền ATO/ATC vẫn theo cấu hình thực thi. "
+            "Tín hiệu trước giờ được nhớ trong ngày; EMA/RSI mất điều kiện thì hủy. "
+            "Nếu bật xác nhận X phút, bắt đầu đếm khi vào khung giờ. SELL/SL không bị giới hạn. "
+            "Lệnh chưa gửi hết hạn khi hết khung; lệnh đã gửi sàn vẫn theo cơ chế khớp của sàn.",
+        ).pack(side="left")
+
+        confirmation = self._card(
+            right_column, "XÁC NHẬN BUY",
+            "Sau tín hiệu BUY, hệ thống kiểm tra các điều kiện EMA/RSI đã chọn tại mỗi lần quan sát cho đến đủ X phút giao dịch. SELL và SL không chờ.",
+            1, 0,
+        )
+        self.phase2_confirmation_card = confirmation
+        row = ctk.CTkFrame(confirmation, fg_color="transparent")
+        row.pack(fill="x", padx=12, pady=(2, 6))
+        self.buy_confirmation_enabled = tk.BooleanVar(value=self.params.buy_confirmation_enabled)
+        self.buy_confirmation_ema = tk.BooleanVar(value=self.params.buy_confirmation_require_ema)
+        self.buy_confirmation_rsi = tk.BooleanVar(value=self.params.buy_confirmation_require_rsi)
+        ctk.CTkSwitch(
+            row, text="BẬT", variable=self.buy_confirmation_enabled,
+            font=("Segoe UI", 12, "bold"), progress_color=self.GREEN,
+            text_color=self.TEXT,
+        ).pack(side="left")
+        self.buy_confirmation_minutes = ctk.CTkEntry(
+            row, width=72, height=32, justify="right", font=("Segoe UI", 12),
+            fg_color="#181B20", border_color="#444B55", text_color=self.TEXT,
+        )
+        self.buy_confirmation_minutes.insert(0, str(self.params.buy_confirmation_minutes))
+        self.buy_confirmation_minutes.pack(side="left", padx=(12, 5))
+        ctk.CTkLabel(row, text="PHÚT", font=("Segoe UI", 12), text_color=self.TEXT).pack(side="left")
+
+        conditions = ctk.CTkFrame(confirmation, fg_color="transparent")
+        conditions.pack(fill="x", padx=12, pady=(2, 12))
+        for label, variable in (("EMA", self.buy_confirmation_ema), ("RSI", self.buy_confirmation_rsi)):
+            ctk.CTkCheckBox(
+                conditions, text=label, variable=variable, width=68,
+                font=("Segoe UI", 12, "bold"), fg_color=self.GREEN,
+                text_color=self.TEXT,
+            ).pack(side="left", padx=(0, 12))
 
     def _phase3(self, frame: ctk.CTkFrame) -> None:
         body = self._content(frame)
         self._summary(
             body,
             "VỐN & BẢO VỆ",
-            "WIN reset chu kỳ · 3 LOSS khóa BUY 24 giờ · position đang giữ vẫn được quản lý",
+            f"WIN reset chu kỳ · {self.params.loss_lock_count} LOSS khóa BUY "
+            f"{self.params.loss_lock_hours} giờ · position đang giữ vẫn được quản lý",
             "WIN/LOSS chỉ tính khi trade đóng hoàn toàn và đã trừ phí. Whipsaw và khóa LOSS chỉ chặn BUY/Re-entry mới; không tắt SL hoặc Exit Manager của position đang giữ.",
         )
 
@@ -344,7 +439,8 @@ class RuleSettingsPopup:
         )
         self.force_min_lot = self._switch(
             capital, "AUTO 100 CP", self.params.force_min_lot_enabled,
-            "ON: tính khối lượng theo exposure trước. Nếu vốn/mã không đủ một lô nhưng NAV và cash vẫn đủ, BOT fallback sang 100 CP. Lệnh này có thể vượt vốn chia theo slot.",
+            "ON: tính theo exposure trước. Nếu vốn/mã không đủ một lô, BOT có thể fallback sang 100 CP. "
+            "Lệnh được vượt phần chia theo slot nhưng không vượt room Phase 1, vốn no-compound hoặc cash gồm phí.",
         )
 
         # Hai mức SL đã chuyển sang tab EXIT MANAGER để nằm cùng chỗ với chốt lời.
@@ -354,7 +450,7 @@ class RuleSettingsPopup:
             stops,
             "Mở lại sau (giờ)",
             self.params.loss_lock_hours,
-            "24 giờ đồng hồ kể từ lúc đóng lệnh lỗ thứ ba; có tính đêm, cuối tuần và ngày nghỉ.",
+            "Tính theo giờ đồng hồ kể từ lúc đóng lệnh lỗ đủ ngưỡng; có tính đêm, cuối tuần và ngày nghỉ.",
         )
 
         whip = self._card(body, "WHIPSAW", "Bộ chống nhiễu trước entry. Không thuộc Exit Manager và không can thiệp position đang giữ.", 1, 2)
@@ -402,7 +498,7 @@ class RuleSettingsPopup:
 
         normal = self._card(
             body, "NORMAL",
-            "Khi đạt ngưỡng lợi nhuận, theo dõi peak realtime. Nếu lợi nhuận giảm đủ số điểm phần trăm từ peak thì bán.",
+            "Khi đạt ngưỡng lợi nhuận, theo dõi peak realtime. Giá giảm đủ X% từ peak thì bán theo tỷ lệ đã đặt.",
             1, 1,
         )
         self.normal_arm = self._field(normal, "Kích hoạt (%)", self.params.normal_arm_pct, "Mặc định +7% tính từ giá vốn.")
@@ -483,7 +579,12 @@ class RuleSettingsPopup:
         fast = value(self.sell_ema_fast, self.params.sell_ema_fast)
         slow = value(self.sell_ema_slow, self.params.sell_ema_slow)
         rsi = value(self.rsi_period, self.params.rsi_period)
-        return f"EMA{fast} ↓ EMA{slow}\nRSI{rsi} GIẢM"
+        conditions: list[str] = []
+        if self.sell_signal_ema.get():
+            conditions.append(f"EMA{fast} ↓ EMA{slow}")
+        if self.sell_signal_rsi.get():
+            conditions.append(f"RSI{rsi} GIẢM")
+        return "\n".join(conditions) or "CHƯA CHỌN ĐIỀU KIỆN"
 
     def _refresh_exit_b_signal(self, _event: Any = None) -> None:
         label = getattr(self, "exit_b_signal_label", None)
@@ -534,6 +635,11 @@ class RuleSettingsPopup:
             "TẮT: bỏ qua đợt này, lệnh chờ sang phiên sau.\n"
             "Backtest không mô phỏng được đợt ATC: tín hiệu chỉ có sau khi nến đóng lúc 14h45."
         )
+        self.confirm_real_orders = self._switch(
+            orders, "XÁC NHẬN LỆNH REAL", self.settings.confirm_real_orders,
+            "ON: lệnh đặt tay ở tài khoản REAL phải xác nhận thêm một lần trước khi gửi. "
+            "Không áp dụng cho PAPER và không làm dừng quyết định tự động của daemon.",
+        )
 
         bot_em = self._card(
             body, "EM CỦA BOT",
@@ -548,8 +654,14 @@ class RuleSettingsPopup:
                 "Mặc định OFF. Lãi chạm mức Chốt lời thì bán sạch vị thế ngay; "
                 "chạy được cả khi ba tactic kia đều tắt.",
             ),
-            "NORMAL": self._switch(bot_em, "NORMAL", "NORMAL" in enabled_modes, "Mặc định ON. Đạt ngưỡng và giảm từ peak thì bán 1/3 một lần."),
-            "HIGH": self._switch(bot_em, "HIGH", "HIGH" in enabled_modes, "Mặc định ON. Dùng Highest Close 1D và bán sạch vị thế."),
+            "NORMAL": self._switch(
+                bot_em, "NORMAL", "NORMAL" in enabled_modes,
+                "Mặc định ON. Đạt ngưỡng rồi giảm từ peak thì bán một lần theo tỷ lệ NORMAL đã đặt.",
+            ),
+            "HIGH": self._switch(
+                bot_em, "HIGH", "HIGH" in enabled_modes,
+                "Mặc định ON. Dùng Highest Close 1D rồi bán một lần theo tỷ lệ HIGH đã đặt.",
+            ),
             "IND_EXIT": self._switch(bot_em, "EXIT SELL", "IND_EXIT" in enabled_modes, "Mặc định ON. Có tín hiệu SELL từ EMA/RSI thì bán hết phần còn lại."),
         }
 
@@ -700,6 +812,9 @@ class RuleSettingsPopup:
             sell_ema_fast = int(self._number(self.sell_ema_fast, "SELL EMA nhanh"))
             sell_ema_slow = int(self._number(self.sell_ema_slow, "SELL EMA chậm"))
             rsi_period = int(self._number(self.rsi_period, "RSI"))
+            buy_confirmation_minutes = int(self._number(
+                self.buy_confirmation_minutes, "Xác nhận BUY",
+            ))
             max_positions = int(self._number(self.max_positions, "Tối đa position"))
             loss_lock = int(self._number(self.loss_lock, "Khóa sau LOSS"))
             loss_lock_hours = int(self._number(self.loss_lock_hours, "Mở lại sau"))
@@ -742,6 +857,24 @@ class RuleSettingsPopup:
                 raise ValueError("Stop Loss phải là số âm")
             if high_volume < low_volume:
                 raise ValueError("High Volume phải lớn hơn hoặc bằng Low Volume")
+            if not 0 < normal_sell <= 100 or not 0 < high_sell <= 100:
+                raise ValueError("Tỷ lệ bán NORMAL/HIGH phải lớn hơn 0 và không quá 100%")
+            if not (self.buy_signal_ema.get() or self.buy_signal_rsi.get()):
+                raise ValueError("Tín hiệu BUY phải bật ít nhất EMA hoặc RSI")
+            if not (self.sell_signal_ema.get() or self.sell_signal_rsi.get()):
+                raise ValueError("Tín hiệu SELL phải bật ít nhất EMA hoặc RSI")
+            if not 1 <= buy_confirmation_minutes <= 120:
+                raise ValueError("Xác nhận BUY phải từ 1 đến 120 phút")
+            if self.buy_confirmation_enabled.get() and not (
+                self.buy_confirmation_ema.get() or self.buy_confirmation_rsi.get()
+            ):
+                raise ValueError("Xác nhận BUY phải chọn ít nhất EMA hoặc RSI")
+            if self.buy_confirmation_enabled.get() and self.signal_mode.get() != "REALTIME":
+                raise ValueError("Xác nhận BUY theo phút cần CÁCH ĐỌC NẾN = REALTIME")
+            window_start = self.buy_window_start.get().strip()
+            validate_buy_window(window_start, "15:00")
+            if self.buy_window_enabled.get() and self.signal_mode.get() != "REALTIME":
+                raise ValueError("Khung giờ mua cần CÁCH ĐỌC NẾN = REALTIME")
 
             self.params.ma_period = ma_period
             self.params.pivot_left = pivot_left
@@ -759,6 +892,16 @@ class RuleSettingsPopup:
             self.params.sell_ema_fast = sell_ema_fast
             self.params.sell_ema_slow = sell_ema_slow
             self.params.rsi_period = rsi_period
+            self.params.buy_signal_use_ema = bool(self.buy_signal_ema.get())
+            self.params.buy_signal_use_rsi = bool(self.buy_signal_rsi.get())
+            self.params.sell_signal_use_ema = bool(self.sell_signal_ema.get())
+            self.params.sell_signal_use_rsi = bool(self.sell_signal_rsi.get())
+            self.params.buy_confirmation_enabled = bool(self.buy_confirmation_enabled.get())
+            self.params.buy_confirmation_minutes = buy_confirmation_minutes
+            self.params.buy_confirmation_require_ema = bool(self.buy_confirmation_ema.get())
+            self.params.buy_confirmation_require_rsi = bool(self.buy_confirmation_rsi.get())
+            self.params.buy_window_enabled = bool(self.buy_window_enabled.get())
+            self.params.buy_window_start = window_start
             self.settings.signal_mode = self.signal_mode.get()
             self.params.max_positions = max_positions
             self.params.no_compound_enabled = bool(self.no_compound.get())
@@ -775,8 +918,9 @@ class RuleSettingsPopup:
             self.params.normal_giveback_pct = normal_giveback
             self.params.high_profit_arm_pct = high_arm
             self.params.high_profit_close_drawdown_pct = high_drawdown
-            self.params.normal_sell_pct = min(100.0, normal_sell)
-            self.params.high_sell_pct = min(100.0, high_sell)
+            self.params.normal_sell_pct = normal_sell
+            self.params.high_sell_pct = high_sell
+            self.params.validate()
             # Activation is per trade. These legacy booleans must never act as
             # an invisible global master after the new UI is saved.
             self.settings.bot_order_mode = (
@@ -784,6 +928,7 @@ class RuleSettingsPopup:
             )
             self.settings.allow_ato = bool(self.execution_allow_ato.get())
             self.settings.allow_atc = bool(self.execution_allow_atc.get())
+            self.settings.confirm_real_orders = bool(self.confirm_real_orders.get())
             self.settings.bot_em_modes = [
                 name for name, variable in self.bot_em_vars.items() if bool(variable.get())
             ]

@@ -40,6 +40,21 @@ def test_shared_buy_sizing_uses_budget_then_explicit_minimum_fallback():
     assert (minimum.quantity, minimum.used_minimum) == (100, True)
 
 
+def test_minimum_lot_never_breaks_exposure_room_or_ignores_fee():
+    no_room = size_buy_order(
+        budget_vnd=0, price_board=100, available_cash=20_000_000,
+        nav=100_000_000, force_min_lot_enabled=True,
+        minimum_order_room_vnd=9_000_000,
+    )
+    no_fee_cash = size_buy_order(
+        budget_vnd=500_000, price_board=100, available_cash=10_000_000,
+        nav=100_000_000, force_min_lot_enabled=True,
+        minimum_order_room_vnd=20_000_000, buy_fee_rate=0.001,
+    )
+    assert no_room.quantity == 0
+    assert no_fee_cash.quantity == 0
+
+
 def test_pending_buy_reserves_exposure_and_duplicate_symbol(tmp_path):
     queue = OrderQueue(tmp_path / "orders.json")
     queue.add(OrderIntent.create("FPT", "BUY", 1000, "LO", limit_price=100))
@@ -60,6 +75,7 @@ def test_pending_buy_reserves_exposure_and_duplicate_symbol(tmp_path):
     assert context["pending_buy"] is True
     assert context["pending_buy_value"] == 100_000_000
     assert context["order_budget"] == 100_000_000
+    assert context["open_positions"] == 1
 
 
 def test_unknown_buy_keeps_capital_reserved_until_reconciliation(tmp_path):

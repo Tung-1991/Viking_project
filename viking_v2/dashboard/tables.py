@@ -10,6 +10,52 @@ from ..trading.orders import CLAIMABLE_STATUSES, FINAL_STATUSES
 from .view import _compact_vnd, _display_price, _number, _price_unit
 
 
+RUNNING_COLUMNS = (
+    "Ticket",
+    "Time",
+    "Order",
+    "Targets",
+    "CostInfo",
+    "RR",
+    "PnL_MAE_MFE",
+    "Status",
+    "X",
+)
+RUNNING_HEADERS = {
+    "Ticket": "Ticket",
+    "Time": "Thời gian",
+    "Order": "Thông tin Lệnh",
+    "Targets": "Chốt lời/Lỗ (SL|TP)",
+    "CostInfo": "Chi phí/Phí qua đêm",
+    "RR": "Rủi ro/Kỳ vọng (%)",
+    "PnL_MAE_MFE": "PnL / MAE / MFE",
+    "Status": "Trạng thái",
+    "X": "✖",
+}
+RUNNING_WIDTHS = {
+    "Ticket": 125,
+    "Time": 145,
+    "Order": 330,
+    "Targets": 250,
+    "CostInfo": 175,
+    "RR": 200,
+    "PnL_MAE_MFE": 310,
+    "Status": 610,
+    "X": 48,
+}
+RUNNING_ANCHORS = {
+    "Ticket": "center",
+    "Time": "center",
+    "Order": "w",
+    "Targets": "center",
+    "CostInfo": "center",
+    "RR": "center",
+    "PnL_MAE_MFE": "center",
+    "Status": "w",
+    "X": "center",
+}
+
+
 class DashboardTablesMixin:
     def _clear_running_selection_on_blank(self, event: Any) -> None:
         """Clear a sticky selection when the user clicks the empty table area."""
@@ -27,29 +73,40 @@ class DashboardTablesMixin:
             tree.selection_remove(*selected)
             self._sync_cancel_button()
 
+    def _running_action_click(self, event: Any) -> None:
+        """Restore the original last-column cancel affordance for open orders."""
+        tree = event.widget
+        if tree.identify("region", event.x, event.y) != "cell":
+            return
+        if tree.identify_column(event.x) != f"#{len(RUNNING_COLUMNS)}":
+            return
+        row_id = tree.identify_row(event.y)
+        if not row_id:
+            return
+        mode = "REAL" if tree is self.trees.get("REAL") else "PAPER"
+        action = self._running_row_actions.get(mode, {}).get(row_id, {})
+        if not action.get("cancellable"):
+            return
+        tree.selection_set(row_id)
+        self._sync_cancel_button()
+        self.after_idle(self._cancel_selected)
+
     @staticmethod
     def _configure_tree(tree: ttk.Treeview, columns: tuple[str, ...]) -> None:
         if tuple(tree["columns"]) == columns:
             return
         tree.configure(columns=columns)
-        widths = {
-            "Ticket": 180,
-            "Thời gian mở": 240,
-            "Lệnh / KL / SL / TP / FEE": 1_100,
-            "PnL / MAE / MFE": 700,
-            "Phase / Vốn / T+ / EM": 1_150,
-        }
-        for index, column in enumerate(columns):
+        for column in columns:
             tree.heading(
                 column,
-                text=column if index == 0 else f"│  {column}",
-                anchor="w",
+                text=RUNNING_HEADERS.get(column, column),
+                anchor=RUNNING_ANCHORS.get(column, "w"),
             )
             tree.column(
                 column,
-                width=widths.get(column, 180),
-                minwidth=widths.get(column, 180),
-                anchor="w",
+                width=RUNNING_WIDTHS.get(column, 180),
+                minwidth=RUNNING_WIDTHS.get(column, 180),
+                anchor=RUNNING_ANCHORS.get(column, "w"),
                 stretch=False,
             )
 
@@ -58,10 +115,7 @@ class DashboardTablesMixin:
         runtime_ticks = runtime_status.get("ticks") if isinstance(runtime_status.get("ticks"), dict) else {}
         runtime_decisions = runtime_status.get("decisions") if isinstance(runtime_status.get("decisions"), dict) else {}
         self._last_running_render = time.time()
-        columns = (
-            "Ticket", "Thời gian mở", "Lệnh / KL / SL / TP / FEE",
-            "PnL / MAE / MFE", "Phase / Vốn / T+ / EM",
-        )
+        columns = RUNNING_COLUMNS
         local_by_mode = {"REAL": [], "PAPER": []}
         for item in self.queue.list_all():
             if item.status.upper() not in FINAL_STATUSES:
@@ -259,24 +313,28 @@ class DashboardTablesMixin:
                 else:
                     row_tag = "position_flat"
                 pnl_icon = "▲" if pnl > 0 else "▼" if pnl < 0 else "•"
-                fee_total = buy_fee + estimated_exit_cost
-                fee_text = _compact_vnd(fee_total) if fee_total > 0 else "0"
+                risk_pct = abs(sl_pct) if sl_pct else 0.0
+                reward_pct = tp_pct if tp_price > 0 else 0.0
+                rr_text = (
+                    f"R {risk_pct:.2f}% · E {reward_pct:.2f}% · 1:{reward_pct / risk_pct:.2f}"
+                    if risk_pct > 0 and reward_pct > 0
+                    else f"R {risk_pct:.2f}% · E --"
+                )
                 tree.insert(
                     "", "end", iid=iid, tags=(row_tag,),
                     values=(
                         f"#{(trade_id or str(row.get('positionId', index)))[:12]}",
-                        f"│  {self._row_time(opened)}",
-                        f"│  {mode} · {source} · BUY {symbol} @ {_display_price(avg_price)} · KL {quantity}"
-                        f" · SL▼{_display_price(sl_price)} ({sl_pct:+g}%)"
-                        + (
-                            f" · TP▲{_display_price(tp_price)} ({tp_pct:+g}%)"
-                            if tp_price > 0 else " · TP▲--"
-                        )
-                        + f" · FEE {fee_text}",
-                        f"│  {pnl_icon}{_compact_vnd(pnl)} ({pnl_pct:+.2f}%)"
+                        self._row_time(opened),
+                        f"{mode} · {source} · BUY {symbol} @ {_display_price(avg_price)} · KL {quantity}",
+                        f"SL▼ {_display_price(sl_price)} ({sl_pct:+g}%) · "
+                        + (f"TP▲ {_display_price(tp_price)} ({tp_pct:+g}%)" if tp_price > 0 else "TP▲ --"),
+                        f"FEE {_compact_vnd(buy_fee)} · DỰ KIẾN BÁN {_compact_vnd(estimated_exit_cost)}",
+                        rr_text,
+                        f"{pnl_icon}{_compact_vnd(pnl)} ({pnl_pct:+.2f}%)"
                         f" · ↘{_compact_vnd(mae)} ({mae_pct:+.2f}%)"
                         f" · ↗{_compact_vnd(mfe)} ({mfe_pct:+.2f}%)",
-                        f"│  {' · '.join(status_parts)}",
+                        " · ".join(status_parts),
+                        "",
                     ),
                 )
                 self._running_row_actions[mode][iid] = {
@@ -356,19 +414,20 @@ class DashboardTablesMixin:
                     if item.side == "BUY" else None
                 )
                 fee_text = _compact_vnd(estimated_fee) if estimated_fee is not None else "--"
+                risk_text = item_sl_label
+                reward_text = item_tp_label
                 tree.insert(
                     "", "end", iid=iid, tags=(tag,),
                     values=(
                         f"[CACHE] {item.id[:8]}",
-                        f"│  {self._row_time(item.created_at)}",
-                        f"│  {mode} · {item.source} · {item.side} {item.symbol} @ {price_text} · KL {item.quantity}"
-                        f" · {target_text}"
-                        + (
-                            f" · FEE {fee_text}"
-                            if gross > 0 else f" · HẾT HẠN {self._row_time(item.expires_at)}"
-                        ),
-                        f"│  --   ·   --   ·   --   ·   Khớp {item.filled_quantity}/{item.quantity}",
-                        f"│  {status_label}  ·  {em_text}  ·  {item.result or item.reason or 'ĐANG CHỜ'}",
+                        self._row_time(item.created_at),
+                        f"{mode} · {item.source} · {item.side} {item.symbol} @ {price_text} · KL {item.quantity}",
+                        target_text,
+                        f"FEE {fee_text}" if gross > 0 else f"HẾT HẠN {self._row_time(item.expires_at)}",
+                        f"R {risk_text} · E {reward_text}" if item.action == "OPEN" else "--",
+                        f"-- · -- · -- · Khớp {item.filled_quantity}/{item.quantity}",
+                        f"{status_label} · {em_text} · {item.result or item.reason or 'ĐANG CHỜ'}",
+                        "✖" if cancellable else "",
                     ),
                 )
                 self._running_row_actions[mode][iid] = {
@@ -406,12 +465,14 @@ class DashboardTablesMixin:
                     "", "end", iid=iid, tags=(("partial_order",) if partial else ("dnse_order",)),
                     values=(
                         f"[DNSE] {(order_id or str(index))[:10]}",
-                        f"│  {self._row_time(row.get('createdAt', row.get('createdDate', '')))}",
-                        f"│  {mode} · DNSE · {side} {symbol} @ {_display_price(price) if price else kind} · KL {quantity}"
-                        f" · {'SL/TP SAU KHI KHỚP' if side == 'BUY' else 'ĐÓNG VỊ THẾ'}"
-                        f" · FEE {_compact_vnd(fee)}",
-                        f"│  --   ·   --   ·   --   ·   Khớp {filled}/{quantity}",
-                        f"│  [DNSE][{'PARTIAL' if partial else 'WORKING'}]  ·  CÒN {remaining}",
+                        self._row_time(row.get('createdAt', row.get('createdDate', ''))),
+                        f"{mode} · DNSE · {side} {symbol} @ {_display_price(price) if price else kind} · KL {quantity}",
+                        "SL/TP SAU KHI KHỚP" if side == "BUY" else "ĐÓNG VỊ THẾ",
+                        f"FEE {_compact_vnd(fee)}",
+                        "--",
+                        f"-- · -- · -- · Khớp {filled}/{quantity}",
+                        f"[DNSE][{'PARTIAL' if partial else 'WORKING'}] · CÒN {remaining}",
+                        "✖" if mode == "REAL" and bool(order_id) else "",
                     ),
                 )
                 self._running_row_actions[mode][iid] = {

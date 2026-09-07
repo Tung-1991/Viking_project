@@ -13,6 +13,99 @@ if TYPE_CHECKING:
 
 VN_TZ = timezone(timedelta(hours=7))
 STOCK_SETTLEMENT_RELEASE = datetime.min.time().replace(hour=13)
+VALID_EXCHANGES = {"HOSE", "HNX", "UPCOM"}
+
+
+def parse_clock_minute(value: str) -> int:
+    parts = str(value).strip().split(":")
+    if len(parts) != 2 or any(len(part) != 2 or not part.isdigit() for part in parts):
+        raise ValueError("Giờ mua phải có dạng HH:MM, ví dụ 14:00.")
+    hour, minute = map(int, parts)
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise ValueError("Giờ mua không hợp lệ.")
+    return hour * 60 + minute
+
+
+def validate_buy_window(start: str, end: str) -> tuple[int, int]:
+    left, right = parse_clock_minute(start), parse_clock_minute(end)
+    if not 540 <= left < right <= 900:
+        raise ValueError("Khung giờ mua phải nằm trong 09:00–15:00; TỪ phải trước ĐẾN.")
+    return left, right
+
+
+def in_buy_window(now: datetime, start: str, end: str) -> bool:
+    left, right = validate_buy_window(start, end)
+    local = now.astimezone(VN_TZ) if now.tzinfo else now.replace(tzinfo=VN_TZ)
+    return left <= local.hour * 60 + local.minute < right
+
+_EXCHANGE_ALIASES = {
+    "HOSE": "HOSE", "HSX": "HOSE", "STO": "HOSE",
+    "HNX": "HNX", "STX": "HNX",
+    "UPCOM": "UPCOM", "UPX": "UPCOM",
+}
+
+
+def normalize_exchange(value: Any) -> str:
+    """Return the canonical cash-equity exchange, or an empty string."""
+    return _EXCHANGE_ALIASES.get(str(value or "").strip().upper(), "")
+
+
+def exchange_sessions(exchange: str) -> tuple[tuple[int, int, str], ...]:
+    """Trading windows as [start, end) minute offsets in Vietnam time."""
+    market = normalize_exchange(exchange)
+    if market == "HOSE":
+        return ((540, 555, "ATO"), (555, 690, "OPEN"), (780, 870, "OPEN"), (870, 885, "ATC"))
+    if market == "HNX":
+        return ((540, 690, "OPEN"), (780, 870, "OPEN"), (870, 885, "ATC"))
+    if market == "UPCOM":
+        return ((540, 690, "OPEN"), (780, 900, "OPEN"))
+    return ()
+
+
+def exchange_open_minute(exchange: str) -> int:
+    """First expected executable print used to assess replay completeness."""
+    return 555 if normalize_exchange(exchange) == "HOSE" else 540
+
+
+def exchange_close_minute(exchange: str) -> int:
+    return 900 if normalize_exchange(exchange) == "UPCOM" else 885
+
+
+def phase_at_minute(exchange: str, minute: int) -> str:
+    for start, end, phase in exchange_sessions(exchange):
+        if start <= int(minute) < end:
+            return phase
+    if 690 <= int(minute) < 780:
+        return "LUNCH"
+    return "CLOSED"
+
+
+def active_trading_minutes(
+    start: datetime,
+    end: datetime,
+    exchange: str,
+    *,
+    working_dates: Iterable[str] | None = None,
+    holidays: Iterable[str] | None = None,
+) -> float:
+    """Elapsed exchange minutes, excluding lunch and closed trading days."""
+    market = normalize_exchange(exchange)
+    if not market or end <= start:
+        return 0.0
+    left = start.astimezone(VN_TZ) if start.tzinfo else start.replace(tzinfo=VN_TZ)
+    right = end.astimezone(VN_TZ) if end.tzinfo else end.replace(tzinfo=VN_TZ)
+    total = 0.0
+    current = left.date()
+    while current <= right.date():
+        if is_working_day(current, working_dates, holidays):
+            midnight = datetime.combine(current, datetime.min.time(), VN_TZ)
+            for open_minute, close_minute, _phase in exchange_sessions(market):
+                overlap_start = max(left, midnight + timedelta(minutes=open_minute))
+                overlap_end = min(right, midnight + timedelta(minutes=close_minute))
+                if overlap_end > overlap_start:
+                    total += (overlap_end - overlap_start).total_seconds() / 60.0
+        current += timedelta(days=1)
+    return total
 
 
 def stock_is_sellable_after_settlement(
@@ -39,6 +132,7 @@ def market_phase(
     now: datetime | None = None,
     working_dates: Iterable[str] | None = None,
     holidays: Iterable[str] | None = None,
+    exchange: str = "HOSE",
 ) -> tuple[str, str]:
     now = now.astimezone(VN_TZ) if now and now.tzinfo else (now.replace(tzinfo=VN_TZ) if now else market_now())
     if now.weekday() >= 5:
@@ -49,18 +143,20 @@ def market_phase(
         str(item)[:10] for item in working_dates
     }:
         return "HOLIDAY", "NGHỈ LỄ"
+    market = normalize_exchange(exchange)
+    if not market:
+        return "UNKNOWN_EXCHANGE", "CHƯA XÁC ĐỊNH SÀN"
     minute = now.hour * 60 + now.minute
     if minute < 540:
         return "CLOSED", "CHƯA MỞ"
-    if minute < 555:
+    phase = phase_at_minute(market, minute)
+    if phase == "ATO":
         return "ATO", "ATO"
-    if minute < 690:
+    if phase == "OPEN":
         return "OPEN", "MỞ"
-    if minute < 780:
+    if phase == "LUNCH":
         return "LUNCH", "NGHỈ TRƯA"
-    if minute < 870:
-        return "OPEN", "MỞ"
-    if minute < 885:
+    if phase == "ATC":
         return "ATC", "ATC"
     return "CLOSED", "ĐÓNG PHIÊN"
 
@@ -69,12 +165,14 @@ def market_session_clock(
     now: datetime | None = None,
     working_dates: Iterable[str] | None = None,
     holidays: Iterable[str] | None = None,
+    exchange: str = "HOSE",
 ) -> tuple[str, bool]:
     """Return a compact phase, trading window and countdown without seconds."""
     now = now.astimezone(VN_TZ) if now and now.tzinfo else (
         now.replace(tzinfo=VN_TZ) if now else market_now()
     )
-    phase, _ = market_phase(now, working_dates, holidays)
+    market = normalize_exchange(exchange)
+    phase, _ = market_phase(now, working_dates, holidays, market)
     def remaining(target: datetime) -> str:
         total_minutes = max(0, int((target - now).total_seconds() + 59) // 60)
         days, day_minutes = divmod(total_minutes, 24 * 60)
@@ -126,9 +224,11 @@ def market_session_clock(
     if phase == "OPEN":
         if now.hour < 12:
             target = now.replace(hour=11, minute=30, second=0, microsecond=0)
-            return f"LIVE 09:15-11:30 · {remaining(target)}", True
-        target = now.replace(hour=14, minute=30, second=0, microsecond=0)
-        return f"LIVE 13:00-14:30 · {remaining(target)}", True
+            opening = "09:15" if market == "HOSE" else "09:00"
+            return f"LIVE {opening}-11:30 · {remaining(target)}", True
+        close_hour, close_minute = ((15, 0) if market == "UPCOM" else (14, 30))
+        target = now.replace(hour=close_hour, minute=close_minute, second=0, microsecond=0)
+        return f"LIVE 13:00-{close_hour:02d}:{close_minute:02d} · {remaining(target)}", True
     if phase == "ATC":
         target = now.replace(hour=14, minute=45, second=0, microsecond=0)
         return f"ATC 14:30-14:45 · {remaining(target)}", True
@@ -378,7 +478,9 @@ class MarketDataService:
         }
 
     @staticmethod
-    def _normalize_ohlc(data: dict[str, Any] | None) -> list[dict[str, Any]]:
+    def _normalize_ohlc(
+        data: dict[str, Any] | None, exchange: str = "HOSE",
+    ) -> list[dict[str, Any]]:
         if not isinstance(data, dict):
             return []
         keys = ("t", "o", "h", "l", "c", "v")
@@ -388,9 +490,10 @@ class MarketDataService:
         if length == 0 or any(len(data[key]) != length for key in keys):
             return []
         now = market_now()
-        phase = market_phase(now)[0]
+        phase = market_phase(now, exchange=exchange)[0]
         today = now.date()
-        today_is_closed = phase == "CLOSED" and now.time().replace(tzinfo=None) >= datetime.min.time().replace(hour=14, minute=45)
+        close_minute = exchange_close_minute(exchange)
+        today_is_closed = phase == "CLOSED" and now.hour * 60 + now.minute >= close_minute
         rows: list[dict[str, Any]] = []
         for index in range(length):
             try:
@@ -413,17 +516,20 @@ class MarketDataService:
                 continue
         return rows
 
-    def get_daily_bars(self, symbol: str, *, count: int = 260, force: bool = False) -> list[dict[str, Any]]:
+    def get_daily_bars(
+        self, symbol: str, *, count: int = 260, force: bool = False,
+        exchange: str = "HOSE",
+    ) -> list[dict[str, Any]]:
         symbol = str(symbol or "").upper()
         now = time.time()
         cached = self._bars_cache.get(symbol)
-        phase = market_phase()[0]
+        phase = market_phase(exchange=exchange)[0]
         ttl = 30.0 if phase in {"ATO", "OPEN", "ATC"} else 1800.0
         if cached and not force and now - cached[0] < ttl:
             return [dict(row) for row in cached[1]]
         window = max(220, int(count or 260))
         data = self.client.get_ohlc(symbol, "1D", int(now - window * 86400 * 1.8), int(now))
-        rows = self._normalize_ohlc(data)
+        rows = self._normalize_ohlc(data, exchange)
         if rows:
             rows = rows[-window:]
             self._bars_cache[symbol] = (now, rows)

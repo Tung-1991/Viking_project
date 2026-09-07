@@ -12,14 +12,36 @@ from ..rules.business import (
     classify_market_state,
     indicator_snapshot,
 )
-from ..trading.portfolio import order_budget, round_lot_down, size_buy_order
-from ..trading.market import stock_is_sellable_after_settlement
+from ..rules.entry_filters import apply_buy_filters
+from ..trading.portfolio import (
+    order_budget,
+    round_lot_down,
+    sell_quantity_for_fraction,
+    size_buy_order,
+)
+from ..trading.market import (
+    stock_is_sellable_after_settlement,
+    normalize_exchange,
+    phase_at_minute,
+    exchange_open_minute,
+    exchange_close_minute,
+    in_buy_window,
+)
 from .data import HistoricalDataStore, VN_TZ, bar_date
 from .models import BacktestConfig, BacktestEvent, BacktestResult, BacktestScenario, BacktestTrade
 from .replay import ReplayDataStore
 
 
 UNKNOWN_SETTLE_DATE = "9999-12-31"
+
+
+def _buy_rule_text(params: StaticRuleParameters) -> str:
+    terms: list[str] = []
+    if params.buy_signal_use_ema:
+        terms.append(f"EMA {params.buy_ema_fast}/{params.buy_ema_slow} cắt lên")
+    if params.buy_signal_use_rsi:
+        terms.append(f"RSI{params.rsi_period} tăng")
+    return " + ".join(terms) or "OFF"
 
 
 def _indicator_columns(details: dict[str, Any] | None) -> dict[str, float]:
@@ -34,16 +56,19 @@ def _indicator_columns(details: dict[str, Any] | None) -> dict[str, float]:
     }
 
 
-def _opening_fill_price(bars: list[dict[str, Any]], fill_session: str) -> float:
+def _opening_fill_price(
+    bars: list[dict[str, Any]], fill_session: str, exchange: str = "HOSE",
+) -> float:
     """Return the first price a trader is allowed to use without look-ahead."""
     if not bars:
         return 0.0
     selected = bars[0]
-    if str(fill_session or "ATO").upper() == "CONTINUOUS":
+    market = normalize_exchange(exchange) or "HOSE"
+    if str(fill_session or "ATO").upper() == "CONTINUOUS" or market != "HOSE":
         eligible: list[dict[str, Any]] = []
         for bar in bars:
             stamp = datetime.fromtimestamp(int(bar.get("time", 0) or 0), VN_TZ)
-            if stamp.hour * 60 + stamp.minute >= 9 * 60 + 15:
+            if stamp.hour * 60 + stamp.minute >= exchange_open_minute(market):
                 eligible.append(bar)
         if eligible:
             selected = eligible[0]
@@ -227,6 +252,16 @@ class BacktestEngine:
         open positions, queued orders and protection state the previous one
         ended with, so the account behaves like one trader moving through time.
         """
+        requested_params = StaticRuleParameters.from_dict(
+            settings.rule_parameters
+        ).validate()
+        if requested_params.buy_window_enabled and settings.simulation_mode != "REPLAY":
+            raise RuntimeError("KHUNG GIỜ MUA cần MODE 2 · REPLAY intraday FULL; không dùng DAILY/AUTO HYBRID.")
+        if requested_params.buy_confirmation_enabled and settings.simulation_mode != "REPLAY":
+            raise RuntimeError(
+                "XÁC NHẬN BUY theo phút chỉ chạy với MODE 2 · REPLAY intraday FULL; "
+                "không dùng DAILY hoặc AUTO HYBRID."
+            )
         if settings.simulation_mode in {"REPLAY", "AUTO_HYBRID"}:
             return self._run_replay(
                 settings, progress=progress, cancelled=cancelled, save=save, carry=carry,
@@ -393,7 +428,10 @@ class BacktestEngine:
                 # live bot has ATO switched off, so it only gets in once
                 # continuous trading starts.  Use the OPEN of the first bar at
                 # or after 09:15; using its close would look into the future.
-                return _opening_fill_price(bars, settings.fill_session)
+                return _opening_fill_price(
+                    bars, settings.fill_session,
+                    settings.symbol_exchanges.get(symbol, "HOSE"),
+                )
             return latest_price(symbol, day, "open") or latest_price(symbol, day, "close")
 
         def stop_fill_price(symbol: str, day: str, stop_price: float) -> float:
@@ -586,6 +624,7 @@ class BacktestEngine:
                         entry_phase = order.market_state if order.market_state in EXPOSURE_DEFAULTS else current_phase
                         exposure = params.exposure.get(entry_phase, 0.0)
                         pending_buy_value = 0.0
+                        minimum_room = max(0.0, nav * exposure - stock_value)
                         budget = order_budget(
                             nav=nav,
                             exposure=exposure,
@@ -597,12 +636,18 @@ class BacktestEngine:
                         )
                         if params.no_compound_enabled and symbol in capital_ledgers:
                             budget = min(budget, capital_ledgers[symbol]["available"])
+                            minimum_room = min(
+                                minimum_room,
+                                capital_ledgers[symbol]["available"] / (1.0 + settings.buy_fee_rate),
+                            )
                         sizing = size_buy_order(
                             budget_vnd=budget,
                             price_board=open_price,
                             available_cash=cash,
                             nav=nav,
                             force_min_lot_enabled=params.force_min_lot_enabled,
+                            minimum_order_room_vnd=minimum_room,
+                            buy_fee_rate=settings.buy_fee_rate,
                         )
                         quantity = sizing.quantity
                         gross = open_price * quantity * 1000.0
@@ -632,10 +677,7 @@ class BacktestEngine:
                                 entry_exposure_pct=exposure * 100.0,
                                 entry_reason=order.reason or order.event,
                                 entry_signal_date=order.created_date,
-                                entry_rule=(
-                                    f"EMA {params.buy_ema_fast}/{params.buy_ema_slow} + "
-                                    f"RSI{params.rsi_period} tăng"
-                                ),
+                                entry_rule=_buy_rule_text(params),
                                 cycle_id=cycle_id,
                                 entry_value=gross + fee,
                                 sl_pct=params.reentry_sl_pct if attempt > 0 else params.initial_sl_pct,
@@ -668,9 +710,9 @@ class BacktestEngine:
                         if day <= position.settle_date:
                             order.settlement_waited = True
                             continue
-                        quantity = round_lot_down(position.quantity * order.fraction)
-                        if order.fraction >= 1.0:
-                            quantity = round_lot_down(position.quantity)
+                        quantity = sell_quantity_for_fraction(
+                            position.quantity, order.fraction
+                        )
                         if quantity > 0:
                             sell_position(
                                 position,
@@ -772,10 +814,7 @@ class BacktestEngine:
                         }
                         share = min(1.0, max(0.0, params.normal_sell_pct / 100.0))
                         if day > position.settle_date:
-                            quantity = (
-                                round_lot_down(position.quantity) if share >= 1.0
-                                else round_lot_down(position.quantity * share)
-                            )
+                            quantity = sell_quantity_for_fraction(position.quantity, share)
                             if quantity > 0:
                                 sell_position(
                                     position, quantity, normal_fill, day,
@@ -1109,12 +1148,19 @@ class BacktestEngine:
         source_quality: dict[str, dict[str, str]] = {symbol: {} for symbol in managed_symbols}
         missing: list[str] = []
         fallback_days: list[str] = []
+        requested_replay_resolution = (
+            None if settings.execution_resolution == "AUTO"
+            else settings.execution_resolution
+        )
         for symbol in managed_symbols:
             for day in calendar:
                 daily = rows_by_symbol.get(symbol, {}).get(day)
                 if daily is None:
                     continue
-                bars, resolution, status = self.replay.load_day(symbol, day, complete_only=True)
+                bars, resolution, status = self.replay.load_day(
+                    symbol, day, resolution=requested_replay_resolution,
+                    complete_only=True,
+                )
                 if bars:
                     replay_days[symbol][day] = bars
                     source_resolution[symbol][day] = resolution
@@ -1130,10 +1176,52 @@ class BacktestEngine:
             suffix = f" và {len(missing) - 12} ngày/mã khác" if len(missing) > 12 else ""
             raise RuntimeError(f"REPLAY thiếu dữ liệu FULL: {sample}{suffix}.")
 
-        history: dict[str, list[dict[str, Any]]] = {
-            symbol: [dict(row) for row in rows if bar_date(row).isoformat() < settings.start_date]
-            for symbol, rows in loaded.items()
-        }
+        symbol_exchanges: dict[str, str] = {}
+        unknown_exchanges: list[str] = []
+        for symbol in managed_symbols:
+            exchange = (
+                normalize_exchange(settings.symbol_exchanges.get(symbol))
+                or self.replay.exchange_for(symbol, requested_replay_resolution)
+            )
+            # Compatibility for old AUTO-HYBRID runs containing no replay at
+            # all. Historically that path was explicitly the HOSE daily model.
+            if not exchange and settings.simulation_mode == "AUTO_HYBRID" and all(
+                source_quality[symbol].get(day) == "FALLBACK_1D"
+                for day in calendar if day in rows_by_symbol.get(symbol, {})
+            ):
+                exchange = "HOSE"
+            if exchange:
+                symbol_exchanges[symbol] = exchange
+            else:
+                unknown_exchanges.append(symbol)
+        if unknown_exchanges:
+            raise RuntimeError(
+                "Chưa xác định SÀN cho: " + ", ".join(unknown_exchanges)
+                + ". Hãy chọn HOSE/HNX/UPCOM khi import dữ liệu."
+            )
+        settings.symbol_exchanges = dict(symbol_exchanges)
+
+        history: dict[str, list[dict[str, Any]]] = {}
+        warmup_sources: dict[str, str] = {}
+        # EMA can be seeded from the available replay closes immediately.  If
+        # RSI does not yet have ``period + 2`` closes, crossover_signal simply
+        # stays silent until it does; importing foreign-vendor daily prices to
+        # manufacture the missing warm-up would be worse than skipping those
+        # first source days.
+        replay_warmup_required = 1
+        for symbol, rows in loaded.items():
+            replay_warmup = self.replay.load_daily_aggregates(
+                symbol, before=settings.start_date,
+            )
+            if len(replay_warmup) >= replay_warmup_required:
+                history[symbol] = replay_warmup
+                warmup_sources[symbol] = "REPLAY_INTRADAY_AGGREGATED"
+            else:
+                history[symbol] = [
+                    dict(row) for row in rows
+                    if bar_date(row).isoformat() < settings.start_date
+                ]
+                warmup_sources[symbol] = "DAILY_FALLBACK"
         indicator_streams: dict[str, dict[str, Any]] = {
             symbol: indicator_snapshot(
                 values,
@@ -1151,6 +1239,11 @@ class BacktestEngine:
         }
         positions: dict[str, _Position] = carried_positions
         pending: dict[str, _Pending] = carried_pending
+        buy_confirmations: dict[str, dict[str, Any]] = {
+            str(symbol).upper(): dict(value)
+            for symbol, value in (carried.get("buy_confirmations") or {}).items()
+            if isinstance(value, dict)
+        }
         cash = float(carried.get("cash", settings.initial_capital))
         loss_streaks = {symbol: 0 for symbol in managed_symbols}
         loss_streaks.update(carried.get("loss_streaks") or {})
@@ -1165,7 +1258,7 @@ class BacktestEngine:
         equity_curve: list[dict[str, Any]] = []
         phase_history: list[dict[str, Any]] = []
         signal_history: list[dict[str, Any]] = []
-        signal_dedupe: dict[tuple[str, str], tuple[str, str, str]] = {}
+        signal_dedupe: dict[tuple[str, str], tuple[str, ...]] = {}
         total_fees = total_tax = 0.0
         buy_count = sell_count = 0
         current_phase = settings.fixed_market_phase
@@ -1298,13 +1391,23 @@ class BacktestEngine:
             if fallback_open:
                 return order.created_date < local.date().isoformat()
             minute = local.hour * 60 + local.minute
-            if minute == 14 * 60 + 45:
-                return False
+            exchange = symbol_exchanges.get(order.symbol, "")
+            phase = phase_at_minute(exchange, minute)
             if order.created_date == local.date().isoformat():
-                return 9 * 60 + 16 <= minute <= 14 * 60 + 29
-            if settings.fill_session == "ATO":
-                return minute == 9 * 60 + 15
-            return 9 * 60 + 16 <= minute <= 14 * 60 + 29
+                # New intraday signals fill on the next continuous bar. Auctions
+                # are never fabricated between source bars.
+                return phase == "OPEN"
+            if exchange == "HOSE" and settings.fill_session == "ATO":
+                size = 60 if order.source_resolution == "1H" else int(order.source_resolution or 1)
+                expected = exchange_open_minute(exchange)
+                return (
+                    minute == expected - expected % max(1, size)
+                    or (phase == "OPEN" and minute > expected)
+                )
+            if exchange == "HOSE":
+                return phase == "OPEN" and minute > exchange_open_minute(exchange)
+            # HNX/UPCOM have no ATO path; use their first real continuous bar.
+            return phase == "OPEN"
 
         def fill_pending_symbol(
             symbol: str,
@@ -1318,6 +1421,22 @@ class BacktestEngine:
         ) -> None:
             nonlocal cash, total_fees, buy_count
             order = pending.get(symbol)
+            if order and order.side == "BUY" and params.buy_window_enabled:
+                local = datetime.fromtimestamp(stamp, VN_TZ)
+                if (local.date().isoformat() != order.created_date
+                        or local.hour * 60 + local.minute >= exchange_close_minute(symbol_exchanges[symbol])):
+                    pending.pop(symbol, None)
+                    signal_history.append({
+                        "symbol": symbol, "date": day, "time": iso_time(stamp),
+                        "signal_time": (order.details.get("buy_window") or {}).get("signal_time", order.created_time),
+                        "decision_time": iso_time(stamp), "signal": "BUY", "action": "WAIT",
+                        "reason": "BUY_WINDOW_EXPIRED", "details": order.details,
+                        "simulation_mode": settings.simulation_mode,
+                    })
+                    return
+                end_minute = exchange_close_minute(symbol_exchanges[symbol])
+                if not in_buy_window(local, params.buy_window_start, f"{end_minute // 60:02d}:{end_minute % 60:02d}"):
+                    return
             if not order or not fill_is_eligible(order, stamp, fallback_open=fallback_open):
                 return
             if order.side == "BUY":
@@ -1327,6 +1446,7 @@ class BacktestEngine:
                 nav, stock_value = portfolio_value()
                 entry_phase = order.market_state if order.market_state in EXPOSURE_DEFAULTS else current_phase
                 exposure = params.exposure.get(entry_phase, 0.0)
+                minimum_room = max(0.0, nav * exposure - stock_value)
                 budget = order_budget(
                     nav=nav, exposure=exposure, max_positions=params.max_positions,
                     current_stock_value=stock_value, pending_buy_value=0.0,
@@ -1334,9 +1454,15 @@ class BacktestEngine:
                 )
                 if params.no_compound_enabled and symbol in capital_ledgers:
                     budget = min(budget, capital_ledgers[symbol]["available"])
+                    minimum_room = min(
+                        minimum_room,
+                        capital_ledgers[symbol]["available"] / (1.0 + settings.buy_fee_rate),
+                    )
                 sizing = size_buy_order(
                     budget_vnd=budget, price_board=price, available_cash=cash,
                     nav=nav, force_min_lot_enabled=params.force_min_lot_enabled,
+                    minimum_order_room_vnd=minimum_room,
+                    buy_fee_rate=settings.buy_fee_rate,
                 )
                 quantity = sizing.quantity
                 gross = price * quantity * 1000.0
@@ -1357,14 +1483,19 @@ class BacktestEngine:
                         cycle_numbers[symbol] += 1
                     cycle_id = f"{symbol}-{cycle_numbers[symbol]:02d}" + (f".{attempt}" if attempt else "")
                     indicators = _indicator_columns(order.details)
+                    confirmation_values = order.details.get("buy_confirmation") or {}
+                    original_signal_time = str(
+                        (order.details.get("buy_window") or {}).get("signal_time")
+                        or confirmation_values.get("signal_time") or order.created_time
+                    )
                     position = _Position(
                         uuid.uuid4().hex, symbol, quantity, quantity, price, day, settle_day,
                         fee, principal, list(settings.em_modes), is_reentry=attempt > 0,
                         highest_close=price, fees=fee, net_pnl=-fee,
                         entry_market_state=entry_phase, entry_exposure_pct=exposure * 100.0,
                         entry_reason=order.reason or order.event,
-                        entry_signal_date=order.created_date,
-                        entry_rule=f"EMA {params.buy_ema_fast}/{params.buy_ema_slow} + RSI{params.rsi_period} tăng",
+                        entry_signal_date=(original_signal_time or order.created_date)[:10],
+                        entry_rule=_buy_rule_text(params),
                         cycle_id=cycle_id, entry_value=gross + fee,
                         sl_pct=params.reentry_sl_pct if attempt else params.initial_sl_pct,
                         entry_ema_fast=indicators["ema_fast"],
@@ -1377,9 +1508,9 @@ class BacktestEngine:
                     events.append(BacktestEvent(
                         day, position.trade_id, symbol, "BUY", "ENTRY_BUY", quantity,
                         price, gross, fee, 0.0, cash, entry_phase, -fee,
-                        signal_date=order.created_date, reason=order.reason or "Tín hiệu BUY",
+                        signal_date=(original_signal_time or order.created_date)[:10], reason=order.reason or "Tín hiệu BUY",
                         details=dict(order.details), cycle_id=cycle_id,
-                        equity_after=portfolio_value()[0], signal_time=order.created_time,
+                        equity_after=portfolio_value()[0], signal_time=original_signal_time,
                         decision_time=order.created_time, fill_time=iso_time(stamp),
                         simulation_mode=settings.simulation_mode,
                         source_resolution=resolution, data_quality=quality, **indicators,
@@ -1401,7 +1532,7 @@ class BacktestEngine:
             ):
                 pending.pop(symbol, None)
                 return
-            quantity = round_lot_down(position.quantity if order.fraction >= 1.0 else position.quantity * order.fraction)
+            quantity = sell_quantity_for_fraction(position.quantity, order.fraction)
             if quantity > 0:
                 sell_position(
                     position, quantity, price, day, order.event, stamp=stamp,
@@ -1429,12 +1560,13 @@ class BacktestEngine:
 
             # DAILY fallback can only fill an overnight order at its known day
             # open. It never pretends to know an intraday path.
-            fallback_stamp = int(datetime.combine(
-                datetime.strptime(day, "%Y-%m-%d").date(), time(9, 15), VN_TZ,
-            ).timestamp())
             for symbol in managed_symbols:
                 if source_quality[symbol].get(day) != "FALLBACK_1D":
                     continue
+                fallback_minute = exchange_open_minute(symbol_exchanges[symbol])
+                fallback_stamp = int((datetime.combine(
+                    datetime.strptime(day, "%Y-%m-%d").date(), time(0, 0), VN_TZ,
+                ) + timedelta(minutes=fallback_minute)).timestamp())
                 daily = rows_by_symbol[symbol][day]
                 opened = float(daily.get("open", 0.0) or daily.get("close", 0.0) or 0.0)
                 marks[symbol] = opened
@@ -1451,9 +1583,9 @@ class BacktestEngine:
                 else:
                     daily = rows_by_symbol.get(symbol, {}).get(day)
                     if daily is not None:
-                        close_stamp = int(datetime.combine(
-                            datetime.strptime(day, "%Y-%m-%d").date(), time(14, 45), VN_TZ,
-                        ).timestamp())
+                        close_stamp = int((datetime.combine(
+                            datetime.strptime(day, "%Y-%m-%d").date(), time(0, 0), VN_TZ,
+                        ) + timedelta(minutes=exchange_close_minute(symbol_exchanges[symbol]))).timestamp())
                         fallback = dict(daily)
                         fallback["time"] = close_stamp
                         fallback["_fallback"] = True
@@ -1585,7 +1717,7 @@ class BacktestEngine:
                             position.peak_profit_pct = max(position.peak_profit_pct, peak)
                             if fill > 0:
                                 share = min(1.0, max(0.0, params.normal_sell_pct / 100.0))
-                                quantity = round_lot_down(position.quantity if share >= 1 else position.quantity * share)
+                                quantity = sell_quantity_for_fraction(position.quantity, share)
                                 details.update(triggered_events=["NORMAL_PROTECTION"], peak_profit_pct=peak)
                                 if quantity > 0 and stock_is_sellable_after_settlement(
                                     position.settle_date, datetime.fromtimestamp(stamp, VN_TZ),
@@ -1630,8 +1762,9 @@ class BacktestEngine:
                     )
                     if params.no_compound_enabled and symbol in capital_ledgers:
                         budget = min(budget, capital_ledgers[symbol]["available"])
-                    decision = rule.evaluate({
+                    rule_context = {
                         "symbol": symbol,
+                        "exchange": symbol_exchanges[symbol],
                         "bars": [*history[symbol], partial],
                         "vnindex_bars": [],
                         "signal_mode": "REALTIME",
@@ -1639,7 +1772,8 @@ class BacktestEngine:
                         "confirmed_market_state": current_phase,
                         "precomputed_market": {"candidate": current_phase, "state": current_phase, "details": {}},
                         "previous_indicators": previous_indicators,
-                    }, {
+                    }
+                    portfolio_context = {
                         "nav": nav, "available_cash": cash,
                         "available_capital": max(0.0, budget), "order_budget": max(0.0, budget),
                         "open_positions": open_positions,
@@ -1656,18 +1790,39 @@ class BacktestEngine:
                             "high_profit_protection_done": position.high_done,
                             "managed_by_app": True, "managed_by_bot": True,
                         } if position else {}),
-                    })
+                    }
+                    decision = rule.evaluate(rule_context, portfolio_context)
+                    next_filters = {}
+                    if params.buy_window_enabled or params.buy_confirmation_enabled:
+                        next_filters, decision = apply_buy_filters(
+                            rule, decision, rule_context, portfolio_context,
+                            buy_confirmations.get(symbol), observed_at=now,
+                            exchange=symbol_exchanges[symbol], working_dates=settlement_calendar,
+                        )
+                    if next_filters:
+                        buy_confirmations[symbol] = next_filters
+                    else:
+                        buy_confirmations.pop(symbol, None)
                     last_decisions[symbol] = decision.action
                     details = dict(decision.details or {}) if isinstance(decision.details, dict) else {}
                     signal_value = str(getattr(decision, "signal", "") or "")
-                    signature = (decision.action, decision.event, decision.reason)
+                    confirmation_values = details.get("buy_confirmation") or {}
+                    window_values = details.get("buy_window") or {}
+                    signature = (
+                        decision.action, decision.event, decision.reason,
+                        str(int(float(confirmation_values.get("minutes_held", 0) or 0))),
+                        str(bool(confirmation_values.get("ema_ok", False))),
+                        str(bool(confirmation_values.get("rsi_ok", False))),
+                        str(window_values.get("state", "")),
+                    )
                     dedupe_key = (symbol, day)
                     if (
                         (settings.export_signals or decision.action != "WAIT" or signal_value in {"BUY", "SELL"})
                         and signal_dedupe.get(dedupe_key) != signature
                     ):
                         signal_history.append({
-                            "date": day, "time": iso_time(stamp), "signal_time": iso_time(stamp),
+                            "date": day, "time": iso_time(stamp),
+                            "signal_time": str(window_values.get("signal_time") or confirmation_values.get("signal_time") or iso_time(stamp)),
                             "decision_time": iso_time(stamp), "fill_time": "",
                             "symbol": symbol, "action": decision.action,
                             "signal": signal_value, "event": decision.event, "reason": decision.reason,
@@ -1733,7 +1888,8 @@ class BacktestEngine:
                 cash=cash, positions=positions, cycle_numbers=cycle_numbers,
                 pending=pending, loss_streaks=loss_streaks,
                 loss_locked_until=loss_locked_until, capital_ledgers=capital_ledgers,
-                last_decisions=last_decisions, last_processed_date=last_day,
+                last_decisions=last_decisions, buy_confirmations=buy_confirmations,
+                last_processed_date=last_day,
             )
         open_trades = [
             BacktestTrade(
@@ -1772,6 +1928,7 @@ class BacktestEngine:
         coverage = {
             symbol: {
                 day: {
+                    "exchange": symbol_exchanges[symbol],
                     "source_resolution": source_resolution[symbol].get(day, ""),
                     "data_quality": source_quality[symbol].get(day, "MISSING"),
                 } for day in calendar if day in rows_by_symbol.get(symbol, {})
@@ -1803,6 +1960,8 @@ class BacktestEngine:
                 "simulation_mode": settings.simulation_mode,
                 "signal_resolution": "1D_REALTIME",
                 "source_coverage": coverage,
+                "indicator_warmup_source": warmup_sources,
+                "symbol_exchanges": symbol_exchanges,
                 "fallback_count": len(fallback_days),
                 "order_timing": "signal after source close; fill at next eligible source open",
             },

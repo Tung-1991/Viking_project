@@ -56,6 +56,8 @@ class BacktestConfig:
     simulation_mode: str = "DAILY"
     export_signals: bool = False
     run_name: str = ""
+    # Persisted with the run so exchange-specific execution is reproducible.
+    symbol_exchanges: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.symbols = list(dict.fromkeys(str(x).strip().upper() for x in self.symbols if str(x).strip()))
@@ -85,12 +87,19 @@ class BacktestConfig:
         self.rule_parameters = dict(self.rule_parameters or {})
         self.warmup_sessions = max(220, int(self.warmup_sessions or 250))
         self.execution_resolution = str(self.execution_resolution or "AUTO").upper()
-        if self.execution_resolution not in {"AUTO", "1", "3", "5", "15", "30", "1H", "1D"}:
+        if self.execution_resolution not in {"AUTO", "1", "2", "3", "5", "15", "30", "1H", "1D"}:
             self.execution_resolution = "AUTO"
         self.simulation_mode = str(self.simulation_mode or "DAILY").strip().upper().replace(" ", "_")
         if self.simulation_mode not in SIMULATION_MODES:
             self.simulation_mode = "DAILY"
         self.export_signals = bool(self.export_signals)
+        aliases = {"HOSE": "HOSE", "HSX": "HOSE", "STO": "HOSE",
+                   "HNX": "HNX", "STX": "HNX", "UPCOM": "UPCOM", "UPX": "UPCOM"}
+        self.symbol_exchanges = {
+            str(symbol).strip().upper(): aliases[str(exchange).strip().upper()]
+            for symbol, exchange in (self.symbol_exchanges or {}).items()
+            if str(symbol).strip() and str(exchange).strip().upper() in aliases
+        }
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -155,9 +164,9 @@ class BacktestSettings:
         # a complete set, otherwise every reader has to guess its own fallback.
         from ..rules.business import StaticRuleParameters
 
-        defaults = asdict(StaticRuleParameters())
-        defaults.update(self.rule_parameters or {})
-        self.rule_parameters = defaults
+        self.rule_parameters = StaticRuleParameters.from_dict(
+            self.rule_parameters
+        ).to_dict()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
