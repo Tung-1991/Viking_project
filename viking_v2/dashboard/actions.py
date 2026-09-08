@@ -1512,6 +1512,7 @@ class DashboardActionsMixin:
         high_share = float(params.get("high_sell_pct", 33.0) or 33.0)
         normal_arm = float(params.get("normal_arm_pct", 7.0) or 7.0)
         normal_giveback = float(params.get("normal_giveback_pct", 3.0) or 3.0)
+        normal_policy = str(params.get("normal_policy", "CLASSIC") or "CLASSIC").upper()
         high_arm = float(params.get("high_profit_arm_pct", 20.0) or 20.0)
         high_drop = float(params.get("high_profit_close_drop_pct", 5.0) or 5.0)
 
@@ -1632,7 +1633,7 @@ class DashboardActionsMixin:
         details.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="position_details")
         detail_values = (
             ("TP", f"Lãi chạm +{take_profit:g}% · bán sạch vị thế"),
-            ("NORMAL", f"Bật +{normal_arm:g}% · lùi {normal_giveback:g} điểm % · bán {normal_share:g}%"),
+            ("NORMAL", f"{normal_policy} · bật +{normal_arm:g}% · trailing {normal_giveback:g} · bán {normal_share:g}%"),
             ("HIGH", f"Bật +{high_arm:g}% · Close giảm {high_drop:g}% · bán {high_share:g}%"),
             ("EXIT SELL", "Tín hiệu SELL · bán hết phần còn lại"),
         )
@@ -1902,6 +1903,8 @@ class DashboardActionsMixin:
                     decision.details["telegram_signal_id"] = str(
                         telegram_record.get("id", "")
                     )
+                if decision.reason == "NORMAL_ALERT":
+                    self._show_normal_alert(decision)
                 if decision.action == "WAIT":
                     continue
                 if decision.action == "BUY" and not bot_enabled:
@@ -1927,7 +1930,12 @@ class DashboardActionsMixin:
                     allow_ato=self.settings.allow_ato and self._symbol_exchange(symbol) == "HOSE",
                     allow_atc=self.settings.allow_atc and self._symbol_exchange(symbol) != "UPCOM",
                     bot_em_modes=self.settings.bot_em_modes,
-                    sell_wait_policy=self.settings.sell_wait_policy,
+                    # An operator-confirmed ALERT sell is a sticky instruction;
+                    # it must not be cancelled by a later T+ recheck.
+                    sell_wait_policy=(
+                        "KEEP" if decision.event == "NORMAL_ALERT_EXIT"
+                        else self.settings.sell_wait_policy
+                    ),
                 )
                 if result.intent:
                     self._log(
@@ -1937,6 +1945,84 @@ class DashboardActionsMixin:
                     )
             except Exception as exc:
                 self._log(f"[RULE] Không tạo được intent {symbol}: {exc}", "bot")
+
+    def _show_normal_alert(self, decision: StrategyDecision) -> None:
+        """Keep one actionable NORMAL alert open until the operator decides."""
+        details = decision.details if isinstance(decision.details, dict) else {}
+        trade_id = str(details.get("trade_id", "") or "")
+        symbol = str(decision.symbol or "").upper()
+        if not symbol or not trade_id:
+            return
+        key = f"{symbol}|{trade_id}"
+        dialogs = getattr(self, "_normal_alert_dialogs", None)
+        if not isinstance(dialogs, dict):
+            dialogs = self._normal_alert_dialogs = {}
+        existing = dialogs.get(key)
+        try:
+            if existing is not None and existing.winfo_exists():
+                return
+        except Exception:
+            dialogs.pop(key, None)
+
+        arm = float(details.get("normal_arm_pct", 0.0) or 0.0)
+        if arm <= 0:
+            arm = float((self.settings.rule_parameters or {}).get("normal_arm_pct", 7.0) or 7.0)
+        peak = float(details.get("peak_profit_pct", 0.0) or 0.0)
+        current = float(details.get("current_profit_pct", 0.0) or 0.0)
+        share = float(details.get("sell_share_pct", 33.0) or 33.0)
+
+        top = ctk.CTkToplevel(self)
+        dialogs[key] = top
+        top.title("NORMAL · CẦN QUYẾT ĐỊNH")
+        top.geometry("520x285")
+        top.resizable(False, False)
+        top.transient(self)
+        top.attributes("-topmost", True)
+        top.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            top, text=f"{symbol} · NORMAL ĐÃ ĐẠT +{arm:g}%",
+            font=("Segoe UI", 18, "bold"), text_color=COL_WARN,
+        ).grid(row=0, column=0, sticky="w", padx=22, pady=(20, 8))
+        ctk.CTkLabel(
+            top,
+            text=f"Hiện tại {current:+.2f}%   ·   MFE {peak:+.2f}%\n"
+                 "Cảnh báo được giữ cho tới khi Ngài chọn một hành động.",
+            font=("Segoe UI", 14), text_color=COL_TEXT, justify="left",
+        ).grid(row=1, column=0, sticky="w", padx=22, pady=(2, 18))
+
+        def finish(action: str) -> None:
+            updated = self.rule_state.resolve_normal_alert(symbol, trade_id, action)
+            if not updated:
+                return
+            self._log(
+                f"[NORMAL] {symbol} #{trade_id[:8]}: "
+                + ("GIỮ TIẾP" if action == "CONTINUE" else f"BÁN {share:g}%"),
+                "bot",
+            )
+            dialogs.pop(key, None)
+            top.destroy()
+
+        actions = ctk.CTkFrame(top, fg_color="transparent")
+        actions.grid(row=2, column=0, sticky="ew", padx=22, pady=(8, 20))
+        actions.grid_columnconfigure((0, 1), weight=1, uniform="normal_alert")
+        ctk.CTkButton(
+            actions, text="GIỮ TIẾP", height=44, font=("Segoe UI", 13, "bold"),
+            fg_color="#3A3F47", hover_color="#2B6CB0",
+            command=lambda: finish("CONTINUE"),
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        ctk.CTkButton(
+            actions, text=f"BÁN {share:g}%", height=44, font=("Segoe UI", 13, "bold"),
+            fg_color=COL_RED, hover_color="#B91C1C",
+            command=lambda: finish("SELL"),
+        ).grid(row=0, column=1, sticky="ew", padx=(6, 0))
+
+        # Closing the window is not an acknowledgement. It is hidden briefly
+        # and the next persistent daemon decision will surface it again.
+        def hide_only() -> None:
+            dialogs.pop(key, None)
+            top.destroy()
+
+        top.protocol("WM_DELETE_WINDOW", hide_only)
 
     def _latest_sell_decision(self, symbol: str, execution_mode: str) -> dict[str, Any] | None:
         runtime = self.bridge.read_config()

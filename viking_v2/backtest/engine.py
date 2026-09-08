@@ -11,6 +11,7 @@ from ..rules.business import (
     StaticRuleParameters,
     classify_market_state,
     indicator_snapshot,
+    normal_auto_stop_profit,
 )
 from ..rules.entry_filters import apply_buy_filters
 from ..trading.portfolio import (
@@ -91,6 +92,10 @@ class _Position:
     peak_profit_pct: float = 0.0
     highest_close: float = 0.0
     normal_done: bool = False
+    normal_armed: bool = False
+    normal_arm_time: str = ""
+    mfe_after_arm_pct: float = 0.0
+    normal_protected_profit_pct: float = 0.0
     high_done: bool = False
     sold_quantity: int = 0
     exit_value: float = 0.0
@@ -186,6 +191,148 @@ def _normal_trail_fill(
         if high > 0:
             peak = max(peak, (high / entry_price - 1.0) * 100.0)
     return 0.0, peak
+
+
+@dataclass(slots=True)
+class _NormalObservation:
+    fill: float
+    peak_profit_pct: float
+    armed: bool
+    armed_at: int
+    mfe_after_arm_pct: float
+    protected_profit_pct: float
+
+
+def _normal_policy_fill(
+    bars: list[dict[str, Any]],
+    *,
+    policy: str,
+    entry_price: float,
+    peak_profit_pct: float,
+    already_armed: bool,
+    mfe_after_arm_pct: float,
+    arm_pct: float,
+    giveback_pct: float,
+) -> _NormalObservation:
+    """Observe one or more bars using deterministic NORMAL semantics.
+
+    CLASSIC delegates to the original calculation unchanged. AUTO checks the
+    stop carried from a previous observation before accepting the current
+    bar's high, so one OHLC bar can arm or raise the stop but cannot also hit
+    that newly-created level. ALERT records MFE and never creates a fill.
+    """
+    policy = str(policy or "CLASSIC").upper()
+    peak = float(peak_profit_pct or 0.0)
+    armed = bool(already_armed or peak >= arm_pct)
+    armed_at = 0
+    mfe = max(float(mfe_after_arm_pct or 0.0), peak if armed else 0.0)
+    if policy == "TSL":
+        policy = "AUTO"
+    protected = normal_auto_stop_profit(peak, arm_pct, giveback_pct) if armed else 0.0
+    if entry_price <= 0:
+        return _NormalObservation(0.0, peak, armed, 0, mfe, protected)
+
+    if policy == "CLASSIC":
+        fill, updated_peak = _normal_trail_fill(
+            bars, entry_price=entry_price, peak_profit_pct=peak,
+            arm_pct=arm_pct, giveback_pct=giveback_pct,
+        )
+        if not armed and updated_peak >= arm_pct:
+            armed = True
+            for bar in bars:
+                high = float(bar.get("high", 0.0) or 0.0)
+                if high > 0 and (high / entry_price - 1.0) * 100.0 >= arm_pct:
+                    armed_at = int(bar.get("time", 0) or 0)
+                    break
+        mfe = max(mfe, updated_peak if armed else 0.0)
+        protected = (
+            (1.0 + updated_peak / 100.0) * (1.0 - giveback_pct / 100.0) * 100.0 - 100.0
+            if armed else 0.0
+        )
+        return _NormalObservation(fill, updated_peak, armed, armed_at, mfe, protected)
+
+    for bar in bars:
+        opened = float(bar.get("open", 0.0) or 0.0)
+        low = float(bar.get("low", 0.0) or 0.0)
+        if policy == "AUTO" and armed:
+            protected = normal_auto_stop_profit(peak, arm_pct, giveback_pct)
+            stop_price = entry_price * (1.0 + protected / 100.0)
+            if 0 < opened <= stop_price:
+                return _NormalObservation(opened, peak, armed, armed_at, mfe, protected)
+            if 0 < low <= stop_price:
+                return _NormalObservation(stop_price, peak, armed, armed_at, mfe, protected)
+
+        high = float(bar.get("high", 0.0) or 0.0)
+        if high > 0:
+            peak = max(peak, (high / entry_price - 1.0) * 100.0)
+        if not armed and peak >= arm_pct:
+            armed = True
+            armed_at = int(bar.get("time", 0) or 0)
+        if armed:
+            mfe = max(mfe, peak)
+            protected = normal_auto_stop_profit(peak, arm_pct, giveback_pct)
+    return _NormalObservation(0.0, peak, armed, armed_at, mfe, protected)
+
+
+def _normal_trade_metrics(
+    position: _Position,
+    params: StaticRuleParameters,
+    profit_pct: float,
+) -> dict[str, Any]:
+    armed = bool(position.normal_armed)
+    mfe = float(position.mfe_after_arm_pct or 0.0)
+    return {
+        "normal_policy": params.normal_policy,
+        "normal_arm_time": position.normal_arm_time,
+        "normal_arm_price": (
+            position.avg_price * (1.0 + params.normal_arm_pct / 100.0) if armed else 0.0
+        ),
+        "mfe_after_arm_pct": mfe,
+        "mfe_extra_pct": max(0.0, mfe - params.normal_arm_pct) if armed else 0.0,
+        "exit_profit_pct": float(profit_pct),
+        "profit_giveback_pct": max(0.0, mfe - float(profit_pct)) if armed else 0.0,
+        "exit_mode": "+".join(position.exit_events),
+    }
+
+
+def _record_normal_telemetry(
+    position: _Position,
+    params: StaticRuleParameters,
+    observed_at: str,
+) -> None:
+    """Record +arm/MFE for every exit case without enabling NORMAL."""
+    if position.peak_profit_pct + 1e-9 < params.normal_arm_pct:
+        return
+    if not position.normal_armed:
+        position.normal_armed = True
+        position.normal_arm_time = observed_at
+    position.mfe_after_arm_pct = max(
+        position.mfe_after_arm_pct, position.peak_profit_pct,
+    )
+
+
+def exit_comparison_variants(
+    scenario: BacktestScenario,
+    rule_parameters: dict[str, Any],
+) -> list[tuple[BacktestScenario, dict[str, Any]]]:
+    """Build the two approved NORMAL cases from one entry scenario."""
+    base = StaticRuleParameters.from_dict(rule_parameters)
+    specs = (
+        ("E + NORMAL AUTO", ["NORMAL", "IND_EXIT"], "AUTO"),
+        ("E + NORMAL ALERT", ["NORMAL", "IND_EXIT"], "ALERT"),
+    )
+    variants: list[tuple[BacktestScenario, dict[str, Any]]] = []
+    for label, modes, policy in specs:
+        scenario_values = scenario.to_dict()
+        scenario_values.update(
+            id=f"{scenario.id}-{policy}-{label}",
+            name=f"{scenario.name} · {label}",
+            em_modes=modes,
+        )
+        params = base.to_dict()
+        params["normal_policy"] = policy
+        variants.append((BacktestScenario.from_dict(scenario_values), params))
+    return variants
 
 
 class BacktestEngine:
@@ -533,6 +680,10 @@ class BacktestEngine:
             if position.quantity <= 0:
                 avg_exit = position.exit_value / max(1, position.sold_quantity) / 1000.0
                 outcome = "WIN" if position.net_pnl >= 0 else "LOSS"
+                final_profit_pct = (
+                    position.net_pnl / position.entry_value * 100.0
+                    if position.entry_value > 0 else 0.0
+                )
                 completed.append(BacktestTrade(
                     trade_id=position.trade_id,
                     symbol=position.symbol,
@@ -557,7 +708,7 @@ class BacktestEngine:
                     entry_value=position.entry_value,
                     sl_pct=position.sl_pct,
                     peak_profit_pct=position.peak_profit_pct,
-                    pnl_pct=(position.net_pnl / position.entry_value * 100.0) if position.entry_value > 0 else 0.0,
+                    pnl_pct=final_profit_pct,
                     equity_after=equity_after,
                     entry_ema_fast=position.entry_ema_fast,
                     entry_ema_slow=position.entry_ema_slow,
@@ -566,6 +717,7 @@ class BacktestEngine:
                     exit_ema_slow=position.exit_ema_slow,
                     exit_rsi=position.exit_rsi,
                     exit_fills=list(position.exit_fills),
+                    **_normal_trade_metrics(position, params, final_profit_pct),
                 ))
                 if outcome == "WIN":
                     loss_streaks[position.symbol] = 0
@@ -771,6 +923,11 @@ class BacktestEngine:
                     target = position.avg_price * (1.0 + params.take_profit_pct / 100.0)
                     fill = target_fill_price(symbol, day, target)
                     if fill > 0:
+                        position.peak_profit_pct = max(
+                            position.peak_profit_pct,
+                            (fill / position.avg_price - 1.0) * 100.0,
+                        )
+                        _record_normal_telemetry(position, params, day)
                         details = {
                             "indicators": indicator_snapshot(
                                 history[symbol],
@@ -793,24 +950,52 @@ class BacktestEngine:
                                 reason="TAKE_PROFIT", details=details,
                             )
                         continue
-                if (
-                    execution_resolution.get(symbol) != "1D"
-                    and "NORMAL" in position.em_modes
-                    and not position.normal_done
-                ):
-                    normal_fill, peak = _normal_trail_fill(
-                        execution_day(symbol, day),
-                        entry_price=position.avg_price,
-                        peak_profit_pct=position.peak_profit_pct,
-                        arm_pct=params.normal_arm_pct,
-                        giveback_pct=params.normal_giveback_pct,
-                    )
-                    position.peak_profit_pct = max(position.peak_profit_pct, peak)
+                if "NORMAL" in position.em_modes and not position.normal_done:
+                    intraday = execution_resolution.get(symbol) != "1D"
+                    # Preserve CLASSIC's historical intraday-only behaviour.
+                    # AUTO/ALERT may use daily OHLC because their ordering is
+                    # explicitly conservative: a newly armed stop cannot fill
+                    # until a later observation.
+                    if intraday or params.normal_policy != "CLASSIC":
+                        normal_bars = execution_day(symbol, day) if intraday else [row]
+                        observation = _normal_policy_fill(
+                            normal_bars,
+                            policy=params.normal_policy,
+                            entry_price=position.avg_price,
+                            peak_profit_pct=position.peak_profit_pct,
+                            already_armed=position.normal_armed,
+                            mfe_after_arm_pct=position.mfe_after_arm_pct,
+                            arm_pct=params.normal_arm_pct,
+                            giveback_pct=params.normal_giveback_pct,
+                        )
+                        was_armed = position.normal_armed
+                        position.normal_armed = observation.armed
+                        position.peak_profit_pct = max(
+                            position.peak_profit_pct, observation.peak_profit_pct,
+                        )
+                        position.mfe_after_arm_pct = max(
+                            position.mfe_after_arm_pct, observation.mfe_after_arm_pct,
+                        )
+                        position.normal_protected_profit_pct = observation.protected_profit_pct
+                        if observation.armed and not was_armed and not position.normal_arm_time:
+                            position.normal_arm_time = day
+                            if observation.armed_at:
+                                position.normal_arm_time = datetime.fromtimestamp(
+                                    observation.armed_at, VN_TZ,
+                                ).isoformat()
+                        normal_fill = observation.fill
+                    else:
+                        normal_fill = 0.0
                     if normal_fill > 0:
                         details = {
                             "triggered_events": ["NORMAL_PROTECTION"],
-                            "peak_profit_pct": peak,
+                            "normal_policy": params.normal_policy,
+                            "normal_arm_time": position.normal_arm_time,
+                            "mfe_after_arm_pct": position.mfe_after_arm_pct,
+                            "normal_protected_profit_pct": position.normal_protected_profit_pct,
+                            "peak_profit_pct": position.peak_profit_pct,
                             "execution_resolution": execution_resolution.get(symbol),
+                            "sticky_exit": params.normal_policy == "AUTO",
                         }
                         share = min(1.0, max(0.0, params.normal_sell_pct / 100.0))
                         if day > position.settle_date:
@@ -849,6 +1034,7 @@ class BacktestEngine:
                     close = float(row.get("close", 0.0) or 0.0)
                     if position.avg_price > 0:
                         position.peak_profit_pct = max(position.peak_profit_pct, (high / position.avg_price - 1.0) * 100.0)
+                        _record_normal_telemetry(position, params, day)
                     position.highest_close = max(position.highest_close, close)
                 locked = False
                 until = loss_locked_until.get(symbol)
@@ -883,6 +1069,7 @@ class BacktestEngine:
                         "is_reentry": position.is_reentry,
                         "em_modes": position.em_modes,
                         "normal_protection_done": position.normal_done,
+                        "normal_execution_managed": True,
                         "high_profit_protection_done": position.high_done,
                         "managed_by_app": True,
                         "managed_by_bot": True,
@@ -918,7 +1105,11 @@ class BacktestEngine:
                     })
 
                 existing = pending.get(symbol)
-                if existing and existing.side == "SELL" and existing.settlement_waited and settings.sell_wait_policy == "RECHECK":
+                if (
+                    existing and existing.side == "SELL" and existing.settlement_waited
+                    and settings.sell_wait_policy == "RECHECK"
+                    and not bool(existing.details.get("sticky_exit"))
+                ):
                     if decision.action != "SELL":
                         pending.pop(symbol, None)
                         existing = None
@@ -993,9 +1184,23 @@ class BacktestEngine:
                 entry_value=position.entry_value,
                 sl_pct=position.sl_pct,
                 peak_profit_pct=position.peak_profit_pct,
+                pnl_pct=(
+                    position.net_pnl
+                    + (latest_price(position.symbol, last_day) - position.avg_price)
+                    * position.quantity * 1000.0
+                ) / position.entry_value * 100.0 if position.entry_value else 0.0,
                 entry_ema_fast=position.entry_ema_fast,
                 entry_ema_slow=position.entry_ema_slow,
                 entry_rsi=position.entry_rsi,
+                **_normal_trade_metrics(
+                    position,
+                    params,
+                    (
+                        position.net_pnl
+                        + (latest_price(position.symbol, last_day) - position.avg_price)
+                        * position.quantity * 1000.0
+                    ) / position.entry_value * 100.0 if position.entry_value else 0.0,
+                ),
             )
             for position in positions.values()
         ]
@@ -1341,6 +1546,10 @@ class BacktestEngine:
             avg_exit = position.exit_value / max(1, position.sold_quantity) / 1000.0
             outcome = "WIN" if position.net_pnl >= 0 else "LOSS"
             equity_after = portfolio_value()[0]
+            final_profit_pct = (
+                position.net_pnl / position.entry_value * 100.0
+                if position.entry_value else 0.0
+            )
             completed.append(BacktestTrade(
                 trade_id=position.trade_id, symbol=position.symbol,
                 opened_date=position.opened_date, closed_date=day,
@@ -1356,13 +1565,14 @@ class BacktestEngine:
                 sessions_held=max(0, calendar_index.get(day, 0) - calendar_index.get(position.opened_date, 0)),
                 entry_value=position.entry_value, sl_pct=position.sl_pct,
                 peak_profit_pct=position.peak_profit_pct,
-                pnl_pct=(position.net_pnl / position.entry_value * 100.0) if position.entry_value else 0.0,
+                pnl_pct=final_profit_pct,
                 equity_after=equity_after,
                 entry_ema_fast=position.entry_ema_fast,
                 entry_ema_slow=position.entry_ema_slow, entry_rsi=position.entry_rsi,
                 exit_ema_fast=position.exit_ema_fast,
                 exit_ema_slow=position.exit_ema_slow, exit_rsi=position.exit_rsi,
                 exit_fills=list(position.exit_fills),
+                **_normal_trade_metrics(position, params, final_profit_pct),
             ))
             if outcome == "WIN":
                 loss_streaks[position.symbol] = 0
@@ -1528,6 +1738,7 @@ class BacktestEngine:
                 return
             if (
                 order.settlement_waited and settings.sell_wait_policy == "RECHECK"
+                and not bool(order.details.get("sticky_exit"))
                 and last_decisions.get(symbol) != "SELL"
             ):
                 pending.pop(symbol, None)
@@ -1686,6 +1897,11 @@ class BacktestEngine:
                         ):
                             target = position.avg_price * (1.0 + params.take_profit_pct / 100.0)
                             fill = opened if opened > target else target
+                            position.peak_profit_pct = max(
+                                position.peak_profit_pct,
+                                (fill / position.avg_price - 1.0) * 100.0,
+                            )
+                            _record_normal_telemetry(position, params, iso_time(stamp))
                             details.update(take_profit_pct=params.take_profit_pct, target_price=target)
                             if stock_is_sellable_after_settlement(
                                 position.settle_date, datetime.fromtimestamp(stamp, VN_TZ),
@@ -1705,20 +1921,45 @@ class BacktestEngine:
                                 )
                             position = positions.get(symbol)
                         elif (
-                            position and not bar.get("_fallback")
+                            position
+                            and (not bar.get("_fallback") or params.normal_policy != "CLASSIC")
                             and "NORMAL" in position.em_modes and not position.normal_done
                         ):
-                            fill, peak = _normal_trail_fill(
-                                [bar], entry_price=position.avg_price,
+                            observation = _normal_policy_fill(
+                                [bar], policy=params.normal_policy,
+                                entry_price=position.avg_price,
                                 peak_profit_pct=position.peak_profit_pct,
+                                already_armed=position.normal_armed,
+                                mfe_after_arm_pct=position.mfe_after_arm_pct,
                                 arm_pct=params.normal_arm_pct,
                                 giveback_pct=params.normal_giveback_pct,
                             )
-                            position.peak_profit_pct = max(position.peak_profit_pct, peak)
+                            was_armed = position.normal_armed
+                            position.normal_armed = observation.armed
+                            position.peak_profit_pct = max(
+                                position.peak_profit_pct, observation.peak_profit_pct,
+                            )
+                            position.mfe_after_arm_pct = max(
+                                position.mfe_after_arm_pct, observation.mfe_after_arm_pct,
+                            )
+                            position.normal_protected_profit_pct = observation.protected_profit_pct
+                            if observation.armed and not was_armed and not position.normal_arm_time:
+                                position.normal_arm_time = iso_time(
+                                    observation.armed_at or stamp,
+                                )
+                            fill = observation.fill
                             if fill > 0:
                                 share = min(1.0, max(0.0, params.normal_sell_pct / 100.0))
                                 quantity = sell_quantity_for_fraction(position.quantity, share)
-                                details.update(triggered_events=["NORMAL_PROTECTION"], peak_profit_pct=peak)
+                                details.update(
+                                    triggered_events=["NORMAL_PROTECTION"],
+                                    normal_policy=params.normal_policy,
+                                    normal_arm_time=position.normal_arm_time,
+                                    mfe_after_arm_pct=position.mfe_after_arm_pct,
+                                    normal_protected_profit_pct=position.normal_protected_profit_pct,
+                                    peak_profit_pct=position.peak_profit_pct,
+                                    sticky_exit=params.normal_policy == "AUTO",
+                                )
                                 if quantity > 0 and stock_is_sellable_after_settlement(
                                     position.settle_date, datetime.fromtimestamp(stamp, VN_TZ),
                                 ):
@@ -1739,6 +1980,9 @@ class BacktestEngine:
                             position.peak_profit_pct = max(
                                 position.peak_profit_pct,
                                 (float(bar.get("high", 0.0) or 0.0) / position.avg_price - 1.0) * 100.0,
+                            )
+                            _record_normal_telemetry(
+                                position, params, iso_time(stamp),
                             )
 
                     # A real fill already consumed this bar. Do not use the
@@ -1787,6 +2031,7 @@ class BacktestEngine:
                             "highest_close": position.highest_close,
                             "is_reentry": position.is_reentry, "em_modes": position.em_modes,
                             "normal_protection_done": position.normal_done,
+                            "normal_execution_managed": True,
                             "high_profit_protection_done": position.high_done,
                             "managed_by_app": True, "managed_by_bot": True,
                         } if position else {}),
@@ -1906,6 +2151,11 @@ class BacktestEngine:
                 sessions_held=max(0, len(calendar) - 1 - calendar_index.get(position.opened_date, 0)),
                 entry_value=position.entry_value, sl_pct=position.sl_pct,
                 peak_profit_pct=position.peak_profit_pct,
+                pnl_pct=(
+                    position.net_pnl
+                    + (marks.get(position.symbol, position.avg_price) - position.avg_price)
+                    * position.quantity * 1000.0
+                ) / position.entry_value * 100.0 if position.entry_value else 0.0,
                 entry_ema_fast=position.entry_ema_fast,
                 entry_ema_slow=position.entry_ema_slow, entry_rsi=position.entry_rsi,
                 exit_ema_fast=position.exit_ema_fast,
@@ -1913,6 +2163,15 @@ class BacktestEngine:
                 exit_fills=list(position.exit_fills),
                 avg_exit_price=(position.exit_value / (position.sold_quantity * 1000.0)
                                 if position.sold_quantity else 0.0),
+                **_normal_trade_metrics(
+                    position,
+                    params,
+                    (
+                        position.net_pnl
+                        + (marks.get(position.symbol, position.avg_price) - position.avg_price)
+                        * position.quantity * 1000.0
+                    ) / position.entry_value * 100.0 if position.entry_value else 0.0,
+                ),
             ) for position in positions.values()
         ]
         peak = max_drawdown = 0.0

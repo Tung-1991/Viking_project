@@ -225,7 +225,7 @@ class InfoPopup:
             ("LOSS LOCK", loss_lock, PALETTE["WARN"]),
             ("MIN LOT", "100 CP" if p.force_min_lot_enabled else "OFF", PALETTE["TEXT"]),
             ("TP", f"{p.take_profit_pct:g}%", PALETTE["GREEN"]),
-            ("NORMAL", f"+{p.normal_arm_pct:g}% / -{p.normal_giveback_pct:g}% · BÁN {p.normal_sell_pct:g}%", PALETTE["TEXT"]),
+            ("NORMAL", f"{p.normal_policy} · +{p.normal_arm_pct:g}% / -{p.normal_giveback_pct:g}% · BÁN {p.normal_sell_pct:g}%", PALETTE["TEXT"]),
             ("HIGH", f"+{p.high_profit_arm_pct:g}% / -{p.high_profit_close_drawdown_pct:g}% · BÁN {p.high_sell_pct:g}%", PALETTE["TEXT"]),
             ("EM BẬT", self._em_name(em_modes), PALETTE["TEXT"]),
         ])
@@ -241,7 +241,10 @@ class InfoPopup:
         ])
         row = self._shared_rule_sections(
             body, row, p,
-            signal_mode=settings.signal_mode,
+            signal_mode=(
+                f"REALTIME · {settings.realtime_indicator_interval}"
+                if settings.signal_mode == "REALTIME" else "CLOSED"
+            ),
             em_modes=settings.bot_em_modes,
             whipsaw_enabled=p.whipsaw_enabled,
             loss_lock=f"{p.loss_lock_count} LOSS · {p.loss_lock_hours} GIỜ",

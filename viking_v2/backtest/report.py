@@ -17,12 +17,15 @@ _EVENT_NAMES = {
     "NORMAL_PROTECTION": "NORMAL",
     "HIGH_PROFIT_PROTECTION": "HIGH",
     "PRICE_PROTECTION": "NORMAL",
+    "NORMAL_ALERT_EXIT": "NORMAL ALERT",
 }
 
 ROUND_HEADERS = (
     "LẦN CHẠY", "LƯỢT", "MÃ", "VÀO", "GIÁ VÀO", "KHỐI LƯỢNG", "VỐN", "CẮT LỖ",
     "EMA VÀO", "RSI VÀO", "RA", "PHIÊN", "THOÁT BỞI", "EMA RA", "RSI RA",
-    "PHÍ+THUẾ", "LÃI/LỖ", "%", "KẾT QUẢ",
+    "PHÍ+THUẾ", "LÃI/LỖ", "%", "NORMAL POLICY", "ARM LÚC", "GIÁ ARM",
+    "MFE SAU ARM %", "+ TRÊN ARM %", "LN THOÁT %", "TRẢ LẠI %", "EXIT MODE",
+    "KẾT QUẢ",
 )
 
 
@@ -88,6 +91,13 @@ def round_rows(results: list[BacktestResult]) -> list[tuple[Any, ...]]:
                 f"{trade.exit_ema_fast:.2f}/{trade.exit_ema_slow:.2f}" if trade.exit_fills else "—",
                 round(trade.exit_rsi, 1) if trade.exit_fills else "—",
                 round(trade.fees + trade.tax), round(trade.net_pnl), round(trade.pnl_pct, 2),
+                trade.normal_policy, trade.normal_arm_time or "—",
+                round(trade.normal_arm_price, 2) if trade.normal_arm_price else "—",
+                round(trade.mfe_after_arm_pct, 2) if trade.normal_arm_time else "—",
+                round(trade.mfe_extra_pct, 2) if trade.normal_arm_time else "—",
+                round(trade.exit_profit_pct, 2),
+                round(trade.profit_giveback_pct, 2) if trade.normal_arm_time else "—",
+                event_name(trade.exit_mode) or "—",
                 {"WIN": "THẮNG", "LOSS": "LỖ"}.get(trade.outcome, "CÒN MỞ"),
             ))
     return rows
@@ -138,6 +148,7 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
     ))
     line("Tối đa số mã", lambda r: (r.config.rule_parameters or {}).get("max_positions"))
     line("Bảo vệ", lambda r: ", ".join(r.config.em_modes) or "chỉ cắt lỗ")
+    line("NORMAL policy", lambda r: (r.config.rule_parameters or {}).get("normal_policy", "CLASSIC"))
     line("Khóa sau LOSS", lambda r: (
         f"{(r.config.rule_parameters or {}).get('loss_lock_count')} LOSS · {r.config.loss_lock_hours} giờ"
         if r.config.loss_lock_enabled else "OFF"
@@ -162,11 +173,19 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
 
     rows: list[tuple[str, Any]] = [("MỤC", *[short(r.config.run_name or r.run_id) for r in results])]
     if len(results) > 1:
+        independent = all(
+            (result.data_quality or {}).get("comparison") == "INDEPENDENT_EXIT_POLICY"
+            for result in results
+        )
         rows.append((
             "CÁCH ĐỌC",
-            "Các cột nối tiếp nhau trên cùng một tài khoản: vốn cuối của cột trước "
-            "là vốn đầu của cột sau. Lượt còn mở ở cuối mỗi cột được định giá theo "
-            "giá đóng cửa ngày cuối rồi quy về tiền cho cột kế tiếp.",
+            (
+                "Mỗi cột khởi chạy độc lập với cùng vốn đầu; chỉ policy thoát thay đổi."
+                if independent else
+                "Các cột nối tiếp nhau trên cùng một tài khoản: vốn cuối của cột trước "
+                "là vốn đầu của cột sau. Lượt còn mở ở cuối mỗi cột được định giá theo "
+                "giá đóng cửa ngày cuối rồi quy về tiền cho cột kế tiếp."
+            ),
         ))
     rows.extend((title, *values) for title, values in per_run)
 
@@ -204,8 +223,8 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
         ("Cắt lỗ", f"{params.get('initial_sl_pct')}% · vào lại {params.get('reentry_sl_pct')}%"
                    f" · bán sạch · luôn bật"),
         ("Ngưỡng TP", f"{params.get('take_profit_pct')}% · bán sạch nếu tactic TP bật"),
-        ("Ngưỡng Normal", f"lãi từng ≥ {params.get('normal_arm_pct')}% rồi giá giảm"
-                          f" {params.get('normal_giveback_pct')}% khỏi đỉnh · bán"
+        ("Ngưỡng Normal", f"lãi từng ≥ {params.get('normal_arm_pct')}%"
+                          f" · trailing {params.get('normal_giveback_pct')}% · bán"
                           f" {params.get('normal_sell_pct', 33)}% một lần nếu tactic bật"),
         ("Ngưỡng High", f"lãi từng ≥ {params.get('high_profit_arm_pct')}% rồi close giảm"
                         f" {params.get('high_profit_close_drawdown_pct')}% khỏi đỉnh close · bán"

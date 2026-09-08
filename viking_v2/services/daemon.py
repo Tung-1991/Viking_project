@@ -62,6 +62,34 @@ def merge_live_tick(
     return merged
 
 
+def realtime_indicator_bucket(at: datetime, interval: str) -> int:
+    """Return the exchange-aligned minute bucket containing ``at``."""
+    minutes = {"1M": 1, "2M": 2, "5M": 5}.get(str(interval or "").upper(), 0)
+    if minutes <= 0:
+        return 0
+    local = at.astimezone(VN_TZ) if at.tzinfo else at.replace(tzinfo=VN_TZ)
+    return int(local.timestamp()) // (minutes * 60)
+
+
+def indicator_snapshot_at_close(
+    bars: list[dict],
+    close_price: float,
+    params: StaticRuleParameters,
+) -> dict:
+    """Calculate the shared EMA/RSI snapshot with a frozen provisional D1 close."""
+    sampled = [dict(row) for row in bars if isinstance(row, dict)]
+    if sampled and float(close_price or 0.0) > 0:
+        sampled[-1]["close"] = float(close_price)
+    return indicator_snapshot(
+        sampled,
+        params.buy_ema_fast,
+        params.buy_ema_slow,
+        params.rsi_period,
+        sell_fast=params.sell_ema_fast,
+        sell_slow=params.sell_ema_slow,
+    )
+
+
 def run(account_id: str | None = None) -> int:
     bridge = RuntimeBridge(account_id)
     logger = setup_logging(bridge.log_dir, "daemon")
@@ -373,21 +401,48 @@ def run(account_id: str | None = None) -> int:
                             context["confirmed_market_state"] = confirmed_market_state
                             context["market_confirmation"] = market_confirmation
                             candle_key = str((bars[-1] if bars else {}).get("time", "") or "")
+                            current_indicators: dict = {}
                             if settings.signal_mode == "REALTIME" and bars:
-                                current_indicators = indicator_snapshot(
-                                    bars,
-                                    rule.params.buy_ema_fast,
-                                    rule.params.buy_ema_slow,
-                                    rule.params.rsi_period,
-                                    sell_fast=rule.params.sell_ema_fast,
-                                    sell_slow=rule.params.sell_ema_slow,
-                                )
-                                context["previous_indicators"] = rule_state.observe_indicators(
-                                    symbol,
-                                    "PAPER" if runtime.paper_mode else "REAL",
-                                    candle_key,
-                                    current_indicators,
-                                )
+                                stream = "PAPER" if runtime.paper_mode else "REAL"
+                                interval = settings.realtime_indicator_interval
+                                context["indicator_interval"] = interval
+                                if interval == "TICK":
+                                    current_indicators = indicator_snapshot_at_close(
+                                        bars, float(bars[-1].get("close", 0.0) or 0.0), rule.params,
+                                    )
+                                    context["previous_indicators"] = rule_state.observe_indicators(
+                                        symbol, stream, candle_key, current_indicators,
+                                    )
+                                else:
+                                    observed_at = datetime.now(VN_TZ)
+                                    closed_bars = [
+                                        row for row in bars
+                                        if isinstance(row, dict) and bool(row.get("closed", True))
+                                    ]
+                                    baseline = indicator_snapshot_at_close(
+                                        closed_bars,
+                                        float((closed_bars[-1] if closed_bars else {}).get("close", 0.0) or 0.0),
+                                        rule.params,
+                                    )
+                                    observation = rule_state.observe_indicator_bucket(
+                                        symbol,
+                                        stream,
+                                        observed_at.date().isoformat(),
+                                        interval,
+                                        realtime_indicator_bucket(observed_at, interval),
+                                        float(bars[-1].get("close", 0.0) or 0.0),
+                                        baseline,
+                                        lambda frozen_close, source=bars: indicator_snapshot_at_close(
+                                            source, frozen_close, rule.params,
+                                        ),
+                                    )
+                                    current_indicators = dict(observation.get("current") or baseline)
+                                    context["previous_indicators"] = dict(
+                                        observation.get("previous") or current_indicators
+                                    )
+                                    accepted_bucket = int(observation.get("bucket", 0) or 0)
+                                    candle_key = f"{candle_key}|{interval}|{accepted_bucket or 'INIT'}"
+                                context["indicator_snapshot"] = current_indicators
                             exposure = rule.params.exposure.get(confirmed_market_state, 0.0)
                             portfolio = portfolio_builder.build(
                                 symbol,
@@ -411,6 +466,15 @@ def run(account_id: str | None = None) -> int:
                                 )
                             else:
                                 decision = rule.evaluate(context, portfolio)
+                            trade_id = str(portfolio.get("trade_id", "") or "")
+                            if trade_id and decision.reason in {"NORMAL_ARMED", "NORMAL_ALERT"}:
+                                armed = rule_state.arm_normal(
+                                    symbol, trade_id, alert=decision.reason == "NORMAL_ALERT",
+                                )
+                                if decision.reason == "NORMAL_ALERT":
+                                    decision.details["normal_alert_status"] = str(
+                                        armed.get("normal_alert_status", "PENDING") or "PENDING"
+                                    )
                             stream = "PAPER" if runtime.paper_mode else "REAL"
                             next_filters, decision = apply_buy_filters(
                                 rule, decision, context, portfolio,

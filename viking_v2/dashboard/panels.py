@@ -1204,26 +1204,33 @@ class DashboardPanelsMixin:
         params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
         normal_arm = float(params.get("normal_arm_pct", 7.0) or 7.0)
         normal_giveback = float(params.get("normal_giveback_pct", 3.0) or 3.0)
+        normal_policy = str(params.get("normal_policy", "CLASSIC") or "CLASSIC").upper()
+        if normal_policy == "TSL":
+            normal_policy = "AUTO"
         high_arm = float(params.get("high_profit_arm_pct", 20.0) or 20.0)
         high_drawdown = float(params.get("high_profit_close_drawdown_pct", 5.0) or 5.0)
         normal_price = entry_price * (1.0 + normal_arm / 100.0) if entry_price > 0 else 0.0
         high_price = entry_price * (1.0 + high_arm / 100.0) if entry_price > 0 else 0.0
         normal_preview_sell = (
+            normal_price * (1.0 - normal_giveback / 100.0)
+            if normal_policy == "CLASSIC" else
             entry_price * (1.0 + (normal_arm - normal_giveback) / 100.0)
-            if entry_price > 0 else 0.0
-        )
+            if normal_policy == "AUTO" else normal_price
+        ) if entry_price > 0 else 0.0
         high_preview_sell = (
             high_price * (1.0 - high_drawdown / 100.0)
             if high_price > 0 else 0.0
         )
         self.preview_normal_value.configure(
             text=(
+                f"CẢNH BÁO TỪ {_display_price(normal_price)}"
+                if normal_policy == "ALERT" and normal_price > 0 else
                 f"{_display_price(normal_price)} → {_display_price(normal_preview_sell)}"
                 if normal_price > 0 else "CHƯA CÓ GIÁ"
             ),
         )
         self.preview_normal_detail.configure(
-            text=f"+{normal_arm:g}/-{normal_giveback:g} · BÁN {float(params.get('normal_sell_pct', 33) or 33):g}%")
+            text=f"{normal_policy} · +{normal_arm:g}/-{normal_giveback:g} · BÁN {float(params.get('normal_sell_pct', 33) or 33):g}%")
         self.preview_high_value.configure(
             text=(
                 f"{_display_price(high_price)} → {_display_price(high_preview_sell)}"
@@ -1269,8 +1276,15 @@ class DashboardPanelsMixin:
         position_quantity = max(0, int(decision_details.get("position_quantity", 0) or 0))
         self._render_exit_sell_preview(signal, exit_enabled, position_quantity)
         if current_profit is not None and self._em_states.get("normal_protection", False):
+            protected = decision_details.get("normal_protected_profit_pct")
             self.preview_normal_value.configure(
-                text=f"PNL {_number(current_profit):+.1f}% · PEAK -{normal_giveback:g}Đ · BÁN {float(params.get('normal_sell_pct', 33) or 33):g}%"
+                text=(
+                    f"PNL {_number(current_profit):+.1f}% · CẢNH BÁO DAI DẲNG"
+                    if normal_policy == "ALERT" else
+                    f"PNL {_number(current_profit):+.1f}% · STOP {_number(protected):+.1f}%"
+                    if normal_policy == "AUTO" and protected is not None else
+                    f"PNL {_number(current_profit):+.1f}% · PEAK -{normal_giveback:g}%"
+                )
             )
         if peak_profit is not None and self._em_states.get("high_profit_protection", False):
             self.preview_high_value.configure(
@@ -1478,6 +1492,9 @@ class DashboardPanelsMixin:
             "INDICATOR_EXIT": "KÍCH HOẠT EXIT SELL",
             "PRICE_PROTECTION": "KÍCH HOẠT BẢO VỆ GIÁ",
             "NORMAL_PROTECTION": "NORMAL",
+            "NORMAL_ARMED": "NORMAL AUTO ĐÃ ARM",
+            "NORMAL_ALERT": "NORMAL CHỜ QUYẾT ĐỊNH",
+            "NORMAL_ALERT_EXIT": "NORMAL ALERT · BÁN",
             "HIGH_PROFIT_PROTECTION": "HIGH",
             "BUY_CONFIRMATION_WAIT": "CHỜ XÁC NHẬN BUY",
             "BUY_WINDOW_WAIT": "CHỜ KHUNG GIỜ MUA",

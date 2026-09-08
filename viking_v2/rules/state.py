@@ -4,7 +4,7 @@ from pathlib import Path
 import hashlib
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 from ..storage import AtomicJSONStore
 
@@ -106,7 +106,9 @@ class RuleStateStore:
             existing = raw["indicator_streams"].get(key)
             previous = (
                 dict(existing.get("snapshot") or {})
-                if isinstance(existing, dict) else {}
+                if isinstance(existing, dict)
+                and str(existing.get("interval", "TICK") or "TICK").upper() == "TICK"
+                else {}
             )
             periods = (
                 "buy_ema_fast_period", "buy_ema_slow_period",
@@ -116,11 +118,114 @@ class RuleStateStore:
                 previous = {}
             raw["indicator_streams"][key] = {
                 "session": session_key,
+                "interval": "TICK",
                 "snapshot": snapshot,
+                "previous_snapshot": previous,
                 "updated_at": time.time(),
             }
             self.store.write(raw)
             return previous
+
+    def observe_indicator_bucket(
+        self,
+        symbol: str,
+        stream: str,
+        session_key: str,
+        interval: str,
+        bucket_key: int,
+        close_price: float,
+        baseline_snapshot: dict[str, Any],
+        build_snapshot: Callable[[float], dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Accept one indicator snapshot per completed minute bucket.
+
+        The current bucket only accumulates its latest price.  When the next
+        bucket starts, that saved close becomes the provisional close of the
+        unfinished 1D candle.  All state needed to resume after a daemon restart
+        is persisted here.
+        """
+        symbol = str(symbol or "").strip().upper()
+        stream = str(stream or "").strip().upper()
+        session_key = str(session_key or "").strip()
+        interval = str(interval or "").strip().upper()
+        bucket_key = int(bucket_key or 0)
+        close_price = float(close_price or 0.0)
+        baseline = dict(baseline_snapshot or {})
+        if not symbol or not stream or interval not in {"1M", "2M", "5M"}:
+            return {"current": baseline, "previous": baseline, "advanced": False, "bucket": 0}
+        key = f"{stream}|{symbol}"
+        periods = (
+            "buy_ema_fast_period", "buy_ema_slow_period",
+            "sell_ema_fast_period", "sell_ema_slow_period", "rsi_period",
+        )
+        with self._lock:
+            raw = self._read()
+            existing = raw["indicator_streams"].get(key)
+            compatible = (
+                isinstance(existing, dict)
+                and str(existing.get("session", "")) == session_key
+                and str(existing.get("interval", "")).upper() == interval
+            )
+            accepted = dict(existing.get("snapshot") or {}) if compatible else baseline
+            if accepted and baseline and any(
+                accepted.get(name) != baseline.get(name) for name in periods
+            ):
+                compatible = False
+                accepted = baseline
+            if not compatible:
+                raw["indicator_streams"][key] = {
+                    "session": session_key,
+                    "interval": interval,
+                    "snapshot": accepted,
+                    "previous_snapshot": accepted,
+                    "pending_bucket": bucket_key,
+                    "pending_close": close_price,
+                    "accepted_bucket": 0,
+                    "updated_at": time.time(),
+                }
+                self.store.write(raw)
+                return {
+                    "current": accepted, "previous": accepted,
+                    "advanced": False, "bucket": 0,
+                }
+
+            pending_bucket = int(existing.get("pending_bucket", 0) or 0)
+            if bucket_key <= pending_bucket:
+                # Out-of-order ticks must not roll the close backwards. The
+                # latest observation in the active bucket wins.
+                if bucket_key == pending_bucket and close_price > 0:
+                    existing["pending_close"] = close_price
+                    existing["updated_at"] = time.time()
+                    raw["indicator_streams"][key] = existing
+                    self.store.write(raw)
+                return {
+                    "current": accepted,
+                    "previous": dict(existing.get("previous_snapshot") or accepted),
+                    "advanced": False,
+                    "bucket": int(existing.get("accepted_bucket", 0) or 0),
+                }
+
+            completed_close = float(existing.get("pending_close", 0.0) or 0.0)
+            previous = accepted
+            current = dict(build_snapshot(completed_close) or {}) if completed_close > 0 else accepted
+            if not current:
+                current = accepted
+            existing.update(
+                session=session_key,
+                interval=interval,
+                snapshot=current,
+                previous_snapshot=previous,
+                pending_bucket=bucket_key,
+                pending_close=close_price,
+                accepted_bucket=pending_bucket,
+                updated_at=time.time(),
+            )
+            raw["indicator_streams"][key] = existing
+            self.store.write(raw)
+            return {
+                "current": current, "previous": previous,
+                "advanced": True, "bucket": pending_bucket,
+            }
 
     def confirmed_market_state(self) -> str:
         return str(self._read()["market"].get("confirmed", "UNKNOWN") or "UNKNOWN").upper()
@@ -276,11 +381,53 @@ class RuleStateStore:
             if not isinstance(current, dict) or str(current.get("trade_id", "")) != str(trade_id):
                 return
             normalized = {str(event or "").upper() for event in events}
-            if "NORMAL_PROTECTION" in normalized:
+            if normalized.intersection({"NORMAL_PROTECTION", "NORMAL_ALERT_EXIT"}):
                 current["normal_protection_done"] = True
             if "HIGH_PROFIT_PROTECTION" in normalized:
                 current["high_profit_protection_done"] = True
             self.store.write(raw)
+
+    def arm_normal(self, symbol: str, trade_id: str, *, alert: bool = False) -> dict[str, Any]:
+        """Persist a NORMAL arm/alert once for the current trade."""
+        symbol = str(symbol or "").upper()
+        trade_id = str(trade_id or "")
+        if not symbol or not trade_id:
+            return {}
+        with self._lock:
+            raw = self._read()
+            key = self._position_key(symbol, trade_id)
+            current = raw["symbols"].get(key)
+            if not isinstance(current, dict):
+                return {}
+            current["normal_armed"] = True
+            current.setdefault("normal_armed_at", time.time())
+            if alert and not str(current.get("normal_alert_status", "")):
+                current["normal_alert_status"] = "PENDING"
+            current["updated_at"] = time.time()
+            raw["symbols"][key] = current
+            self.store.write(raw)
+            return dict(current)
+
+    def resolve_normal_alert(self, symbol: str, trade_id: str, action: str) -> dict[str, Any]:
+        """Record the operator's persistent CONTINUE or SELL choice."""
+        symbol = str(symbol or "").upper()
+        trade_id = str(trade_id or "")
+        action = str(action or "").upper()
+        if action not in {"CONTINUE", "SELL"} or not symbol or not trade_id:
+            return {}
+        with self._lock:
+            raw = self._read()
+            key = self._position_key(symbol, trade_id)
+            current = raw["symbols"].get(key)
+            if not isinstance(current, dict):
+                return {}
+            current["normal_armed"] = True
+            current["normal_alert_status"] = action
+            current["normal_alert_resolved_at"] = time.time()
+            current["updated_at"] = time.time()
+            raw["symbols"][key] = current
+            self.store.write(raw)
+            return dict(current)
 
     def position_metrics(self, symbol: str, trade_id: str) -> dict[str, Any]:
         raw = self._read()["symbols"]

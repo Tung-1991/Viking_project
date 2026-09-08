@@ -315,6 +315,9 @@ class StaticRuleParameters:
     normal_arm_pct: float = 7.0
     normal_sell_pct: float = 33.0
     normal_giveback_pct: float = 3.0
+    # CLASSIC keeps the original peak-price drawdown. AUTO protects profit
+    # points; ALERT waits for an explicit operator choice.
+    normal_policy: str = "CLASSIC"
     high_profit_arm_pct: float = 20.0
     high_profit_close_drawdown_pct: float = 5.0
     high_sell_pct: float = 33.0
@@ -343,6 +346,11 @@ class StaticRuleParameters:
         self.buy_confirmation_require_rsi = bool(self.buy_confirmation_require_rsi)
         self.buy_window_enabled = bool(self.buy_window_enabled)
         self.buy_window_start = str(self.buy_window_start).strip()
+        self.normal_policy = str(self.normal_policy or "CLASSIC").strip().upper()
+        if self.normal_policy == "TSL":  # compatibility with the short-lived draft name
+            self.normal_policy = "AUTO"
+        if self.normal_policy not in {"CLASSIC", "AUTO", "ALERT"}:
+            self.normal_policy = "CLASSIC"
         validate_buy_window(self.buy_window_start, "15:00")
 
     @classmethod
@@ -541,6 +549,19 @@ def _working_bars(rows: list[dict[str, Any]], signal_mode: str) -> list[dict[str
         values.pop()
     return values
 
+
+def normal_auto_stop_profit(
+    peak_profit_pct: float,
+    arm_pct: float,
+    trailing_gap_pct: float,
+) -> float:
+    """Profit percentage protected by NORMAL AUTO.
+
+    ``trailing_gap_pct`` is expressed in percentage points.  The protected
+    level trails MFE by a fixed number of percentage points after arming.
+    """
+    return float(peak_profit_pct) - float(trailing_gap_pct)
+
 def classify_market_state(
     rows: list[dict[str, Any]],
     *,
@@ -634,13 +655,18 @@ class StaticRule:
             market_details["confirmation_pending"] = bool(confirmation.get("pending", False))
         position = portfolio.get("position") if isinstance(portfolio.get("position"), dict) else {}
         quantity = max(0, int(position.get("quantity", portfolio.get("position_quantity", 0)) or 0))
-        indicators = indicator_snapshot(
-            bars,
-            self.params.buy_ema_fast,
-            self.params.buy_ema_slow,
-            self.params.rsi_period,
-            sell_fast=self.params.sell_ema_fast,
-            sell_slow=self.params.sell_ema_slow,
+        supplied_indicators = context.get("indicator_snapshot")
+        indicators = (
+            dict(supplied_indicators)
+            if isinstance(supplied_indicators, dict) and supplied_indicators
+            else indicator_snapshot(
+                bars,
+                self.params.buy_ema_fast,
+                self.params.buy_ema_slow,
+                self.params.rsi_period,
+                sell_fast=self.params.sell_ema_fast,
+                sell_slow=self.params.sell_ema_slow,
+            )
         )
         previous_indicators = context.get("previous_indicators")
         if signal_mode.upper() == "REALTIME" and isinstance(previous_indicators, dict):
@@ -684,6 +710,7 @@ class StaticRule:
             "market": market_details,
             "exposure": self.params.exposure.get(market_state, 0.0),
             "indicators": indicators,
+            "indicator_interval": str(context.get("indicator_interval", "") or ""),
             "buy_confirmation_forced": bool(context.get("confirmed_buy")),
             "entry_checks": {
                 "nav": float(portfolio.get("nav", 0.0) or 0.0),
@@ -819,14 +846,65 @@ class StaticRule:
             )
 
         triggered: list[str] = []
-        if "NORMAL" in em_modes and not bool(position.get("normal_protection_done")):
-            # Giveback is measured on price, not on profit points, so the
-            # room to breathe stays the same 3% whether the trade is up
-            # 8% or up 90%.
-            peak_price = entry * (1.0 + peak_profit / 100.0)
-            trigger = peak_price * (1.0 - self.params.normal_giveback_pct / 100.0)
-            if peak_profit >= self.params.normal_arm_pct and current <= trigger:
-                triggered.append("NORMAL_PROTECTION")
+        normal_enabled = (
+            "NORMAL" in em_modes
+            and not bool(position.get("normal_protection_done"))
+            and not bool(position.get("normal_execution_managed"))
+        )
+        if normal_enabled:
+            policy = self.params.normal_policy
+            details.update(
+                normal_policy=policy,
+                normal_arm_pct=self.params.normal_arm_pct,
+                normal_giveback_pct=self.params.normal_giveback_pct,
+                sell_share_pct=self.params.normal_sell_pct,
+            )
+            if policy == "ALERT" and peak_profit >= self.params.normal_arm_pct:
+                alert_status = str(position.get("normal_alert_status", "") or "").upper()
+                protected = normal_auto_stop_profit(
+                    peak_profit, self.params.normal_arm_pct, self.params.normal_giveback_pct,
+                )
+                details.update(
+                    normal_alert=True,
+                    normal_alert_status=alert_status or "PENDING",
+                    normal_protected_profit_pct=protected,
+                    sell_share_pct=self.params.normal_sell_pct,
+                )
+                if alert_status == "SELL":
+                    details["triggered_events"] = ["NORMAL_ALERT_EXIT"]
+                    return StrategyDecision(
+                        "SELL", symbol, "NORMAL_ALERT_EXIT", event="NORMAL_ALERT_EXIT",
+                        signal=signal, market_state=market_state,
+                        quantity_fraction=min(1.0, self.params.normal_sell_pct / 100.0),
+                        details=details, scope="POSITION_MANAGEMENT",
+                    )
+                if alert_status != "CONTINUE":
+                    return StrategyDecision(
+                        "WAIT", symbol, "NORMAL_ALERT", event="NORMAL_ALERT",
+                        signal=signal, market_state=market_state, details=details,
+                        scope="POSITION_MANAGEMENT",
+                    )
+            elif policy == "AUTO" and peak_profit >= self.params.normal_arm_pct:
+                protected = normal_auto_stop_profit(
+                    peak_profit, self.params.normal_arm_pct, self.params.normal_giveback_pct,
+                )
+                details["normal_protected_profit_pct"] = protected
+                # Arming and triggering are separate observations. This prevents
+                # an exact +7% first touch from selling on that same observation.
+                if not bool(position.get("normal_armed")):
+                    return StrategyDecision(
+                        "WAIT", symbol, "NORMAL_ARMED", event="NORMAL_ARMED",
+                        signal=signal, market_state=market_state, details=details,
+                        scope="POSITION_MANAGEMENT",
+                    )
+                if current_profit <= protected + 1e-9:
+                    triggered.append("NORMAL_PROTECTION")
+            elif policy == "CLASSIC":
+                # Original behaviour: giveback is a percentage of peak price.
+                peak_price = entry * (1.0 + peak_profit / 100.0)
+                trigger = peak_price * (1.0 - self.params.normal_giveback_pct / 100.0)
+                if peak_profit >= self.params.normal_arm_pct and current <= trigger:
+                    triggered.append("NORMAL_PROTECTION")
         highest_close = float(position.get("highest_close", 0.0) or 0.0)
         closed_values = closes(
             row for row in bars if isinstance(row, dict) and bool(row.get("closed", True))

@@ -296,6 +296,14 @@ class BacktestTrade:
     entry_value: float = 0.0
     sl_pct: float = 0.0
     peak_profit_pct: float = 0.0
+    normal_policy: str = "CLASSIC"
+    normal_arm_time: str = ""
+    normal_arm_price: float = 0.0
+    mfe_after_arm_pct: float = 0.0
+    mfe_extra_pct: float = 0.0
+    exit_profit_pct: float = 0.0
+    profit_giveback_pct: float = 0.0
+    exit_mode: str = ""
     pnl_pct: float = 0.0
     equity_after: float = 0.0
     entry_ema_fast: float = 0.0

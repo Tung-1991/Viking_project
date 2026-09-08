@@ -358,6 +358,7 @@ class RuleSettingsPopup:
             mode_row, values=["REALTIME", "CLOSED"], variable=self.signal_mode,
             height=36, font=("Segoe UI", 12), fg_color=self.BLUE,
             button_color="#245C92", button_hover_color="#1D4D7B",
+            command=lambda _value: self._refresh_realtime_interval_state(),
         )
         menu.grid(row=0, column=0, sticky="ew")
         ctk.CTkLabel(
@@ -365,6 +366,29 @@ class RuleSettingsPopup:
             text="REALTIME  ·  phản ứng trong phiên\nCLOSED    ·  chờ nến ngày đóng",
             justify="left", anchor="w", font=("Segoe UI", 12), text_color=self.TEXT,
         ).pack(fill="x", padx=12, pady=(8, 10))
+
+        interval_row = ctk.CTkFrame(mode, fg_color="transparent")
+        interval_row.pack(fill="x", padx=12, pady=(0, 8))
+        ctk.CTkLabel(
+            interval_row, text="NHỊP EMA/RSI", font=("Segoe UI", 12),
+            text_color=self.TEXT,
+        ).pack(side="left")
+        self.realtime_indicator_interval = tk.StringVar(
+            value=self.settings.realtime_indicator_interval,
+        )
+        self.realtime_interval_menu = ctk.CTkOptionMenu(
+            interval_row, values=["TICK", "1M", "2M", "5M"],
+            variable=self.realtime_indicator_interval, width=105, height=32,
+            font=("Segoe UI", 12), fg_color=self.BLUE,
+            button_color="#245C92", button_hover_color="#1D4D7B",
+        )
+        self.realtime_interval_menu.pack(side="right", padx=(8, 0))
+        self._hint_icon(
+            interval_row,
+            "EMA/RSI vẫn tính trên nến 1D. TICK dùng giá mới nhất; 1M/2M/5M chỉ "
+            "nhận giá cuối của bucket vừa hoàn thành. SL, TP và bảo vệ giá luôn chạy theo tick.",
+        ).pack(side="right")
+        self._refresh_realtime_interval_state()
 
         self.buy_window_enabled = tk.BooleanVar(value=self.params.buy_window_enabled)
         window_row = ctk.CTkFrame(mode, fg_color="transparent")
@@ -498,12 +522,30 @@ class RuleSettingsPopup:
 
         normal = self._card(
             body, "NORMAL",
-            "Khi đạt ngưỡng lợi nhuận, theo dõi peak realtime. Giá giảm đủ X% từ peak thì bán theo tỷ lệ đã đặt.",
+            "CLASSIC giữ nguyên; AUTO trailing tự bán; ALERT chờ operator quyết định.",
             1, 1,
         )
+        policy_row = ctk.CTkFrame(normal, fg_color="transparent")
+        policy_row.pack(fill="x", padx=12, pady=4)
+        ctk.CTkLabel(
+            policy_row, text="POLICY", font=("Segoe UI", 12), text_color=self.TEXT,
+        ).pack(side="left")
+        self.normal_policy = tk.StringVar(value=self.params.normal_policy)
+        ctk.CTkOptionMenu(
+            policy_row, values=["CLASSIC", "AUTO", "ALERT"],
+            variable=self.normal_policy, width=140, height=34,
+            font=("Segoe UI", 12), fg_color=self.BLUE,
+            button_color="#245C92", button_hover_color="#1D4D7B",
+            command=self._select_normal_policy,
+        ).pack(side="right")
+        self._hint_icon(
+            policy_row,
+            "CLASSIC: giảm X% theo giá từ peak. AUTO: mức bảo vệ = MFE − X điểm %. "
+            "ALERT: báo dai dẳng khi đạt ngưỡng; operator chọn giữ hoặc bán.",
+        ).pack(side="right", padx=(0, 6))
         self.normal_arm = self._field(normal, "Kích hoạt (%)", self.params.normal_arm_pct, "Mặc định +7% tính từ giá vốn.")
-        self.normal_giveback = self._field(normal, "Giảm từ đỉnh (%)", self.params.normal_giveback_pct, "Mặc định 3%. Giá rơi bấy nhiêu phần trăm khỏi giá cao nhất đã đạt thì bán.")
-        self.normal_sell = self._field(normal, "Bán bao nhiêu (%)", self.params.normal_sell_pct, "Phần trăm khối lượng đang giữ sẽ bán khi NORMAL kích hoạt. Mặc định 33%. Đặt 100 để bán sạch.")
+        self.normal_giveback = self._field(normal, "Khoảng trailing (%)", self.params.normal_giveback_pct, "CLASSIC dùng phần trăm giảm theo giá; AUTO dùng số điểm phần trăm trừ khỏi MFE.")
+        self.normal_sell = self._field(normal, "Bán bao nhiêu (%)", self.params.normal_sell_pct, "Phần trăm khối lượng đang giữ sẽ bán. Khi chọn AUTO, mặc định 100%.")
         self.normal_result = ctk.CTkLabel(normal, text="", font=("Segoe UI", 12), text_color=self.TEXT)
         self.normal_result.pack(anchor="w", padx=14, pady=(8, 12))
 
@@ -570,6 +612,20 @@ class RuleSettingsPopup:
                 text="KẾT QUẢ  ·  BÁN SẠCH VỊ THẾ" if value >= 100
                 else f"KẾT QUẢ  ·  BÁN {value:g}% KHỐI LƯỢNG ĐANG GIỮ, MỘT LẦN",
             )
+
+    def _refresh_realtime_interval_state(self) -> None:
+        if not hasattr(self, "realtime_interval_menu"):
+            return
+        self.realtime_interval_menu.configure(
+            state="normal" if self.signal_mode.get() == "REALTIME" else "disabled",
+        )
+
+    def _select_normal_policy(self, value: str) -> None:
+        if str(value or "").upper() == "AUTO":
+            for entry, default in ((self.normal_giveback, 2), (self.normal_sell, 100)):
+                entry.delete(0, "end")
+                entry.insert(0, str(default))
+        self._refresh_share_labels()
 
     def _exit_b_signal_text(self) -> str:
         def value(entry: ctk.CTkEntry, fallback: int) -> str:
@@ -903,6 +959,7 @@ class RuleSettingsPopup:
             self.params.buy_window_enabled = bool(self.buy_window_enabled.get())
             self.params.buy_window_start = window_start
             self.settings.signal_mode = self.signal_mode.get()
+            self.settings.realtime_indicator_interval = self.realtime_indicator_interval.get()
             self.params.max_positions = max_positions
             self.params.no_compound_enabled = bool(self.no_compound.get())
             self.params.force_min_lot_enabled = bool(self.force_min_lot.get())
@@ -914,6 +971,7 @@ class RuleSettingsPopup:
             self.params.whipsaw_n = whipsaw_n
             self.params.whipsaw_x = whipsaw_x
             self.params.take_profit_pct = take_profit
+            self.params.normal_policy = self.normal_policy.get()
             self.params.normal_arm_pct = normal_arm
             self.params.normal_giveback_pct = normal_giveback
             self.params.high_profit_arm_pct = high_arm

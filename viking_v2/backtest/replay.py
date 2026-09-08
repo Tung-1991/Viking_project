@@ -104,6 +104,39 @@ def resolution_minutes(value: str) -> int:
     return int(normalized) if normalized.isdigit() else 10**9
 
 
+def aggregate_intraday_bars(
+    rows: list[dict[str, Any]],
+    target_resolution: str | int,
+) -> list[dict[str, Any]]:
+    """Aggregate ordered intraday OHLCV rows into larger minute buckets."""
+    minutes = resolution_minutes(str(target_resolution))
+    if minutes <= 0 or minutes >= 24 * 60:
+        raise ValueError("Resolution gộp phải là số phút intraday.")
+    grouped: dict[int, dict[str, Any]] = {}
+    for source in sorted(rows, key=lambda item: int(item.get("time", 0) or 0)):
+        stamp = int(source.get("time", 0) or 0)
+        if stamp <= 0:
+            continue
+        bucket = stamp - stamp % (minutes * 60)
+        current = grouped.get(bucket)
+        if current is None:
+            grouped[bucket] = {
+                "time": bucket,
+                "open": float(source.get("open", 0.0) or 0.0),
+                "high": float(source.get("high", 0.0) or 0.0),
+                "low": float(source.get("low", 0.0) or 0.0),
+                "close": float(source.get("close", 0.0) or 0.0),
+                "volume": float(source.get("volume", 0.0) or 0.0),
+                "closed": True,
+            }
+            continue
+        current["high"] = max(float(current["high"]), float(source.get("high", 0.0) or 0.0))
+        current["low"] = min(float(current["low"]), float(source.get("low", 0.0) or 0.0))
+        current["close"] = float(source.get("close", 0.0) or 0.0)
+        current["volume"] = float(current["volume"]) + float(source.get("volume", 0.0) or 0.0)
+    return list(grouped.values())
+
+
 def _column_map(headers: Iterable[Any]) -> dict[str, str]:
     available = {str(value or "").strip().casefold(): str(value or "") for value in headers}
     missing = [name for name in REQUIRED_COLUMNS if name not in available]
@@ -611,6 +644,44 @@ class ReplayDataStore:
                 for row in rows:
                     row["closed"] = True
                 return rows, candidate, status
+            # A requested larger bucket may be derived from a complete finer
+            # dataset. This is deliberately one-way: never invent 1m detail
+            # from a 2m file. CTS therefore supports requested 2m from its 1m
+            # import while VIX keeps using its exact 2m source.
+            requested = normalize_resolution(resolution) if resolution else ""
+            target_minutes = resolution_minutes(requested)
+            if requested and target_minutes < 24 * 60:
+                source_rows = connection.execute(
+                    "SELECT resolution,status,first_timestamp,last_timestamp FROM replay_days "
+                    "WHERE symbol=? AND day=? AND status='FULL'",
+                    (symbol, day_text),
+                ).fetchall()
+                finer = sorted(
+                    (
+                        row for row in source_rows
+                        if resolution_minutes(str(row["resolution"])) < target_minutes
+                        and target_minutes % resolution_minutes(str(row["resolution"])) == 0
+                    ),
+                    key=lambda row: resolution_minutes(str(row["resolution"])),
+                    reverse=True,
+                )
+                for source in finer:
+                    source_resolution = str(source["resolution"])
+                    raw_rows = [dict(row) for row in connection.execute(
+                        "SELECT timestamp AS time,open,high,low,close,volume FROM replay_bars "
+                        "WHERE symbol=? AND resolution=? AND timestamp BETWEEN ? AND ? ORDER BY timestamp",
+                        (
+                            symbol, source_resolution,
+                            int(source["first_timestamp"]), int(source["last_timestamp"]),
+                        ),
+                    )]
+                    aggregated = aggregate_intraday_bars(raw_rows, requested)
+                    if aggregated:
+                        return (
+                            aggregated,
+                            requested,
+                            f"FULL_AGGREGATED_{source_resolution}_TO_{requested}",
+                        )
         return [], "", "MISSING"
 
     def load_daily_aggregates(

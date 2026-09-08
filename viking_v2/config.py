@@ -174,6 +174,9 @@ class AppSettings:
     # react during the session. Backtest explicitly opts into CLOSED when it
     # only has completed daily candles.
     signal_mode: str = "REALTIME"
+    # REALTIME still calculates indicators on the unfinished 1D candle.  This
+    # setting only controls how often a new provisional close is accepted.
+    realtime_indicator_interval: str = "TICK"
     rule_parameters: dict[str, Any] = field(default_factory=dict)
     corporate_actions: list[dict[str, Any]] = field(default_factory=list)
     custom_holidays: list[str] = field(default_factory=list)
@@ -227,6 +230,11 @@ class AppSettings:
         self.signal_mode = str(self.signal_mode or "REALTIME").strip().upper()
         if self.signal_mode not in {"REALTIME", "CLOSED"}:
             self.signal_mode = "REALTIME"
+        self.realtime_indicator_interval = str(
+            self.realtime_indicator_interval or "TICK"
+        ).strip().upper()
+        if self.realtime_indicator_interval not in {"TICK", "1M", "2M", "5M"}:
+            self.realtime_indicator_interval = "TICK"
         self.rule_parameters = dict(self.rule_parameters) if isinstance(self.rule_parameters, dict) else {}
         self.corporate_actions = [
             dict(item) for item in self.corporate_actions if isinstance(item, dict) and str(item.get("symbol", "")).strip()

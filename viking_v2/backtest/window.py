@@ -17,7 +17,7 @@ from ..dashboard.windows import PALETTE, SymbolPicker, _HoverHint, _window
 from ..rules.business import StaticRuleParameters
 from ..trading.market import normalize_exchange, validate_buy_window
 from .data import HistoricalDataStore
-from .engine import BacktestEngine
+from .engine import BacktestEngine, exit_comparison_variants
 from .models import (
     NO_PHASE,
     VALID_PHASES,
@@ -108,8 +108,11 @@ PHASE_GROUPS = (
             ("CẮT LỖ LỆNH ĐẦU %", "initial_sl_pct", "Cắt lỗ cho lệnh đầu mỗi chu kỳ. Nhập số âm."),
             ("CẮT LỖ VÀO LẠI %", "reentry_sl_pct", "Cắt lỗ cho lệnh vào lại sau khi vừa lỗ. Nhập số âm."),
             ("NORMAL · LÃI %", "normal_arm_pct", "Lãi phải từng đạt mức này thì Normal mới bắt đầu theo dõi."),
-            ("NORMAL · TỤT GIÁ %", "normal_giveback_pct", "Giá giảm bấy nhiêu phần trăm khỏi giá cao nhất thì Normal bán."),
-            ("NORMAL · BÁN %", "normal_sell_pct", "Bán bao nhiêu phần trăm khối lượng đang giữ khi Normal kích hoạt. Mặc định 33. Đặt 100 để bán sạch."),
+            (
+                "NORMAL · TRAILING %", "normal_giveback_pct",
+                "CLASSIC: phần trăm giảm theo giá từ peak. AUTO: số điểm phần trăm trừ khỏi MFE.",
+            ),
+            ("NORMAL · BÁN %", "normal_sell_pct", "Bán bao nhiêu phần trăm khối lượng đang giữ. Khi chọn AUTO, mặc định 100%."),
             ("HIGH · LÃI %", "high_profit_arm_pct", "Lãi phải từng đạt mức này thì High mới bắt đầu theo dõi."),
             ("HIGH · TỤT CLOSE %", "high_profit_close_drawdown_pct", "Giá đóng cửa giảm bấy nhiêu khỏi đỉnh thì High bán."),
             ("HIGH · BÁN %", "high_sell_pct", "Bán bao nhiêu phần trăm khối lượng đang giữ khi High kích hoạt. Mặc định 33. Đặt 100 để bán sạch."),
@@ -125,6 +128,7 @@ PHASE_PARAMETER_KEYS = frozenset(
 )
 BACKTEST_RULE_KEYS = PHASE_PARAMETER_KEYS | {
     "exposure", "whipsaw_enabled", "loss_lock_hours", "max_positions",
+    "normal_policy",
     "volume_confirmation", "no_compound_enabled", "force_min_lot_enabled",
     "buy_signal_use_ema", "buy_signal_use_rsi",
     "sell_signal_use_ema", "sell_signal_use_rsi",
@@ -606,6 +610,12 @@ class BacktestPopup:
             actions, text="XÓA DÒNG", width=140, height=36, font=(FONT, 12, "bold"),
             fg_color=COL_SLATE, hover_color=COL_RED, command=self._delete_scenario,
         ).grid(row=0, column=2, padx=5)
+        self.compare_exit_button = ctk.CTkButton(
+            actions, text="SO SÁNH NORMAL AUTO / ALERT", width=245, height=36,
+            font=(FONT, 12, "bold"), fg_color=COL_BLUE,
+            hover_color=COL_BLUE_HOVER, command=self.run_exit_comparison,
+        )
+        self.compare_exit_button.grid(row=0, column=3, padx=5)
 
     def _replay_panel(self, frame: ctk.CTkFrame) -> None:
         panel = ctk.CTkFrame(
@@ -840,6 +850,7 @@ class BacktestPopup:
         self.replay_import_button.configure(state="disabled")
         self.replay_delete_button.configure(state="disabled")
         self.run_mode2.configure(state="disabled")
+        self.compare_exit_button.configure(state="disabled")
         self._say("Đang import dữ liệu REPLAY…", "busy")
 
         def done(task: Any) -> None:
@@ -847,6 +858,7 @@ class BacktestPopup:
             self.replay_import_button.configure(state="normal")
             self.replay_delete_button.configure(state="normal")
             self.run_mode2.configure(state="normal")
+            self.compare_exit_button.configure(state="normal")
             try:
                 preview = task.result()
             except Exception as exc:
@@ -1319,8 +1331,27 @@ class BacktestPopup:
             "Tín hiệu trước giờ được giữ trong ngày nếu điều kiện còn đạt; không chuyển sang sáng hôm sau. SELL/SL không chờ.",
         ).grid(row=0, column=3)
 
+        normal_row = ctk.CTkFrame(card, fg_color="transparent")
+        normal_row.grid(row=7, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
+        self._label(normal_row, "NORMAL POLICY", 14).grid(
+            row=0, column=0, sticky="w", padx=(0, 12),
+        )
+        self.normal_policy = ctk.StringVar(value=params.normal_policy)
+        self.normal_policy_menu = ctk.CTkOptionMenu(
+            normal_row, values=["CLASSIC", "AUTO", "ALERT"],
+            variable=self.normal_policy, width=180, height=36,
+            font=(FONT, 12), fg_color=COL_BLUE, dynamic_resizing=False,
+            command=self._select_normal_policy,
+        )
+        self.normal_policy_menu.grid(row=0, column=1, sticky="w")
+        self._hint(
+            normal_row,
+            "CLASSIC giữ cơ chế cũ. AUTO bảo vệ MFE − khoảng trailing. "
+            "ALERT ghi nhận + MFE rồi tiếp tục đến E trong backtest.",
+        ).grid(row=0, column=2, padx=10)
+
         fill_row = ctk.CTkFrame(card, fg_color="transparent")
-        fill_row.grid(row=7, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
+        fill_row.grid(row=8, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
         self._label(fill_row, "ĐỢT ATO", 14).grid(row=0, column=0, sticky="w", padx=(0, 12))
         self.fill_session = ctk.CTkOptionMenu(
             fill_row, values=["CHO PHÉP · khớp giá mở cửa", "KHÔNG · khớp sau 9h15"],
@@ -1339,7 +1370,7 @@ class BacktestPopup:
         ).grid(row=0, column=2, padx=10)
 
         sell_row = ctk.CTkFrame(card, fg_color="transparent")
-        sell_row.grid(row=8, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
+        sell_row.grid(row=9, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
         self._label(sell_row, "BÁN KHI CỔ VỀ", 14).grid(row=0, column=0, sticky="w", padx=(0, 12))
         self.sell_wait = ctk.CTkOptionMenu(
             sell_row, values=["KIỂM TRA LẠI ĐIỀU KIỆN", "BÁN THEO YÊU CẦU CŨ"],
@@ -1354,6 +1385,15 @@ class BacktestPopup:
             "KIỂM TRA LẠI: tới lúc bán được thì xem điều kiện thoát còn đúng không, hết đúng thì thôi.\n"
             "BÁN THEO YÊU CẦU CŨ: đã ra lệnh bán thì cổ về bao nhiêu bán bấy nhiêu.",
         ).grid(row=0, column=2, padx=10)
+
+    def _select_normal_policy(self, value: str) -> None:
+        if str(value or "").upper() != "AUTO":
+            return
+        for key, default in (("normal_giveback_pct", 2), ("normal_sell_pct", 100)):
+            entry = self._rule_entries.get(key)
+            if entry is not None:
+                entry.delete(0, "end")
+                entry.insert(0, str(default))
 
 
     def _sync_phase_controls(self) -> None:
@@ -1386,6 +1426,8 @@ class BacktestPopup:
         self.buy_confirmation_minutes.delete(0, "end")
         self.buy_confirmation_minutes.insert(0, str(params.get("buy_confirmation_minutes", 5)))
         self.buy_window_enabled.set(bool(params.get("buy_window_enabled", False)))
+        normal_policy = str(params.get("normal_policy", "CLASSIC") or "CLASSIC").upper()
+        self.normal_policy.set("AUTO" if normal_policy == "TSL" else normal_policy)
         for key, default in (("start", "14:00"),):
             entry = getattr(self, f"buy_window_{key}")
             entry.delete(0, "end")
@@ -1553,6 +1595,7 @@ class BacktestPopup:
         validate_buy_window(window_start, "15:00")
         params.update(buy_window_enabled=bool(self.buy_window_enabled.get()),
                       buy_window_start=window_start)
+        params["normal_policy"] = self.normal_policy.get()
         params.pop("buy_window_end", None)
         try:
             params["max_positions"] = int(float(self.mode1_slots.get().strip() or 5))
@@ -1697,6 +1740,60 @@ class BacktestPopup:
 
         self._start(MODE_2, [job(row) for row in rows])
 
+    def run_exit_comparison(self) -> None:
+        """Run E+NORMAL AUTO and E+NORMAL ALERT independently."""
+        rows = self._selected_scenarios()
+        if not rows:
+            self.tabs.set(MODE_2)
+            messagebox.showinfo(
+                "SO SÁNH EXIT", "Chọn ít nhất một dòng kịch bản MODE 2.", parent=self.top,
+            )
+            return
+        try:
+            values = self._collect()
+            if (
+                values.rule_parameters.get("buy_confirmation_enabled")
+                or values.rule_parameters.get("buy_window_enabled")
+            ) and values.simulation_mode != "REPLAY":
+                raise ValueError("Lọc BUY theo phút/giờ cần chọn CÁCH CHẠY = REPLAY")
+            exchanges = self._resolve_symbol_exchanges([
+                symbol for row in rows for symbol in row.symbols
+            ])
+        except (TypeError, ValueError) as exc:
+            messagebox.showerror("SO SÁNH EXIT", str(exc), parent=self.top)
+            return
+
+        jobs: list[Callable[[], BacktestResult]] = []
+        for selected in rows:
+            for scenario, params in exit_comparison_variants(
+                selected, values.rule_parameters,
+            ):
+                def run(
+                    scenario: BacktestScenario = scenario,
+                    params: dict[str, Any] = params,
+                ) -> BacktestResult:
+                    result = self.engine.run_scenario(
+                        scenario,
+                        initial_capital=values.initial_capital,
+                        rule_parameters=params,
+                        loss_lock_enabled=values.loss_lock_enabled,
+                        loss_lock_hours=values.loss_lock_hours,
+                        sell_wait_policy=values.sell_wait_policy,
+                        fill_session=values.fill_session,
+                        buy_fee_rate=values.buy_fee_pct / 100.0,
+                        sell_fee_rate=values.sell_fee_pct / 100.0,
+                        sell_tax_rate=values.sell_tax_pct / 100.0,
+                        simulation_mode=values.simulation_mode,
+                        symbol_exchanges=exchanges,
+                        progress=self._progress,
+                        cancelled=self.cancel_event.is_set,
+                    )
+                    result.data_quality["comparison"] = "INDEPENDENT_EXIT_POLICY"
+                    return result
+
+                jobs.append(run)
+        self._start("MODE 2 · EXIT", jobs)
+
     def _start(self, mode: str, jobs: list[Callable[[], BacktestResult]]) -> None:
         if self.running or not jobs:
             return
@@ -1704,6 +1801,7 @@ class BacktestPopup:
         self.running = True
         self.cancel_event.clear()
         for button in (self.clear_cache_button, self.download_button, self.run_mode1, self.run_mode2,
+                       self.compare_exit_button,
                        self.replay_import_button, self.replay_delete_button):
             button.configure(state="disabled")
         self.cancel_button.configure(state="normal")
@@ -1728,6 +1826,7 @@ class BacktestPopup:
     def _finished(self, task: Any) -> None:
         self.running = False
         for button in (self.clear_cache_button, self.download_button, self.run_mode1, self.run_mode2,
+                       self.compare_exit_button,
                        self.replay_import_button, self.replay_delete_button):
             button.configure(state="normal")
         self.cancel_button.configure(state="disabled")
@@ -1806,6 +1905,7 @@ class BacktestPopup:
         self.running = True
         self.cancel_event.clear()
         for button in (self.clear_cache_button, self.download_button, self.run_mode1, self.run_mode2,
+                       self.compare_exit_button,
                        self.replay_import_button, self.replay_delete_button):
             button.configure(state="disabled")
         self.cancel_button.configure(state="normal")
@@ -1833,6 +1933,7 @@ class BacktestPopup:
         def done(task: Any) -> None:
             self.running = False
             for button in (self.clear_cache_button, self.download_button, self.run_mode1, self.run_mode2,
+                           self.compare_exit_button,
                            self.replay_import_button, self.replay_delete_button):
                 button.configure(state="normal")
             self.cancel_button.configure(state="disabled")
