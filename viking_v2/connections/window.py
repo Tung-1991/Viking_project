@@ -517,7 +517,7 @@ class ConnectionPopup:
         body = self._body(frame)
         card = self._card(
             body, "THÔNG BÁO TELEGRAM",
-            "Báo BUY ngay dù BOT OFF; chỉ báo lần hai khi vị thế cùng ID đã đóng hết.",
+            "Báo BUY đã được xếp slot; tín hiệu không vào được dùng công tắc riêng. Vị thế đóng hết được báo theo cùng ID.",
         )
         card.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
         card.grid_columnconfigure(1, weight=1)
@@ -542,7 +542,7 @@ class ConnectionPopup:
         ).grid(row=6, column=0, columnspan=3, sticky="w", padx=12, pady=(8, 2))
         ctk.CTkLabel(
             card,
-            text="Bốn mươi mã mà chỉ năm chỗ, nên phần lớn tín hiệu không thành lệnh.\n"
+            text="Watchlist có thể nhiều hơn số slot, nên phần lớn tín hiệu không thành lệnh.\n"
                  "Bật thì báo cả những cái đó kèm lý do; ồn hơn nhưng thấy hết.",
             font=("Segoe UI", 11), text_color=self.MUTED, justify="left", anchor="w",
         ).grid(row=7, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))

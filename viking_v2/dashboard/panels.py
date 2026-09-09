@@ -131,7 +131,7 @@ class DashboardPanelsMixin:
             corner_radius=7,
         ).grid(row=0, column=0, sticky="ew", padx=(0, 5))
         self.bot_button = ctk.CTkButton(
-            mode_row, text="BOT · OFF", height=32, font=("Segoe UI", 10, "bold"),
+            mode_row, text="MUA TỰ ĐỘNG · OFF", height=32, font=("Segoe UI", 10, "bold"),
             width=1,
             fg_color=COL_GRAY, hover_color="#4B515B", corner_radius=7,
             command=self._toggle_bot,
@@ -159,9 +159,8 @@ class DashboardPanelsMixin:
 
         em_row = setting_row(3, "EM")
         self._em_specs = {
-            "normal_protection": "NORMAL",
-            "high_profit_protection": "HIGH",
-            "indicator_exit": "EXIT SELL",
+            "normal_protection": "PROTECT",
+            "indicator_exit": "E",
         }
         self._em_states = {key: False for key in self._em_specs}
         self._em_buttons: dict[str, ctk.CTkButton] = {}
@@ -640,7 +639,7 @@ class DashboardPanelsMixin:
             setattr(self, f"log_{target}", text)
             setattr(self, f"log_{target}_scrollbar", scrollbar)
         self.log_bot.insert(
-            "end", "BOT khởi động OFF. Quyết định chỉ thực thi khi được bật.\n"
+            "end", "Mua tự động khởi động OFF; vị thế đang giữ vẫn được quản lý.\n"
         )
         self.log_tabview.set("PREVIEW")
         self.info_tab_selector.set("PREVIEW")
@@ -753,7 +752,7 @@ class DashboardPanelsMixin:
         management.grid(row=2, column=0, sticky="nsew", padx=6, pady=(3, 6))
         management.grid_propagate(False)
         management.grid_rowconfigure(0, weight=1)
-        for column in range(5):
+        for column in range(4):
             management.grid_columnconfigure(column, weight=1, uniform="preview_management")
 
         def level_card(column: int, title: str, title_color: str):
@@ -779,9 +778,8 @@ class DashboardPanelsMixin:
 
         _tp_title, self.preview_tp_value, self.preview_tp_detail = level_card(0, "TP MANUAL", COL_GREEN)
         _sl_title, self.preview_sl_value, self.preview_sl_detail = level_card(1, "STOP LOSS", COL_RED)
-        self.preview_em_normal, self.preview_normal_value, self.preview_normal_detail = level_card(2, "NORMAL · OFF", COL_RED)
-        self.preview_em_high, self.preview_high_value, self.preview_high_detail = level_card(3, "HIGH · OFF", COL_RED)
-        self.preview_em_exit, self.preview_exit_value, self.preview_exit_detail = level_card(4, "EXIT SELL · OFF", COL_RED)
+        self.preview_em_normal, self.preview_normal_value, self.preview_normal_detail = level_card(2, "PROTECT · OFF", COL_RED)
+        self.preview_em_exit, self.preview_exit_value, self.preview_exit_detail = level_card(3, "E · OFF", COL_RED)
 
         rule_group.grid_columnconfigure(0, weight=1)
         for row in (1, 2, 3, 4):
@@ -790,7 +788,7 @@ class DashboardPanelsMixin:
         rule_header.grid(row=0, column=0, sticky="ew", padx=8, pady=(4, 2))
         rule_header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            rule_header, text="QUYẾT ĐỊNH BOT", height=14, font=("Segoe UI", 11, "bold"),
+            rule_header, text="QUYẾT ĐỊNH HỆ THỐNG", height=14, font=("Segoe UI", 11, "bold"),
             text_color="#60A5FA", anchor="w",
         ).grid(row=0, column=0, sticky="w")
         rule_hint = ctk.CTkButton(
@@ -804,10 +802,10 @@ class DashboardPanelsMixin:
             "P1: trạng thái VNINDEX từ dữ liệu 1D DNSE.\n"
             "P2: tín hiệu BUY/SELL từ các chỉ báo EMA/RSI đang bật.\n"
             "P3: vốn, số position và khóa bảo vệ.\n"
-            "Bán 1/3 chỉ thuộc NORMAL/HIGH trong Exit Manager.",
+            "SL luôn bật; TP, PROTECT và E gắn theo từng vị thế.",
         )
         self.preview_rule_title = ctk.CTkLabel(
-            rule_header, text="BOT · OFF", width=72, height=16,
+            rule_header, text="MUA · OFF", width=72, height=16,
             font=("Segoe UI", 10, "bold"), text_color=COL_RED,
             fg_color=COL_SURFACE_2, corner_radius=5,
         )
@@ -1205,53 +1203,31 @@ class DashboardPanelsMixin:
         normal_arm = float(params.get("normal_arm_pct", 7.0) or 7.0)
         normal_giveback = float(params.get("normal_giveback_pct", 3.0) or 3.0)
         normal_policy = str(params.get("normal_policy", "CLASSIC") or "CLASSIC").upper()
-        if normal_policy == "TSL":
-            normal_policy = "AUTO"
-        high_arm = float(params.get("high_profit_arm_pct", 20.0) or 20.0)
-        high_drawdown = float(params.get("high_profit_close_drawdown_pct", 5.0) or 5.0)
         normal_price = entry_price * (1.0 + normal_arm / 100.0) if entry_price > 0 else 0.0
-        high_price = entry_price * (1.0 + high_arm / 100.0) if entry_price > 0 else 0.0
         normal_preview_sell = (
             normal_price * (1.0 - normal_giveback / 100.0)
             if normal_policy == "CLASSIC" else
             entry_price * (1.0 + (normal_arm - normal_giveback) / 100.0)
             if normal_policy == "AUTO" else normal_price
         ) if entry_price > 0 else 0.0
-        high_preview_sell = (
-            high_price * (1.0 - high_drawdown / 100.0)
-            if high_price > 0 else 0.0
-        )
         self.preview_normal_value.configure(
             text=(
-                f"CẢNH BÁO TỪ {_display_price(normal_price)}"
-                if normal_policy == "ALERT" and normal_price > 0 else
                 f"{_display_price(normal_price)} → {_display_price(normal_preview_sell)}"
                 if normal_price > 0 else "CHƯA CÓ GIÁ"
             ),
         )
         self.preview_normal_detail.configure(
             text=f"{normal_policy} · +{normal_arm:g}/-{normal_giveback:g} · BÁN {float(params.get('normal_sell_pct', 33) or 33):g}%")
-        self.preview_high_value.configure(
-            text=(
-                f"{_display_price(high_price)} → {_display_price(high_preview_sell)}"
-                if high_price > 0 else "CHƯA CÓ GIÁ"
-            ),
-        )
-        self.preview_high_detail.configure(
-            text=f"+{high_arm:g}/-{high_drawdown:g} · BÁN {float(params.get('high_sell_pct', 33) or 33):g}%")
         em_labels = {
-            "normal_protection": "NORMAL",
-            "high_profit_protection": "HIGH",
-            "indicator_exit": "EXIT SELL",
+            "normal_protection": "PROTECT",
+            "indicator_exit": "E",
         }
         em_widgets = {
             "normal_protection": self.preview_em_normal,
-            "high_profit_protection": self.preview_em_high,
             "indicator_exit": self.preview_em_exit,
         }
         em_value_widgets = {
             "normal_protection": self.preview_normal_value,
-            "high_profit_protection": self.preview_high_value,
             "indicator_exit": self.preview_exit_value,
         }
         decisions = status.get("decisions") if isinstance(status.get("decisions"), dict) else {}
@@ -1279,16 +1255,10 @@ class DashboardPanelsMixin:
             protected = decision_details.get("normal_protected_profit_pct")
             self.preview_normal_value.configure(
                 text=(
-                    f"PNL {_number(current_profit):+.1f}% · CẢNH BÁO DAI DẲNG"
-                    if normal_policy == "ALERT" else
                     f"PNL {_number(current_profit):+.1f}% · STOP {_number(protected):+.1f}%"
                     if normal_policy == "AUTO" and protected is not None else
                     f"PNL {_number(current_profit):+.1f}% · PEAK -{normal_giveback:g}%"
                 )
-            )
-        if peak_profit is not None and self._em_states.get("high_profit_protection", False):
-            self.preview_high_value.configure(
-                text=f"PEAK {_number(peak_profit):+.1f}% · CLOSE -{high_drawdown:g}% · BÁN {float(params.get('high_sell_pct', 33) or 33):g}%"
             )
         self._refresh_rule_preview(status, symbol)
 
@@ -1317,7 +1287,7 @@ class DashboardPanelsMixin:
         signal_label = "BUY" if signal == "BUY" else "SELL" if signal == "SELL" else "WAIT"
         bot_enabled = bool(status.get("bot_enabled", False))
         self.preview_rule_title.configure(
-            text=f"BOT · {'ON' if bot_enabled else 'OFF'}",
+            text=f"MUA · {'ON' if bot_enabled else 'OFF'}",
             text_color=COL_GREEN if bot_enabled else COL_RED,
         )
         market_details = details.get("market") if isinstance(details.get("market"), dict) else {}
@@ -1424,7 +1394,13 @@ class DashboardPanelsMixin:
         whipsaw_locked = bool(whipsaw_on and whipsaw_limit and crosses >= whipsaw_limit)
         loss_locked = bool(loss_limit and losses >= loss_limit)
         guard_warn = whipsaw_locked or loss_locked
-        phase3_parts = [f"{open_positions}/{max_positions or '--'}"]
+        slot_summary = getattr(self, "_slot_summary", {})
+        slot_used = max(open_positions, int(slot_summary.get("used", 0) or 0))
+        slot_max = int(slot_summary.get("max", max_positions) or max_positions)
+        pending_buys = int(slot_summary.get("pending", 0) or 0)
+        phase3_parts = [f"{slot_used}/{slot_max or '--'} SLOT"]
+        if pending_buys:
+            phase3_parts.append(f"{pending_buys} BUY CHỜ")
         if capital > 0:
             phase3_parts.append(f"{_compact_vnd(capital)}/MÃ")
         self.preview_rule_phase3.configure(
@@ -1482,6 +1458,8 @@ class DashboardPanelsMixin:
             "BUY_ALREADY_PENDING": "ĐÃ CÓ LỆNH MUA CHỜ",
             "MAX_POSITIONS": "ĐÃ ĐỦ SỐ MÃ",
             "NO_AVAILABLE_CAPITAL": "KHÔNG ĐỦ CASH",
+            "BROKER_REJECTED": "BROKER TỪ CHỐI",
+            "BROKER_FAILED": "GỬI BROKER THẤT BẠI",
             "MARKET_STATE_UNKNOWN": "CHỜ · STATE CHƯA XÁC NHẬN",
             "WHIPSAW_LOCK": "TẠM KHÓA DO NHIỄU",
             "LOCKED_AFTER_3_LOSSES": "KHÓA SAU 3 LỆNH LỖ",
@@ -1491,11 +1469,8 @@ class DashboardPanelsMixin:
             "STOP_LOSS": "KÍCH HOẠT SL",
             "INDICATOR_EXIT": "KÍCH HOẠT EXIT SELL",
             "PRICE_PROTECTION": "KÍCH HOẠT BẢO VỆ GIÁ",
-            "NORMAL_PROTECTION": "NORMAL",
-            "NORMAL_ARMED": "NORMAL AUTO ĐÃ ARM",
-            "NORMAL_ALERT": "NORMAL CHỜ QUYẾT ĐỊNH",
-            "NORMAL_ALERT_EXIT": "NORMAL ALERT · BÁN",
-            "HIGH_PROFIT_PROTECTION": "HIGH",
+            "NORMAL_PROTECTION": "PROTECT",
+            "NORMAL_ARMED": "PROTECT AUTO ĐÃ KÍCH HOẠT",
             "BUY_CONFIRMATION_WAIT": "CHỜ XÁC NHẬN BUY",
             "BUY_WINDOW_WAIT": "CHỜ KHUNG GIỜ MUA",
             "BUY_WINDOW_BROKEN": "HỦY CHỜ GIỜ · ĐIỀU KIỆN BUY KHÔNG CÒN ĐẠT",

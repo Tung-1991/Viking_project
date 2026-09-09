@@ -14,6 +14,7 @@ import customtkinter as ctk
 
 from ..config import AppSettings
 from ..dashboard.windows import PALETTE, SymbolPicker, _HoverHint, _window
+from ..exit_modes import exit_mode_label
 from ..rules.business import StaticRuleParameters
 from ..trading.market import normalize_exchange, validate_buy_window
 from .data import HistoricalDataStore
@@ -107,15 +108,12 @@ PHASE_GROUPS = (
             ("CHỐT LỜI %", "take_profit_pct", "Lãi chạm mức này thì bán sạch vị thế. Chỉ chạy khi bật ô TP."),
             ("CẮT LỖ LỆNH ĐẦU %", "initial_sl_pct", "Cắt lỗ cho lệnh đầu mỗi chu kỳ. Nhập số âm."),
             ("CẮT LỖ VÀO LẠI %", "reentry_sl_pct", "Cắt lỗ cho lệnh vào lại sau khi vừa lỗ. Nhập số âm."),
-            ("NORMAL · LÃI %", "normal_arm_pct", "Lãi phải từng đạt mức này thì Normal mới bắt đầu theo dõi."),
+            ("PROTECT · LÃI %", "normal_arm_pct", "Lãi phải từng đạt mức này thì Protect mới bắt đầu theo dõi."),
             (
-                "NORMAL · TRAILING %", "normal_giveback_pct",
+                "PROTECT · TRAILING %", "normal_giveback_pct",
                 "CLASSIC: phần trăm giảm theo giá từ peak. AUTO: số điểm phần trăm trừ khỏi MFE.",
             ),
-            ("NORMAL · BÁN %", "normal_sell_pct", "Bán bao nhiêu phần trăm khối lượng đang giữ. Khi chọn AUTO, mặc định 100%."),
-            ("HIGH · LÃI %", "high_profit_arm_pct", "Lãi phải từng đạt mức này thì High mới bắt đầu theo dõi."),
-            ("HIGH · TỤT CLOSE %", "high_profit_close_drawdown_pct", "Giá đóng cửa giảm bấy nhiêu khỏi đỉnh thì High bán."),
-            ("HIGH · BÁN %", "high_sell_pct", "Bán bao nhiêu phần trăm khối lượng đang giữ khi High kích hoạt. Mặc định 33. Đặt 100 để bán sạch."),
+            ("PROTECT · BÁN %", "normal_sell_pct", "Bán bao nhiêu phần trăm khối lượng đang giữ. Khi chọn AUTO, mặc định 100%."),
             ("WHIPSAW · SỐ LẦN CẮT", "whipsaw_n", "EMA cắt qua lại bao nhiêu lần thì khóa mua mã đó."),
             ("WHIPSAW · SỐ PHIÊN ĐẾM", "whipsaw_x", "Đếm số lần cắt trong bấy nhiêu phiên gần nhất."),
             ("LOSS · SỐ LỆNH KHÓA", "loss_lock_count", "Số lệnh lỗ liên tiếp làm khóa BUY mới."),
@@ -350,12 +348,10 @@ class BacktestPopup:
         low.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 14))
         self._label(low, "BẢO VỆ", 13, bold=True).grid(row=0, column=0, sticky="w", padx=(0, 10))
         self.em_normal = ctk.BooleanVar(value="NORMAL" in self.config.em_modes)
-        self.em_high = ctk.BooleanVar(value="HIGH" in self.config.em_modes)
         self.em_exit = ctk.BooleanVar(value="IND_EXIT" in self.config.em_modes)
         self.em_tp = ctk.BooleanVar(value="TP" in self.config.em_modes)
         for index, (label, var) in enumerate((
-            ("TP", self.em_tp), ("NORMAL", self.em_normal),
-            ("HIGH", self.em_high), ("EXIT", self.em_exit),
+            ("TP", self.em_tp), ("PROTECT", self.em_normal), ("E", self.em_exit),
         )):
             ctk.CTkCheckBox(
                 low, text=label, variable=var, font=(FONT, 12, "bold"),
@@ -566,7 +562,7 @@ class BacktestPopup:
         self._label(guards, "BẢO VỆ", 13, bold=True).grid(row=1, column=0, sticky="w", pady=(6, 0))
         self.scenario_em = {}
         for index, (key, label) in enumerate((
-            ("TP", "TP"), ("NORMAL", "NORMAL"), ("HIGH", "HIGH"), ("IND_EXIT", "EXIT"),
+            ("TP", "TP"), ("NORMAL", "PROTECT"), ("IND_EXIT", "E"),
         )):
             var = ctk.BooleanVar(value=True)
             ctk.CTkCheckBox(
@@ -582,7 +578,7 @@ class BacktestPopup:
         ).grid(row=1, column=5, sticky="w", padx=(18, 0), pady=(6, 0))
         self._hint(
             guards,
-            "Số mã tối đa, TP/NORMAL/HIGH/EXIT và WHIPSAW thuộc riêng dòng kịch bản này. "
+            "Số mã tối đa, TP/PROTECT/E và WHIPSAW thuộc riêng dòng kịch bản này. "
             "Các ngưỡng số vẫn lấy chung từ tab THAM SỐ.",
         ).grid(row=1, column=6, padx=10, pady=(6, 0))
         # A scenario may hold several symbols; capital is still split by the
@@ -611,7 +607,7 @@ class BacktestPopup:
             fg_color=COL_SLATE, hover_color=COL_RED, command=self._delete_scenario,
         ).grid(row=0, column=2, padx=5)
         self.compare_exit_button = ctk.CTkButton(
-            actions, text="SO SÁNH NORMAL AUTO / ALERT", width=245, height=36,
+            actions, text="SO SÁNH PROTECT CLASSIC / AUTO", width=265, height=36,
             font=(FONT, 12, "bold"), fg_color=COL_BLUE,
             hover_color=COL_BLUE_HOVER, command=self.run_exit_comparison,
         )
@@ -918,7 +914,7 @@ class BacktestPopup:
                     row.market_phase if row.uses_market_phase else NO_PHASE_LABEL,
                     "THEO THAM SỐ" if row.uses_market_phase else f"TỰ NHẬP · {row.exposure_pct:g}%",
                     row.max_positions,
-                    "+".join(m.replace("IND_EXIT", "EXIT") for m in row.em_modes) or "không",
+                    "+".join(exit_mode_label(mode) for mode in row.em_modes) or "không",
                     "BẬT" if row.whipsaw_enabled else "TẮT",
                 ),
             )
@@ -1266,7 +1262,7 @@ class BacktestPopup:
         for column, (label, variable, help_text) in enumerate((
             (
                 "ĐỘ TIN CẬY VOLUME", self.volume_confirmation,
-                "Tính và hiện nhãn HIGH/NORMAL/LOW; không thay đổi state hoặc quyết định giao dịch.",
+                "Tính và hiện nhãn CAO/TRUNG BÌNH/THẤP; không thay đổi state hoặc quyết định giao dịch.",
             ),
             (
                 "KHÔNG COMPOUND", self.no_compound,
@@ -1333,12 +1329,12 @@ class BacktestPopup:
 
         normal_row = ctk.CTkFrame(card, fg_color="transparent")
         normal_row.grid(row=7, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
-        self._label(normal_row, "NORMAL POLICY", 14).grid(
+        self._label(normal_row, "PROTECT POLICY", 14).grid(
             row=0, column=0, sticky="w", padx=(0, 12),
         )
         self.normal_policy = ctk.StringVar(value=params.normal_policy)
         self.normal_policy_menu = ctk.CTkOptionMenu(
-            normal_row, values=["CLASSIC", "AUTO", "ALERT"],
+            normal_row, values=["CLASSIC", "AUTO"],
             variable=self.normal_policy, width=180, height=36,
             font=(FONT, 12), fg_color=COL_BLUE, dynamic_resizing=False,
             command=self._select_normal_policy,
@@ -1346,8 +1342,7 @@ class BacktestPopup:
         self.normal_policy_menu.grid(row=0, column=1, sticky="w")
         self._hint(
             normal_row,
-            "CLASSIC giữ cơ chế cũ. AUTO bảo vệ MFE − khoảng trailing. "
-            "ALERT ghi nhận + MFE rồi tiếp tục đến E trong backtest.",
+            "CLASSIC giữ cơ chế cũ. AUTO bảo vệ MFE − khoảng trailing.",
         ).grid(row=0, column=2, padx=10)
 
         fill_row = ctk.CTkFrame(card, fg_color="transparent")
@@ -1427,13 +1422,12 @@ class BacktestPopup:
         self.buy_confirmation_minutes.insert(0, str(params.get("buy_confirmation_minutes", 5)))
         self.buy_window_enabled.set(bool(params.get("buy_window_enabled", False)))
         normal_policy = str(params.get("normal_policy", "CLASSIC") or "CLASSIC").upper()
-        self.normal_policy.set("AUTO" if normal_policy == "TSL" else normal_policy)
+        self.normal_policy.set(normal_policy if normal_policy in {"CLASSIC", "AUTO"} else "CLASSIC")
         for key, default in (("start", "14:00"),):
             entry = getattr(self, f"buy_window_{key}")
             entry.delete(0, "end")
             entry.insert(0, str(params.get(f"buy_window_{key}", default)))
         self.em_normal.set("NORMAL" in self.settings.bot_em_modes)
-        self.em_high.set("HIGH" in self.settings.bot_em_modes)
         self.em_exit.set("IND_EXIT" in self.settings.bot_em_modes)
         self.em_tp.set("TP" in self.settings.bot_em_modes)
         self.mode1_slots.delete(0, "end")
@@ -1629,7 +1623,7 @@ class BacktestPopup:
             em_modes=[
                 name for name, variable in (
                     ("TP", self.em_tp), ("NORMAL", self.em_normal),
-                    ("HIGH", self.em_high), ("IND_EXIT", self.em_exit),
+                    ("IND_EXIT", self.em_exit),
                 ) if variable.get()
             ],
             sell_wait_policy="KEEP" if self.sell_wait.get().startswith("BÁN") else "RECHECK",
@@ -1670,7 +1664,7 @@ class BacktestPopup:
                 # Name carries the exit stack so eight runs land in eight
                 # files instead of overwriting each other.
                 run_name="MODE 1 · " + ("+".join(
-                    m.replace("IND_EXIT", "E").replace("NORMAL", "N").replace("HIGH", "H")
+                    m.replace("IND_EXIT", "E").replace("NORMAL", "PROTECT")
                     for m in values.em_modes) or "SL"),
             )
         except (TypeError, ValueError) as exc:
@@ -1741,7 +1735,7 @@ class BacktestPopup:
         self._start(MODE_2, [job(row) for row in rows])
 
     def run_exit_comparison(self) -> None:
-        """Run E+NORMAL AUTO and E+NORMAL ALERT independently."""
+        """Run E+PROTECT CLASSIC and E+PROTECT AUTO independently."""
         rows = self._selected_scenarios()
         if not rows:
             self.tabs.set(MODE_2)
@@ -1889,7 +1883,7 @@ class BacktestPopup:
             messagebox.showerror("Backtest", str(exc), parent=self.top)
             return
         # Cover both modes in one fetch: MODE 1's list plus every scenario symbol.
-        # Execution bars matter to MODE 2 as well (SL/TP/NORMAL fills), so a
+        # Execution bars matter to MODE 2 as well (SL/TP/PROTECT fills), so a
         # symbol that exists only in a scenario must not be limited to 1D data.
         scenario_symbols = [s for row in self.scenarios for s in row.symbols]
         execution_symbols = list(dict.fromkeys([*values.symbols, *scenario_symbols]))

@@ -131,8 +131,6 @@ class DashboardTablesMixin:
             take_profit_pct = float(params.get("take_profit_pct", 7.0) or 7.0)
             normal_tp = float(params.get("normal_arm_pct", 7.0) or 7.0)
             normal_giveback = float(params.get("normal_giveback_pct", 3.0) or 3.0)
-            high_tp = float(params.get("high_profit_arm_pct", 20.0) or 20.0)
-            high_drawdown = float(params.get("high_profit_close_drawdown_pct", 5.0) or 5.0)
             close_items = [item for item in local_by_mode[mode] if item.action == "CLOSE"]
             consumed_close_ids: set[str] = set()
 
@@ -221,10 +219,8 @@ class DashboardTablesMixin:
                 peak_pct = float(metrics.get("peak_profit_pct", pnl_pct) or pnl_pct)
                 take_profit_enabled = "TP" in cycle_modes
                 normal_enabled = "NORMAL" in cycle_modes
-                high_enabled = "HIGH" in cycle_modes
                 indicator_enabled = "IND_EXIT" in cycle_modes
                 normal_state = "OFF" if not normal_enabled else "DONE" if metrics.get("normal_protection_done") else "ARM" if peak_pct >= normal_tp else "WAIT"
-                high_state = "OFF" if not high_enabled else "DONE" if metrics.get("high_profit_protection_done") else "ARM" if peak_pct >= high_tp else "WAIT"
                 decision = runtime_decisions.get(symbol) if isinstance(runtime_decisions.get(symbol), dict) else {}
                 decision_details = decision.get("details") if isinstance(decision.get("details"), dict) else {}
                 decision_checks = (
@@ -234,8 +230,6 @@ class DashboardTablesMixin:
                 indicator_state = "OFF" if not indicator_enabled else "SIGNAL" if str(decision.get("signal", "")).upper() == "SELL" else "WAIT"
                 normal_arm_price = avg_price * (1.0 + normal_tp / 100.0)
                 normal_preview_exit = avg_price * (1.0 + (normal_tp - normal_giveback) / 100.0)
-                high_arm_price = avg_price * (1.0 + high_tp / 100.0)
-                high_preview_exit = high_arm_price * (1.0 - high_drawdown / 100.0)
                 pending_close = next(
                     (
                         item for item in close_items
@@ -286,9 +280,8 @@ class DashboardTablesMixin:
                     entry_context,
                     settlement_status,
                     f"TP {take_profit_state}·+{take_profit_pct:g}%",
-                    f"NORMAL {normal_state}·{_display_price(normal_arm_price)}→{_display_price(normal_preview_exit)}",
-                    f"HIGH {high_state}·{_display_price(high_arm_price)}→{_display_price(high_preview_exit)}",
-                    f"EXIT {indicator_state}",
+                    f"PROTECT {normal_state}·{_display_price(normal_arm_price)}→{_display_price(normal_preview_exit)}",
+                    f"E {indicator_state}",
                 ]
                 if cycle and cycle.is_reentry:
                     status_parts.append("[REENTRY]")
@@ -357,7 +350,6 @@ class DashboardTablesMixin:
                 item_modes = set(cycle.em_modes if cycle else item.em_modes)
                 item_take_profit = "TP" in item_modes
                 item_normal = "NORMAL" in item_modes
-                item_high = "HIGH" in item_modes
                 item_indicator = "IND_EXIT" in item_modes
                 if item.sl_mode == "PRICE" and item.sl_value > 0:
                     item_sl_label = _display_price(item.sl_value)
@@ -379,9 +371,8 @@ class DashboardTablesMixin:
                 )
                 em_text = (
                     f"TP {'+' + format(take_profit_pct, 'g') + '%' if item_take_profit else 'OFF'}"
-                    f"   ·   NORMAL {'+' + format(normal_tp, 'g') + '%' if item_normal else 'OFF'}"
-                    f"   ·   HIGH {'+' + format(high_tp, 'g') + '%' if item_high else 'OFF'}"
-                    f"   ·   EXIT {'ON' if item_indicator else 'OFF'}"
+                    f"   ·   PROTECT {'+' + format(normal_tp, 'g') + '%' if item_normal else 'OFF'}"
+                    f"   ·   E {'ON' if item_indicator else 'OFF'}"
                     if item.action == "OPEN" else "--"
                 )
                 status_upper = item.status.upper()

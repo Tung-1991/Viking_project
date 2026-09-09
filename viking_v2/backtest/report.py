@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from ..exit_modes import exit_mode_label
 from .models import BacktestResult, BacktestTrade
 
 
@@ -13,17 +14,15 @@ _EVENT_NAMES = {
     "ENTRY_BUY": "MUA",
     "STOP_LOSS": "SL",
     "TAKE_PROFIT": "TP",
-    "INDICATOR_EXIT": "EXIT",
-    "NORMAL_PROTECTION": "NORMAL",
-    "HIGH_PROFIT_PROTECTION": "HIGH",
-    "PRICE_PROTECTION": "NORMAL",
-    "NORMAL_ALERT_EXIT": "NORMAL ALERT",
+    "INDICATOR_EXIT": "E",
+    "NORMAL_PROTECTION": "PROTECT",
+    "PRICE_PROTECTION": "PROTECT",
 }
 
 ROUND_HEADERS = (
     "LẦN CHẠY", "LƯỢT", "MÃ", "VÀO", "GIÁ VÀO", "KHỐI LƯỢNG", "VỐN", "CẮT LỖ",
     "EMA VÀO", "RSI VÀO", "RA", "PHIÊN", "THOÁT BỞI", "EMA RA", "RSI RA",
-    "PHÍ+THUẾ", "LÃI/LỖ", "%", "NORMAL POLICY", "ARM LÚC", "GIÁ ARM",
+    "PHÍ+THUẾ", "LÃI/LỖ", "%", "PROTECT POLICY", "ARM LÚC", "GIÁ ARM",
     "MFE SAU ARM %", "+ TRÊN ARM %", "LN THOÁT %", "TRẢ LẠI %", "EXIT MODE",
     "KẾT QUẢ",
 )
@@ -147,8 +146,10 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
         f"{symbol}:{r.config.symbol_exchanges.get(symbol, '?')}" for symbol in r.config.symbols
     ))
     line("Tối đa số mã", lambda r: (r.config.rule_parameters or {}).get("max_positions"))
-    line("Bảo vệ", lambda r: ", ".join(r.config.em_modes) or "chỉ cắt lỗ")
-    line("NORMAL policy", lambda r: (r.config.rule_parameters or {}).get("normal_policy", "CLASSIC"))
+    line("Bảo vệ", lambda r: ", ".join(
+        exit_mode_label(mode) for mode in r.config.em_modes if exit_mode_label(mode)
+    ) or "chỉ cắt lỗ")
+    line("PROTECT policy", lambda r: (r.config.rule_parameters or {}).get("normal_policy", "CLASSIC"))
     line("Khóa sau LOSS", lambda r: (
         f"{(r.config.rule_parameters or {}).get('loss_lock_count')} LOSS · {r.config.loss_lock_hours} giờ"
         if r.config.loss_lock_enabled else "OFF"
@@ -223,13 +224,10 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
         ("Cắt lỗ", f"{params.get('initial_sl_pct')}% · vào lại {params.get('reentry_sl_pct')}%"
                    f" · bán sạch · luôn bật"),
         ("Ngưỡng TP", f"{params.get('take_profit_pct')}% · bán sạch nếu tactic TP bật"),
-        ("Ngưỡng Normal", f"lãi từng ≥ {params.get('normal_arm_pct')}%"
+        ("Ngưỡng PROTECT", f"lãi từng ≥ {params.get('normal_arm_pct')}%"
                           f" · trailing {params.get('normal_giveback_pct')}% · bán"
                           f" {params.get('normal_sell_pct', 33)}% một lần nếu tactic bật"),
-        ("Ngưỡng High", f"lãi từng ≥ {params.get('high_profit_arm_pct')}% rồi close giảm"
-                        f" {params.get('high_profit_close_drawdown_pct')}% khỏi đỉnh close · bán"
-                        f" {params.get('high_sell_pct', 33)}% một lần nếu tactic bật"),
-        ("Điều kiện Exit", f"{' và '.join(sell_terms) or 'OFF'} · bán hết phần còn lại nếu tactic bật"),
+        ("Điều kiện E", f"{' và '.join(sell_terms) or 'OFF'} · bán hết phần còn lại nếu tactic bật"),
         ("Khung giờ mua", (
             f"Từ {params.get('buy_window_start', '14:00')} đến hết phiên hợp lệ · giờ Việt Nam"
             if params.get("buy_window_enabled") else "OFF"

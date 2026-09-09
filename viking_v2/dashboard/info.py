@@ -112,7 +112,7 @@ class InfoPopup:
 
     @staticmethod
     def _em_name(values: Iterable[str]) -> str:
-        names = {"TP": "TP", "NORMAL": "NORMAL", "HIGH": "HIGH", "IND_EXIT": "EXIT"}
+        names = {"TP": "TP", "NORMAL": "PROTECT", "IND_EXIT": "E"}
         result = [names[item] for item in values if item in names]
         return " · ".join(result) if result else "SL"
 
@@ -225,8 +225,7 @@ class InfoPopup:
             ("LOSS LOCK", loss_lock, PALETTE["WARN"]),
             ("MIN LOT", "100 CP" if p.force_min_lot_enabled else "OFF", PALETTE["TEXT"]),
             ("TP", f"{p.take_profit_pct:g}%", PALETTE["GREEN"]),
-            ("NORMAL", f"{p.normal_policy} · +{p.normal_arm_pct:g}% / -{p.normal_giveback_pct:g}% · BÁN {p.normal_sell_pct:g}%", PALETTE["TEXT"]),
-            ("HIGH", f"+{p.high_profit_arm_pct:g}% / -{p.high_profit_close_drawdown_pct:g}% · BÁN {p.high_sell_pct:g}%", PALETTE["TEXT"]),
+            ("PROTECT", f"{p.normal_policy} · +{p.normal_arm_pct:g}% / -{p.normal_giveback_pct:g}% · BÁN {p.normal_sell_pct:g}%", PALETTE["TEXT"]),
             ("EM BẬT", self._em_name(em_modes), PALETTE["TEXT"]),
         ])
 
@@ -262,7 +261,7 @@ class InfoPopup:
     def _scenario_profiles(rows: list[BacktestScenario]) -> list[str]:
         profiles: list[str] = []
         for item in rows:
-            modes = [short for value, short in (("TP", "TP"), ("NORMAL", "N"), ("HIGH", "H"), ("IND_EXIT", "E")) if value in item.em_modes]
+            modes = [short for value, short in (("TP", "TP"), ("NORMAL", "PROTECT"), ("IND_EXIT", "E")) if value in item.em_modes]
             name = "+".join(modes) if modes else "SL"
             value = f"{name} · {item.max_positions} SLOT · W {'ON' if item.whipsaw_enabled else 'OFF'}"
             if value not in profiles:

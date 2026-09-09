@@ -265,7 +265,7 @@ class RuleSettingsPopup:
         )
         self.volume_confirmation = self._switch(
             volume, "HIỆN ĐỘ TIN CẬY", self.params.volume_confirmation,
-            "Mặc định OFF. ON để tính và hiện nhãn HIGH/NORMAL/LOW theo volume; nhãn này không thay đổi quyết định của bot.",
+            "Mặc định OFF. ON để tính và hiện nhãn CAO/TRUNG BÌNH/THẤP theo volume; nhãn này không thay đổi quyết định của bot.",
         )
         self.volume_average = self._field(volume, "Trung bình (phiên)", self.params.volume_average_sessions, "Mặc định 20 phiên dùng tính volume trung bình.")
         self.high_volume = self._field(volume, "Volume cao (%)", self.params.high_volume_ratio * 100, "Mặc định 150%. Từ mức này trở lên được coi là volume cao.")
@@ -521,8 +521,8 @@ class RuleSettingsPopup:
                      font=("Segoe UI", 12), text_color=self.TEXT).pack(anchor="w", padx=14, pady=(8, 12))
 
         normal = self._card(
-            body, "NORMAL",
-            "CLASSIC giữ nguyên; AUTO trailing tự bán; ALERT chờ operator quyết định.",
+            body, "PROTECT",
+            "CLASSIC giữ nguyên; AUTO trailing tự bán theo MFE.",
             1, 1,
         )
         policy_row = ctk.CTkFrame(normal, fg_color="transparent")
@@ -532,7 +532,7 @@ class RuleSettingsPopup:
         ).pack(side="left")
         self.normal_policy = tk.StringVar(value=self.params.normal_policy)
         ctk.CTkOptionMenu(
-            policy_row, values=["CLASSIC", "AUTO", "ALERT"],
+            policy_row, values=["CLASSIC", "AUTO"],
             variable=self.normal_policy, width=140, height=34,
             font=("Segoe UI", 12), fg_color=self.BLUE,
             button_color="#245C92", button_hover_color="#1D4D7B",
@@ -540,8 +540,7 @@ class RuleSettingsPopup:
         ).pack(side="right")
         self._hint_icon(
             policy_row,
-            "CLASSIC: giảm X% theo giá từ peak. AUTO: mức bảo vệ = MFE − X điểm %. "
-            "ALERT: báo dai dẳng khi đạt ngưỡng; operator chọn giữ hoặc bán.",
+            "CLASSIC: giảm X% theo giá từ peak. AUTO: mức bảo vệ = MFE − X điểm %.",
         ).pack(side="right", padx=(0, 6))
         self.normal_arm = self._field(normal, "Kích hoạt (%)", self.params.normal_arm_pct, "Mặc định +7% tính từ giá vốn.")
         self.normal_giveback = self._field(normal, "Khoảng trailing (%)", self.params.normal_giveback_pct, "CLASSIC dùng phần trăm giảm theo giá; AUTO dùng số điểm phần trăm trừ khỏi MFE.")
@@ -549,26 +548,15 @@ class RuleSettingsPopup:
         self.normal_result = ctk.CTkLabel(normal, text="", font=("Segoe UI", 12), text_color=self.TEXT)
         self.normal_result.pack(anchor="w", padx=14, pady=(8, 12))
 
-        high = self._card(
-            body, "HIGH",
-            "Khi đạt lợi nhuận cao, theo dõi Highest Close 1D. Giá đóng cửa giảm đủ tỷ lệ thì bán.",
-            2, 0,
-        )
-        self.high_arm = self._field(high, "Kích hoạt (%)", self.params.high_profit_arm_pct, "Mặc định +20% tính từ giá vốn.")
-        self.high_drawdown = self._field(high, "Đóng cửa giảm (%)", self.params.high_profit_close_drawdown_pct, "Mặc định 5% tính từ Highest Close; chỉ cập nhật bằng nến ngày đã đóng.")
-        self.high_sell = self._field(high, "Bán bao nhiêu (%)", self.params.high_sell_pct, "Phần trăm khối lượng đang giữ sẽ bán khi HIGH kích hoạt. Mặc định 33%. Đặt 100 để bán sạch.")
-        self.high_result = ctk.CTkLabel(high, text="", font=("Segoe UI", 12), text_color=self.TEXT)
-        self.high_result.pack(anchor="w", padx=14, pady=(8, 12))
         self._refresh_share_labels()
-        for entry in (self.normal_sell, self.high_sell):
-            entry.bind("<KeyRelease>", self._refresh_share_labels, add="+")
+        self.normal_sell.bind("<KeyRelease>", self._refresh_share_labels, add="+")
 
         indicator = self._card(
-            body, "EXIT SELL",
-            "Khi EXIT SELL được bật cho một trade, tín hiệu SELL xuất hiện sẽ đóng toàn bộ phần cổ phiếu còn lại. "
+            body, "E · EXIT SELL",
+            "Khi E được bật cho một trade, tín hiệu SELL xuất hiện sẽ đóng toàn bộ phần cổ phiếu còn lại. "
             "EMA SELL nhanh/chậm và RSI lấy từ setting Phase 2 rồi lưu vào settings.json theo account; daemon tự nhận lại sau khi lưu. "
             "Khối lượng bán 100% mới là rule cố định và không có ô điều chỉnh.",
-            2, 1,
+            2, 0,
         )
         for title, value in (
             ("TÍN HIỆU", self._exit_b_signal_text()),
@@ -598,7 +586,6 @@ class RuleSettingsPopup:
         """Say in words what the percent box will actually do."""
         for entry, label, fallback in (
             (self.normal_sell, self.normal_result, self.params.normal_sell_pct),
-            (self.high_sell, self.high_result, self.params.high_sell_pct),
         ):
             if not label.winfo_exists():
                 continue
@@ -699,7 +686,7 @@ class RuleSettingsPopup:
 
         bot_em = self._card(
             body, "EM CỦA BOT",
-            "BOT và manual dùng chung tham số TP, NORMAL, HIGH và EXIT SELL. Bốn nút dưới đây chỉ chọn tactic mặc định gắn vào trade do BOT mở.",
+            "BOT và manual dùng chung TP, PROTECT và E. Các nút dưới đây chọn tactic mặc định gắn vào trade do BOT mở; SL luôn bật.",
             1, 1,
         )
         enabled_modes = set(self.settings.bot_em_modes)
@@ -711,14 +698,10 @@ class RuleSettingsPopup:
                 "chạy được cả khi ba tactic kia đều tắt.",
             ),
             "NORMAL": self._switch(
-                bot_em, "NORMAL", "NORMAL" in enabled_modes,
-                "Mặc định ON. Đạt ngưỡng rồi giảm từ peak thì bán một lần theo tỷ lệ NORMAL đã đặt.",
+                bot_em, "PROTECT", "NORMAL" in enabled_modes,
+                "Mặc định ON. Đạt ngưỡng rồi giảm từ peak thì bán một lần theo tỷ lệ PROTECT đã đặt.",
             ),
-            "HIGH": self._switch(
-                bot_em, "HIGH", "HIGH" in enabled_modes,
-                "Mặc định ON. Dùng Highest Close 1D rồi bán một lần theo tỷ lệ HIGH đã đặt.",
-            ),
-            "IND_EXIT": self._switch(bot_em, "EXIT SELL", "IND_EXIT" in enabled_modes, "Mặc định ON. Có tín hiệu SELL từ EMA/RSI thì bán hết phần còn lại."),
+            "IND_EXIT": self._switch(bot_em, "E · EXIT SELL", "IND_EXIT" in enabled_modes, "Mặc định ON. Có tín hiệu SELL từ EMA/RSI thì bán hết phần còn lại."),
         }
 
         costs = self._card(
@@ -733,7 +716,7 @@ class RuleSettingsPopup:
 
         settlement = self._card(
             body, "SELL CHỜ T+",
-            "Áp dụng cho SL, NORMAL, HIGH và EXIT SELL khi cổ phiếu chưa về đủ để bán; T+2 chỉ sẵn sàng từ phiên chiều.",
+            "Áp dụng cho SL, TP, PROTECT và E khi cổ phiếu chưa về đủ để bán; T+2 chỉ sẵn sàng từ phiên chiều.",
             1, 2,
         )
         self.sell_wait_policy = tk.StringVar(
@@ -774,7 +757,7 @@ class RuleSettingsPopup:
         )
         self.corporate_symbol.grid(row=0, column=0, padx=(0, 7))
         self.corporate_date = ctk.CTkEntry(
-            editor, width=145, height=34, placeholder_text="YYYY-MM-DD",
+            editor, width=180, height=34, placeholder_text="NGÀY GDKHQ · YYYY-MM-DD",
             font=("Segoe UI", 12), text_color=self.TEXT,
         )
         self.corporate_date.grid(row=0, column=1, padx=(0, 7))
@@ -891,10 +874,7 @@ class RuleSettingsPopup:
             take_profit = self._nonnegative(self.take_profit, "Chốt lời")
             normal_arm = self._nonnegative(self.normal_arm, "Normal kích hoạt")
             normal_giveback = self._nonnegative(self.normal_giveback, "Normal giveback")
-            high_arm = self._nonnegative(self.high_arm, "High kích hoạt")
-            high_drawdown = self._nonnegative(self.high_drawdown, "Highest Close giảm")
-            normal_sell = self._nonnegative(self.normal_sell, "Normal bán bao nhiêu")
-            high_sell = self._nonnegative(self.high_sell, "High bán bao nhiêu")
+            normal_sell = self._nonnegative(self.normal_sell, "Protect bán bao nhiêu")
             if min(
                 ma_period, pivot_left, pivot_right, confirm_sessions,
                 volume_average, buy_ema_fast, sell_ema_fast, rsi_period,
@@ -913,8 +893,8 @@ class RuleSettingsPopup:
                 raise ValueError("Stop Loss phải là số âm")
             if high_volume < low_volume:
                 raise ValueError("High Volume phải lớn hơn hoặc bằng Low Volume")
-            if not 0 < normal_sell <= 100 or not 0 < high_sell <= 100:
-                raise ValueError("Tỷ lệ bán NORMAL/HIGH phải lớn hơn 0 và không quá 100%")
+            if not 0 < normal_sell <= 100:
+                raise ValueError("Tỷ lệ bán PROTECT phải lớn hơn 0 và không quá 100%")
             if not (self.buy_signal_ema.get() or self.buy_signal_rsi.get()):
                 raise ValueError("Tín hiệu BUY phải bật ít nhất EMA hoặc RSI")
             if not (self.sell_signal_ema.get() or self.sell_signal_rsi.get()):
@@ -974,10 +954,7 @@ class RuleSettingsPopup:
             self.params.normal_policy = self.normal_policy.get()
             self.params.normal_arm_pct = normal_arm
             self.params.normal_giveback_pct = normal_giveback
-            self.params.high_profit_arm_pct = high_arm
-            self.params.high_profit_close_drawdown_pct = high_drawdown
             self.params.normal_sell_pct = normal_sell
-            self.params.high_sell_pct = high_sell
             self.params.validate()
             # Activation is per trade. These legacy booleans must never act as
             # an invisible global master after the new UI is saved.
