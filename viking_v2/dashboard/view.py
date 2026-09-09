@@ -13,8 +13,8 @@ COL_SURFACE_2 = "#22262D"
 COL_BORDER = "#30353D"
 COL_PREVIEW_TEXT = "#D6DAE1"
 # Neutral titles/keys stay subordinate to actionable values and status colours.
-# This is roughly 30% dimmer than COL_TEXT to reduce glare across the whole UI.
-COL_TITLE = "#A9ADB3"
+# It remains below COL_TEXT while keeping keys easy to distinguish from the panel.
+COL_TITLE = "#BABEC5"
 FONT_BOLD = ("Segoe UI", 14)
 FONT_PREVIEW_TITLE = ("Segoe UI", 14, "bold", "italic")
 FONT_PREVIEW_VALUE = ("Cascadia Mono", 14)

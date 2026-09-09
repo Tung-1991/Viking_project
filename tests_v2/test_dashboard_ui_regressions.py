@@ -40,7 +40,7 @@ def test_operator_typography_separates_keys_from_values() -> None:
     text_rgb = tuple(int(COL_TEXT[index:index + 2], 16) for index in (1, 3, 5))
     brightness_ratio = sum(title_rgb) / sum(text_rgb)
     assert PALETTE["TITLE"] == COL_TITLE
-    assert 0.65 <= brightness_ratio <= 0.75
+    assert 0.75 <= brightness_ratio <= 0.85
 
 
 def test_dynamic_entry_values_shrink_only_when_they_need_more_room(ui_root) -> None:

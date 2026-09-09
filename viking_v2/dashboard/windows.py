@@ -20,7 +20,7 @@ PALETTE = {
     "SLATE": "#3A3F47",     # neutral buttons
     "SLATE_HOVER": "#4B515B",
     "TEXT": "#E8EBEF",
-    "TITLE": "#A9ADB3",     # neutral headings/keys; ~28% dimmer than TEXT
+    "TITLE": "#BABEC5",     # neutral headings/keys; readable without white glare
     "MUTED": "#C5CBD4",
     "DIM": "#98A2B3",
     "BLUE": "#2B6CB0",
