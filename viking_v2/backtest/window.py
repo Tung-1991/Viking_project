@@ -191,11 +191,11 @@ class BacktestPopup:
         style.theme_use("clam")
         style.configure(
             "Backtest.Treeview", background=COL_SURFACE, foreground=COL_TEXT,
-            fieldbackground=COL_SURFACE, rowheight=42, font=(FONT, 12), borderwidth=0,
+            fieldbackground=COL_SURFACE, rowheight=46, font=(FONT, 13), borderwidth=0,
         )
         style.configure(
             "Backtest.Treeview.Heading", background=COL_SURFACE_2, foreground=COL_TEXT,
-            font=(FONT, 12, "bold"), relief="flat", padding=(9, 8),
+            font=(FONT, 14, "bold"), relief="flat", padding=(10, 9),
         )
         style.map(
             "Backtest.Treeview",

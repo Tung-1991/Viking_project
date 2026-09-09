@@ -29,7 +29,7 @@ PALETTE = {
     "WARN": "#F59E0B",
 }
 
-HINT_FONT = ("Segoe UI", 13)
+HINT_FONT = ("Segoe UI", 15)
 
 
 _SIGNAL_REASONS = {
@@ -322,8 +322,8 @@ class _HoverHint:
         # hundreds of pixels away from its icon.
         host = self.widget.winfo_toplevel()
         self.popup = tk.Label(
-            host, text=self.text, justify="left", wraplength=560,
-            bg="#252A31", fg="#F5F7FA", padx=12, pady=10,
+            host, text=self.text, justify="left", wraplength=680,
+            bg="#252A31", fg="#F5F7FA", padx=14, pady=12,
             font=HINT_FONT, relief="solid", borderwidth=1,
         )
         self.popup.update_idletasks()
@@ -464,14 +464,14 @@ class DataTablePopup:
         style.theme_use("clam")
         style.configure(
             "V2Popup.Treeview", background=PALETTE["SURFACE"], foreground=PALETTE["TEXT"],
-            fieldbackground=PALETTE["SURFACE"], rowheight=42, font=("Segoe UI", 12),
+            fieldbackground=PALETTE["SURFACE"], rowheight=46, font=("Segoe UI", 13),
             borderwidth=0, relief="flat",
         )
         style.layout("V2Popup.Treeview", [("V2Popup.Treeview.treearea", {"sticky": "nswe"})])
         style.configure(
             "V2Popup.Treeview.Heading", background=PALETTE["SURFACE_2"],
-            foreground=PALETTE["TEXT"], font=("Segoe UI", 12, "bold"),
-            relief="flat", padding=(9, 8),
+            foreground=PALETTE["TEXT"], font=("Segoe UI", 14, "bold"),
+            relief="flat", padding=(10, 9),
         )
         style.map(
             "V2Popup.Treeview",
@@ -667,14 +667,14 @@ class HistoryPopup:
         style.theme_use("clam")
         style.configure(
             "History.Treeview", background=PALETTE["SURFACE"], foreground=PALETTE["TEXT"],
-            fieldbackground=PALETTE["SURFACE"], rowheight=44,
-            font=("Segoe UI", 12), borderwidth=0,
+            fieldbackground=PALETTE["SURFACE"], rowheight=48,
+            font=("Segoe UI", 13), borderwidth=0,
         )
         style.layout("History.Treeview", [("History.Treeview.treearea", {"sticky": "nswe"})])
         style.configure(
             "History.Treeview.Heading", background=PALETTE["SURFACE_2"],
-            foreground=PALETTE["TEXT"], font=("Segoe UI", 12, "bold"),
-            relief="flat", padding=(9, 8),
+            foreground=PALETTE["TEXT"], font=("Segoe UI", 14, "bold"),
+            relief="flat", padding=(10, 9),
         )
         style.map(
             "History.Treeview",
@@ -749,13 +749,13 @@ class HistoryPopup:
         style = ttk.Style()
         style.configure(
             "Signal.Treeview", background=PALETTE["SURFACE"], foreground=PALETTE["TEXT"],
-            fieldbackground=PALETTE["SURFACE"], rowheight=44,
-            font=("Segoe UI", 12), borderwidth=0,
+            fieldbackground=PALETTE["SURFACE"], rowheight=48,
+            font=("Segoe UI", 13), borderwidth=0,
         )
         style.configure(
             "Signal.Treeview.Heading", background=PALETTE["SURFACE_2"],
-            foreground=PALETTE["TEXT"], font=("Segoe UI", 12, "bold"),
-            relief="flat", padding=(9, 8),
+            foreground=PALETTE["TEXT"], font=("Segoe UI", 14, "bold"),
+            relief="flat", padding=(10, 9),
         )
         tree.heading("#0", text="NGÀY / GIỜ", anchor="w")
         tree.column("#0", width=320, minwidth=270, anchor="w", stretch=True)

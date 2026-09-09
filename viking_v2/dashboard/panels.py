@@ -457,13 +457,13 @@ class DashboardPanelsMixin:
         style.theme_use("clam")
         style.configure(
             "Running.Treeview", background=COL_SURFACE_2, foreground=COL_TEXT,
-            fieldbackground=COL_SURFACE_2, rowheight=42, font=("Segoe UI", 12),
+            fieldbackground=COL_SURFACE_2, rowheight=46, font=("Segoe UI", 13),
             borderwidth=0, relief="flat", bordercolor=COL_BORDER,
             lightcolor=COL_BORDER, darkcolor=COL_BORDER,
         )
         style.configure(
             "Running.Treeview.Heading", background=COL_SURFACE, foreground=COL_TEXT,
-            font=("Segoe UI", 12, "bold"), relief="flat", padding=(9, 8),
+            font=("Segoe UI", 14, "bold"), relief="flat", padding=(10, 9),
         )
         style.map(
             "Running.Treeview.Heading",
@@ -751,29 +751,30 @@ class DashboardPanelsMixin:
         management = ctk.CTkFrame(order_group, height=84, fg_color="transparent")
         management.grid(row=2, column=0, sticky="nsew", padx=6, pady=(3, 6))
         management.grid_propagate(False)
-        management.grid_rowconfigure(0, weight=1)
-        for column in range(4):
+        management.grid_rowconfigure((0, 1), weight=1, uniform="preview_management_rows")
+        for column in range(2):
             management.grid_columnconfigure(column, weight=1, uniform="preview_management")
 
-        def level_card(column: int, title: str, title_color: str):
+        def level_card(index: int, title: str, title_color: str):
+            row, column = divmod(index, 2)
             card = ctk.CTkFrame(management, width=1, fg_color=COL_SURFACE_2, corner_radius=6)
-            card.grid(row=0, column=column, sticky="nsew", padx=3)
+            card.grid(row=row, column=column, sticky="nsew", padx=3, pady=3)
             card.grid_columnconfigure(0, weight=1)
             title_widget = ctk.CTkLabel(
-                card, text=title, width=1, height=22, font=("Segoe UI", 11, "bold"),
+                card, text=title, width=1, height=18, font=("Segoe UI", 11, "bold"),
                 text_color=title_color, anchor="w",
             )
-            title_widget.grid(row=0, column=0, sticky="ew", padx=9, pady=(7, 0))
+            title_widget.grid(row=0, column=0, sticky="ew", padx=9, pady=(3, 0))
             value = ctk.CTkLabel(
-                card, text="NA", width=1, height=24, font=("Cascadia Mono", 12, "bold"),
+                card, text="NA", width=1, height=20, font=("Cascadia Mono", 12, "bold"),
                 text_color=title_color, anchor="w",
             )
             value.grid(row=1, column=0, sticky="ew", padx=9, pady=(1, 0))
             detail = ctk.CTkLabel(
-                card, text="", width=1, height=22, font=("Segoe UI", 11),
+                card, text="", width=1, height=18, font=("Segoe UI", 11),
                 text_color=COL_PREVIEW_TEXT, anchor="w",
             )
-            detail.grid(row=2, column=0, sticky="ew", padx=9, pady=(0, 6))
+            detail.grid(row=2, column=0, sticky="ew", padx=9, pady=(0, 2))
             return title_widget, value, detail
 
         _tp_title, self.preview_tp_value, self.preview_tp_detail = level_card(0, "TP MANUAL", COL_GREEN)

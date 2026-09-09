@@ -185,6 +185,24 @@ def test_phase2_preview_uses_readable_stacked_rows(ui_root) -> None:
         assert subject.preview_rule_ema.master is subject.preview_rule_sell_ema.master
         assert subject.preview_rule_ema.master is subject.preview_rule_rsi.master
         assert int(subject.preview_rule_phase3_detail.grid_info()["row"]) == 1
+
+        root.update_idletasks()
+        management_cards = (
+            subject.preview_tp_value.master,
+            subject.preview_sl_value.master,
+            subject.preview_normal_value.master,
+            subject.preview_exit_value.master,
+        )
+        assert {
+            (int(card.grid_info()["row"]), int(card.grid_info()["column"]))
+            for card in management_cards
+        } == {(0, 0), (0, 1), (1, 0), (1, 1)}
+        for card in management_cards:
+            content_bottom = max(
+                child.winfo_y() + child.winfo_height()
+                for child in card.winfo_children()
+            )
+            assert content_bottom <= card.winfo_height()
     finally:
         if parent is not None and parent.winfo_exists():
             parent.destroy()
