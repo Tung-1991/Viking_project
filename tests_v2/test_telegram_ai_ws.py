@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import msgpack
 
 from viking_v2.connections.dnse.websocket import DNSEMarketWS
 from viking_v2.connections.telegram import SignalTelegramService
 from viking_v2.dashboard.actions import DashboardActionsMixin
-from viking_v2.models import StrategyDecision, TradeCycle
+from viking_v2.models import BrokerOrderResult, OrderIntent, StrategyDecision, TradeCycle
 from viking_v2.rules.state import RuleStateStore
+from viking_v2.storage import SignalLog
 
 
 class Telegram:
@@ -27,7 +29,7 @@ def test_telegram_sends_one_buy_and_only_its_matching_closed_summary():
     )
     cycle = TradeCycle(
         id="ABCDEF1234", symbol="FPT", execution_mode="REAL",
-        em_modes=["NORMAL", "HIGH", "IND_EXIT"],
+        em_modes=["NORMAL", "IND_EXIT"],
     )
     cycle.record_buy_fill(100, 69.2, 3_000)
     cycle.mark_exit_once("NORMAL_PROTECTION")
@@ -41,8 +43,8 @@ def test_telegram_sends_one_buy_and_only_its_matching_closed_summary():
     assert "CLOSED · FPT · REAL" in tele.sent[1][1]
     assert "ABCDEF1234" in tele.sent[1][1]
     assert "Lãi/lỗ ròng: +473,000đ (+6.84%)" in tele.sent[1][1]
-    assert "EM bật: NORMAL · HIGH · EXIT SELL" in tele.sent[1][1]
-    assert "EM kích hoạt: 2 lần · NORMAL ×1 · EXIT SELL ×1" in tele.sent[1][1]
+    assert "EM bật: PROTECT · E" in tele.sent[1][1]
+    assert "EM kích hoạt: 2 lần · PROTECT ×1 · E ×1" in tele.sent[1][1]
     assert "Lý do: INDICATOR EXIT" in tele.sent[1][1]
 
 
@@ -99,6 +101,56 @@ def test_telegram_signal_state_is_persistent_and_deduplicated(tmp_path):
     assert closed and closed["id"] == opened["id"]
     assert closed["buy_price"] == 69.2
     assert state.active_telegram_signal("FPT") is None
+
+
+def test_telegram_signal_can_use_the_trade_id_and_corporate_action_is_outbound(tmp_path):
+    state = RuleStateStore(tmp_path / "rule_state.json")
+    opened = state.open_telegram_signal(
+        "FPT", "2026-09-09", price=100.0, market_state="ACCUMULATION",
+        signal_id="TRADE-001",
+    )
+    assert opened and opened["id"] == "TRADE-001"
+
+    tele = Telegram()
+    service = SignalTelegramService(tele, chat_id="7")
+    assert service.notify_corporate_action(symbol="FPT", ex_date="2026-09-21")
+    assert "CHỐT QUYỀN · FPT" in tele.sent[0][1]
+    assert "Ngày GDKHQ: 2026-09-21" in tele.sent[0][1]
+    assert "không tự bán" in tele.sent[0][1]
+
+
+def test_rejected_bot_buy_is_written_back_to_signal_history(tmp_path):
+    class Subject(DashboardActionsMixin):
+        pass
+
+    subject = object.__new__(Subject)
+    subject.rule_state = RuleStateStore(tmp_path / "rule_state.json")
+    subject.signal_log = SignalLog(tmp_path / "signal_log.csv")
+    subject.settings = SimpleNamespace(
+        rule_parameters={"max_positions": 5}, watchlist=["FPT"],
+    )
+    subject.snapshots = {"PAPER": ({}, [], [])}
+    subject.queue = SimpleNamespace(list_all=lambda: [])
+    subject.telegram = None
+    subject._shared_tick = lambda _symbol: {"price": 100.0}
+    subject._symbol_exchange = lambda _symbol: "HOSE"
+    subject.rule_state.open_telegram_signal(
+        "FPT", "D1", price=100.0, market_state="UPTREND", signal_id="T1",
+    )
+    intent = OrderIntent.create(
+        "FPT", "BUY", 100, "MARKET", execution_mode="PAPER",
+        source="BOT", trade_id="T1", signal="BUY", candle_key="D1",
+    )
+
+    subject._record_failed_buy_execution(
+        "PAPER", intent, BrokerOrderResult(False, "REJECTED"),
+    )
+
+    assert subject.rule_state.active_telegram_signal("FPT") is None
+    row = subject.signal_log.read_all()[-1]
+    assert (row["acted"], row["blocked_by"], row["candle_key"]) == (
+        "WAIT", "BROKER_REJECTED", "D1",
+    )
 
 
 def test_telegram_does_not_report_a_partial_exit_as_closed():

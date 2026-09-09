@@ -68,12 +68,10 @@ class SignalTelegramService:
         return {
             "TP": "TP",
             "TAKE_PROFIT": "TP",
-            "NORMAL": "NORMAL",
-            "NORMAL_PROTECTION": "NORMAL",
-            "HIGH": "HIGH",
-            "HIGH_PROFIT_PROTECTION": "HIGH",
-            "IND_EXIT": "EXIT SELL",
-            "INDICATOR_EXIT": "EXIT SELL",
+            "NORMAL": "PROTECT",
+            "NORMAL_PROTECTION": "PROTECT",
+            "IND_EXIT": "E",
+            "INDICATOR_EXIT": "E",
         }.get(str(value or "").strip().upper(), "")
 
     def _send(self, text: str) -> bool:
@@ -194,6 +192,21 @@ class SignalTelegramService:
         if why:
             lines.append(f"Bot không vào: {why}")
         return self._send(chr(10).join(lines))
+
+    def notify_corporate_action(self, *, symbol: str, ex_date: str) -> bool:
+        symbol = str(symbol or "").strip().upper()
+        ex_date = str(ex_date or "").strip()
+        if not symbol or not ex_date:
+            return False
+        return self._send(
+            "\n".join(
+                (
+                    f"⚠️ CHỐT QUYỀN · {symbol}",
+                    f"Ngày GDKHQ: {ex_date}",
+                    "Đang có vị thế · Viking không tự bán · operator kiểm tra thủ công.",
+                )
+            )
+        )
 
     def notify_closed(self, *, cycle: TradeCycle, reason: str = "") -> bool:
         """Notify only after every share in the matching trade has been sold."""
