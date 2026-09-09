@@ -7,7 +7,7 @@ from typing import Any, Callable
 import customtkinter as ctk
 
 from ..config import AppSettings, save_settings
-from ..dashboard.windows import FONT_KEY, FONT_VALUE, _HoverHint, _window
+from ..dashboard.windows import FONT_KEY, FONT_VALUE, PALETTE, _HoverHint, _window
 from .business import StaticRuleParameters
 from ..trading.market import validate_buy_window
 
@@ -17,6 +17,7 @@ class RuleSettingsPopup:
     SURFACE = "#22262D"
     BORDER = "#30353D"
     TEXT = "#E8EBEF"
+    TITLE = PALETTE["TITLE"]
     MUTED = "#C5CBD4"
     GREEN = "#22C55E"
     BLUE = "#2B6CB0"
@@ -175,7 +176,7 @@ class RuleSettingsPopup:
         line.pack(fill="x", padx=13, pady=10)
         ctk.CTkLabel(
             line, text=title, font=("Segoe UI", 15, "bold"),
-            text_color=self.TEXT, anchor="w",
+            text_color=self.TITLE, anchor="w",
         ).pack(side="left", padx=(0, 12))
         ctk.CTkLabel(
             line, text=text, font=("Segoe UI", 12),
@@ -201,7 +202,7 @@ class RuleSettingsPopup:
         header.pack(fill="x", padx=12, pady=(9, 5))
         ctk.CTkLabel(
             header, text=title, font=("Segoe UI", 15, "bold"),
-            text_color=self.TEXT, anchor="w",
+            text_color=self.TITLE, anchor="w",
         ).pack(side="left")
         if description:
             self._hint_icon(header, description).pack(side="left", padx=(8, 0))
@@ -212,7 +213,7 @@ class RuleSettingsPopup:
         row.pack(fill="x", padx=12, pady=4)
         row.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            row, text=label, font=FONT_KEY, text_color=self.TEXT, anchor="w",
+            row, text=label, font=FONT_KEY, text_color=self.TITLE, anchor="w",
         ).grid(row=0, column=0, sticky="w")
         entry = ctk.CTkEntry(
             row, width=92, height=34, justify="right",
@@ -371,7 +372,7 @@ class RuleSettingsPopup:
         interval_row.pack(fill="x", padx=12, pady=(0, 8))
         ctk.CTkLabel(
             interval_row, text="NHỊP EMA/RSI", font=FONT_KEY,
-            text_color=self.TEXT,
+            text_color=self.TITLE,
         ).pack(side="left")
         self.realtime_indicator_interval = tk.StringVar(
             value=self.settings.realtime_indicator_interval,
@@ -528,7 +529,7 @@ class RuleSettingsPopup:
         policy_row = ctk.CTkFrame(normal, fg_color="transparent")
         policy_row.pack(fill="x", padx=12, pady=4)
         ctk.CTkLabel(
-            policy_row, text="POLICY", font=FONT_KEY, text_color=self.TEXT,
+            policy_row, text="POLICY", font=FONT_KEY, text_color=self.TITLE,
         ).pack(side="left")
         self.normal_policy = tk.StringVar(value=self.params.normal_policy)
         ctk.CTkOptionMenu(
@@ -572,7 +573,7 @@ class RuleSettingsPopup:
             fact.grid(row=0, column=column, sticky="nsew", padx=3)
             ctk.CTkLabel(
                 fact, text=title, font=FONT_KEY,
-                text_color=self.MUTED, anchor="w",
+                text_color=self.TITLE, anchor="w",
             ).pack(fill="x", padx=10, pady=(7, 2))
             value_label = ctk.CTkLabel(
                 fact, text=value, font=FONT_VALUE,

@@ -35,7 +35,7 @@ from ..storage import CSVOrderJournal
 from ..trading.market import VN_TZ, market_phase, market_session_clock, normalize_exchange
 from .view import (
     COL_GRAY, COL_GREEN, COL_MUTED, COL_PREVIEW_TEXT, COL_RED, COL_SURFACE_2,
-    COL_TEXT, COL_WARN, _cash, _compact_vnd, _display_price, _equity, _number,
+    COL_TEXT, COL_TITLE, COL_WARN, _cash, _compact_vnd, _display_price, _equity, _number,
     _price_unit,
 )
 from .info import InfoPopup
@@ -1444,15 +1444,15 @@ class DashboardActionsMixin:
         ctk.CTkLabel(
             top,
             text=f"{action.get('symbol', '')} · {order_type} · {action.get('mode', '')}",
-            font=("Segoe UI", 15, "bold"),
+            font=("Segoe UI", 15, "bold"), text_color=COL_TITLE,
         ).grid(row=0, column=0, columnspan=2, sticky="w", padx=18, pady=(16, 10))
-        ctk.CTkLabel(top, text="Khối lượng", font=FONT_KEY).grid(
+        ctk.CTkLabel(top, text="Khối lượng", font=FONT_KEY, text_color=COL_TITLE).grid(
             row=1, column=0, sticky="w", padx=18, pady=7
         )
         quantity_entry = ctk.CTkEntry(top, font=FONT_MONO_VALUE)
         quantity_entry.insert(0, str(quantity_value))
         quantity_entry.grid(row=1, column=1, sticky="ew", padx=(8, 18), pady=7)
-        ctk.CTkLabel(top, text="Giá LO", font=FONT_KEY).grid(
+        ctk.CTkLabel(top, text="Giá LO", font=FONT_KEY, text_color=COL_TITLE).grid(
             row=2, column=0, sticky="w", padx=18, pady=7
         )
         price_entry = ctk.CTkEntry(top, font=FONT_MONO_VALUE)
@@ -1549,7 +1549,7 @@ class DashboardActionsMixin:
         top.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             top, text=f"{symbol} · {mode} · {quantity:,} CP",
-            font=("Segoe UI", 18, "bold"), text_color=COL_TEXT,
+            font=("Segoe UI", 18, "bold"), text_color=COL_TITLE,
         ).grid(row=0, column=0, sticky="w", padx=20, pady=(18, 4))
         ctk.CTkLabel(
             top,
@@ -1585,7 +1585,7 @@ class DashboardActionsMixin:
             card.grid(row=0, column=col, sticky="nsew", padx=4, pady=6)
             ctk.CTkLabel(
                 card, text=title, font=FONT_KEY,
-                text_color=COL_MUTED,
+                text_color=COL_TITLE,
             ).pack(anchor="w", padx=12, pady=(9, 3))
             ctk.CTkLabel(
                 card, text=value, font=FONT_MONO_VALUE,
@@ -1664,7 +1664,7 @@ class DashboardActionsMixin:
             card_color = COL_GRAY if col % 2 == 0 else "#343A43"
             card = ctk.CTkFrame(details, fg_color=card_color, corner_radius=7)
             card.grid(row=0, column=col, sticky="ew", padx=4, pady=6)
-            ctk.CTkLabel(card, text=title, font=FONT_KEY, text_color=COL_TEXT).pack(anchor="w", padx=12, pady=(9, 3))
+            ctk.CTkLabel(card, text=title, font=FONT_KEY, text_color=COL_TITLE).pack(anchor="w", padx=12, pady=(9, 3))
             ctk.CTkLabel(card, text=value, font=FONT_VALUE, text_color=COL_TEXT, wraplength=300, justify="left").pack(anchor="w", padx=12, pady=(0, 10))
 
         status = ctk.CTkLabel(top, text="", font=("Segoe UI", 11), text_color=COL_WARN)

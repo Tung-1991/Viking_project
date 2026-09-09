@@ -44,6 +44,7 @@ COL_SURFACE = PALETTE["SURFACE"]
 COL_SURFACE_2 = PALETTE["SURFACE_2"]
 COL_BORDER = PALETTE["BORDER"]
 COL_TEXT = PALETTE["TEXT"]
+COL_TITLE = PALETTE["TITLE"]
 COL_MUTED = PALETTE["MUTED"]
 COL_DIM = PALETTE["DIM"]
 COL_BLUE = PALETTE["BLUE"]
@@ -202,7 +203,7 @@ class BacktestPopup:
             fieldbackground=COL_SURFACE, rowheight=48, font=FONT_TABLE_VALUE, borderwidth=0,
         )
         style.configure(
-            "Backtest.Treeview.Heading", background=COL_SURFACE_2, foreground=COL_TEXT,
+            "Backtest.Treeview.Heading", background=COL_SURFACE_2, foreground=COL_TITLE,
             font=FONT_TABLE_HEADING, relief="flat", padding=(10, 9),
         )
         style.map(
@@ -270,9 +271,17 @@ class BacktestPopup:
         return entry
 
     @staticmethod
-    def _label(parent: Any, text: str, size: int = 15, *, bold: bool = False, color: str = COL_TEXT) -> ctk.CTkLabel:
+    def _label(
+        parent: Any,
+        text: str,
+        size: int = 15,
+        *,
+        bold: bool = False,
+        color: str | None = None,
+    ) -> ctk.CTkLabel:
         return ctk.CTkLabel(
-            parent, text=text, anchor="w", text_color=color,
+            parent, text=text, anchor="w",
+            text_color=color or (COL_TITLE if bold else COL_TEXT),
             font=(FONT, size, "bold", "italic") if bold else (FONT, size),
         )
 

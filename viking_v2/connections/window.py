@@ -12,7 +12,7 @@ import customtkinter as ctk
 
 from .. import config
 from ..config import AppSettings, load_settings, save_settings
-from ..dashboard.windows import FONT_KEY, FONT_VALUE, SymbolPicker, _HoverHint, _window
+from ..dashboard.windows import FONT_KEY, FONT_VALUE, PALETTE, SymbolPicker, _HoverHint, _window
 from ..config import update_env
 from .dnse.client import DNSEClient
 from .telegram import TelegramClient
@@ -24,6 +24,7 @@ class ConnectionPopup:
     SURFACE_2 = "#1B1F25"
     BORDER = "#343A43"
     TEXT = "#E8EBEF"
+    TITLE = PALETTE["TITLE"]
     MUTED = "#C5CBD4"
     GREEN = "#22C55E"
     BLUE = "#2B6CB0"
@@ -156,7 +157,7 @@ class ConnectionPopup:
         card.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(
             card, text=title, font=("Segoe UI", 15, "bold"),
-            text_color=self.TEXT, anchor="w",
+            text_color=self.TITLE, anchor="w",
         ).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 5))
         if hint:
             button = ctk.CTkButton(
@@ -178,7 +179,7 @@ class ConnectionPopup:
         hint: str = "",
     ) -> ctk.CTkEntry:
         ctk.CTkLabel(
-            frame, text=label, anchor="w", font=FONT_KEY, text_color=self.TEXT,
+            frame, text=label, anchor="w", font=FONT_KEY, text_color=self.TITLE,
         ).grid(row=row, column=0, sticky="w", padx=(12, 8), pady=4)
         entry = ctk.CTkEntry(
             frame, show="•" if secret else "", height=32,
@@ -243,7 +244,7 @@ class ConnectionPopup:
             cell = ctk.CTkFrame(self.account_info, fg_color="transparent")
             cell.grid(row=0, column=column, sticky="nsew", padx=7, pady=4)
             ctk.CTkLabel(
-                cell, text=title, font=FONT_KEY, text_color=self.MUTED,
+                cell, text=title, font=FONT_KEY, text_color=self.TITLE,
             ).pack(side="left", padx=(0, 8))
             label = ctk.CTkLabel(
                 cell, text=value, font=FONT_VALUE, text_color=self.TEXT,
@@ -272,7 +273,7 @@ class ConnectionPopup:
         )
         ctk.CTkLabel(
             self.token_bar, text="TOKEN GD", width=82, anchor="w",
-            font=FONT_KEY, text_color=self.TEXT,
+            font=FONT_KEY, text_color=self.TITLE,
         ).grid(row=0, column=1, sticky="w")
         token_ready = self.client.has_trading_token()
         self.token_status = ctk.CTkLabel(
@@ -327,7 +328,7 @@ class ConnectionPopup:
         self.otp_type = tk.StringVar(value="SMART OTP" if self.client.otp_type == "smart_otp" else "EMAIL OTP")
         ctk.CTkLabel(
             otp_card, text="PHƯƠNG THỨC", anchor="w",
-            font=FONT_KEY, text_color=self.TEXT,
+            font=FONT_KEY, text_color=self.TITLE,
         ).grid(row=1, column=0, sticky="w", padx=(12, 8), pady=4)
         ctk.CTkSegmentedButton(
             otp_card, values=["EMAIL OTP", "SMART OTP"], variable=self.otp_type,
@@ -436,7 +437,7 @@ class ConnectionPopup:
         exchange_row.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(
             exchange_row, text="SÀN DỰ PHÒNG", font=FONT_KEY,
-            text_color=self.TEXT,
+            text_color=self.TITLE,
         ).grid(row=0, column=0, sticky="w", padx=(0, 10))
         self.exchange_symbol = ctk.CTkOptionMenu(
             exchange_row, values=self._watchlist_draft or [""], width=110, height=32,

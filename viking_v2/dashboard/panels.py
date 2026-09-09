@@ -10,9 +10,9 @@ import customtkinter as ctk
 from ..trading.market import market_phase
 from ..trading.portfolio import size_buy_order, validate_quantity
 from .view import (
-    COL_BORDER, COL_GRAY, COL_GREEN, COL_MUTED, COL_PREVIEW_TEXT, COL_RED,
-    COL_SURFACE, COL_SURFACE_2, COL_TEXT, COL_WARN, FONT_BOLD,
-    FONT_PREVIEW_TITLE, FONT_PREVIEW_VALUE, _compact_vnd, _display_price,
+    COL_BORDER, COL_GRAY, COL_GREEN, COL_MUTED,
+    COL_PREVIEW_TEXT, COL_RED, COL_SURFACE, COL_SURFACE_2, COL_TEXT, COL_WARN, FONT_BOLD,
+    COL_TITLE, FONT_PREVIEW_TITLE, FONT_PREVIEW_VALUE, _compact_vnd, _display_price,
     _number, _price_unit,
 )
 from .windows import (
@@ -102,8 +102,8 @@ class DashboardPanelsMixin:
         def setting_row(index: int, label: str) -> ctk.CTkFrame:
             ctk.CTkLabel(
                 control, text=label, font=FONT_KEY,
-                text_color=COL_TEXT, anchor="e",
-            ).grid(row=index, column=0, sticky="e", padx=(7, 6), pady=3)
+                text_color=COL_TITLE, anchor="w", justify="left",
+            ).grid(row=index, column=0, sticky="ew", padx=(7, 6), pady=3)
             frame = ctk.CTkFrame(control, width=1, height=36, fg_color="transparent")
             frame.grid(row=index, column=1, sticky="ew", padx=(0, 7), pady=3)
             # Child buttons must consume the available panel width, not enlarge
@@ -387,7 +387,7 @@ class DashboardPanelsMixin:
         )
         ctk.CTkLabel(
             box, text=label, width=96, font=FONT_KEY,
-            text_color=COL_MUTED, anchor="w",
+            text_color=COL_TITLE, anchor="w",
         ).grid(row=0, column=0, sticky="w", padx=(8, 2), pady=4)
         entry = ctk.CTkEntry(
             box, width=1, font=FONT_MONO_VALUE, height=36,
@@ -417,7 +417,7 @@ class DashboardPanelsMixin:
         header.grid(row=0, column=0, sticky="ew", pady=(0, 5))
         self.table_title = ctk.CTkLabel(
             header, text="LỆNH ĐANG CHẠY", font=("Segoe UI", 17, "bold"),
-            text_color=COL_TEXT,
+            text_color=COL_TITLE,
         )
         self.table_title.pack(side="left")
         self.running_legend_button = ctk.CTkButton(
@@ -479,13 +479,13 @@ class DashboardPanelsMixin:
             lightcolor=COL_BORDER, darkcolor=COL_BORDER,
         )
         style.configure(
-            "Running.Treeview.Heading", background=COL_SURFACE, foreground=COL_TEXT,
+            "Running.Treeview.Heading", background=COL_SURFACE, foreground=COL_TITLE,
             font=FONT_TABLE_HEADING, relief="flat", padding=(10, 9),
         )
         style.map(
             "Running.Treeview.Heading",
             background=[("active", "#252A32"), ("pressed", "#252A32")],
-            foreground=[("active", COL_TEXT), ("pressed", COL_TEXT)],
+            foreground=[("active", COL_TITLE), ("pressed", COL_TITLE)],
         )
         style.map(
             "Running.Treeview",
@@ -544,7 +544,7 @@ class DashboardPanelsMixin:
         info_header.grid_columnconfigure(2, weight=1, uniform="info_header_side")
         ctk.CTkLabel(
             info_header, text="HỆ THỐNG", font=("Segoe UI", 14, "bold"),
-            text_color=COL_TEXT, anchor="w",
+            text_color=COL_TITLE, anchor="w",
         ).grid(row=0, column=0, sticky="w", padx=(2, 12))
         self.info_tab_selector = ctk.CTkSegmentedButton(
             info_header, values=["PREVIEW", "Manual", "Bot"],
@@ -697,7 +697,7 @@ class DashboardPanelsMixin:
         order_header.grid_columnconfigure(2, weight=0)
         self.preview_order_title = ctk.CTkLabel(
             order_header, text="--- · PAPER · BUY · MARKET",
-            width=230, height=22, font=("Segoe UI", 13, "bold"), text_color=COL_TEXT, anchor="w",
+            width=230, height=22, font=("Segoe UI", 13, "bold"), text_color=COL_TITLE, anchor="w",
         )
         self.preview_order_title.grid(
             row=0, column=0, sticky="ew", padx=(2, 5)
@@ -728,7 +728,7 @@ class DashboardPanelsMixin:
         def metric_card(
             column: int,
             title: str,
-            title_color: str = COL_PREVIEW_TEXT,
+            title_color: str = COL_TITLE,
             hint: str = "",
         ):
             card = ctk.CTkFrame(metrics, width=1, fg_color=COL_SURFACE_2, corner_radius=6)
@@ -1755,7 +1755,7 @@ class DashboardPanelsMixin:
 
         ctk.CTkLabel(
             top, text="CHÚ THÍCH BẢNG LỆNH",
-            font=("Segoe UI", 17, "bold"), text_color=COL_TEXT,
+            font=("Segoe UI", 17, "bold"), text_color=COL_TITLE,
         ).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 8))
 
         body = ctk.CTkScrollableFrame(

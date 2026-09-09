@@ -52,7 +52,7 @@ class InfoPopup:
         head.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             head, text="INFO", font=(self.FONT, 20, "bold"),
-            text_color=PALETTE["TEXT"], anchor="w",
+            text_color=PALETTE["TITLE"], anchor="w",
         ).grid(row=0, column=0, sticky="w")
         ctk.CTkLabel(
             head, text="Cùng bố cục · cấu hình độc lập",
@@ -168,7 +168,7 @@ class InfoPopup:
             cell.grid_columnconfigure(1, weight=1)
             ctk.CTkLabel(
                 cell, text=label, font=FONT_KEY,
-                text_color=PALETTE["MUTED"], anchor="w",
+                text_color=PALETTE["TITLE"], anchor="w",
             ).grid(row=0, column=0, sticky="w", padx=(9, 10), pady=5)
             ctk.CTkLabel(
                 cell, text=value, font=FONT_VALUE,

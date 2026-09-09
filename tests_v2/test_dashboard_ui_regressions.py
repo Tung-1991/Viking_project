@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 
 from viking_v2.dashboard.panels import DashboardPanelsMixin
+from viking_v2.dashboard.view import COL_TEXT, COL_TITLE
 from viking_v2.dashboard.tables import (
     DashboardTablesMixin,
     RUNNING_COLUMNS,
@@ -16,6 +17,7 @@ from viking_v2.dashboard.windows import (
     FONT_TABLE_VALUE,
     FONT_VALUE,
     HINT_FONT,
+    PALETTE,
     fit_entry_text,
 )
 
@@ -34,6 +36,11 @@ def test_operator_typography_separates_keys_from_values() -> None:
     assert FONT_TABLE_HEADING == ("Segoe UI", 16, "bold", "italic")
     assert FONT_TABLE_VALUE == ("Segoe UI", 14)
     assert HINT_FONT == ("Segoe UI", 20)
+    title_rgb = tuple(int(COL_TITLE[index:index + 2], 16) for index in (1, 3, 5))
+    text_rgb = tuple(int(COL_TEXT[index:index + 2], 16) for index in (1, 3, 5))
+    brightness_ratio = sum(title_rgb) / sum(text_rgb)
+    assert PALETTE["TITLE"] == COL_TITLE
+    assert 0.65 <= brightness_ratio <= 0.75
 
 
 def test_dynamic_entry_values_shrink_only_when_they_need_more_room(ui_root) -> None:

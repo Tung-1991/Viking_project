@@ -20,6 +20,7 @@ PALETTE = {
     "SLATE": "#3A3F47",     # neutral buttons
     "SLATE_HOVER": "#4B515B",
     "TEXT": "#E8EBEF",
+    "TITLE": "#A9ADB3",     # neutral headings/keys; ~28% dimmer than TEXT
     "MUTED": "#C5CBD4",
     "DIM": "#98A2B3",
     "BLUE": "#2B6CB0",
@@ -462,7 +463,7 @@ class DataTablePopup:
         header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             header, text=title.upper(), font=("Segoe UI", 18, "bold"),
-            text_color=PALETTE["TEXT"], anchor="w",
+            text_color=PALETTE["TITLE"], anchor="w",
         ).grid(row=0, column=0, sticky="w")
         ctk.CTkButton(
             header, text="↻  LÀM MỚI", width=126, height=36,
@@ -483,7 +484,7 @@ class DataTablePopup:
             cell.grid(row=0, column=column, sticky="nsew", padx=8, pady=8)
             label = ctk.CTkLabel(
                 cell, text="--", font=FONT_KEY,
-                text_color=PALETTE["MUTED"], anchor="center",
+                text_color=PALETTE["TITLE"], anchor="center",
             )
             label.pack(fill="x")
             value = ctk.CTkLabel(
@@ -519,7 +520,7 @@ class DataTablePopup:
         style.layout("V2Popup.Treeview", [("V2Popup.Treeview.treearea", {"sticky": "nswe"})])
         style.configure(
             "V2Popup.Treeview.Heading", background=PALETTE["SURFACE_2"],
-            foreground=PALETTE["TEXT"], font=FONT_TABLE_HEADING,
+            foreground=PALETTE["TITLE"], font=FONT_TABLE_HEADING,
             relief="flat", padding=(10, 9),
         )
         style.map(
@@ -607,7 +608,7 @@ class DataTablePopup:
         while len(values) < 6:
             values.append(("", "", PALETTE["TEXT"]))
         for (label_widget, value_widget), (label, value, color) in zip(self.summary_labels, values):
-            label_widget.configure(text=str(label), text_color=PALETTE["MUTED"])
+            label_widget.configure(text=str(label), text_color=PALETTE["TITLE"])
             value_widget.configure(text=str(value), text_color=str(color or PALETTE["TEXT"]))
 
     def refresh(self) -> None:
@@ -685,7 +686,7 @@ class HistoryPopup:
         header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             header, text="LỊCH SỬ GIAO DỊCH", font=("Segoe UI", 18, "bold"),
-            text_color=PALETTE["TEXT"], anchor="w",
+            text_color=PALETTE["TITLE"], anchor="w",
         ).grid(row=0, column=0, sticky="w")
         self.subtitle = ctk.CTkLabel(
             header, text="Mỗi ngày → mỗi giao dịch → các lần đặt/hủy/khớp",
@@ -722,7 +723,7 @@ class HistoryPopup:
         style.layout("History.Treeview", [("History.Treeview.treearea", {"sticky": "nswe"})])
         style.configure(
             "History.Treeview.Heading", background=PALETTE["SURFACE_2"],
-            foreground=PALETTE["TEXT"], font=FONT_TABLE_HEADING,
+            foreground=PALETTE["TITLE"], font=FONT_TABLE_HEADING,
             relief="flat", padding=(10, 9),
         )
         style.map(
@@ -803,7 +804,7 @@ class HistoryPopup:
         )
         style.configure(
             "Signal.Treeview.Heading", background=PALETTE["SURFACE_2"],
-            foreground=PALETTE["TEXT"], font=FONT_TABLE_HEADING,
+            foreground=PALETTE["TITLE"], font=FONT_TABLE_HEADING,
             relief="flat", padding=(10, 9),
         )
         tree.heading("#0", text="NGÀY / GIỜ", anchor="w")
@@ -818,7 +819,7 @@ class HistoryPopup:
         tree.tag_configure("sell", foreground="#FF8A8A")
         tree.tag_configure("blocked", foreground="#F6C35B")
         tree.tag_configure(
-            "signal_day", background=PALETTE["SURFACE_2"], foreground=PALETTE["TEXT"],
+            "signal_day", background=PALETTE["SURFACE_2"], foreground=PALETTE["TITLE"],
             font=("Segoe UI", 12, "bold"),
         )
         tree.grid(row=0, column=0, sticky="nsew", padx=(5, 0), pady=(5, 0))
