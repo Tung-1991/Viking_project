@@ -10,14 +10,16 @@ env/
 .coverage
 htmlcov/
 
-# Dữ liệu chạy: giá tải về, lệnh, nhật ký, file Excel xuất ra
+# Dữ liệu chạy: giá tải về, lệnh, nhật ký và báo cáo
 viking_v2/runtime/
+*.xlsx
+*.xls
 
 # Bí mật
 .env
 .env.*
-!.env.example
 viking_v2/.env
+!viking_v2/.env.example
 
 # IDE và hệ điều hành
 .vscode/
@@ -28,5 +30,5 @@ Thumbs.db
 *.log
 .artifacts/
 
-# Tài liệu API của DNSE, để tra cứu tại chỗ, không cần đẩy lên git
+# Tài liệu API DNSE chỉ dùng để tra cứu cục bộ
 viking_v2/dnse_api/
