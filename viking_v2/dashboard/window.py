@@ -155,9 +155,7 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         self._left_panel()
         self._right_panel()
         self.after_idle(self._sync_left_scrollbar)
-        self.after_idle(self._sync_info_selector_mode)
         self.bind("<Configure>", self._on_dashboard_resize, add="+")
 
     def _on_dashboard_resize(self, _event=None) -> None:
         self.after_idle(self._sync_left_scrollbar)
-        self.after_idle(self._sync_info_selector_mode)

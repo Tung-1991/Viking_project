@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from datetime import datetime
 import time
+import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import ttk
 from typing import Any
 
 from .. import config
 from ..trading.orders import CLAIMABLE_STATUSES, FINAL_STATUSES
 from .view import _compact_vnd, _display_price, _number, _price_unit
+from .windows import FONT_TABLE_HEADING
 
 
 RUNNING_COLUMNS = (
@@ -37,11 +40,11 @@ RUNNING_WIDTHS = {
     "Time": 145,
     "Order": 330,
     "Targets": 250,
-    "CostInfo": 220,
-    "RR": 200,
+    "CostInfo": 240,
+    "RR": 225,
     "PnL_MAE_MFE": 310,
     "Status": 610,
-    "X": 48,
+    "X": 56,
 }
 RUNNING_ANCHORS = {
     "Ticket": "center",
@@ -57,6 +60,24 @@ RUNNING_ANCHORS = {
 
 
 class DashboardTablesMixin:
+    @staticmethod
+    def _running_column_width(tree: ttk.Treeview, column: str) -> int:
+        """Return a width that fits both content policy and the rendered header."""
+        configured = RUNNING_WIDTHS.get(column, 180)
+        try:
+            family, size, *styles = FONT_TABLE_HEADING
+            options: dict[str, Any] = {
+                "root": tree.winfo_toplevel(), "family": family, "size": size,
+            }
+            if "bold" in styles:
+                options["weight"] = "bold"
+            if "italic" in styles:
+                options["slant"] = "italic"
+            measured = tkfont.Font(**options).measure(RUNNING_HEADERS.get(column, column))
+            return max(configured, measured + 32)
+        except (AttributeError, RuntimeError, TypeError, ValueError, tk.TclError):
+            return configured
+
     def _clear_running_selection_on_blank(self, event: Any) -> None:
         """Clear a sticky selection when the user clicks the empty table area."""
         tree = event.widget
@@ -97,6 +118,7 @@ class DashboardTablesMixin:
             return
         tree.configure(columns=columns)
         for column in columns:
+            width = DashboardTablesMixin._running_column_width(tree, column)
             tree.heading(
                 column,
                 text=RUNNING_HEADERS.get(column, column),
@@ -104,8 +126,8 @@ class DashboardTablesMixin:
             )
             tree.column(
                 column,
-                width=RUNNING_WIDTHS.get(column, 180),
-                minwidth=RUNNING_WIDTHS.get(column, 180),
+                width=width,
+                minwidth=width,
                 anchor=RUNNING_ANCHORS.get(column, "w"),
                 stretch=False,
             )

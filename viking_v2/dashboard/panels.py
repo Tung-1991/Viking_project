@@ -558,22 +558,6 @@ class DashboardPanelsMixin:
             command=self._select_info_tab,
         )
         self.info_tab_selector.grid(row=0, column=1)
-        self.info_tab_dropdown = ctk.CTkOptionMenu(
-            info_header,
-            values=["PREVIEW", "Manual", "Bot"],
-            width=156,
-            height=28,
-            dynamic_resizing=False,
-            font=("Segoe UI", 11, "bold"),
-            fg_color="#2563A6",
-            button_color="#245C92",
-            button_hover_color="#2E73BB",
-            dropdown_fg_color=COL_SURFACE_2,
-            dropdown_hover_color=COL_GRAY,
-            command=self._select_info_tab,
-        )
-        self.info_tab_dropdown.grid(row=0, column=1)
-        self.info_tab_dropdown.grid_remove()
         self._info_collapsed = False
         self.info_collapse_button = ctk.CTkButton(
             info_header,
@@ -660,8 +644,6 @@ class DashboardPanelsMixin:
         )
         self.log_tabview.set("PREVIEW")
         self.info_tab_selector.set("PREVIEW")
-        self.info_tab_dropdown.set("PREVIEW")
-        self.after_idle(self._sync_info_selector_mode)
         self._refresh_full_order_preview()
         self._refresh_api_health_panel(self.bridge.read_status())
 
@@ -1570,30 +1552,6 @@ class DashboardPanelsMixin:
             text_color=COL_MUTED if not enabled else COL_TEXT,
         )
 
-    def _sync_info_selector_mode(self) -> None:
-        """Use a compact dropdown only when the main window is narrow."""
-        if not self.running:
-            return
-        if not hasattr(self, "info_tab_selector") or not hasattr(self, "info_tab_dropdown"):
-            return
-        try:
-            if not self.winfo_exists() or not self.info_tab_selector.winfo_exists() or not self.info_tab_dropdown.winfo_exists():
-                return
-            window_scale = max(0.1, float(ctk.ScalingTracker.get_window_scaling(self)))
-        except (AttributeError, TypeError, ValueError, tk.TclError):
-            return
-        try:
-            logical_width = int(self.winfo_width() or 0) / window_scale
-            compact = logical_width < 1280
-            if compact:
-                self.info_tab_selector.grid_remove()
-                self.info_tab_dropdown.grid()
-            else:
-                self.info_tab_dropdown.grid_remove()
-                self.info_tab_selector.grid()
-        except tk.TclError:
-            return
-
     def _on_log_tab_change(self) -> None:
         active = self.log_tabview.get() if hasattr(self, "log_tabview") else ""
         target = "manual" if active == "Manual" else "bot" if active == "Bot" else ""
@@ -1603,8 +1561,6 @@ class DashboardPanelsMixin:
             self._refresh_full_order_preview()
         if hasattr(self, "info_tab_selector"):
             self.info_tab_selector.set(active)
-        if hasattr(self, "info_tab_dropdown"):
-            self.info_tab_dropdown.set(active)
 
     def _set_log_unread(self, target: str, unread: bool) -> None:
         if target not in getattr(self, "log_tab_keys", {}):
@@ -1612,7 +1568,9 @@ class DashboardPanelsMixin:
         self.log_tab_unread[target] = bool(unread)
         base = self.log_tab_keys[target]
         label = f"{base} *" if unread else base
-        selector = getattr(self, "info_tab_selector", self.log_tabview._segmented_button)
+        selector = getattr(self, "info_tab_selector", None)
+        if selector is None:
+            selector = getattr(self.log_tabview, "_segmented_button", None)
         try:
             for key, button in selector._buttons_dict.items():
                 if key == base:
@@ -1620,17 +1578,6 @@ class DashboardPanelsMixin:
                     break
         except (AttributeError, tk.TclError):
             pass
-        dropdown = getattr(self, "info_tab_dropdown", None)
-        if dropdown is not None:
-            values = [
-                "PREVIEW",
-                "Manual *" if self.log_tab_unread.get("manual") else "Manual",
-                "Bot *" if self.log_tab_unread.get("bot") else "Bot",
-            ]
-            dropdown.configure(values=values)
-            active = self.log_tabview.get() if hasattr(self, "log_tabview") else "PREVIEW"
-            selected = next((value for value in values if value.removesuffix(" *") == active), active)
-            dropdown.set(selected)
 
     def _refresh_api_health_panel(self, status: dict[str, Any] | None = None) -> None:
         if not hasattr(self, "preview_health_core"):

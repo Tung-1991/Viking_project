@@ -183,6 +183,63 @@ def test_running_table_keeps_the_completed_split_column_design() -> None:
     assert RUNNING_HEADERS["Order"] != "Lệnh / KL / SL / TP / FEE"
 
 
+def test_running_headers_fit_their_rendered_font(ui_root) -> None:
+    from tkinter import font as tkfont
+    from tkinter import ttk
+
+    tree = ttk.Treeview(ui_root, show="headings")
+    tree.grid(row=0, column=0)
+    try:
+        DashboardTablesMixin._configure_tree(tree, RUNNING_COLUMNS)
+        ui_root.update_idletasks()
+        heading_font = tkfont.Font(
+            root=ui_root, family=FONT_TABLE_HEADING[0],
+            size=FONT_TABLE_HEADING[1], weight="bold", slant="italic",
+        )
+        for column in RUNNING_COLUMNS:
+            required = heading_font.measure(RUNNING_HEADERS[column]) + 32
+            assert int(tree.column(column, "width")) >= required
+    finally:
+        tree.destroy()
+
+
+class _Tabs:
+    def __init__(self, value: str = "PREVIEW") -> None:
+        self.value = value
+
+    def get(self) -> str:
+        return self.value
+
+    def set(self, value: str) -> None:
+        self.value = value
+
+
+class _Selector(_Tabs):
+    def __init__(self) -> None:
+        super().__init__()
+        self._buttons_dict = {name: _Label() for name in ("PREVIEW", "Manual", "Bot")}
+
+
+def test_log_tabs_show_unread_star_and_clear_it_when_selected() -> None:
+    subject = DashboardPanelsMixin()
+    subject.log_tabview = _Tabs()
+    subject.info_tab_selector = _Selector()
+    subject.log_tab_keys = {"manual": "Manual", "bot": "Bot"}
+    subject.log_tab_unread = {"manual": False, "bot": False}
+
+    subject._set_log_unread("bot", True)
+
+    assert subject.log_tab_unread["bot"] is True
+    assert subject.info_tab_selector._buttons_dict["Bot"].options["text"] == "Bot *"
+
+    subject._select_info_tab("Bot *")
+
+    assert subject.log_tabview.get() == "Bot"
+    assert subject.log_tab_unread["bot"] is False
+    assert subject.info_tab_selector._buttons_dict["Bot"].options["text"] == "Bot"
+    assert not hasattr(DashboardPanelsMixin, "_sync_info_selector_mode")
+
+
 def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> None:
     import customtkinter as ctk
 
