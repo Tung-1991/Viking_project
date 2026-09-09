@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 import re
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import ttk
 from typing import Any, Callable
 
@@ -35,6 +36,49 @@ FONT_MONO_VALUE = ("Cascadia Mono", 14)
 FONT_TABLE_HEADING = ("Segoe UI", 16, "bold", "italic")
 FONT_TABLE_VALUE = ("Segoe UI", 14)
 HINT_FONT = ("Segoe UI", 20)
+
+
+def fit_entry_text(
+    entry: ctk.CTkEntry,
+    text: str,
+    *,
+    base_font: tuple[Any, ...] = FONT_MONO_VALUE,
+    minimum_size: int = 11,
+    horizontal_padding: int = 22,
+) -> int:
+    """Keep a dynamic entry value readable without letting it be clipped.
+
+    Normal values stay at the standard 14-point size.  Only values wider than
+    the actual input area are reduced, and never below the UI minimum of 11.
+    """
+    family = str(base_font[0])
+    base_size = max(minimum_size, int(base_font[1]))
+    styles = tuple(str(item) for item in base_font[2:])
+    inner = getattr(entry, "_entry", None)
+    inner_width = int(inner.winfo_width()) if inner is not None else 0
+    available = max(
+        0,
+        inner_width - 8 if inner_width > 1
+        else int(entry.winfo_width()) - horizontal_padding,
+    )
+    selected = base_size
+    if available > 0 and text:
+        top = entry.winfo_toplevel()
+        for size in range(base_size, minimum_size - 1, -1):
+            options: dict[str, Any] = {"root": top, "family": family, "size": size}
+            if "bold" in styles:
+                options["weight"] = "bold"
+            if "italic" in styles:
+                options["slant"] = "italic"
+            if tkfont.Font(**options).measure(text) <= available:
+                selected = size
+                break
+        else:
+            selected = minimum_size
+    if getattr(entry, "_viking_fit_font_size", None) != selected:
+        entry.configure(font=(family, selected, *styles))
+        entry._viking_fit_font_size = selected
+    return selected
 
 
 _SIGNAL_REASONS = {

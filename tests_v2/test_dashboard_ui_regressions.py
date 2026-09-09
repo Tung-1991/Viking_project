@@ -11,10 +11,12 @@ from viking_v2.dashboard.tables import (
 )
 from viking_v2.dashboard.windows import (
     FONT_KEY,
+    FONT_MONO_VALUE,
     FONT_TABLE_HEADING,
     FONT_TABLE_VALUE,
     FONT_VALUE,
     HINT_FONT,
+    fit_entry_text,
 )
 
 
@@ -32,6 +34,20 @@ def test_operator_typography_separates_keys_from_values() -> None:
     assert FONT_TABLE_HEADING == ("Segoe UI", 16, "bold", "italic")
     assert FONT_TABLE_VALUE == ("Segoe UI", 14)
     assert HINT_FONT == ("Segoe UI", 20)
+
+
+def test_dynamic_entry_values_shrink_only_when_they_need_more_room(ui_root) -> None:
+    import customtkinter as ctk
+
+    entry = ctk.CTkEntry(ui_root, width=115, font=FONT_MONO_VALUE)
+    entry.grid(row=0, column=0)
+    ui_root.update_idletasks()
+    try:
+        assert fit_entry_text(entry, "100 CP") == 14
+        long_size = fit_entry_text(entry, "999,999,999,999,999 CP")
+        assert 11 <= long_size < 14
+    finally:
+        entry.destroy()
 
 
 class _Label:

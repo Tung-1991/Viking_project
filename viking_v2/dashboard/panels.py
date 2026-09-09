@@ -22,6 +22,7 @@ from .windows import (
     FONT_TABLE_VALUE,
     FONT_VALUE,
     _HoverHint,
+    fit_entry_text,
 )
 
 
@@ -322,11 +323,11 @@ class DashboardPanelsMixin:
         self._sl_manual_override = False
         entries = (self.quantity, self.price, self.tp)
         for entry in entries:
-            entry.bind("<KeyRelease>", lambda _event: self._update_order_preview())
+            entry.bind("<KeyRelease>", lambda _event: self._update_order_preview(), add="+")
             entry.bind("<KeyPress>", lambda _event, widget=entry: widget.configure(text_color=COL_TEXT), add="+")
         self.sl.bind("<KeyPress>", lambda _event: self.sl.configure(text_color=COL_TEXT), add="+")
         self.price.bind("<FocusIn>", self._activate_lo_input, add="+")
-        self.sl.bind("<KeyRelease>", self._sl_edited)
+        self.sl.bind("<KeyRelease>", self._sl_edited, add="+")
         self.quantity.bind(
             "<Tab>",
             lambda _event: self._focus_widget(
@@ -398,6 +399,15 @@ class DashboardPanelsMixin:
         )
         entry.insert(0, value)
         entry.grid(row=0, column=1, sticky="ew", padx=(2, 5), pady=4)
+
+        def fit_current_text(_event: Any = None) -> None:
+            shown = str(entry.get() or entry.cget("placeholder_text") or "")
+            fit_entry_text(entry, shown)
+
+        entry.bind("<Configure>", fit_current_text, add="+")
+        entry.bind("<KeyRelease>", fit_current_text, add="+")
+        entry._viking_fit_text = fit_current_text
+        entry.after_idle(fit_current_text)
         if disabled:
             entry.configure(state="disabled")
         return entry
@@ -1012,11 +1022,13 @@ class DashboardPanelsMixin:
         quantity = sizing.quantity
         forced_minimum = sizing.used_minimum
         if hasattr(self, "quantity") and not self.quantity.get().strip():
+            quantity_text = f"{quantity:,} CP" if quantity > 0 else "AUTO"
             self.quantity.configure(
-                placeholder_text=(
-                    f"{quantity:,} CP" if quantity > 0 else "AUTO"
-                )
+                placeholder_text=quantity_text
             )
+            fit_callback = getattr(self.quantity, "_viking_fit_text", None)
+            if callable(fit_callback):
+                fit_callback()
         return quantity, budget, forced_minimum
 
     def _refresh_full_order_preview(self, status: dict[str, Any] | None = None) -> None:
