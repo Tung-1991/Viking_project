@@ -6,6 +6,7 @@ from typing import Any
 import uuid
 
 from .. import config
+from ..exit_modes import normalize_exit_modes
 
 
 VALID_PHASES = {"UPTREND", "DOWNTREND", "ACCUMULATION", "DISTRIBUTION"}
@@ -39,7 +40,7 @@ class BacktestConfig:
     loss_lock_enabled: bool = False
     loss_lock_hours: int = 24
     whipsaw_enabled: bool = False
-    em_modes: list[str] = field(default_factory=lambda: ["NORMAL", "HIGH", "IND_EXIT"])
+    em_modes: list[str] = field(default_factory=lambda: ["NORMAL", "IND_EXIT"])
     sell_wait_policy: str = "RECHECK"
     # ATO khớp ở giá mở cửa · CONTINUOUS khớp sau 9h15 như bot thật đang chạy
     fill_session: str = "ATO"
@@ -76,8 +77,7 @@ class BacktestConfig:
             raise ValueError("Phase cố định không hợp lệ.")
         self.loss_lock_hours = max(0, int(self.loss_lock_hours or 0))
         self.whipsaw_enabled = bool(self.whipsaw_enabled)
-        allowed = {"NORMAL", "HIGH", "IND_EXIT", "TP"}
-        self.em_modes = list(dict.fromkeys(str(x).upper() for x in self.em_modes if str(x).upper() in allowed))
+        self.em_modes = normalize_exit_modes(self.em_modes)
         self.sell_wait_policy = str(self.sell_wait_policy or "RECHECK").upper()
         if self.sell_wait_policy not in {"RECHECK", "KEEP"}:
             self.sell_wait_policy = "RECHECK"
@@ -132,7 +132,7 @@ class BacktestSettings:
     loss_lock_enabled: bool = True
     loss_lock_hours: int = 24
     whipsaw_enabled: bool = True
-    em_modes: list[str] = field(default_factory=lambda: ["NORMAL", "HIGH", "IND_EXIT"])
+    em_modes: list[str] = field(default_factory=lambda: ["NORMAL", "IND_EXIT"])
     sell_wait_policy: str = "RECHECK"
     fill_session: str = "ATO"
     buy_fee_pct: float = config.DEFAULT_BUY_FEE_PCT
@@ -151,8 +151,7 @@ class BacktestSettings:
             self.fixed_market_phase = "ACCUMULATION"
         self.fixed_exposure_pct = min(100.0, max(0.0, float(self.fixed_exposure_pct or 0.0)))
         self.loss_lock_hours = max(0, int(self.loss_lock_hours or 0))
-        allowed = {"NORMAL", "HIGH", "IND_EXIT", "TP"}
-        self.em_modes = list(dict.fromkeys(str(x).upper() for x in self.em_modes if str(x).upper() in allowed))
+        self.em_modes = normalize_exit_modes(self.em_modes)
         self.sell_wait_policy = "KEEP" if str(self.sell_wait_policy).upper() == "KEEP" else "RECHECK"
         self.fill_session = "CONTINUOUS" if str(self.fill_session).upper() == "CONTINUOUS" else "ATO"
         self.simulation_mode = str(self.simulation_mode or "AUTO_HYBRID").strip().upper().replace(" ", "_")
@@ -195,7 +194,7 @@ class BacktestScenario:
     # its own protection switches, so two rows can compare configurations over
     # the same window without touching the shared settings.
     max_positions: int = 5
-    em_modes: list[str] = field(default_factory=lambda: ["NORMAL", "HIGH", "IND_EXIT"])
+    em_modes: list[str] = field(default_factory=lambda: ["NORMAL", "IND_EXIT"])
     whipsaw_enabled: bool = True
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
@@ -213,10 +212,7 @@ class BacktestScenario:
         # exposure_pct is only read when Phase 1 is switched off for this row.
         self.exposure_pct = min(100.0, max(0.0, float(self.exposure_pct or 0.0)))
         self.max_positions = max(1, int(self.max_positions or 1))
-        allowed = {"NORMAL", "HIGH", "IND_EXIT", "TP"}
-        self.em_modes = list(dict.fromkeys(
-            str(x).upper() for x in (self.em_modes or []) if str(x).upper() in allowed
-        ))
+        self.em_modes = normalize_exit_modes(self.em_modes)
         self.whipsaw_enabled = bool(self.whipsaw_enabled)
 
     @property
@@ -313,7 +309,7 @@ class BacktestTrade:
     exit_ema_slow: float = 0.0
     exit_rsi: float = 0.0
     # Every sell of this round as {event, quantity, price}, so the report can
-    # spell out "NORMAL 1500@21.24 + EXIT 3000@21.09" instead of one blended
+    # spell out "PROTECT 1500@21.24 + E 3000@21.09" instead of one blended
     # average price that never traded.
     exit_fills: list[dict[str, Any]] = field(default_factory=list)
 

@@ -39,6 +39,7 @@ class RuleStateStore:
                 "telegram_signals": {},
                 "indicator_streams": {},
                 "buy_confirmations": {},
+                "signal_observations": {},
             },
         )
         self._lock = threading.RLock()
@@ -57,6 +58,7 @@ class RuleStateStore:
         raw["telegram_signals"] = raw.get("telegram_signals") if isinstance(raw.get("telegram_signals"), dict) else {}
         raw["indicator_streams"] = raw.get("indicator_streams") if isinstance(raw.get("indicator_streams"), dict) else {}
         raw["buy_confirmations"] = raw.get("buy_confirmations") if isinstance(raw.get("buy_confirmations"), dict) else {}
+        raw["signal_observations"] = raw.get("signal_observations") if isinstance(raw.get("signal_observations"), dict) else {}
         return raw
 
     @staticmethod
@@ -80,6 +82,41 @@ class RuleStateStore:
             else:
                 raw["buy_confirmations"].pop(key, None)
             self.store.write(raw)
+
+    def observe_signal_time(
+        self,
+        symbol: str,
+        stream: str,
+        signal: str,
+        candle_key: str,
+        observed_at: str,
+    ) -> str:
+        """Persist the first BUY observation even when entry filters are off."""
+        key = self._buy_confirmation_key(symbol, stream)
+        signal = str(signal or "").strip().upper()
+        candle_key = str(candle_key or "").strip()
+        observed_at = str(observed_at or "").strip()
+        with self._lock:
+            raw = self._read()
+            current = raw["signal_observations"].get(key)
+            if signal != "BUY" or not candle_key or not observed_at:
+                if key in raw["signal_observations"]:
+                    raw["signal_observations"].pop(key, None)
+                    self.store.write(raw)
+                return ""
+            if (
+                isinstance(current, dict)
+                and current.get("signal") == signal
+                and current.get("candle_key") == candle_key
+            ):
+                return str(current.get("first_seen", "") or "")
+            raw["signal_observations"][key] = {
+                "signal": signal,
+                "candle_key": candle_key,
+                "first_seen": observed_at,
+            }
+            self.store.write(raw)
+            return observed_at
 
     def observe_indicators(
         self,
@@ -331,8 +368,6 @@ class RuleStateStore:
         profit_pct: float,
         net_pnl: float | None = None,
         market_price: float = 0.0,
-        close_price: float = 0.0,
-        closed_bar: bool = False,
     ) -> dict[str, Any]:
         symbol = str(symbol or "").upper()
         trade_id = str(trade_id or "")
@@ -362,8 +397,6 @@ class RuleStateStore:
                 )
             if float(market_price or 0.0) > 0:
                 current["market_price"] = float(market_price)
-            if closed_bar and float(close_price or 0.0) > 0:
-                current["highest_close"] = max(float(current.get("highest_close", 0.0) or 0.0), float(close_price))
             current["updated_at"] = time.time()
             raw["symbols"][key] = current
             raw["symbols"].pop(symbol, None)
@@ -381,14 +414,12 @@ class RuleStateStore:
             if not isinstance(current, dict) or str(current.get("trade_id", "")) != str(trade_id):
                 return
             normalized = {str(event or "").upper() for event in events}
-            if normalized.intersection({"NORMAL_PROTECTION", "NORMAL_ALERT_EXIT"}):
+            if "NORMAL_PROTECTION" in normalized:
                 current["normal_protection_done"] = True
-            if "HIGH_PROFIT_PROTECTION" in normalized:
-                current["high_profit_protection_done"] = True
             self.store.write(raw)
 
-    def arm_normal(self, symbol: str, trade_id: str, *, alert: bool = False) -> dict[str, Any]:
-        """Persist a NORMAL arm/alert once for the current trade."""
+    def arm_normal(self, symbol: str, trade_id: str) -> dict[str, Any]:
+        """Persist a PROTECT AUTO arm once for the current trade."""
         symbol = str(symbol or "").upper()
         trade_id = str(trade_id or "")
         if not symbol or not trade_id:
@@ -401,29 +432,6 @@ class RuleStateStore:
                 return {}
             current["normal_armed"] = True
             current.setdefault("normal_armed_at", time.time())
-            if alert and not str(current.get("normal_alert_status", "")):
-                current["normal_alert_status"] = "PENDING"
-            current["updated_at"] = time.time()
-            raw["symbols"][key] = current
-            self.store.write(raw)
-            return dict(current)
-
-    def resolve_normal_alert(self, symbol: str, trade_id: str, action: str) -> dict[str, Any]:
-        """Record the operator's persistent CONTINUE or SELL choice."""
-        symbol = str(symbol or "").upper()
-        trade_id = str(trade_id or "")
-        action = str(action or "").upper()
-        if action not in {"CONTINUE", "SELL"} or not symbol or not trade_id:
-            return {}
-        with self._lock:
-            raw = self._read()
-            key = self._position_key(symbol, trade_id)
-            current = raw["symbols"].get(key)
-            if not isinstance(current, dict):
-                return {}
-            current["normal_armed"] = True
-            current["normal_alert_status"] = action
-            current["normal_alert_resolved_at"] = time.time()
             current["updated_at"] = time.time()
             raw["symbols"][key] = current
             self.store.write(raw)
@@ -497,6 +505,7 @@ class RuleStateStore:
         *,
         price: float,
         market_state: str,
+        signal_id: str = "",
     ) -> dict[str, Any] | None:
         """Create one persistent Telegram BUY signal per symbol."""
         symbol = str(symbol or "").strip().upper()
@@ -509,7 +518,9 @@ class RuleStateStore:
             active = raw["telegram_signals"].get(symbol)
             if isinstance(active, dict):
                 return None
-            signal_id = hashlib.sha256(f"{symbol}|{candle_key}".encode("utf-8")).hexdigest()[:10].upper()
+            signal_id = str(signal_id or "").strip() or hashlib.sha256(
+                f"{symbol}|{candle_key}".encode("utf-8")
+            ).hexdigest()[:10].upper()
             record = {
                 "id": signal_id,
                 "symbol": symbol,

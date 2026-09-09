@@ -157,7 +157,7 @@ def test_backtest_defaults_are_neutral_and_independent():
     assert config.loss_lock_enabled is False
     assert config.loss_lock_hours == 24
     assert config.whipsaw_enabled is False
-    assert config.em_modes == ["NORMAL", "HIGH", "IND_EXIT"]
+    assert config.em_modes == ["NORMAL", "IND_EXIT"]
     assert config.execution_resolution == "AUTO"
     assert config.simulation_mode == "DAILY"
     assert config.buy_fee_rate == pytest.approx(app_config.DEFAULT_BUY_FEE_PCT / 100.0)
@@ -315,7 +315,7 @@ def test_exit_detail_names_every_sell_with_its_own_price():
         {"event": "NORMAL_PROTECTION", "quantity": 1500, "price": 21.24},
         {"event": "INDICATOR_EXIT", "quantity": 3000, "price": 21.09},
     ])
-    assert exit_detail(trade) == "NORMAL 1,500@21.24 + EXIT 3,000@21.09"
+    assert exit_detail(trade) == "PROTECT 1,500@21.24 + E 3,000@21.09"
     assert exit_detail(BacktestTrade("t", "HSG", "2022-02-09")) == "CÒN MỞ"
 
 

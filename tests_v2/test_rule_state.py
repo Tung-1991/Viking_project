@@ -66,13 +66,12 @@ def test_market_confirmation_replays_existing_history_at_startup(tmp_path):
     }
 
 
-def test_position_peak_highest_close_and_protection_state_persist(tmp_path):
+def test_position_peak_and_protection_state_persist(tmp_path):
     store = RuleStateStore(tmp_path / "rule.json")
-    first = store.update_position_metrics("FPT", "T1", profit_pct=7.0, close_price=106, closed_bar=True)
-    second = store.update_position_metrics("FPT", "T1", profit_pct=4.0, close_price=104, closed_bar=True)
+    first = store.update_position_metrics("FPT", "T1", profit_pct=7.0)
+    second = store.update_position_metrics("FPT", "T1", profit_pct=4.0)
     assert first["peak_profit_pct"] == 7.0
     assert second["peak_profit_pct"] == 7.0
-    assert second["highest_close"] == 106
     store.mark_protection_done("FPT", "T1", ["NORMAL_PROTECTION"])
     assert store.position_metrics("FPT", "T1")["normal_protection_done"] is True
 
@@ -117,6 +116,18 @@ def test_real_and_paper_do_not_consume_each_others_signal(tmp_path):
     assert store.release_signal("FPT", "BUY", "D1", stream="PAPER")
     assert store.claim_signal("FPT", "BUY", "D1", stream="PAPER")
     assert not store.claim_signal("FPT", "BUY", "D1", stream="REAL")
+
+
+def test_first_buy_signal_time_persists_until_signal_or_candle_changes(tmp_path):
+    store = RuleStateStore(tmp_path / "rule-signal-time.json")
+    first = "2026-09-09T09:15:01+07:00"
+    later = "2026-09-09T09:16:00+07:00"
+    assert store.observe_signal_time("FPT", "PAPER", "BUY", "D1", first) == first
+    assert store.observe_signal_time("FPT", "PAPER", "BUY", "D1", later) == first
+    assert store.observe_signal_time("FPT", "PAPER", "SELL", "D1", later) == ""
+    assert store.observe_signal_time("FPT", "PAPER", "BUY", "D1", later) == later
+    assert store.claim_signal("FPT", "BUY", f"D1|{first}", stream="PAPER")
+    assert store.claim_signal("FPT", "BUY", f"D1|{later}", stream="PAPER")
 
 
 def test_live_indicator_observations_survive_restart_and_keep_modes_separate(tmp_path):

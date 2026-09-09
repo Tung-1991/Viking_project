@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Iterable
 
 from ..models import StrategyDecision
+from ..exit_modes import normalize_normal_policy
 from ..trading.market import active_trading_minutes, normalize_exchange, validate_buy_window
 
 
@@ -316,11 +317,8 @@ class StaticRuleParameters:
     normal_sell_pct: float = 33.0
     normal_giveback_pct: float = 3.0
     # CLASSIC keeps the original peak-price drawdown. AUTO protects profit
-    # points; ALERT waits for an explicit operator choice.
+    # points behind the maximum favourable excursion.
     normal_policy: str = "CLASSIC"
-    high_profit_arm_pct: float = 20.0
-    high_profit_close_drawdown_pct: float = 5.0
-    high_sell_pct: float = 33.0
     whipsaw_enabled: bool = True
     whipsaw_n: int = 3
     whipsaw_x: int = 7
@@ -346,11 +344,7 @@ class StaticRuleParameters:
         self.buy_confirmation_require_rsi = bool(self.buy_confirmation_require_rsi)
         self.buy_window_enabled = bool(self.buy_window_enabled)
         self.buy_window_start = str(self.buy_window_start).strip()
-        self.normal_policy = str(self.normal_policy or "CLASSIC").strip().upper()
-        if self.normal_policy == "TSL":  # compatibility with the short-lived draft name
-            self.normal_policy = "AUTO"
-        if self.normal_policy not in {"CLASSIC", "AUTO", "ALERT"}:
-            self.normal_policy = "CLASSIC"
+        self.normal_policy = normalize_normal_policy(self.normal_policy)
         validate_buy_window(self.buy_window_start, "15:00")
 
     @classmethod
@@ -413,13 +407,11 @@ class StaticRuleParameters:
             raise ValueError("Tín hiệu SELL phải bật ít nhất EMA hoặc RSI")
         if self.initial_sl_pct >= 0 or self.reentry_sl_pct >= 0:
             raise ValueError("Stop Loss phải là số âm")
-        if not 0 < self.normal_sell_pct <= 100 or not 0 < self.high_sell_pct <= 100:
-            raise ValueError("Tỷ lệ bán NORMAL/HIGH phải lớn hơn 0 và không quá 100%")
+        if not 0 < self.normal_sell_pct <= 100:
+            raise ValueError("Tỷ lệ bán PROTECT phải lớn hơn 0 và không quá 100%")
         if not 0 < self.normal_giveback_pct <= 100:
-            raise ValueError("Mức giảm NORMAL phải lớn hơn 0 và không quá 100%")
-        if not 0 < self.high_profit_close_drawdown_pct <= 100:
-            raise ValueError("Mức giảm HIGH phải lớn hơn 0 và không quá 100%")
-        if min(self.take_profit_pct, self.normal_arm_pct, self.high_profit_arm_pct) < 0:
+            raise ValueError("Mức giảm PROTECT phải lớn hơn 0 và không quá 100%")
+        if min(self.take_profit_pct, self.normal_arm_pct) < 0:
             raise ValueError("Ngưỡng lợi nhuận không được là số âm")
         if min(self.pivot_horizontal_pct, self.ma_zone_pct) < 0:
             raise ValueError("Sai số Pivot và vùng MA không được là số âm")
@@ -589,9 +581,9 @@ def classify_market_state(
         volume_ratio=volume_ratio,
         volume_confidence=(
             "OFF" if not params.volume_confirmation
-            else "HIGH" if volume_ratio >= params.high_volume_ratio
-            else "LOW" if 0 < volume_ratio < params.low_volume_ratio
-            else "NORMAL"
+            else "CAO" if volume_ratio >= params.high_volume_ratio
+            else "THẤP" if 0 < volume_ratio < params.low_volume_ratio
+            else "TRUNG BÌNH"
         ),
     )
     if len(highs) < 2 or len(lows) < 2:
@@ -859,32 +851,7 @@ class StaticRule:
                 normal_giveback_pct=self.params.normal_giveback_pct,
                 sell_share_pct=self.params.normal_sell_pct,
             )
-            if policy == "ALERT" and peak_profit >= self.params.normal_arm_pct:
-                alert_status = str(position.get("normal_alert_status", "") or "").upper()
-                protected = normal_auto_stop_profit(
-                    peak_profit, self.params.normal_arm_pct, self.params.normal_giveback_pct,
-                )
-                details.update(
-                    normal_alert=True,
-                    normal_alert_status=alert_status or "PENDING",
-                    normal_protected_profit_pct=protected,
-                    sell_share_pct=self.params.normal_sell_pct,
-                )
-                if alert_status == "SELL":
-                    details["triggered_events"] = ["NORMAL_ALERT_EXIT"]
-                    return StrategyDecision(
-                        "SELL", symbol, "NORMAL_ALERT_EXIT", event="NORMAL_ALERT_EXIT",
-                        signal=signal, market_state=market_state,
-                        quantity_fraction=min(1.0, self.params.normal_sell_pct / 100.0),
-                        details=details, scope="POSITION_MANAGEMENT",
-                    )
-                if alert_status != "CONTINUE":
-                    return StrategyDecision(
-                        "WAIT", symbol, "NORMAL_ALERT", event="NORMAL_ALERT",
-                        signal=signal, market_state=market_state, details=details,
-                        scope="POSITION_MANAGEMENT",
-                    )
-            elif policy == "AUTO" and peak_profit >= self.params.normal_arm_pct:
+            if policy == "AUTO" and peak_profit >= self.params.normal_arm_pct:
                 protected = normal_auto_stop_profit(
                     peak_profit, self.params.normal_arm_pct, self.params.normal_giveback_pct,
                 )
@@ -905,23 +872,9 @@ class StaticRule:
                 trigger = peak_price * (1.0 - self.params.normal_giveback_pct / 100.0)
                 if peak_profit >= self.params.normal_arm_pct and current <= trigger:
                     triggered.append("NORMAL_PROTECTION")
-        highest_close = float(position.get("highest_close", 0.0) or 0.0)
-        closed_values = closes(
-            row for row in bars if isinstance(row, dict) and bool(row.get("closed", True))
-        )
-        latest_close = closed_values[-1] if closed_values else 0.0
-        high_profit_armed = peak_profit >= self.params.high_profit_arm_pct
-        if "HIGH" in em_modes and not bool(position.get("high_profit_protection_done")):
-            if high_profit_armed and highest_close > 0 and latest_close <= highest_close * (1.0 - self.params.high_profit_close_drawdown_pct / 100.0):
-                triggered.append("HIGH_PROFIT_PROTECTION")
         if triggered:
             details["triggered_events"] = triggered
-            # How much each layer sells is a setting, not a constant.  When both
-            # fire on the same bar the larger share wins rather than stacking.
-            share = max(
-                self.params.normal_sell_pct if "NORMAL_PROTECTION" in triggered else 0.0,
-                self.params.high_sell_pct if "HIGH_PROFIT_PROTECTION" in triggered else 0.0,
-            )
+            share = self.params.normal_sell_pct
             fraction = min(1.0, max(0.0, share / 100.0))
             details["sell_share_pct"] = share
             return StrategyDecision(

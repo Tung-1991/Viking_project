@@ -11,6 +11,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from .exit_modes import normalize_exit_modes
+
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_ROOT.parent
@@ -163,7 +165,7 @@ class AppSettings:
     bot_order_mode: str = "MARKET"
     allow_ato: bool = False
     allow_atc: bool = False
-    bot_em_modes: list[str] = field(default_factory=lambda: ["NORMAL", "HIGH", "IND_EXIT"])
+    bot_em_modes: list[str] = field(default_factory=lambda: ["NORMAL", "IND_EXIT"])
     # Real DNSE rates.  The bot needs them to leave room for the fee when
     # sizing an order, and the paper broker charges with them.
     buy_fee_pct: float = DEFAULT_BUY_FEE_PCT
@@ -216,14 +218,7 @@ class AppSettings:
         self.allow_atc = bool(self.allow_atc)
         for name in ("buy_fee_pct", "sell_fee_pct", "sell_tax_pct"):
             setattr(self, name, min(5.0, max(0.0, float(getattr(self, name) or 0.0))))
-        allowed_em = {"TP", "NORMAL", "HIGH", "IND_EXIT"}
-        self.bot_em_modes = list(
-            dict.fromkeys(
-                str(item or "").strip().upper()
-                for item in (self.bot_em_modes or [])
-                if str(item or "").strip().upper() in allowed_em
-            )
-        )
+        self.bot_em_modes = normalize_exit_modes(self.bot_em_modes)
         self.sell_wait_policy = str(self.sell_wait_policy or "RECHECK").strip().upper()
         if self.sell_wait_policy not in {"RECHECK", "KEEP"}:
             self.sell_wait_policy = "RECHECK"

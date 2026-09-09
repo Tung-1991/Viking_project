@@ -35,7 +35,7 @@ def test_order_intent_roundtrip_keeps_manual_em_and_stop_loss(tmp_path):
         100,
         "MARKET",
         trade_id="T1",
-        em_modes=["NORMAL", "HIGH", "NORMAL", "INVALID"],
+        em_modes=["NORMAL", "REMOVED", "NORMAL", "INVALID"],
         sl_mode="PERCENT",
         sl_value=-4.25,
     )
@@ -44,7 +44,7 @@ def test_order_intent_roundtrip_keeps_manual_em_and_stop_loss(tmp_path):
     restored = OrderQueue(tmp_path / "orders.json").get(intent.id)
     assert restored is not None
     assert restored.trade_id == "T1"
-    assert restored.em_modes == ["NORMAL", "HIGH"]
+    assert restored.em_modes == ["NORMAL"]
     assert restored.sl_mode == "PERCENT"
     assert restored.sl_value == -4.25
 
@@ -103,7 +103,7 @@ def test_no_hidden_global_exit_switch_can_sell_an_unmanaged_trade():
     assert decision.scope == "POSITION_MANAGEMENT"
 
 
-def test_normal_and_high_same_evaluation_sell_only_one_third_and_mark_both():
+def test_protect_evaluation_sells_configured_fraction_and_marks_one_event():
     decision = StaticRule().evaluate(
         {"symbol": "FPT", "bars": _bars(114), "confirmed_market_state": "UPTREND"},
         {
@@ -112,15 +112,11 @@ def test_normal_and_high_same_evaluation_sell_only_one_third_and_mark_both():
                 "avg_price": 100,
                 "current_price": 114,
                 "peak_profit_pct": 21,
-                "highest_close": 120,
-                "em_modes": ["NORMAL", "HIGH"],
+                "em_modes": ["NORMAL"],
             }
         },
     )
-    assert decision.details["triggered_events"] == [
-        "NORMAL_PROTECTION",
-        "HIGH_PROFIT_PROTECTION",
-    ]
+    assert decision.details["triggered_events"] == ["NORMAL_PROTECTION"]
     assert math.isclose(decision.quantity_fraction, 0.33)
 
 

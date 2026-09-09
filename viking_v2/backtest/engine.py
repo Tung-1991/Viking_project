@@ -90,13 +90,11 @@ class _Position:
     em_modes: list[str]
     is_reentry: bool = False
     peak_profit_pct: float = 0.0
-    highest_close: float = 0.0
     normal_done: bool = False
     normal_armed: bool = False
     normal_arm_time: str = ""
     mfe_after_arm_pct: float = 0.0
     normal_protected_profit_pct: float = 0.0
-    high_done: bool = False
     sold_quantity: int = 0
     exit_value: float = 0.0
     exit_fills: list[dict[str, Any]] = field(default_factory=list)
@@ -219,15 +217,13 @@ def _normal_policy_fill(
     CLASSIC delegates to the original calculation unchanged. AUTO checks the
     stop carried from a previous observation before accepting the current
     bar's high, so one OHLC bar can arm or raise the stop but cannot also hit
-    that newly-created level. ALERT records MFE and never creates a fill.
+    that newly-created level.
     """
     policy = str(policy or "CLASSIC").upper()
     peak = float(peak_profit_pct or 0.0)
     armed = bool(already_armed or peak >= arm_pct)
     armed_at = 0
     mfe = max(float(mfe_after_arm_pct or 0.0), peak if armed else 0.0)
-    if policy == "TSL":
-        policy = "AUTO"
     protected = normal_auto_stop_profit(peak, arm_pct, giveback_pct) if armed else 0.0
     if entry_price <= 0:
         return _NormalObservation(0.0, peak, armed, 0, mfe, protected)
@@ -315,11 +311,11 @@ def exit_comparison_variants(
     scenario: BacktestScenario,
     rule_parameters: dict[str, Any],
 ) -> list[tuple[BacktestScenario, dict[str, Any]]]:
-    """Build the two approved NORMAL cases from one entry scenario."""
+    """Build the two supported PROTECT cases from one entry scenario."""
     base = StaticRuleParameters.from_dict(rule_parameters)
     specs = (
-        ("E + NORMAL AUTO", ["NORMAL", "IND_EXIT"], "AUTO"),
-        ("E + NORMAL ALERT", ["NORMAL", "IND_EXIT"], "ALERT"),
+        ("E + PROTECT CLASSIC", ["NORMAL", "IND_EXIT"], "CLASSIC"),
+        ("E + PROTECT AUTO", ["NORMAL", "IND_EXIT"], "AUTO"),
     )
     variants: list[tuple[BacktestScenario, dict[str, Any]]] = []
     for label, modes, policy in specs:
@@ -653,8 +649,6 @@ class BacktestEngine:
                     position.exit_events.append(name)
             if "NORMAL_PROTECTION" in event_names:
                 position.normal_done = True
-            if "HIGH_PROFIT_PROTECTION" in event_names:
-                position.high_done = True
             details = dict(details or {})
             equity_after = portfolio_value(day)[0]
             profit_pct = (price / position.avg_price - 1.0) * 100.0 if position.avg_price > 0 else 0.0
@@ -824,7 +818,7 @@ class BacktestEngine:
                                 uuid.uuid4().hex, symbol, quantity, quantity, open_price, day, settle_day,
                                 fee, principal, list(settings.em_modes),
                                 is_reentry=attempt > 0,
-                                highest_close=open_price, fees=fee, net_pnl=-fee,
+                                fees=fee, net_pnl=-fee,
                                 entry_market_state=entry_phase,
                                 entry_exposure_pct=exposure * 100.0,
                                 entry_reason=order.reason or order.event,
@@ -883,8 +877,8 @@ class BacktestEngine:
 
             fill_pending()
 
-            # SL has absolute priority. NORMAL can then use intraday replay;
-            # HIGH and indicator EXIT remain daily-close rules by definition.
+            # SL has absolute priority. PROTECT can then use intraday replay;
+            # indicator E remains a daily-close rule by definition.
             for symbol, position in list(positions.items()):
                 row = rows_by_symbol.get(symbol, {}).get(day)
                 if not row or symbol in pending:
@@ -953,7 +947,7 @@ class BacktestEngine:
                 if "NORMAL" in position.em_modes and not position.normal_done:
                     intraday = execution_resolution.get(symbol) != "1D"
                     # Preserve CLASSIC's historical intraday-only behaviour.
-                    # AUTO/ALERT may use daily OHLC because their ordering is
+                    # AUTO may use daily OHLC because its ordering is
                     # explicitly conservative: a newly armed stop cannot fill
                     # until a later observation.
                     if intraday or params.normal_policy != "CLASSIC":
@@ -1035,7 +1029,6 @@ class BacktestEngine:
                     if position.avg_price > 0:
                         position.peak_profit_pct = max(position.peak_profit_pct, (high / position.avg_price - 1.0) * 100.0)
                         _record_normal_telemetry(position, params, day)
-                    position.highest_close = max(position.highest_close, close)
                 locked = False
                 until = loss_locked_until.get(symbol)
                 if until is not None:
@@ -1065,12 +1058,10 @@ class BacktestEngine:
                         "avg_price": position.avg_price,
                         "current_price": float(row.get("close", 0.0) or 0.0),
                         "peak_profit_pct": position.peak_profit_pct,
-                        "highest_close": position.highest_close,
                         "is_reentry": position.is_reentry,
                         "em_modes": position.em_modes,
                         "normal_protection_done": position.normal_done,
                         "normal_execution_managed": True,
-                        "high_profit_protection_done": position.high_done,
                         "managed_by_app": True,
                         "managed_by_bot": True,
                     } if position else {}),
@@ -1168,9 +1159,8 @@ class BacktestEngine:
                 net_pnl=position.net_pnl + (latest_price(position.symbol, last_day) - position.avg_price) * position.quantity * 1000.0,
                 outcome="OPEN",
                 exit_events=list(position.exit_events),
-                # A position still open may already have been trimmed by NORMAL
-                # or HIGH; dropping those fills made the report read as if the
-                # protections had never fired at all.
+                # A position still open may already have been trimmed by
+                # PROTECT; retain those fills in the report.
                 exit_fills=list(position.exit_fills),
                 avg_exit_price=(position.exit_value / (position.sold_quantity * 1000.0)
                                 if position.sold_quantity else 0.0),
@@ -1517,8 +1507,6 @@ class BacktestEngine:
                     position.exit_events.append(name)
             if "NORMAL_PROTECTION" in names:
                 position.normal_done = True
-            if "HIGH_PROFIT_PROTECTION" in names:
-                position.high_done = True
             detail_values = dict(details or {})
             indicators = _indicator_columns(detail_values)
             position.exit_fills.append({
@@ -1701,7 +1689,7 @@ class BacktestEngine:
                     position = _Position(
                         uuid.uuid4().hex, symbol, quantity, quantity, price, day, settle_day,
                         fee, principal, list(settings.em_modes), is_reentry=attempt > 0,
-                        highest_close=price, fees=fee, net_pnl=-fee,
+                        fees=fee, net_pnl=-fee,
                         entry_market_state=entry_phase, entry_exposure_pct=exposure * 100.0,
                         entry_reason=order.reason or order.event,
                         entry_signal_date=(original_signal_time or order.created_date)[:10],
@@ -2028,11 +2016,9 @@ class BacktestEngine:
                             "quantity": position.quantity, "avg_price": position.avg_price,
                             "current_price": float(partial["close"]),
                             "peak_profit_pct": position.peak_profit_pct,
-                            "highest_close": position.highest_close,
                             "is_reentry": position.is_reentry, "em_modes": position.em_modes,
                             "normal_protection_done": position.normal_done,
                             "normal_execution_managed": True,
-                            "high_profit_protection_done": position.high_done,
                             "managed_by_app": True, "managed_by_bot": True,
                         } if position else {}),
                     }
@@ -2117,9 +2103,6 @@ class BacktestEngine:
                 final = dict(partial)
                 final["closed"] = True
                 history[symbol].append(final)
-                position = positions.get(symbol)
-                if position:
-                    position.highest_close = max(position.highest_close, float(final["close"]))
             nav, stock_value = portfolio_value()
             equity_curve.append({
                 "date": day, "equity": nav, "cash": cash, "market_value": stock_value,

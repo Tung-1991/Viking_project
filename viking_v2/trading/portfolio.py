@@ -364,8 +364,6 @@ class PortfolioContextBuilder:
             profit_pct=profit_pct,
             net_pnl=current_net_pnl,
             market_price=current_price,
-            close_price=float(tick.get("daily_close", current_price) or current_price),
-            closed_bar=bool(tick.get("daily_bar_closed", False)),
         ) if trade_id else {}
         context["position"] = {
             "quantity": quantity,

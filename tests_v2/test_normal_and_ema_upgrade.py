@@ -84,25 +84,9 @@ def test_normal_auto_arms_first_then_sells_configured_fraction() -> None:
     assert sold.quantity_fraction == pytest.approx(0.5)
 
 
-def test_normal_alert_is_persistent_until_operator_resolves_it() -> None:
-    rule = StaticRule(StaticRuleParameters(normal_policy="ALERT", normal_sell_pct=100))
-    context = {"symbol": "FPT", "bars": _bars(), "confirmed_market_state": "UPTREND"}
-
-    pending = rule.evaluate(context, {"position": _position(peak_profit_pct=8.0)})
-    assert pending.action == "WAIT" and pending.reason == "NORMAL_ALERT"
-
-    continued = rule.evaluate(
-        context,
-        {"position": _position(peak_profit_pct=8.0, normal_alert_status="CONTINUE")},
-    )
-    assert continued.action == "WAIT" and continued.reason == "HOLD_POSITION"
-
-    sold = rule.evaluate(
-        context,
-        {"position": _position(peak_profit_pct=8.0, normal_alert_status="SELL")},
-    )
-    assert sold.action == "SELL" and sold.event == "NORMAL_ALERT_EXIT"
-    assert sold.quantity_fraction == pytest.approx(1.0)
+def test_removed_normal_policy_falls_back_to_classic() -> None:
+    params = StaticRuleParameters.from_dict({"normal_policy": "REMOVED"})
+    assert params.normal_policy == "CLASSIC"
 
 
 def test_normal_auto_never_uses_new_high_and_low_from_the_same_bar() -> None:
@@ -133,14 +117,12 @@ def test_normal_auto_gap_fills_at_the_observed_open() -> None:
     assert observed.fill == pytest.approx(105.0)
 
 
-def test_normal_alert_and_indicator_bucket_state_survive_restart(tmp_path) -> None:
+def test_normal_arm_and_indicator_bucket_state_survive_restart(tmp_path) -> None:
     path = tmp_path / "rule.json"
     store = RuleStateStore(path)
     store.update_position_metrics("FPT", "T1", profit_pct=8.0)
-    store.arm_normal("FPT", "T1", alert=True)
-    assert RuleStateStore(path).position_metrics("FPT", "T1")["normal_alert_status"] == "PENDING"
-    RuleStateStore(path).resolve_normal_alert("FPT", "T1", "CONTINUE")
-    assert RuleStateStore(path).position_metrics("FPT", "T1")["normal_alert_status"] == "CONTINUE"
+    store.arm_normal("FPT", "T1")
+    assert RuleStateStore(path).position_metrics("FPT", "T1")["normal_armed"] is True
 
     base = {
         "buy_ema_fast_period": 3,
@@ -224,7 +206,7 @@ def test_realtime_bucket_and_setting_normalization() -> None:
     assert AppSettings.from_dict({"realtime_indicator_interval": "bad"}).realtime_indicator_interval == "TICK"
 
 
-def test_exit_comparison_builds_two_independent_normal_policies() -> None:
+def test_exit_comparison_builds_two_independent_protect_policies() -> None:
     scenario = BacktestScenario(
         "CTS", ["CTS"], "2026-03-14", "2026-08-20", "ACCUMULATION",
     )
@@ -235,10 +217,10 @@ def test_exit_comparison_builds_two_independent_normal_policies() -> None:
         ["NORMAL", "IND_EXIT"], ["NORMAL", "IND_EXIT"],
     ]
     assert [params["normal_policy"] for _item, params in variants] == [
-        "AUTO", "ALERT",
+        "CLASSIC", "AUTO",
     ]
     assert [item.name.rsplit(" · ", 1)[-1] for item, _params in variants] == [
-        "E + NORMAL AUTO", "E + NORMAL ALERT",
+        "E + PROTECT CLASSIC", "E + PROTECT AUTO",
     ]
 
 

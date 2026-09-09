@@ -247,26 +247,6 @@ def test_normal_protection_sells_one_third_once_condition_is_met():
     assert math.isclose(decision.quantity_fraction, 0.33)
 
 
-def test_high_profit_protection_uses_highest_daily_close():
-    decision = StaticRule().evaluate(
-        {"symbol": "FPT", "bars": _bars([114] * 19 + [114]), "previous_market_state": "UPTREND"},
-        {
-            "position": {
-                "quantity": 900,
-                "avg_price": 100,
-                "current_price": 114,
-                "peak_profit_pct": 20,
-                "highest_close": 120,
-                "normal_protection_done": True,
-                "em_modes": ["HIGH"],
-            }
-        },
-    )
-    assert decision.action == "SELL"
-    assert decision.details["triggered_events"] == ["HIGH_PROFIT_PROTECTION"]
-    assert math.isclose(decision.quantity_fraction, 0.33)
-
-
 def test_indicator_b_sells_all_remaining_position():
     decision = StaticRule().evaluate(
         {"symbol": "FPT", "bars": _bars(B_VALUES), "previous_market_state": "UPTREND"},
@@ -292,36 +272,9 @@ def test_volume_is_confidence_metadata_not_a_separate_state_or_signal():
         rows, params=StaticRuleParameters(volume_confirmation=True)
     )
     assert state == "UPTREND"
-    assert details["volume_confidence"] == "HIGH"
+    assert details["volume_confidence"] == "CAO"
     _, disabled = classify_market_state(rows)
     assert disabled["volume_confidence"] == "OFF"
-
-
-def test_high_protection_never_uses_an_unfinished_daily_close():
-    params = StaticRuleParameters(
-        high_profit_arm_pct=10,
-        high_profit_close_drawdown_pct=5,
-    )
-    position = {
-        "quantity": 300,
-        "avg_price": 100,
-        "current_price": 100,
-        "peak_profit_pct": 20,
-        "highest_close": 110,
-        "em_modes": ["HIGH"],
-    }
-    bars = _bars([108] * 19 + [100], last_closed=False)
-    live = StaticRule(params).evaluate(
-        {"symbol": "FPT", "bars": bars, "confirmed_market_state": "UPTREND", "signal_mode": "REALTIME"},
-        {"position": position},
-    )
-    assert live.action == "WAIT"
-    bars[-1]["closed"] = True
-    closed = StaticRule(params).evaluate(
-        {"symbol": "FPT", "bars": bars, "confirmed_market_state": "UPTREND", "signal_mode": "REALTIME"},
-        {"position": position},
-    )
-    assert closed.details["triggered_events"] == ["HIGH_PROFIT_PROTECTION"]
 
 
 def test_rule_validation_rejects_a_zero_percent_exit():
@@ -364,7 +317,7 @@ def test_corporate_action_mark_blocks_new_buy_but_only_warns_for_open_position()
     assert held.details["corporate_action_warning"] is True
 
 
-def test_normal_and_high_sell_share_is_a_setting_not_a_constant():
+def test_protect_sell_share_is_a_setting_not_a_constant():
     """How much each protection sells is configurable; 33% is only the default."""
     position = {
         "quantity": 300, "avg_price": 100, "current_price": 104,
@@ -379,10 +332,3 @@ def test_normal_and_high_sell_share_is_a_setting_not_a_constant():
     half = StaticRule(StaticRuleParameters(normal_sell_pct=50)).evaluate(
         context, {"position": position})
     assert math.isclose(half.quantity_fraction, 0.5)
-    # Both layers on the same bar take the larger share, they do not stack.
-    both = StaticRule(StaticRuleParameters(normal_sell_pct=25, high_sell_pct=80)).evaluate(
-        context,
-        {"position": {**position, "em_modes": ["NORMAL", "HIGH"],
-                      "peak_profit_pct": 25, "highest_close": 130, "current_price": 104}},
-    )
-    assert math.isclose(both.quantity_fraction, 0.8)

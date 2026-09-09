@@ -6,6 +6,7 @@ import uuid
 from typing import Any, Literal
 
 from .config import ORDER_TTL_SECONDS
+from .exit_modes import normalize_exit_modes
 
 
 Side = Literal["BUY", "SELL"]
@@ -97,14 +98,7 @@ class OrderIntent:
         self.broker_filled_quantity = max(0, int(self.broker_filled_quantity or 0))
         self.broker_fee_logged = max(0.0, float(self.broker_fee_logged or 0.0))
         self.broker_tax_logged = max(0.0, float(self.broker_tax_logged or 0.0))
-        allowed_em = {"TP", "NORMAL", "HIGH", "IND_EXIT"}
-        self.em_modes = list(
-            dict.fromkeys(
-                str(value or "").strip().upper()
-                for value in self.em_modes
-                if str(value or "").strip().upper() in allowed_em
-            )
-        )
+        self.em_modes = normalize_exit_modes(self.em_modes)
         self.sl_mode = str(self.sl_mode or "DEFAULT").strip().upper()
         if self.sl_mode not in {"DEFAULT", "PERCENT", "PRICE"}:
             self.sl_mode = "DEFAULT"
@@ -244,14 +238,7 @@ class TradeCycle:
         self.net_pnl = float(self.net_pnl or 0.0)
         self.fees_paid = max(0.0, float(self.fees_paid or 0.0))
         self.exit_events = list(dict.fromkeys(str(value) for value in self.exit_events if str(value)))
-        allowed_em = {"TP", "NORMAL", "HIGH", "IND_EXIT"}
-        self.em_modes = list(
-            dict.fromkeys(
-                str(value or "").strip().upper()
-                for value in self.em_modes
-                if str(value or "").strip().upper() in allowed_em
-            )
-        )
+        self.em_modes = normalize_exit_modes(self.em_modes)
         self.sl_mode = str(self.sl_mode or "DEFAULT").strip().upper()
         if self.sl_mode not in {"DEFAULT", "PERCENT", "PRICE"}:
             self.sl_mode = "DEFAULT"

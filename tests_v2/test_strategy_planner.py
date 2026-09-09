@@ -30,11 +30,11 @@ def test_buy_plan_uses_budget_round_lot_and_claims_signal_once(tmp_path):
         portfolio={"order_budget": 25_000_000},
         candle_key="2026-08-11",
         allow_ato=True,
-        bot_em_modes=["NORMAL", "HIGH", "IND_EXIT"],
+        bot_em_modes=["NORMAL", "REMOVED", "IND_EXIT"],
     )
     assert result.intent.quantity == 200
     assert result.intent.allow_ato is True
-    assert result.intent.em_modes == ["NORMAL", "HIGH", "IND_EXIT"]
+    assert result.intent.em_modes == ["NORMAL", "IND_EXIT"]
     assert result.intent.trade_id == "ABCDEF1234"
     assert len(queue.list_all()) == 1
     repeated = planner.plan(
