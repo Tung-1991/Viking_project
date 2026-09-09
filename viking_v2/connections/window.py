@@ -517,7 +517,7 @@ class ConnectionPopup:
         body = self._body(frame)
         card = self._card(
             body, "THÔNG BÁO TELEGRAM",
-            "Báo BUY đã được xếp slot; tín hiệu không vào được dùng công tắc riêng. Vị thế đóng hết được báo theo cùng ID.",
+            "BUY đã xếp slot và vị thế CLOSED luôn theo luồng chính; tín hiệu bị chặn có công tắc riêng.",
         )
         card.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
         card.grid_columnconfigure(1, weight=1)
@@ -537,13 +537,12 @@ class ConnectionPopup:
         )
         self.tele_signal_alerts = tk.BooleanVar(value=self.settings.telegram_signal_alerts)
         ctk.CTkSwitch(
-            card, text="BÁO CẢ TÍN HIỆU BOT KHÔNG VÀO ĐƯỢC", variable=self.tele_signal_alerts,
+            card, text="BÁO TÍN HIỆU KHÔNG THÀNH LỆNH", variable=self.tele_signal_alerts,
             font=("Segoe UI", 12, "bold"), text_color=self.TEXT, progress_color=self.GREEN,
         ).grid(row=6, column=0, columnspan=3, sticky="w", padx=12, pady=(8, 2))
         ctk.CTkLabel(
             card,
-            text="Watchlist có thể nhiều hơn số slot, nên phần lớn tín hiệu không thành lệnh.\n"
-                 "Bật thì báo cả những cái đó kèm lý do; ồn hơn nhưng thấy hết.",
+            text="Gửi một lần kèm lý do khi tín hiệu BUY hợp lệ nhưng không thể tạo lệnh.",
             font=("Segoe UI", 11), text_color=self.MUTED, justify="left", anchor="w",
         ).grid(row=7, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
 
@@ -563,8 +562,27 @@ class ConnectionPopup:
         ctk.CTkLabel(
             alert_row, text="● CLOSED · GỬI NGAY", font=("Segoe UI", 11, "bold"), text_color=self.RED,
         ).grid(row=0, column=3, sticky="w")
+        anti_spam = ctk.CTkFrame(
+            card, fg_color=self.SURFACE_2, corner_radius=7,
+            border_width=1, border_color=self.BORDER,
+        )
+        anti_spam.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(5, 3))
+        ctk.CTkLabel(
+            anti_spam, text="CHỐNG SPAM", width=112,
+            font=("Segoe UI", 11, "bold"), text_color=self.WARN, anchor="w",
+        ).grid(row=0, column=0, rowspan=2, sticky="w", padx=(10, 8), pady=6)
+        ctk.CTkLabel(
+            anti_spam,
+            text="BUY trùng mã trong batch: gộp · Tín hiệu trùng chu kỳ + lý do: bỏ",
+            font=("Segoe UI", 11, "bold"), text_color=self.TEXT, anchor="w",
+        ).grid(row=0, column=1, sticky="w", padx=(0, 10), pady=(5, 0))
+        ctk.CTkLabel(
+            anti_spam,
+            text="CLOSED: 1 lần/trade · Chốt quyền: 1 lần/mã + ngày GDKHQ",
+            font=("Segoe UI", 11), text_color=self.MUTED, anchor="w",
+        ).grid(row=1, column=1, sticky="w", padx=(0, 10), pady=(0, 5))
         tele_actions = ctk.CTkFrame(card, fg_color="transparent")
-        tele_actions.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 3))
+        tele_actions.grid(row=8, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 3))
         tele_actions.grid_columnconfigure(0, weight=1)
         self.btn_tele_test = ctk.CTkButton(
             tele_actions, text="GỬI THỬ", width=100, height=32, fg_color="#3A3F47",
@@ -579,7 +597,7 @@ class ConnectionPopup:
             card, text="",
             font=("Segoe UI", 11), text_color=self.MUTED, anchor="w",
         )
-        self.tele_status.grid(row=8, column=0, columnspan=3, sticky="ew", padx=12, pady=(1, 10))
+        self.tele_status.grid(row=9, column=0, columnspan=3, sticky="ew", padx=12, pady=(1, 10))
 
     @staticmethod
     def _account_payload(data: Any) -> tuple[list[dict[str, Any]], str, str]:
@@ -826,7 +844,7 @@ class ConnectionPopup:
                 height=30,
                 fg_color="#29313B",
                 corner_radius=6,
-                font=("Cascadia Mono", 10, "bold"),
+                font=("Cascadia Mono", 11, "bold"),
                 text_color=self.TEXT,
             ).grid(row=index // 6, column=index % 6, sticky="ew", padx=4, pady=5)
         offset = len(default_dates)
@@ -834,7 +852,7 @@ class ConnectionPopup:
             ctk.CTkButton(
                 self.holiday_chips, text=f"{value}  ×", height=30,
                 fg_color="#343A43", hover_color="#4B515B",
-                font=("Cascadia Mono", 10, "bold"),
+                font=("Cascadia Mono", 11, "bold"),
                 command=lambda date_value=value: self._remove_holiday(date_value),
             ).grid(
                 row=(offset + index) // 6,

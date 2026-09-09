@@ -43,8 +43,8 @@ def test_telegram_sends_one_buy_and_only_its_matching_closed_summary():
     assert "CLOSED · FPT · REAL" in tele.sent[1][1]
     assert "ABCDEF1234" in tele.sent[1][1]
     assert "Lãi/lỗ ròng: +473,000đ (+6.84%)" in tele.sent[1][1]
-    assert "EM bật: PROTECT · E" in tele.sent[1][1]
-    assert "EM kích hoạt: 2 lần · PROTECT ×1 · E ×1" in tele.sent[1][1]
+    assert "E/M bật: PROTECT · E" in tele.sent[1][1]
+    assert "E/M kích hoạt: 2 lần · PROTECT ×1 · E ×1" in tele.sent[1][1]
     assert "Lý do: INDICATOR EXIT" in tele.sent[1][1]
 
 

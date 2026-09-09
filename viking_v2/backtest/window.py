@@ -191,11 +191,11 @@ class BacktestPopup:
         style.theme_use("clam")
         style.configure(
             "Backtest.Treeview", background=COL_SURFACE, foreground=COL_TEXT,
-            fieldbackground=COL_SURFACE, rowheight=38, font=(FONT, 11), borderwidth=0,
+            fieldbackground=COL_SURFACE, rowheight=42, font=(FONT, 12), borderwidth=0,
         )
         style.configure(
             "Backtest.Treeview.Heading", background=COL_SURFACE_2, foreground=COL_TEXT,
-            font=(FONT, 11, "bold"), relief="flat", padding=(8, 7),
+            font=(FONT, 12, "bold"), relief="flat", padding=(9, 8),
         )
         style.map(
             "Backtest.Treeview",
@@ -211,7 +211,7 @@ class BacktestPopup:
         )
         self.tabs.grid(row=0, column=0, sticky="nsew", padx=10, pady=(10, 0))
         try:
-            self.tabs._segmented_button.configure(font=(FONT, 11, "bold"), text_color=COL_TEXT)
+            self.tabs._segmented_button.configure(font=(FONT, 12, "bold"), text_color=COL_TEXT)
         except AttributeError:
             pass
         tab_one, tab_two, tab_set = (

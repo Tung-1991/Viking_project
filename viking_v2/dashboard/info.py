@@ -31,7 +31,7 @@ class InfoPopup:
 
         parent.update_idletasks()
         sw, sh = int(parent.winfo_screenwidth()), int(parent.winfo_screenheight())
-        width, height = min(1180, sw - 60), min(800, sh - 80)
+        width, height = min(1240, sw - 60), min(780, sh - 80)
         x, y = max(10, (sw - width) // 2), max(10, (sh - height) // 3)
         self.top = _window(parent, "VIKING · INFO", f"{width}x{height}+{x}+{y}")
         try:
@@ -51,16 +51,16 @@ class InfoPopup:
         head.grid(row=0, column=0, sticky="ew", padx=16, pady=(8, 2))
         head.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            head, text="INFO", font=(self.FONT, 18, "bold"),
+            head, text="INFO", font=(self.FONT, 20, "bold"),
             text_color=PALETTE["TEXT"], anchor="w",
         ).grid(row=0, column=0, sticky="w")
         ctk.CTkLabel(
             head, text="Cùng bố cục · cấu hình độc lập",
-            font=(self.FONT, 11), text_color=PALETTE["MUTED"], anchor="w",
+            font=(self.FONT, 12, "bold"), text_color=PALETTE["MUTED"], anchor="w",
         ).grid(row=1, column=0, sticky="w")
         ctk.CTkButton(
             head, text="↻  LÀM MỚI", width=118, height=34,
-            font=(self.FONT, 11, "bold"), fg_color=PALETTE["BLUE"],
+            font=(self.FONT, 12, "bold"), fg_color=PALETTE["BLUE"],
             hover_color=PALETTE["BLUE_HOVER"], command=self.refresh,
         ).grid(row=0, column=1, rowspan=2)
 
@@ -74,7 +74,7 @@ class InfoPopup:
         )
         self.tabs.grid(row=1, column=0, sticky="nsew", padx=10, pady=(2, 10))
         try:
-            self.tabs._segmented_button.configure(font=(self.FONT, 11, "bold"))
+            self.tabs._segmented_button.configure(font=(self.FONT, 12, "bold"))
         except AttributeError:
             pass
 
@@ -120,6 +120,8 @@ class InfoPopup:
         body = self.bodies[name]
         for child in body.winfo_children():
             child.destroy()
+        for column in (0, 1):
+            body.grid_columnconfigure(column, weight=1, uniform="info-layout")
         return body
 
     def _section(
@@ -129,40 +131,52 @@ class InfoPopup:
         title: str,
         items: list[tuple[str, str, str]],
         *,
-        columns: int = 2,
+        columns: int = 3,
+        grid_column: int = 0,
+        grid_span: int = 2,
     ) -> int:
-        """Render one flat section. Items are aligned fields, not nested cards."""
-        section = ctk.CTkFrame(body, fg_color="transparent")
-        section.grid(row=row, column=0, sticky="ew", padx=11, pady=(2, 0))
+        """Render one compact comparison card with aligned fields."""
+        section = ctk.CTkFrame(
+            body, fg_color=PALETTE["SURFACE"], corner_radius=9,
+            border_width=1, border_color=PALETTE["BORDER"],
+        )
+        section.grid(
+            row=row, column=grid_column, columnspan=grid_span,
+            sticky="new", padx=8, pady=4,
+        )
         for column in range(columns):
             section.grid_columnconfigure(column, weight=1, uniform=f"info-{row}")
 
         ctk.CTkLabel(
-            section, text=title, font=(self.FONT, 12, "bold"),
+            section, text=title, font=(self.FONT, 13, "bold"),
             text_color="#60A5FA", anchor="w",
-        ).grid(row=0, column=0, columnspan=columns, sticky="ew", pady=(2, 2))
+        ).grid(
+            row=0, column=0, columnspan=columns, sticky="ew",
+            padx=12, pady=(8, 5),
+        )
 
         for index, (label, value, color) in enumerate(items):
             item_row, item_column = divmod(index, columns)
-            cell = ctk.CTkFrame(section, fg_color="transparent")
+            cell = ctk.CTkFrame(
+                section, fg_color=PALETTE["SURFACE_2"], corner_radius=6,
+            )
             cell.grid(
                 row=item_row + 1, column=item_column, sticky="ew",
-                padx=(0 if item_column == 0 else 12, 7), pady=1,
+                padx=(12 if item_column == 0 else 4, 12 if item_column == columns - 1 else 4),
+                pady=3,
             )
             cell.grid_columnconfigure(1, weight=1)
             ctk.CTkLabel(
-                cell, text=label, font=(self.FONT, 10, "bold"),
+                cell, text=label, font=(self.FONT, 11, "bold"),
                 text_color=PALETTE["MUTED"], anchor="w",
-            ).grid(row=0, column=0, sticky="w", padx=(0, 10))
+            ).grid(row=0, column=0, sticky="w", padx=(9, 10), pady=5)
             ctk.CTkLabel(
-                cell, text=value, font=(self.FONT, 11, "bold"),
+                cell, text=value, font=(self.FONT, 12, "bold"),
                 text_color=color, anchor="w", justify="left",
-            ).grid(row=0, column=1, sticky="w")
+            ).grid(row=0, column=1, sticky="w", padx=(0, 9), pady=5)
 
         last_row = ((len(items) - 1) // columns) + 2 if items else 1
-        ctk.CTkFrame(section, height=1, fg_color=PALETTE["BORDER"]).grid(
-            row=last_row, column=0, columnspan=columns, sticky="ew", pady=(5, 0),
-        )
+        section.grid_rowconfigure(last_row, minsize=7)
         return row + 1
 
     def _shared_rule_sections(
@@ -175,16 +189,17 @@ class InfoPopup:
         em_modes: Iterable[str],
         whipsaw_enabled: bool,
         loss_lock: str,
+        compact_layout: bool = False,
     ) -> int:
         exposure = p.exposure
-        row = self._section(body, row, "PHASE 1 · VNINDEX 1D", [
+        phase1_items = [
             ("CẤU TRÚC", f"MA{p.ma_period} · PIVOT {p.pivot_left}/{p.pivot_right}", PALETTE["TEXT"]),
             ("XÁC NHẬN", f"{p.confirm_sessions} PHIÊN", PALETTE["TEXT"]),
             ("VOLUME", self._on_off(p.volume_confirmation), PALETTE["TEXT"]),
             ("UP", f"{exposure.get('UPTREND', .9) * 100:g}%", PALETTE["GREEN"]),
             ("ACC", f"{exposure.get('ACCUMULATION', .6) * 100:g}%", PALETTE["TEXT"]),
             ("DIS / DOWN", f"{exposure.get('DISTRIBUTION', .5) * 100:g}% / {exposure.get('DOWNTREND', .1) * 100:g}%", PALETTE["WARN"]),
-        ])
+        ]
         buy_conditions = " + ".join(
             label for enabled, label in (
                 (p.buy_signal_use_ema, f"EMA {p.buy_ema_fast}/{p.buy_ema_slow}"),
@@ -197,9 +212,9 @@ class InfoPopup:
                 (p.sell_signal_use_rsi, f"RSI{p.rsi_period} ↓"),
             ) if enabled
         ) or "OFF"
-        row = self._section(body, row, "PHASE 2 · BUY / EXIT", [
+        phase2_items = [
             ("BUY", buy_conditions, PALETTE["GREEN"]),
-            ("EXIT", sell_conditions, PALETTE["RED"]),
+            ("E", sell_conditions, PALETTE["RED"]),
             ("TÍN HIỆU", signal_mode, PALETTE["TEXT"]),
             (
                 "XÁC NHẬN BUY",
@@ -216,8 +231,8 @@ class InfoPopup:
                 f"TỪ {p.buy_window_start}" if p.buy_window_enabled else "OFF",
                 PALETTE["TEXT"],
             ),
-        ])
-        return self._section(body, row, "PHASE 3 · VỐN / THOÁT", [
+        ]
+        phase3_items = [
             ("VỊ THẾ", str(p.max_positions), PALETTE["TEXT"]),
             ("SL / RE", f"{p.initial_sl_pct:g}% / {p.reentry_sl_pct:g}%", PALETTE["RED"]),
             ("COMPOUND", "OFF" if p.no_compound_enabled else "ON", PALETTE["TEXT"]),
@@ -226,8 +241,25 @@ class InfoPopup:
             ("MIN LOT", "100 CP" if p.force_min_lot_enabled else "OFF", PALETTE["TEXT"]),
             ("TP", f"{p.take_profit_pct:g}%", PALETTE["GREEN"]),
             ("PROTECT", f"{p.normal_policy} · +{p.normal_arm_pct:g}% / -{p.normal_giveback_pct:g}% · BÁN {p.normal_sell_pct:g}%", PALETTE["TEXT"]),
-            ("EM BẬT", self._em_name(em_modes), PALETTE["TEXT"]),
-        ])
+            ("E/M BẬT", self._em_name(em_modes), PALETTE["TEXT"]),
+        ]
+        if compact_layout:
+            self._section(
+                body, row, "PHASE 1 · VNINDEX 1D", phase1_items,
+                columns=2, grid_column=0, grid_span=1,
+            )
+            self._section(
+                body, row, "PHASE 2 · BUY / E", phase2_items,
+                columns=2, grid_column=1, grid_span=1,
+            )
+            self._section(
+                body, row + 1, "PHASE 3 · VỐN / THOÁT", phase3_items,
+                columns=2, grid_column=0, grid_span=1,
+            )
+            return row + 1
+        row = self._section(body, row, "PHASE 1 · VNINDEX 1D", phase1_items)
+        row = self._section(body, row, "PHASE 2 · BUY / E", phase2_items)
+        return self._section(body, row, "PHASE 3 · VỐN / THOÁT", phase3_items)
 
     def _render_real(self) -> None:
         body = self._clear("REAL")
@@ -247,6 +279,7 @@ class InfoPopup:
             em_modes=settings.bot_em_modes,
             whipsaw_enabled=p.whipsaw_enabled,
             loss_lock=f"{p.loss_lock_count} LOSS · {p.loss_lock_hours} GIỜ",
+            compact_layout=True,
         )
         self._section(body, row, "THỰC THI", [
             ("LỆNH BOT", "LO LOCAL" if settings.bot_order_mode == "LO_LOCAL" else "MARKET", PALETTE["TEXT"]),
@@ -255,7 +288,7 @@ class InfoPopup:
             ("PHÍ MUA", f"{settings.buy_fee_pct:g}%", PALETTE["WARN"]),
             ("PHÍ BÁN", f"{settings.sell_fee_pct:g}%", PALETTE["WARN"]),
             ("THUẾ", f"{settings.sell_tax_pct:g}%", PALETTE["WARN"]),
-        ])
+        ], columns=2, grid_column=1, grid_span=1)
 
     @staticmethod
     def _scenario_profiles(rows: list[BacktestScenario]) -> list[str]:
@@ -319,13 +352,15 @@ class InfoPopup:
             em_modes=settings.em_modes,
             whipsaw_enabled=settings.whipsaw_enabled,
             loss_lock=f"{self._on_off(settings.loss_lock_enabled)} · {settings.loss_lock_hours} GIỜ",
+            compact_layout=True,
         )
-        row = self._section(body, row, "THỰC THI", [
+        self._section(body, row, "THỰC THI", [
             ("SELL T+", "KIỂM TRA LẠI" if settings.sell_wait_policy == "RECHECK" else "VẪN BÁN", PALETTE["TEXT"]),
             ("PHÍ MUA", f"{settings.buy_fee_pct:g}%", PALETTE["WARN"]),
             ("PHÍ BÁN", f"{settings.sell_fee_pct:g}%", PALETTE["WARN"]),
             ("THUẾ", f"{settings.sell_tax_pct:g}%", PALETTE["WARN"]),
-        ])
+        ], columns=2, grid_column=1, grid_span=1)
+        row += 1
         row = self._mode2_section(body, row)
 
         runs: list[BacktestResult] = []

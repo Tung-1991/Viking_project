@@ -63,7 +63,7 @@ class RuleSettingsPopup:
         self.tabs.grid(row=0, column=0, sticky="nsew", padx=12, pady=(12, 5))
         self._tab_font(self.tabs, 12)
         self._business_tab(self.tabs.add("NGHIỆP VỤ"))
-        self._exit_manager_tab(self.tabs.add("EXIT MANAGER"))
+        self._exit_manager_tab(self.tabs.add("E/M"))
         self._execution_tab(self.tabs.add("THỰC THI"))
 
         footer = ctk.CTkFrame(self.top, fg_color="transparent")
@@ -119,7 +119,7 @@ class RuleSettingsPopup:
         )
         self.phase_tabs = phases
         phases.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
-        self._tab_font(phases, 11)
+        self._tab_font(phases, 12)
         self._phase1(phases.add("PHASE 1 · THỊ TRƯỜNG"))
         self._phase2(phases.add("PHASE 2 · TÍN HIỆU"))
         self._phase3(phases.add("PHASE 3 · VỐN & BẢO VỆ"))
@@ -452,7 +452,7 @@ class RuleSettingsPopup:
             "VỐN & BẢO VỆ",
             f"WIN reset chu kỳ · {self.params.loss_lock_count} LOSS khóa BUY "
             f"{self.params.loss_lock_hours} giờ · position đang giữ vẫn được quản lý",
-            "WIN/LOSS chỉ tính khi trade đóng hoàn toàn và đã trừ phí. Whipsaw và khóa LOSS chỉ chặn BUY/Re-entry mới; không tắt SL hoặc Exit Manager của position đang giữ.",
+            "WIN/LOSS chỉ tính khi trade đóng hoàn toàn và đã trừ phí. Whipsaw và khóa LOSS chỉ chặn BUY/Re-entry mới; không tắt SL hoặc E/M của position đang giữ.",
         )
 
         capital = self._card(body, "VỐN", "Exposure ở Phase 1 vẫn là trần tổng danh mục. Nhóm này giới hạn số position và cách tái sử dụng vốn theo mã.", 1, 0)
@@ -467,8 +467,8 @@ class RuleSettingsPopup:
             "Lệnh được vượt phần chia theo slot nhưng không vượt room Phase 1, vốn no-compound hoặc cash gồm phí.",
         )
 
-        # Hai mức SL đã chuyển sang tab EXIT MANAGER để nằm cùng chỗ với chốt lời.
-        stops = self._card(body, "KHÓA SAU LỖ", "Bộ chặn entry sau chuỗi lệnh thua. Hai mức cắt lỗ nằm ở tab EXIT MANAGER.", 1, 1)
+        # Hai mức SL nằm ở tab E/M để đứng cùng các cách thoát vị thế.
+        stops = self._card(body, "KHÓA SAU LỖ", "Bộ chặn entry sau chuỗi lệnh thua. Hai mức cắt lỗ nằm ở tab E/M.", 1, 1)
         self.loss_lock = self._field(stops, "Khóa sau LOSS", self.params.loss_lock_count, "Mặc định 3 LOSS liên tiếp; một WIN reset về 0.")
         self.loss_lock_hours = self._field(
             stops,
@@ -477,7 +477,7 @@ class RuleSettingsPopup:
             "Tính theo giờ đồng hồ kể từ lúc đóng lệnh lỗ đủ ngưỡng; có tính đêm, cuối tuần và ngày nghỉ.",
         )
 
-        whip = self._card(body, "WHIPSAW", "Bộ chống nhiễu trước entry. Không thuộc Exit Manager và không can thiệp position đang giữ.", 1, 2)
+        whip = self._card(body, "WHIPSAW", "Bộ chống nhiễu trước entry. Không thuộc E/M và không can thiệp position đang giữ.", 1, 2)
         self.whipsaw_enabled = self._switch(
             whip, "BẬT CHỐNG NHIỄU", self.params.whipsaw_enabled,
             "Nếu cặp EMA BUY crossover đạt N lần trong X phiên, khóa BUY/Re-entry mới; position đang giữ vẫn hoạt động.",
@@ -491,8 +491,8 @@ class RuleSettingsPopup:
         body = self._content(frame, columns=2)
         self._summary(
             body,
-            "EXIT MANAGER",
-            "Cắt lỗ luôn bật · 4 tactic bật/tắt theo từng trade · tham số thay đổi có hiệu lực ngay",
+            "E/M · QUẢN LÝ THOÁT",
+            "SL luôn bật · TP / PROTECT / E được gắn theo từng trade · thay đổi có hiệu lực ngay",
             "Popup này chỉ đặt tham số global. Tactic nào chạy cho trade nào được chọn ở panel manual hoặc popup QUẢN LÝ VỊ THẾ.",
             columns=2,
         )
@@ -556,26 +556,29 @@ class RuleSettingsPopup:
             "Khi E được bật cho một trade, tín hiệu SELL xuất hiện sẽ đóng toàn bộ phần cổ phiếu còn lại. "
             "EMA SELL nhanh/chậm và RSI lấy từ setting Phase 2 rồi lưu vào settings.json theo account; daemon tự nhận lại sau khi lưu. "
             "Khối lượng bán 100% mới là rule cố định và không có ô điều chỉnh.",
-            2, 0,
+            2, 0, span=2,
         )
-        for title, value in (
+        indicator_facts = ctk.CTkFrame(indicator, fg_color="transparent")
+        indicator_facts.pack(fill="x", padx=10, pady=(2, 10))
+        for column in range(4):
+            indicator_facts.grid_columnconfigure(column, weight=1, uniform="em-facts")
+        for column, (title, value) in enumerate((
             ("TÍN HIỆU", self._exit_b_signal_text()),
             ("CHỈNH TẠI", "PHASE 2 · EMA / RSI"),
             ("HÀNH ĐỘNG", "BÁN HẾT PHẦN CÒN LẠI"),
             ("KL BÁN", "100% · CỐ ĐỊNH"),
-        ):
-            row = ctk.CTkFrame(indicator, fg_color="transparent")
-            row.pack(fill="x", padx=14, pady=4)
-            row.grid_columnconfigure(1, weight=1)
+        )):
+            fact = ctk.CTkFrame(indicator_facts, fg_color="#1A1E24", corner_radius=7)
+            fact.grid(row=0, column=column, sticky="nsew", padx=3)
             ctk.CTkLabel(
-                row, text=title, width=86, font=("Segoe UI", 12),
+                fact, text=title, font=("Segoe UI", 11, "bold"),
                 text_color=self.MUTED, anchor="w",
-            ).grid(row=0, column=0, sticky="w")
+            ).pack(fill="x", padx=10, pady=(7, 2))
             value_label = ctk.CTkLabel(
-                row, text=value, font=("Segoe UI", 12, "bold"),
-                text_color=self.TEXT, anchor="w", justify="left",
+                fact, text=value, font=("Segoe UI", 12, "bold"),
+                text_color=self.TEXT, anchor="w", justify="left", wraplength=205,
             )
-            value_label.grid(row=0, column=1, sticky="w")
+            value_label.pack(fill="x", padx=10, pady=(0, 7))
             if title == "TÍN HIỆU":
                 self.exit_b_signal_label = value_label
 
@@ -635,13 +638,14 @@ class RuleSettingsPopup:
             label.configure(text=self._exit_b_signal_text())
 
     def _execution_tab(self, frame: ctk.CTkFrame) -> None:
-        body = self._content(frame)
+        body = self._content(frame, columns=2)
         self._summary(
             body,
             "THỰC THI",
             "BUY / SELL → KIỂM TRA → GỬI DNSE HOẶC CHỜ TRÊN APP",
             "Tab này chỉ quy định cách bot thực hiện quyết định đã có. Không tạo thêm tín hiệu BUY/SELL, "
             "không thay đổi Phase 1–3 và không tạo safeguard ẩn.",
+            columns=2,
         )
 
         orders = self._card(
@@ -685,7 +689,7 @@ class RuleSettingsPopup:
         )
 
         bot_em = self._card(
-            body, "EM CỦA BOT",
+            body, "E/M MẶC ĐỊNH",
             "BOT và manual dùng chung TP, PROTECT và E. Các nút dưới đây chọn tactic mặc định gắn vào trade do BOT mở; SL luôn bật.",
             1, 1,
         )
@@ -717,7 +721,7 @@ class RuleSettingsPopup:
         settlement = self._card(
             body, "SELL CHỜ T+",
             "Áp dụng cho SL, TP, PROTECT và E khi cổ phiếu chưa về đủ để bán; T+2 chỉ sẵn sàng từ phiên chiều.",
-            1, 2,
+            2, 1,
         )
         self.sell_wait_policy = tk.StringVar(
             value="VẪN BÁN" if self.settings.sell_wait_policy == "KEEP" else "KIỂM TRA LẠI"
@@ -745,7 +749,7 @@ class RuleSettingsPopup:
         corporate = self._card(
             body, "CHỐT QUYỀN",
             "Mã được đánh dấu sẽ bị chặn BOT BUY. Nếu đang giữ position, Viking chỉ gửi cảnh báo Telegram để operator xử lý; hệ thống không tự SELL.",
-            3, 0, span=3,
+            3, 0, span=2,
         )
         self._corporate_draft = [dict(item) for item in self.settings.corporate_actions]
         editor = ctk.CTkFrame(corporate, fg_color="transparent")
@@ -767,7 +771,6 @@ class RuleSettingsPopup:
             hover_color="#245C92", command=self._add_corporate_action,
         ).grid(row=0, column=2, sticky="w")
         self.corporate_rows = ctk.CTkFrame(corporate, fg_color="#1A1E24", corner_radius=7)
-        self.corporate_rows.pack(fill="x", padx=12, pady=(2, 10))
         self._render_corporate_actions()
 
     def _add_corporate_action(self) -> None:
@@ -806,11 +809,10 @@ class RuleSettingsPopup:
         for child in self.corporate_rows.winfo_children():
             child.destroy()
         if not self._corporate_draft:
-            ctk.CTkLabel(
-                self.corporate_rows, text="CHƯA ĐÁNH DẤU MÃ NÀO",
-                font=("Segoe UI", 12), text_color=self.MUTED,
-            ).pack(anchor="w", padx=12, pady=8)
+            self.corporate_rows.pack_forget()
             return
+        if not self.corporate_rows.winfo_manager():
+            self.corporate_rows.pack(fill="x", padx=12, pady=(2, 10))
         for item in sorted(self._corporate_draft, key=lambda row: (str(row.get("ex_date", "")), str(row.get("symbol", "")))):
             symbol = str(item.get("symbol", "") or "").upper()
             row = ctk.CTkFrame(self.corporate_rows, fg_color="transparent")

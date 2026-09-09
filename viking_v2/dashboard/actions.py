@@ -461,7 +461,7 @@ class DashboardActionsMixin:
             ("pnl", "PNL", 150, "center"),
             ("pnl_pct", "PNL %", 100, "center"),
             ("targets", "SL / TP", 165, "center"),
-            ("em", "EXIT MANAGER", 230, "center"),
+            ("em", "E/M", 230, "center"),
             ("settle", "NGÀY VỀ", 110, "center"),
             ("trade", "TRADE ID", 145, "center"),
             ("note", "TRẠNG THÁI", 230, "w"),
@@ -1386,7 +1386,7 @@ class DashboardActionsMixin:
                         command=lambda name=key: self._quick_toggle_position_mode(action, name),
                     )
                 menu.add_command(
-                    label="■  Tắt toàn bộ Exit Manager",
+                    label="■  Tắt toàn bộ E/M",
                     command=lambda: self._set_position_modes(action, []),
                 )
         cancellable_count = sum(
@@ -1409,7 +1409,7 @@ class DashboardActionsMixin:
         cycle = self.trade_state.update_management(trade_id, em_modes=modes) if trade_id else None
         if not cycle:
             return
-        self._log(f"[EM] {cycle.execution_mode} {cycle.symbol} #{cycle.id[:8]}: {'+'.join(cycle.em_modes) or 'OFF'}")
+        self._log(f"[E/M] {cycle.execution_mode} {cycle.symbol} #{cycle.id[:8]}: {'+'.join(cycle.em_modes) or 'OFF'}")
         self._refresh_local()
 
     def _quick_toggle_position_mode(self, action: dict[str, Any], mode_name: str) -> None:
@@ -1453,7 +1453,7 @@ class DashboardActionsMixin:
         price_entry.grid(row=2, column=1, sticky="ew", padx=(8, 18), pady=7)
         if order_type != "LO":
             price_entry.configure(state="disabled")
-        status = ctk.CTkLabel(top, text="", font=("Segoe UI", 10), text_color=COL_WARN)
+        status = ctk.CTkLabel(top, text="", font=("Segoe UI", 11), text_color=COL_WARN)
         status.grid(row=3, column=0, columnspan=2, sticky="w", padx=18, pady=(5, 0))
 
         def save() -> None:
@@ -1743,7 +1743,7 @@ class DashboardActionsMixin:
                 status.configure(text="Không cập nhật được chu kỳ giao dịch.", text_color=COL_RED)
                 return
             self._log(
-                f"[EM] {mode} {symbol} #{cycle.id[:8]}: "
+                f"[E/M] {mode} {symbol} #{cycle.id[:8]}: "
                 f"{'+'.join(cycle.em_modes) or 'OFF'} · SL {cycle.sl_mode} {cycle.sl_value:g}"
                 f" · TP {cycle.tp_mode} {cycle.tp_value:g}"
             )
@@ -1760,7 +1760,7 @@ class DashboardActionsMixin:
         actions.grid(row=7, column=0, sticky="ew", padx=20, pady=(6, 16))
         actions.grid_columnconfigure(1, weight=1)
         ctk.CTkButton(
-            actions, text="TẮT TOÀN BỘ EM", width=170, height=40,
+            actions, text="TẮT TOÀN BỘ E/M", width=170, height=40,
             font=("Segoe UI", 11, "bold"), fg_color="#3A3F47",
             command=turn_off_all,
         ).grid(row=0, column=0, padx=(0, 8))

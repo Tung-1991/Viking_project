@@ -236,8 +236,8 @@ class SignalTelegramService:
                     f"Bán: {cycle.sold_quantity:,} CP @ {self._price(cycle.avg_exit_price)}",
                     f"Phí + thuế: {cycle.fees_paid:,.0f}đ",
                     f"Lãi/lỗ ròng: {self._money(cycle.net_pnl)} ({pnl_pct:+.2f}%)",
-                    f"EM bật: {em_enabled_text}",
-                    f"EM kích hoạt: {em_triggered_text}",
+                    f"E/M bật: {em_enabled_text}",
+                    f"E/M kích hoạt: {em_triggered_text}",
                     f"Lý do: {close_reason}",
                 )
             )

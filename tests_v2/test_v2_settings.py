@@ -181,7 +181,7 @@ def test_no_two_cards_ever_share_a_grid_cell(ui_root):
                     taken[cell] = str(child)
 
         rules = RuleSettingsPopup(root, load_settings("PAPER"), "PAPER", lambda: None)
-        for name in ("NGHIỆP VỤ", "EXIT MANAGER", "THỰC THI"):
+        for name in ("NGHIỆP VỤ", "E/M", "THỰC THI"):
             rules.tabs.set(name)
             root.update_idletasks()
             for frame in rules.tabs.tab(name).winfo_children():
@@ -219,7 +219,7 @@ def test_no_tab_is_wider_than_the_window_it_lives_in(ui_root):
         settings = load_settings("PAPER")
         pages = (
             ("RULE", RuleSettingsPopup(root, settings, "PAPER", lambda: None),
-             ("NGHIỆP VỤ", "EXIT MANAGER", "THỰC THI")),
+             ("NGHIỆP VỤ", "E/M", "THỰC THI")),
             ("BACKTEST", BacktestPopup(root, settings, None),
              ("MODE 1", "MODE 2", "THAM SỐ")),
         )
