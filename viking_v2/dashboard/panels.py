@@ -15,7 +15,14 @@ from .view import (
     FONT_PREVIEW_TITLE, FONT_PREVIEW_VALUE, _compact_vnd, _display_price,
     _number, _price_unit,
 )
-from .windows import _HoverHint
+from .windows import (
+    FONT_KEY,
+    FONT_MONO_VALUE,
+    FONT_TABLE_HEADING,
+    FONT_TABLE_VALUE,
+    FONT_VALUE,
+    _HoverHint,
+)
 
 
 class DashboardPanelsMixin:
@@ -93,7 +100,7 @@ class DashboardPanelsMixin:
 
         def setting_row(index: int, label: str) -> ctk.CTkFrame:
             ctk.CTkLabel(
-                control, text=label, font=("Segoe UI", 12, "bold"),
+                control, text=label, font=FONT_KEY,
                 text_color=COL_TEXT, anchor="e",
             ).grid(row=index, column=0, sticky="e", padx=(7, 6), pady=3)
             frame = ctk.CTkFrame(control, width=1, height=36, fg_color="transparent")
@@ -123,7 +130,7 @@ class DashboardPanelsMixin:
         self.mode = tk.StringVar(value="PAPER" if self.settings.paper_mode else "REAL")
         ctk.CTkSegmentedButton(
             mode_row, values=["REAL", "PAPER"], variable=self.mode,
-            command=self._mode_changed, height=32, font=("Segoe UI", 11, "bold"),
+            command=self._mode_changed, height=32, font=FONT_VALUE,
             width=1,
             selected_color=COL_GREEN, selected_hover_color="#16A34A",
             unselected_color=COL_GRAY, unselected_hover_color="#4B515B",
@@ -198,7 +205,7 @@ class DashboardPanelsMixin:
         change_box = ctk.CTkFrame(quote, fg_color="transparent")
         change_box.grid(row=0, column=1, sticky="e", padx=(5, 9), pady=(7, 0))
         self.lbl_change = ctk.CTkLabel(
-            change_box, text="--", font=("Cascadia Mono", 11, "bold"),
+            change_box, text="--", font=FONT_MONO_VALUE,
             text_color=COL_MUTED, anchor="e",
         )
         self.lbl_change.pack(side="left")
@@ -378,11 +385,11 @@ class DashboardPanelsMixin:
             padx=(0 if column == 0 else 4, 0), pady=(0, 4), sticky="ew",
         )
         ctk.CTkLabel(
-            box, text=label, width=82, font=("Segoe UI", 11, "bold"),
+            box, text=label, width=96, font=FONT_KEY,
             text_color=COL_MUTED, anchor="w",
         ).grid(row=0, column=0, sticky="w", padx=(8, 2), pady=4)
         entry = ctk.CTkEntry(
-            box, width=1, font=("Cascadia Mono", 12, "bold"), height=32,
+            box, width=1, font=FONT_MONO_VALUE, height=36,
             justify="right", fg_color="#1A1E23", border_width=0,
             text_color=COL_MUTED if dimmed else COL_TEXT,
             placeholder_text=placeholder,
@@ -457,13 +464,13 @@ class DashboardPanelsMixin:
         style.theme_use("clam")
         style.configure(
             "Running.Treeview", background=COL_SURFACE_2, foreground=COL_TEXT,
-            fieldbackground=COL_SURFACE_2, rowheight=46, font=("Segoe UI", 13),
+            fieldbackground=COL_SURFACE_2, rowheight=48, font=FONT_TABLE_VALUE,
             borderwidth=0, relief="flat", bordercolor=COL_BORDER,
             lightcolor=COL_BORDER, darkcolor=COL_BORDER,
         )
         style.configure(
             "Running.Treeview.Heading", background=COL_SURFACE, foreground=COL_TEXT,
-            font=("Segoe UI", 14, "bold"), relief="flat", padding=(10, 9),
+            font=FONT_TABLE_HEADING, relief="flat", padding=(10, 9),
         )
         style.map(
             "Running.Treeview.Heading",
@@ -686,7 +693,7 @@ class DashboardPanelsMixin:
             row=0, column=0, sticky="ew", padx=(2, 5)
         )
         self.preview_status_reason = ctk.CTkLabel(
-            order_header, text="--", width=1, height=22, font=("Segoe UI", 11, "bold"),
+            order_header, text="--", width=1, height=22, font=("Segoe UI", 12),
             text_color=COL_PREVIEW_TEXT, fg_color=COL_SURFACE_2, corner_radius=5,
             anchor="w", justify="left",
         )
@@ -719,7 +726,7 @@ class DashboardPanelsMixin:
             card.grid_columnconfigure(0, weight=1)
             title_widget = ctk.CTkLabel(
                 card, text=f"{title}{'  ⓘ' if hint else ''}", height=22,
-                font=("Segoe UI", 11, "bold"),
+                font=("Segoe UI", 13, "bold", "italic"),
                 text_color=title_color, anchor="w",
             )
             title_widget.grid(row=0, column=0, sticky="ew", padx=9, pady=(6, 0))
@@ -729,7 +736,7 @@ class DashboardPanelsMixin:
                 _HoverHint(title_widget, hint, placement="inside")
             value = ctk.CTkLabel(
                 card, text="NA", width=1, height=30,
-                font=("Cascadia Mono", 13, "bold"), text_color=COL_TEXT,
+                font=FONT_MONO_VALUE, text_color=COL_TEXT,
                 anchor="w", justify="left", wraplength=190,
             )
             value.grid(row=1, column=0, sticky="ew", padx=9, pady=(1, 6))
@@ -761,12 +768,12 @@ class DashboardPanelsMixin:
             card.grid(row=row, column=column, sticky="nsew", padx=3, pady=3)
             card.grid_columnconfigure(0, weight=1)
             title_widget = ctk.CTkLabel(
-                card, text=title, width=1, height=18, font=("Segoe UI", 11, "bold"),
+                card, text=title, width=1, height=18, font=("Segoe UI", 12, "bold", "italic"),
                 text_color=title_color, anchor="w",
             )
             title_widget.grid(row=0, column=0, sticky="ew", padx=9, pady=(3, 0))
             value = ctk.CTkLabel(
-                card, text="NA", width=1, height=20, font=("Cascadia Mono", 12, "bold"),
+                card, text="NA", width=1, height=20, font=("Cascadia Mono", 13),
                 text_color=title_color, anchor="w",
             )
             value.grid(row=1, column=0, sticky="ew", padx=9, pady=(1, 0))
@@ -789,7 +796,7 @@ class DashboardPanelsMixin:
         rule_header.grid(row=0, column=0, sticky="ew", padx=8, pady=(4, 2))
         rule_header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            rule_header, text="QUYẾT ĐỊNH HỆ THỐNG", height=14, font=("Segoe UI", 12, "bold"),
+            rule_header, text="QUYẾT ĐỊNH HỆ THỐNG", height=14, font=("Segoe UI", 14, "bold"),
             text_color="#60A5FA", anchor="w",
         ).grid(row=0, column=0, sticky="w")
         rule_hint = ctk.CTkButton(
@@ -818,7 +825,7 @@ class DashboardPanelsMixin:
             card.grid_columnconfigure(0, weight=0)
             card.grid_columnconfigure(1, weight=1)
             title_widget = ctk.CTkLabel(
-                card, text=f"{title}{'  ⓘ' if hint else ''}", font=("Segoe UI", 11, "bold"),
+                card, text=f"{title}{'  ⓘ' if hint else ''}", font=("Segoe UI", 13, "bold", "italic"),
                 text_color="#60A5FA", anchor="w",
             )
             title_widget.grid(row=0, column=0, sticky="w", padx=(8, 6), pady=4)
@@ -829,7 +836,7 @@ class DashboardPanelsMixin:
         phase1 = phase_card(1, "P1 · VNINDEX")
         self.preview_rule_market = ctk.CTkLabel(
             phase1, text="VNINDEX --", width=1, height=16,
-            font=("Cascadia Mono", 11, "bold"), text_color=COL_PREVIEW_TEXT,
+            font=("Cascadia Mono", 13), text_color=COL_PREVIEW_TEXT,
             anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_market.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=4)
@@ -848,7 +855,7 @@ class DashboardPanelsMixin:
         )
         self.preview_rule_ema = ctk.CTkLabel(
             phase2, text="BUY EMA 3/6 · --/--", width=1, height=14,
-            font=("Cascadia Mono", 11), text_color=COL_PREVIEW_TEXT,
+            font=("Cascadia Mono", 13), text_color=COL_PREVIEW_TEXT,
             anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_ema.grid(
@@ -856,7 +863,7 @@ class DashboardPanelsMixin:
         )
         self.preview_rule_sell_ema = ctk.CTkLabel(
             phase2, text="SELL EMA 3/6 · --/--", width=1, height=14,
-            font=("Cascadia Mono", 11), text_color=COL_PREVIEW_TEXT,
+            font=("Cascadia Mono", 13), text_color=COL_PREVIEW_TEXT,
             anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_sell_ema.grid(
@@ -864,7 +871,7 @@ class DashboardPanelsMixin:
         )
         self.preview_rule_rsi = ctk.CTkLabel(
             phase2, text="RSI14 -- · WAIT", width=1, height=14,
-            font=("Cascadia Mono", 11), text_color=COL_PREVIEW_TEXT,
+            font=("Cascadia Mono", 13), text_color=COL_PREVIEW_TEXT,
             anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_rsi.grid(
@@ -883,14 +890,14 @@ class DashboardPanelsMixin:
             "LỖ: số lệnh lỗ liên tiếp / mức khóa mã.",
         )
         self.preview_rule_phase3 = ctk.CTkLabel(
-            phase3, text="--/-- · --/MÃ", width=1, font=("Cascadia Mono", 11, "bold"),
+            phase3, text="--/-- · --/MÃ", width=1, font=("Cascadia Mono", 13),
             text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_phase3.grid(
             row=0, column=1, sticky="ew", padx=(0, 8), pady=4
         )
         self.preview_rule_phase3_detail = ctk.CTkLabel(
-            phase3, text="AUTO --", font=("Segoe UI", 11, "bold"),
+            phase3, text="AUTO --", font=("Segoe UI", 13),
             text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_phase3_detail.grid(
@@ -916,7 +923,7 @@ class DashboardPanelsMixin:
         for column in range(7):
             health_group.grid_columnconfigure(column, weight=1, uniform="health_pills")
         self.preview_health_title = ctk.CTkLabel(
-            health_group, text="HEALTH ⓘ", width=1, font=("Segoe UI", 11, "bold"),
+            health_group, text="HEALTH ⓘ", width=1, font=("Segoe UI", 13, "bold", "italic"),
             text_color="#60A5FA", anchor="w",
         )
         self.preview_health_title.grid(row=0, column=0, sticky="ew", padx=(10, 3))
@@ -931,7 +938,7 @@ class DashboardPanelsMixin:
         def health_cell(column: int, text: str) -> ctk.CTkLabel:
             label = ctk.CTkLabel(
                 health_group, text=text, width=1, height=24,
-                font=("Cascadia Mono", 11, "bold"), text_color=COL_PREVIEW_TEXT,
+                font=("Cascadia Mono", 13), text_color=COL_PREVIEW_TEXT,
                 fg_color=COL_SURFACE_2, corner_radius=5,
             )
             label.grid(row=0, column=column, sticky="ew", padx=3, pady=5)

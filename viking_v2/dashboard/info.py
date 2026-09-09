@@ -7,7 +7,7 @@ import customtkinter as ctk
 from ..backtest.data import HistoricalDataStore
 from ..backtest.models import BacktestResult, BacktestScenario, BacktestSettings
 from ..rules.business import StaticRuleParameters
-from .windows import PALETTE, _window
+from .windows import FONT_KEY, FONT_VALUE, PALETTE, _window
 
 
 class InfoPopup:
@@ -167,11 +167,11 @@ class InfoPopup:
             )
             cell.grid_columnconfigure(1, weight=1)
             ctk.CTkLabel(
-                cell, text=label, font=(self.FONT, 11, "bold"),
+                cell, text=label, font=FONT_KEY,
                 text_color=PALETTE["MUTED"], anchor="w",
             ).grid(row=0, column=0, sticky="w", padx=(9, 10), pady=5)
             ctk.CTkLabel(
-                cell, text=value, font=(self.FONT, 12, "bold"),
+                cell, text=value, font=FONT_VALUE,
                 text_color=color, anchor="w", justify="left",
             ).grid(row=0, column=1, sticky="w", padx=(0, 9), pady=5)
 
@@ -240,7 +240,7 @@ class InfoPopup:
             ("LOSS LOCK", loss_lock, PALETTE["WARN"]),
             ("MIN LOT", "100 CP" if p.force_min_lot_enabled else "OFF", PALETTE["TEXT"]),
             ("TP", f"{p.take_profit_pct:g}%", PALETTE["GREEN"]),
-            ("PROTECT", f"{p.normal_policy} · +{p.normal_arm_pct:g}% / -{p.normal_giveback_pct:g}% · BÁN {p.normal_sell_pct:g}%", PALETTE["TEXT"]),
+            ("PROTECT", f"{p.normal_policy} · +{p.normal_arm_pct:g}/-{p.normal_giveback_pct:g} · {p.normal_sell_pct:g}%", PALETTE["TEXT"]),
             ("E/M BẬT", self._em_name(em_modes), PALETTE["TEXT"]),
         ]
         if compact_layout:

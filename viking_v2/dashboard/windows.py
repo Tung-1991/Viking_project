@@ -29,7 +29,12 @@ PALETTE = {
     "WARN": "#F59E0B",
 }
 
-HINT_FONT = ("Segoe UI", 15)
+FONT_KEY = ("Segoe UI", 14, "bold", "italic")
+FONT_VALUE = ("Segoe UI", 14)
+FONT_MONO_VALUE = ("Cascadia Mono", 14)
+FONT_TABLE_HEADING = ("Segoe UI", 16, "bold", "italic")
+FONT_TABLE_VALUE = ("Segoe UI", 14)
+HINT_FONT = ("Segoe UI", 20)
 
 
 _SIGNAL_REASONS = {
@@ -322,9 +327,9 @@ class _HoverHint:
         # hundreds of pixels away from its icon.
         host = self.widget.winfo_toplevel()
         self.popup = tk.Label(
-            host, text=self.text, justify="left", wraplength=680,
-            bg="#252A31", fg="#F5F7FA", padx=14, pady=12,
-            font=HINT_FONT, relief="solid", borderwidth=1,
+            host, text=self.text, justify="left", wraplength=780,
+            bg="#252A31", fg="#F5F7FA", padx=16, pady=14,
+            font=HINT_FONT, relief="solid", borderwidth=2,
         )
         self.popup.update_idletasks()
         width, height = self.popup.winfo_reqwidth(), self.popup.winfo_reqheight()
@@ -433,12 +438,12 @@ class DataTablePopup:
             cell = ctk.CTkFrame(self.summary, fg_color="transparent")
             cell.grid(row=0, column=column, sticky="nsew", padx=8, pady=8)
             label = ctk.CTkLabel(
-                cell, text="--", font=("Segoe UI", 11, "bold"),
+                cell, text="--", font=FONT_KEY,
                 text_color=PALETTE["MUTED"], anchor="center",
             )
             label.pack(fill="x")
             value = ctk.CTkLabel(
-                cell, text="--", font=("Cascadia Mono", 12, "bold"),
+                cell, text="--", font=FONT_MONO_VALUE,
                 text_color=PALETTE["TEXT"], anchor="center",
             )
             value.pack(fill="x", pady=(2, 0))
@@ -464,13 +469,13 @@ class DataTablePopup:
         style.theme_use("clam")
         style.configure(
             "V2Popup.Treeview", background=PALETTE["SURFACE"], foreground=PALETTE["TEXT"],
-            fieldbackground=PALETTE["SURFACE"], rowheight=46, font=("Segoe UI", 13),
+            fieldbackground=PALETTE["SURFACE"], rowheight=48, font=FONT_TABLE_VALUE,
             borderwidth=0, relief="flat",
         )
         style.layout("V2Popup.Treeview", [("V2Popup.Treeview.treearea", {"sticky": "nswe"})])
         style.configure(
             "V2Popup.Treeview.Heading", background=PALETTE["SURFACE_2"],
-            foreground=PALETTE["TEXT"], font=("Segoe UI", 14, "bold"),
+            foreground=PALETTE["TEXT"], font=FONT_TABLE_HEADING,
             relief="flat", padding=(10, 9),
         )
         style.map(
@@ -667,13 +672,13 @@ class HistoryPopup:
         style.theme_use("clam")
         style.configure(
             "History.Treeview", background=PALETTE["SURFACE"], foreground=PALETTE["TEXT"],
-            fieldbackground=PALETTE["SURFACE"], rowheight=48,
-            font=("Segoe UI", 13), borderwidth=0,
+            fieldbackground=PALETTE["SURFACE"], rowheight=50,
+            font=FONT_TABLE_VALUE, borderwidth=0,
         )
         style.layout("History.Treeview", [("History.Treeview.treearea", {"sticky": "nswe"})])
         style.configure(
             "History.Treeview.Heading", background=PALETTE["SURFACE_2"],
-            foreground=PALETTE["TEXT"], font=("Segoe UI", 14, "bold"),
+            foreground=PALETTE["TEXT"], font=FONT_TABLE_HEADING,
             relief="flat", padding=(10, 9),
         )
         style.map(
@@ -698,9 +703,9 @@ class HistoryPopup:
                 tree.heading(key, text=title, anchor=anchor)
                 tree.column(key, width=width_px, minwidth=min(width_px, 100), anchor=anchor, stretch=True)
             tree.tag_configure("day", background="#171B20", foreground="#FFFFFF", font=("Segoe UI", 12, "bold"))
-            tree.tag_configure("trade_win", background="#173322", foreground="#EAFBF0", font=("Segoe UI", 12, "bold"))
-            tree.tag_configure("trade_loss", background="#382126", foreground="#FFF1F2", font=("Segoe UI", 12, "bold"))
-            tree.tag_configure("trade_open", background="#3C321B", foreground="#FEF3C7", font=("Segoe UI", 12, "bold"))
+            tree.tag_configure("trade_win", background="#173322", foreground="#EAFBF0", font=FONT_TABLE_VALUE)
+            tree.tag_configure("trade_loss", background="#382126", foreground="#FFF1F2", font=FONT_TABLE_VALUE)
+            tree.tag_configure("trade_open", background="#3C321B", foreground="#FEF3C7", font=FONT_TABLE_VALUE)
             tree.tag_configure("buy", foreground="#65D991")
             tree.tag_configure("sell", foreground="#FF8A8A")
             tree.tag_configure("cancelled", foreground="#F6C35B")
@@ -724,7 +729,7 @@ class HistoryPopup:
     SIGNAL_COLUMNS = (
         ("symbol", "MÃ", 95, "center"),
         ("execution_mode", "CHẾ ĐỘ", 95, "center"),
-        ("watchlist_priority", "ƯU TIÊN FA", 105, "center"),
+        ("watchlist_priority", "ƯU TIÊN FA", 125, "center"),
         ("slot_usage", "SLOT", 90, "center"),
         ("suggestion", "GỢI Ý", 180, "center"),
         ("signal", "TÍN HIỆU EMA", 150, "center"),
@@ -749,12 +754,12 @@ class HistoryPopup:
         style = ttk.Style()
         style.configure(
             "Signal.Treeview", background=PALETTE["SURFACE"], foreground=PALETTE["TEXT"],
-            fieldbackground=PALETTE["SURFACE"], rowheight=48,
-            font=("Segoe UI", 13), borderwidth=0,
+            fieldbackground=PALETTE["SURFACE"], rowheight=50,
+            font=FONT_TABLE_VALUE, borderwidth=0,
         )
         style.configure(
             "Signal.Treeview.Heading", background=PALETTE["SURFACE_2"],
-            foreground=PALETTE["TEXT"], font=("Segoe UI", 14, "bold"),
+            foreground=PALETTE["TEXT"], font=FONT_TABLE_HEADING,
             relief="flat", padding=(10, 9),
         )
         tree.heading("#0", text="NGÀY / GIỜ", anchor="w")

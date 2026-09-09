@@ -37,7 +37,7 @@ RUNNING_WIDTHS = {
     "Time": 145,
     "Order": 330,
     "Targets": 250,
-    "CostInfo": 175,
+    "CostInfo": 220,
     "RR": 200,
     "PnL_MAE_MFE": 310,
     "Status": 610,

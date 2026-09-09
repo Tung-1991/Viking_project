@@ -7,7 +7,7 @@ from typing import Any, Callable
 import customtkinter as ctk
 
 from ..config import AppSettings, save_settings
-from ..dashboard.windows import _HoverHint, _window
+from ..dashboard.windows import FONT_KEY, FONT_VALUE, _HoverHint, _window
 from .business import StaticRuleParameters
 from ..trading.market import validate_buy_window
 
@@ -212,11 +212,11 @@ class RuleSettingsPopup:
         row.pack(fill="x", padx=12, pady=4)
         row.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            row, text=label, font=("Segoe UI", 12), text_color=self.TEXT, anchor="w",
+            row, text=label, font=FONT_KEY, text_color=self.TEXT, anchor="w",
         ).grid(row=0, column=0, sticky="w")
         entry = ctk.CTkEntry(
             row, width=92, height=34, justify="right",
-            font=("Segoe UI", 12), fg_color="#181B20", border_color="#444B55",
+            font=FONT_VALUE, fg_color="#181B20", border_color="#444B55",
             text_color=self.TEXT,
         )
         entry.insert(0, str(value))
@@ -370,7 +370,7 @@ class RuleSettingsPopup:
         interval_row = ctk.CTkFrame(mode, fg_color="transparent")
         interval_row.pack(fill="x", padx=12, pady=(0, 8))
         ctk.CTkLabel(
-            interval_row, text="NHỊP EMA/RSI", font=("Segoe UI", 12),
+            interval_row, text="NHỊP EMA/RSI", font=FONT_KEY,
             text_color=self.TEXT,
         ).pack(side="left")
         self.realtime_indicator_interval = tk.StringVar(
@@ -528,13 +528,13 @@ class RuleSettingsPopup:
         policy_row = ctk.CTkFrame(normal, fg_color="transparent")
         policy_row.pack(fill="x", padx=12, pady=4)
         ctk.CTkLabel(
-            policy_row, text="POLICY", font=("Segoe UI", 12), text_color=self.TEXT,
+            policy_row, text="POLICY", font=FONT_KEY, text_color=self.TEXT,
         ).pack(side="left")
         self.normal_policy = tk.StringVar(value=self.params.normal_policy)
         ctk.CTkOptionMenu(
             policy_row, values=["CLASSIC", "AUTO"],
             variable=self.normal_policy, width=140, height=34,
-            font=("Segoe UI", 12), fg_color=self.BLUE,
+            font=FONT_VALUE, fg_color=self.BLUE,
             button_color="#245C92", button_hover_color="#1D4D7B",
             command=self._select_normal_policy,
         ).pack(side="right")
@@ -571,11 +571,11 @@ class RuleSettingsPopup:
             fact = ctk.CTkFrame(indicator_facts, fg_color="#1A1E24", corner_radius=7)
             fact.grid(row=0, column=column, sticky="nsew", padx=3)
             ctk.CTkLabel(
-                fact, text=title, font=("Segoe UI", 11, "bold"),
+                fact, text=title, font=FONT_KEY,
                 text_color=self.MUTED, anchor="w",
             ).pack(fill="x", padx=10, pady=(7, 2))
             value_label = ctk.CTkLabel(
-                fact, text=value, font=("Segoe UI", 12, "bold"),
+                fact, text=value, font=FONT_VALUE,
                 text_color=self.TEXT, anchor="w", justify="left", wraplength=205,
             )
             value_label.pack(fill="x", padx=10, pady=(0, 7))

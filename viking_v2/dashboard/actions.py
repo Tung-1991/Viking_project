@@ -39,7 +39,14 @@ from .view import (
     _price_unit,
 )
 from .info import InfoPopup
-from .windows import DataTablePopup, HistoryPopup, minimize_popup
+from .windows import (
+    FONT_KEY,
+    FONT_MONO_VALUE,
+    FONT_VALUE,
+    DataTablePopup,
+    HistoryPopup,
+    minimize_popup,
+)
 
 # One list so a new tactic never has to be remembered in four separate places.
 EM_TACTICS: tuple[tuple[str, str], ...] = (
@@ -1439,16 +1446,16 @@ class DashboardActionsMixin:
             text=f"{action.get('symbol', '')} · {order_type} · {action.get('mode', '')}",
             font=("Segoe UI", 15, "bold"),
         ).grid(row=0, column=0, columnspan=2, sticky="w", padx=18, pady=(16, 10))
-        ctk.CTkLabel(top, text="Khối lượng", font=("Segoe UI", 11, "bold")).grid(
+        ctk.CTkLabel(top, text="Khối lượng", font=FONT_KEY).grid(
             row=1, column=0, sticky="w", padx=18, pady=7
         )
-        quantity_entry = ctk.CTkEntry(top, font=("Cascadia Mono", 12))
+        quantity_entry = ctk.CTkEntry(top, font=FONT_MONO_VALUE)
         quantity_entry.insert(0, str(quantity_value))
         quantity_entry.grid(row=1, column=1, sticky="ew", padx=(8, 18), pady=7)
-        ctk.CTkLabel(top, text="Giá LO", font=("Segoe UI", 11, "bold")).grid(
+        ctk.CTkLabel(top, text="Giá LO", font=FONT_KEY).grid(
             row=2, column=0, sticky="w", padx=18, pady=7
         )
-        price_entry = ctk.CTkEntry(top, font=("Cascadia Mono", 12))
+        price_entry = ctk.CTkEntry(top, font=FONT_MONO_VALUE)
         price_entry.insert(0, _display_price(price_value) if price_value > 0 else "")
         price_entry.grid(row=2, column=1, sticky="ew", padx=(8, 18), pady=7)
         if order_type != "LO":
@@ -1577,11 +1584,11 @@ class DashboardActionsMixin:
             card = ctk.CTkFrame(summary, fg_color=card_color, corner_radius=7)
             card.grid(row=0, column=col, sticky="nsew", padx=4, pady=6)
             ctk.CTkLabel(
-                card, text=title, font=("Segoe UI", 12, "bold"),
+                card, text=title, font=FONT_KEY,
                 text_color=COL_MUTED,
             ).pack(anchor="w", padx=12, pady=(9, 3))
             ctk.CTkLabel(
-                card, text=value, font=("Cascadia Mono", 12, "bold"),
+                card, text=value, font=FONT_MONO_VALUE,
                 text_color=color,
             ).pack(anchor="w", padx=12, pady=(0, 10))
 
@@ -1620,8 +1627,8 @@ class DashboardActionsMixin:
         targets = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
         targets.grid(row=4, column=0, sticky="ew", padx=20, pady=8)
         targets.grid_columnconfigure((1, 3), weight=1)
-        ctk.CTkLabel(targets, text="TAKE PROFIT", font=("Segoe UI", 12, "bold"), text_color=COL_GREEN).grid(row=0, column=0, sticky="w", padx=(12, 8), pady=(10, 5))
-        tp_entry = ctk.CTkEntry(targets, font=("Cascadia Mono", 12), height=38)
+        ctk.CTkLabel(targets, text="TAKE PROFIT", font=FONT_KEY, text_color=COL_GREEN).grid(row=0, column=0, sticky="w", padx=(12, 8), pady=(10, 5))
+        tp_entry = ctk.CTkEntry(targets, font=FONT_MONO_VALUE, height=38)
         if cycle and cycle.tp_mode == "PRICE":
             tp_entry.insert(0, _display_price(cycle.tp_value))
         elif cycle and cycle.tp_mode == "PERCENT":
@@ -1631,8 +1638,8 @@ class DashboardActionsMixin:
             # target onto the position.  AUTO means "dùng tactic TP nếu bật".
             tp_entry.insert(0, "AUTO")
         tp_entry.grid(row=0, column=1, sticky="ew", padx=(0, 14), pady=(10, 5))
-        ctk.CTkLabel(targets, text="STOP LOSS", font=("Segoe UI", 12, "bold"), text_color=COL_RED).grid(row=0, column=2, sticky="w", padx=(12, 8), pady=(10, 5))
-        sl_entry = ctk.CTkEntry(targets, font=("Cascadia Mono", 12), height=38)
+        ctk.CTkLabel(targets, text="STOP LOSS", font=FONT_KEY, text_color=COL_RED).grid(row=0, column=2, sticky="w", padx=(12, 8), pady=(10, 5))
+        sl_entry = ctk.CTkEntry(targets, font=FONT_MONO_VALUE, height=38)
         if cycle and cycle.sl_mode == "PRICE":
             sl_entry.insert(0, _display_price(cycle.sl_value))
         elif cycle and cycle.sl_mode == "PERCENT":
@@ -1657,8 +1664,8 @@ class DashboardActionsMixin:
             card_color = COL_GRAY if col % 2 == 0 else "#343A43"
             card = ctk.CTkFrame(details, fg_color=card_color, corner_radius=7)
             card.grid(row=0, column=col, sticky="ew", padx=4, pady=6)
-            ctk.CTkLabel(card, text=title, font=("Segoe UI", 12, "bold"), text_color=COL_TEXT).pack(anchor="w", padx=12, pady=(9, 3))
-            ctk.CTkLabel(card, text=value, font=("Segoe UI", 12), text_color=COL_TEXT, wraplength=300, justify="left").pack(anchor="w", padx=12, pady=(0, 10))
+            ctk.CTkLabel(card, text=title, font=FONT_KEY, text_color=COL_TEXT).pack(anchor="w", padx=12, pady=(9, 3))
+            ctk.CTkLabel(card, text=value, font=FONT_VALUE, text_color=COL_TEXT, wraplength=300, justify="left").pack(anchor="w", padx=12, pady=(0, 10))
 
         status = ctk.CTkLabel(top, text="", font=("Segoe UI", 11), text_color=COL_WARN)
         status.grid(row=6, column=0, sticky="w", padx=20, pady=(2, 0))

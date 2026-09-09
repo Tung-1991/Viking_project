@@ -13,7 +13,15 @@ from typing import Any, Callable
 import customtkinter as ctk
 
 from ..config import AppSettings
-from ..dashboard.windows import PALETTE, SymbolPicker, _HoverHint, _window
+from ..dashboard.windows import (
+    FONT_TABLE_HEADING,
+    FONT_TABLE_VALUE,
+    FONT_VALUE,
+    PALETTE,
+    SymbolPicker,
+    _HoverHint,
+    _window,
+)
 from ..exit_modes import exit_mode_label
 from ..rules.business import StaticRuleParameters
 from ..trading.market import normalize_exchange, validate_buy_window
@@ -191,11 +199,11 @@ class BacktestPopup:
         style.theme_use("clam")
         style.configure(
             "Backtest.Treeview", background=COL_SURFACE, foreground=COL_TEXT,
-            fieldbackground=COL_SURFACE, rowheight=46, font=(FONT, 13), borderwidth=0,
+            fieldbackground=COL_SURFACE, rowheight=48, font=FONT_TABLE_VALUE, borderwidth=0,
         )
         style.configure(
             "Backtest.Treeview.Heading", background=COL_SURFACE_2, foreground=COL_TEXT,
-            font=(FONT, 14, "bold"), relief="flat", padding=(10, 9),
+            font=FONT_TABLE_HEADING, relief="flat", padding=(10, 9),
         )
         style.map(
             "Backtest.Treeview",
@@ -254,7 +262,7 @@ class BacktestPopup:
     @staticmethod
     def _entry(parent: Any, value: str = "", width: int = 150) -> ctk.CTkEntry:
         entry = ctk.CTkEntry(
-            parent, width=width, height=36, font=(FONT, 12),
+            parent, width=width, height=38, font=FONT_VALUE,
             fg_color=COL_SURFACE_2, border_color=COL_BORDER,
             text_color=COL_TEXT,
         )
@@ -263,12 +271,9 @@ class BacktestPopup:
 
     @staticmethod
     def _label(parent: Any, text: str, size: int = 15, *, bold: bool = False, color: str = COL_TEXT) -> ctk.CTkLabel:
-        # Legacy callers pass semantic sizes; normalize them to the popup's
-        # four visual levels so direct controls and labels stay balanced.
-        size = {17: 16, 16: 14, 15: 12, 14: 12, 13: 11}.get(size, size)
         return ctk.CTkLabel(
             parent, text=text, anchor="w", text_color=color,
-            font=(FONT, size, "bold") if bold else (FONT, size),
+            font=(FONT, size, "bold", "italic") if bold else (FONT, size),
         )
 
     def _card(self, parent: Any, title: str, subtitle: str = "") -> ctk.CTkFrame:
@@ -319,10 +324,10 @@ class BacktestPopup:
         period = self._card(body, "KHOẢNG THỜI GIAN")
         period.grid(row=1, column=0, sticky="ew")
         period.grid_columnconfigure(4, weight=1)
-        self._label(period, "TỪ NGÀY").grid(row=2, column=0, sticky="w", padx=(16, 8), pady=(0, 12))
+        self._label(period, "TỪ NGÀY", bold=True).grid(row=2, column=0, sticky="w", padx=(16, 8), pady=(0, 12))
         self.start_entry = self._entry(period, self.config.start_date, 150)
         self.start_entry.grid(row=2, column=1, sticky="w", pady=(0, 12))
-        self._label(period, "ĐẾN NGÀY").grid(row=2, column=2, sticky="w", padx=(24, 8), pady=(0, 12))
+        self._label(period, "ĐẾN NGÀY", bold=True).grid(row=2, column=2, sticky="w", padx=(24, 8), pady=(0, 12))
         self.end_entry = self._entry(period, self.config.end_date, 150)
         self.end_entry.grid(row=2, column=3, sticky="w", pady=(0, 12))
         self.capital_hint = self._label(period, "", 14, color=COL_MUTED)
@@ -388,7 +393,7 @@ class BacktestPopup:
         ).grid(row=0, column=1, padx=10)
         self.fixed_block = ctk.CTkFrame(phase, fg_color="transparent")
         self.fixed_block.grid(row=3, column=0, columnspan=3, sticky="ew", padx=16, pady=(4, 16))
-        self._label(self.fixed_block, "DÙNG TRẠNG THÁI", 14).grid(row=0, column=0, sticky="w")
+        self._label(self.fixed_block, "DÙNG TRẠNG THÁI", 14, bold=True).grid(row=0, column=0, sticky="w")
         self.fixed_phase = ctk.CTkOptionMenu(
             self.fixed_block, values=sorted(VALID_PHASES), height=38, font=(FONT, 12),
             fg_color=COL_BLUE, width=230, dynamic_resizing=False,
@@ -1091,7 +1096,7 @@ class BacktestPopup:
         )
         money.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         money.grid_columnconfigure(2, weight=1)
-        self._label(money, "VỐN (ĐỒNG)", 14).grid(row=2, column=0, sticky="w", padx=(16, 10), pady=(0, 16))
+        self._label(money, "VỐN (ĐỒNG)", 14, bold=True).grid(row=2, column=0, sticky="w", padx=(16, 10), pady=(0, 16))
         self.capital_entry = self._entry(money, f"{int(self.config.initial_capital)}", 230)
         self.capital_entry.grid(row=2, column=1, sticky="w", pady=(0, 16))
         self.capital_entry.bind("<KeyRelease>", lambda _e: self._refresh_capital_hint())
@@ -1108,7 +1113,7 @@ class BacktestPopup:
                 cell = ctk.CTkFrame(card, fg_color="transparent")
                 cell.grid(row=2 + grid_row, column=grid_col * 2, columnspan=2, sticky="ew", padx=(16, 12), pady=4)
                 cell.grid_columnconfigure(1, weight=1)
-                self._label(cell, label, 14).grid(row=0, column=0, sticky="w")
+                self._label(cell, label, 14, bold=True).grid(row=0, column=0, sticky="w")
                 entry = self._entry(cell, f"{self.config.rule_parameters.get(key, '')}", 95)
                 entry.grid(row=0, column=1, sticky="e", padx=(8, 5))
                 self._hint(cell, help_text).grid(row=0, column=2, sticky="e")
@@ -1131,7 +1136,7 @@ class BacktestPopup:
         self.exposure_entries: dict[str, ctk.CTkEntry] = {}
         saved = self.config.rule_parameters.get("exposure") or {}
         for index, (state, caption) in enumerate(PHASE_NAMES):
-            self._label(card, caption, 14).grid(
+            self._label(card, caption, 14, bold=True).grid(
                 row=2 + index // 2, column=(index % 2) * 2, sticky="w", padx=(16, 8), pady=6,
             )
             entry = self._entry(card, f"{float(saved.get(state, 0.0)) * 100:g}", 85)
@@ -1160,7 +1165,7 @@ class BacktestPopup:
         for index, (label, key, value, help_text) in enumerate(fields):
             cell = ctk.CTkFrame(card, fg_color="transparent")
             cell.grid(row=2, column=index, sticky="w", padx=(16 if index == 0 else 24, 0), pady=(0, 6))
-            self._label(cell, label, 14).grid(row=0, column=0, sticky="w", padx=(0, 8))
+            self._label(cell, label, 14, bold=True).grid(row=0, column=0, sticky="w", padx=(0, 8))
             entry = self._entry(cell, f"{value:g}", 85)
             entry.grid(row=0, column=1, sticky="w")
             entry.bind("<KeyRelease>", lambda _e: self._refresh_cost_hint())
@@ -1232,7 +1237,7 @@ class BacktestPopup:
             lock_row,
             "Đủ số LOSS liên tiếp theo tham số Phase 3 thì khóa BUY mã đó. Backtest tự mở lại sau số giờ bên cạnh.",
         ).grid(row=0, column=1, padx=10)
-        self._label(lock_row, "MỞ SAU (GIỜ)", 12).grid(row=0, column=2, sticky="w", padx=(22, 8))
+        self._label(lock_row, "MỞ SAU (GIỜ)", 14, bold=True).grid(row=0, column=2, sticky="w", padx=(22, 8))
         self.cooldown_entry = self._entry(lock_row, str(self.config.loss_lock_hours), 90)
         self.cooldown_entry.grid(row=0, column=3, sticky="w")
 
@@ -1329,14 +1334,14 @@ class BacktestPopup:
 
         normal_row = ctk.CTkFrame(card, fg_color="transparent")
         normal_row.grid(row=7, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
-        self._label(normal_row, "PROTECT POLICY", 14).grid(
+        self._label(normal_row, "PROTECT POLICY", 14, bold=True).grid(
             row=0, column=0, sticky="w", padx=(0, 12),
         )
         self.normal_policy = ctk.StringVar(value=params.normal_policy)
         self.normal_policy_menu = ctk.CTkOptionMenu(
             normal_row, values=["CLASSIC", "AUTO"],
             variable=self.normal_policy, width=180, height=36,
-            font=(FONT, 12), fg_color=COL_BLUE, dynamic_resizing=False,
+            font=FONT_VALUE, fg_color=COL_BLUE, dynamic_resizing=False,
             command=self._select_normal_policy,
         )
         self.normal_policy_menu.grid(row=0, column=1, sticky="w")
@@ -1347,10 +1352,10 @@ class BacktestPopup:
 
         fill_row = ctk.CTkFrame(card, fg_color="transparent")
         fill_row.grid(row=8, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
-        self._label(fill_row, "ĐỢT ATO", 14).grid(row=0, column=0, sticky="w", padx=(0, 12))
+        self._label(fill_row, "ĐỢT ATO", 14, bold=True).grid(row=0, column=0, sticky="w", padx=(0, 12))
         self.fill_session = ctk.CTkOptionMenu(
             fill_row, values=["CHO PHÉP · khớp giá mở cửa", "KHÔNG · khớp sau 9h15"],
-            height=36, font=(FONT, 12), fg_color=COL_BLUE, width=265,
+            height=36, font=FONT_VALUE, fg_color=COL_BLUE, width=265,
             dynamic_resizing=False,
         )
         self.fill_session.set(
@@ -1366,10 +1371,10 @@ class BacktestPopup:
 
         sell_row = ctk.CTkFrame(card, fg_color="transparent")
         sell_row.grid(row=9, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
-        self._label(sell_row, "BÁN KHI CỔ VỀ", 14).grid(row=0, column=0, sticky="w", padx=(0, 12))
+        self._label(sell_row, "BÁN KHI CỔ VỀ", 14, bold=True).grid(row=0, column=0, sticky="w", padx=(0, 12))
         self.sell_wait = ctk.CTkOptionMenu(
             sell_row, values=["KIỂM TRA LẠI ĐIỀU KIỆN", "BÁN THEO YÊU CẦU CŨ"],
-            height=36, font=(FONT, 12), fg_color=COL_BLUE, width=265,
+            height=36, font=FONT_VALUE, fg_color=COL_BLUE, width=265,
             dynamic_resizing=False,
         )
         self.sell_wait.set("BÁN THEO YÊU CẦU CŨ" if self.config.sell_wait_policy == "KEEP" else "KIỂM TRA LẠI ĐIỀU KIỆN")

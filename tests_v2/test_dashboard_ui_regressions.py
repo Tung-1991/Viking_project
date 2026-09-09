@@ -9,6 +9,13 @@ from viking_v2.dashboard.tables import (
     RUNNING_HEADERS,
     RUNNING_WIDTHS,
 )
+from viking_v2.dashboard.windows import (
+    FONT_KEY,
+    FONT_TABLE_HEADING,
+    FONT_TABLE_VALUE,
+    FONT_VALUE,
+    HINT_FONT,
+)
 
 
 class _Value:
@@ -17,6 +24,14 @@ class _Value:
 
     def get(self) -> str:
         return self.value
+
+
+def test_operator_typography_separates_keys_from_values() -> None:
+    assert FONT_KEY == ("Segoe UI", 14, "bold", "italic")
+    assert FONT_VALUE == ("Segoe UI", 14)
+    assert FONT_TABLE_HEADING == ("Segoe UI", 16, "bold", "italic")
+    assert FONT_TABLE_VALUE == ("Segoe UI", 14)
+    assert HINT_FONT == ("Segoe UI", 20)
 
 
 class _Label:
