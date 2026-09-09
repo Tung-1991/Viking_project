@@ -1014,8 +1014,7 @@ class DashboardPanelsMixin:
         if hasattr(self, "quantity") and not self.quantity.get().strip():
             self.quantity.configure(
                 placeholder_text=(
-                    f"{quantity:,} · {'AUTO' if forced_minimum else 'VỐN'}"
-                    if quantity > 0 else "THEO VỐN"
+                    f"{quantity:,} CP" if quantity > 0 else "AUTO"
                 )
             )
         return quantity, budget, forced_minimum

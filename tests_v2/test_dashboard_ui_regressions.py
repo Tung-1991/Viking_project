@@ -42,6 +42,41 @@ class _Label:
         self.options.update(options)
 
 
+class _Entry(_Label):
+    def __init__(self, value: str = "") -> None:
+        super().__init__()
+        self.value = value
+
+    def get(self) -> str:
+        return self.value
+
+
+def test_auto_quantity_placeholder_is_compact_and_unambiguous() -> None:
+    subject = DashboardPanelsMixin()
+    subject.symbol = _Value("AAA")
+    subject.quantity = _Entry()
+
+    quantity, _budget, _forced = subject._suggested_order_quantity(
+        7.29,
+        {
+            "decisions": {
+                "AAA": {
+                    "details": {
+                        "entry_checks": {
+                            "order_budget": 1_400_000,
+                            "available_cash": 100_000_000,
+                            "nav": 100_000_000,
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    assert quantity == 100
+    assert subject.quantity.options["placeholder_text"] == "100 CP"
+
+
 class _Real:
     @staticmethod
     def api_health() -> dict[str, object]:
