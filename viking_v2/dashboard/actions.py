@@ -21,10 +21,18 @@ from .. import config
 from ..config import save_settings
 from ..connections.telegram import SignalTelegramService, TelegramClient
 from ..connections.window import ConnectionPopup
+from ..exit_modes import EXIT_MODE_LABELS
 from ..models import OrderIntent, RuntimeConfig, StrategyDecision, TradeCycle
 from ..rules.window import RuleSettingsPopup
-from ..storage import CSVOrderJournal, SignalLog
-from ..trading.market import market_phase, market_session_clock, normalize_exchange
+from ..services.signal_coordinator import (
+    BuyAttempt,
+    BuySlotAllocator,
+    coordinate_buy_decisions,
+    decision_signal_time,
+    is_terminal_buy_block,
+)
+from ..storage import CSVOrderJournal
+from ..trading.market import VN_TZ, market_phase, market_session_clock, normalize_exchange
 from .view import (
     COL_GRAY, COL_GREEN, COL_MUTED, COL_PREVIEW_TEXT, COL_RED, COL_SURFACE_2,
     COL_TEXT, COL_WARN, _cash, _compact_vnd, _display_price, _equity, _number,
@@ -35,7 +43,9 @@ from .windows import DataTablePopup, HistoryPopup, minimize_popup
 
 # One list so a new tactic never has to be remembered in four separate places.
 EM_TACTICS: tuple[tuple[str, str], ...] = (
-    ("TP", "TP"), ("NORMAL", "NORMAL"), ("HIGH", "HIGH"), ("IND_EXIT", "EXIT SELL"),
+    ("TP", EXIT_MODE_LABELS["TP"]),
+    ("NORMAL", EXIT_MODE_LABELS["NORMAL"]),
+    ("IND_EXIT", EXIT_MODE_LABELS["IND_EXIT"]),
 )
 EM_LABELS: dict[str, str] = dict(EM_TACTICS)
 SIGNAL_HISTORY_ROW_LIMIT = 250
@@ -618,7 +628,7 @@ class DashboardActionsMixin:
                 enabled = set(cycle.em_modes)
                 em_text = " · ".join(
                     f"{short} {'ON' if key in enabled else 'OFF'}"
-                    for key, short in (("NORMAL", "N"), ("HIGH", "H"), ("IND_EXIT", "E"))
+                    for key, short in (("NORMAL", "PROTECT"), ("IND_EXIT", "E"))
                 )
             else:
                 em_text = "CHƯA QUẢN LÝ"
@@ -698,7 +708,7 @@ class DashboardActionsMixin:
 
     def _signal_log_rows(self) -> list[dict[str, Any]]:
         """Only recent signal days are rendered; Excel keeps the full archive."""
-        rows = SignalLog(self.bridge.signal_log_path).read_all(limit=SIGNAL_HISTORY_ROW_LIMIT)
+        rows = self.signal_log.read_all(limit=SIGNAL_HISTORY_ROW_LIMIT)
         recent_days = sorted({str(row.get("timestamp", ""))[:10] for row in rows}, reverse=True)
         visible_days = set(recent_days[:HISTORY_DAY_LIMIT])
         return [row for row in rows if str(row.get("timestamp", ""))[:10] in visible_days]
@@ -901,9 +911,9 @@ class DashboardActionsMixin:
         self._bot_sync_until = time.time() + 3.0
         self._paint_bot(enabled, force=True)
         self._log(
-            "BOT ON · cho phép mở lệnh mới."
+            "MUA TỰ ĐỘNG ON · cho phép mở lệnh mới."
             if enabled
-            else "BOT OFF · ngừng mở lệnh mới; vị thế đang giữ vẫn được quản lý.",
+            else "MUA TỰ ĐỘNG OFF · ngừng mở lệnh mới; vị thế đang giữ vẫn được quản lý.",
             "bot",
         )
 
@@ -914,7 +924,7 @@ class DashboardActionsMixin:
                 return
         self._bot_enabled = enabled
         self.bot_button.configure(
-            text=f"BOT · {'ON' if enabled else 'OFF'}",
+            text=f"MUA TỰ ĐỘNG · {'ON' if enabled else 'OFF'}",
             fg_color=COL_GREEN if enabled else COL_GRAY,
             hover_color="#16A34A" if enabled else "#4B515B",
         )
@@ -1053,10 +1063,15 @@ class DashboardActionsMixin:
         symbol: str,
         decision: StrategyDecision,
         tick: dict[str, Any],
+        *,
+        signal_id: str = "",
+        execution_mode: str = "",
     ) -> dict[str, Any] | None:
         service = self.telegram
         details = decision.details if isinstance(decision.details, dict) else {}
-        candle_key = str(details.get("candle_key", "") or "")
+        candle_key = str(
+            details.get("signal_cycle") or details.get("candle_key", "") or ""
+        )
         raw_price = (
             tick.get("price")
             or tick.get("lastPrice")
@@ -1079,21 +1094,19 @@ class DashboardActionsMixin:
                 self.rule_state.discard_telegram_signal(symbol)
             return None
 
-        # Notify only a BUY that passed all three business phases.  BOT ON/OFF
-        # controls order execution, never signal visibility.
         if not service:
             return None
-        if decision.action != "BUY" or signal != "BUY":
-            self._notify_signal_only(service, symbol, signal, decision, price)
+        if decision.action != "BUY" or signal != "BUY" or not signal_id:
+            self._notify_signal_only(
+                service, symbol, signal, decision, price, execution_mode,
+            )
             return None
-        seen = getattr(self, "_signal_alert_seen", None)
-        if seen is not None:
-            seen.pop(symbol, None)
         record = self.rule_state.open_telegram_signal(
             symbol,
             candle_key,
             price=price,
             market_state=decision.market_state,
+            signal_id=signal_id,
         )
         if not record:
             return self.rule_state.active_telegram_signal(symbol)
@@ -1111,16 +1124,24 @@ class DashboardActionsMixin:
 
     def _notify_signal_only(
         self, service: Any, symbol: str, signal: str, decision: Any, price: float,
+        execution_mode: str,
     ) -> None:
         """Tell Telegram about signals the bot could not act on, once each."""
         if not self.settings.telegram_signal_alerts or signal not in {"BUY", "SELL"}:
             return
-        seen = getattr(self, "_signal_alert_seen", None)
-        if seen is None:
-            seen = self._signal_alert_seen = {}
-        if seen.get(symbol) == signal:
+        details = decision.details if isinstance(decision.details, dict) else {}
+        occurrence = "|".join(
+            (
+                signal,
+                str(details.get("signal_cycle") or details.get("candle_key", "") or ""),
+                str(decision.reason or ""),
+            )
+        )
+        alert_key = (
+            f"TELEGRAM_SIGNAL|{str(execution_mode or '').upper()}|{symbol}"
+        )
+        if not self.rule_state.claim_alert(alert_key, occurrence):
             return
-        seen[symbol] = signal
         threading.Thread(
             target=service.notify_signal_only,
             kwargs={
@@ -1202,7 +1223,6 @@ class DashboardActionsMixin:
                 return
         em_key_map = {
             "normal_protection": "NORMAL",
-            "high_profit_protection": "HIGH",
             "indicator_exit": "IND_EXIT",
         }
         em_modes = [
@@ -1509,12 +1529,9 @@ class DashboardActionsMixin:
         params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
         take_profit = float(params.get("take_profit_pct", 7.0) or 7.0)
         normal_share = float(params.get("normal_sell_pct", 33.0) or 33.0)
-        high_share = float(params.get("high_sell_pct", 33.0) or 33.0)
         normal_arm = float(params.get("normal_arm_pct", 7.0) or 7.0)
         normal_giveback = float(params.get("normal_giveback_pct", 3.0) or 3.0)
         normal_policy = str(params.get("normal_policy", "CLASSIC") or "CLASSIC").upper()
-        high_arm = float(params.get("high_profit_arm_pct", 20.0) or 20.0)
-        high_drop = float(params.get("high_profit_close_drop_pct", 5.0) or 5.0)
 
         top = ctk.CTkToplevel(self)
         top.title("Quản lý vị thế")
@@ -1630,12 +1647,11 @@ class DashboardActionsMixin:
 
         details = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
         details.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 8))
-        details.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="position_details")
+        details.grid_columnconfigure((0, 1, 2), weight=1, uniform="position_details")
         detail_values = (
             ("TP", f"Lãi chạm +{take_profit:g}% · bán sạch vị thế"),
-            ("NORMAL", f"{normal_policy} · bật +{normal_arm:g}% · trailing {normal_giveback:g} · bán {normal_share:g}%"),
-            ("HIGH", f"Bật +{high_arm:g}% · Close giảm {high_drop:g}% · bán {high_share:g}%"),
-            ("EXIT SELL", "Tín hiệu SELL · bán hết phần còn lại"),
+            ("PROTECT", f"{normal_policy} · bật +{normal_arm:g}% · trailing {normal_giveback:g} · bán {normal_share:g}%"),
+            ("E", "Tín hiệu SELL · bán hết phần còn lại"),
         )
         for col, (title, value) in enumerate(detail_values):
             card_color = COL_GRAY if col % 2 == 0 else "#343A43"
@@ -1885,144 +1901,230 @@ class DashboardActionsMixin:
         self._consume_bot_decisions(status, daemon)
         self.after(1000, self._poll_runtime)
 
+    @staticmethod
+    def _blocked_decision(decision: StrategyDecision, reason: str) -> StrategyDecision:
+        return StrategyDecision(
+            "WAIT", decision.symbol, str(reason or "WAIT"), signal=decision.signal,
+            market_state=decision.market_state, details=dict(decision.details or {}),
+            scope=decision.scope,
+        )
+
+    def _plan_rule_decision(
+        self, decision: StrategyDecision, tick: dict[str, Any], mode: str,
+        *, available_cash: float | None = None,
+    ) -> Any:
+        details = decision.details if isinstance(decision.details, dict) else {}
+        checks = details.get("entry_checks") if isinstance(details.get("entry_checks"), dict) else {}
+        portfolio = {
+            "order_budget": details.get("order_budget", 0.0),
+            "trade_id": details.get("trade_id", ""),
+            "position_quantity": details.get("position_quantity", 0),
+        }
+        if available_cash is not None:
+            portfolio.update(
+                available_cash=max(0.0, available_cash),
+                nav=checks.get("nav", 0.0),
+                minimum_order_room=min(
+                    max(0.0, available_cash),
+                    float(checks.get("minimum_order_room", available_cash) or available_cash),
+                ),
+                buy_fee_rate=checks.get("buy_fee_rate", 0.0),
+            )
+        return self.strategy_planner.plan(
+            decision, execution_mode=mode, execution_style=self.settings.bot_order_mode,
+            tick=tick, portfolio=portfolio,
+            candle_key=str(
+                details.get("signal_cycle") or details.get("candle_key", "") or ""
+            ),
+            allow_ato=self.settings.allow_ato and self._symbol_exchange(decision.symbol) == "HOSE",
+            allow_atc=self.settings.allow_atc and self._symbol_exchange(decision.symbol) != "UPCOM",
+            bot_em_modes=self.settings.bot_em_modes,
+            sell_wait_policy=self.settings.sell_wait_policy,
+        )
+
+    def _record_signal_decision(
+        self, decision: StrategyDecision, tick: dict[str, Any], mode: str,
+        allocator: BuySlotAllocator,
+    ) -> None:
+        details = decision.details if isinstance(decision.details, dict) else {}
+        marks = details.get("indicators") if isinstance(details.get("indicators"), dict) else {}
+        confirmation = details.get("buy_confirmation") if isinstance(details.get("buy_confirmation"), dict) else {}
+        window = details.get("buy_window") if isinstance(details.get("buy_window"), dict) else {}
+        symbol = str(decision.symbol or "").upper()
+        raw_price = (
+            tick.get("price") or tick.get("lastPrice") or tick.get("matchPrice")
+            or tick.get("expected_price") or tick.get("expectedPrice")
+            or tick.get("bid") or tick.get("ask") or 0
+        )
+        try:
+            priority = self.settings.watchlist.index(symbol) + 1
+        except ValueError:
+            priority = 0
+        self.signal_log.record({
+            "timestamp": datetime.now(VN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            "execution_mode": mode, "symbol": symbol, "signal": decision.signal,
+            "price": _price_unit(raw_price),
+            "ema_fast": round(float(marks.get("buy_ema_fast") or 0.0), 4),
+            "ema_slow": round(float(marks.get("buy_ema_slow") or 0.0), 4),
+            "rsi": round(float(marks.get("rsi") or 0.0), 2),
+            "market_state": decision.market_state, "acted": decision.action,
+            "blocked_by": "" if decision.action != "WAIT" else decision.reason,
+            "candle_key": details.get("candle_key", ""),
+            "signal_cycle": details.get("signal_cycle", ""),
+            "exchange": self._symbol_exchange(symbol),
+            "signal_time": decision_signal_time(decision),
+            "decision_time": confirmation.get("observed_time") or datetime.now(VN_TZ).isoformat(),
+            "confirmation_state": confirmation.get("state", "BYPASS"),
+            "confirmation_minutes": int(confirmation.get("minutes_held", 0) or 0),
+            "confirmation_required": confirmation.get("minutes_required", ""),
+            "confirmation_ema": confirmation.get("ema_ok", ""),
+            "confirmation_rsi": confirmation.get("rsi_ok", ""),
+            "buy_window": f"{window.get('start', '')}–{window.get('end', '')}" if window else "",
+            "buy_window_state": window.get("state", ""),
+            "watchlist_priority": priority,
+            "slot_usage": f"{allocator.used}/{allocator.max_positions}",
+        })
+
+    def _claim_terminal_buy(self, decision: StrategyDecision, mode: str) -> None:
+        if (
+            str(decision.signal or "").upper() != "BUY"
+            or not is_terminal_buy_block(decision.reason)
+        ):
+            return
+        details = decision.details if isinstance(decision.details, dict) else {}
+        self.rule_state.claim_signal(
+            decision.symbol,
+            "BUY",
+            str(details.get("signal_cycle") or details.get("candle_key", "") or ""),
+            stream=mode,
+        )
+
     def _consume_bot_decisions(self, status: dict[str, Any], daemon_status: str) -> None:
         if daemon_status != "RUNNING":
             return
-        bot_enabled = bool(status.get("bot_enabled", False))
         runtime = self.bridge.read_config()
         mode = "PAPER" if runtime.paper_mode else "REAL"
-        for symbol, raw in (status.get("decisions") or {}).items():
+        bot_enabled = bool(status.get("bot_enabled", False))
+        raw_decisions = status.get("decisions") if isinstance(status.get("decisions"), dict) else {}
+        decisions: dict[str, StrategyDecision] = {}
+        for symbol, raw in raw_decisions.items():
             if not isinstance(raw, dict):
                 continue
             try:
-                decision = StrategyDecision.from_dict(raw)
-                self._notify_corporate_action(symbol, decision, mode)
-                tick = (status.get("ticks") or {}).get(symbol) or {}
-                telegram_record = self._notify_rule_signal(symbol, decision, tick)
-                if telegram_record:
-                    decision.details["telegram_signal_id"] = str(
-                        telegram_record.get("id", "")
-                    )
-                if decision.reason == "NORMAL_ALERT":
-                    self._show_normal_alert(decision)
-                if decision.action == "WAIT":
-                    continue
-                if decision.action == "BUY" and not bot_enabled:
-                    continue
-                if (
-                    decision.action == "SELL"
-                    and decision.scope != "POSITION_MANAGEMENT"
-                    and not bot_enabled
-                ):
-                    continue
-                details = decision.details if isinstance(decision.details, dict) else {}
-                result = self.strategy_planner.plan(
-                    decision,
-                    execution_mode=mode,
-                    execution_style=self.settings.bot_order_mode,
-                    tick=tick,
-                    portfolio={
-                        "order_budget": details.get("order_budget", 0.0),
-                        "trade_id": details.get("trade_id", ""),
-                        "position_quantity": details.get("position_quantity", 0),
-                    },
-                    candle_key=str(details.get("candle_key", "") or ""),
-                    allow_ato=self.settings.allow_ato and self._symbol_exchange(symbol) == "HOSE",
-                    allow_atc=self.settings.allow_atc and self._symbol_exchange(symbol) != "UPCOM",
-                    bot_em_modes=self.settings.bot_em_modes,
-                    # An operator-confirmed ALERT sell is a sticky instruction;
-                    # it must not be cancelled by a later T+ recheck.
-                    sell_wait_policy=(
-                        "KEEP" if decision.event == "NORMAL_ALERT_EXIT"
-                        else self.settings.sell_wait_policy
-                    ),
-                )
-                if result.intent:
-                    self._log(
-                        f"[RULE] {decision.event or decision.reason} → {mode} "
-                        f"{result.intent.side} {result.intent.quantity} {symbol} {result.intent.order_type}",
-                        "bot",
-                    )
+                decisions[str(symbol).upper()] = StrategyDecision.from_dict(raw)
             except Exception as exc:
-                self._log(f"[RULE] Không tạo được intent {symbol}: {exc}", "bot")
+                self._log(f"[RULE] Quyết định {symbol} không hợp lệ: {exc}", "bot")
 
-    def _show_normal_alert(self, decision: StrategyDecision) -> None:
-        """Keep one actionable NORMAL alert open until the operator decides."""
-        details = decision.details if isinstance(decision.details, dict) else {}
-        trade_id = str(details.get("trade_id", "") or "")
-        symbol = str(decision.symbol or "").upper()
-        if not symbol or not trade_id:
-            return
-        key = f"{symbol}|{trade_id}"
-        dialogs = getattr(self, "_normal_alert_dialogs", None)
-        if not isinstance(dialogs, dict):
-            dialogs = self._normal_alert_dialogs = {}
-        existing = dialogs.get(key)
-        try:
-            if existing is not None and existing.winfo_exists():
-                return
-        except Exception:
-            dialogs.pop(key, None)
+        positions = self.snapshots.get(mode, ({}, [], []))[1]
+        max_positions = int((self.settings.rule_parameters or {}).get("max_positions", 5) or 5)
+        current_intents = self.queue.list_all()
+        allocator = BuySlotAllocator.from_runtime(max_positions, positions, current_intents, mode)
+        self._slot_summary = {
+            "used": allocator.used, "max": allocator.max_positions,
+            "pending": sum(
+                1 for item in current_intents
+                if item.side == "BUY" and item.execution_mode == mode
+                and str(item.status).upper() not in {"FILLED", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"}
+            ),
+        }
+        ticks = status.get("ticks") if isinstance(status.get("ticks"), dict) else {}
 
-        arm = float(details.get("normal_arm_pct", 0.0) or 0.0)
-        if arm <= 0:
-            arm = float((self.settings.rule_parameters or {}).get("normal_arm_pct", 7.0) or 7.0)
-        peak = float(details.get("peak_profit_pct", 0.0) or 0.0)
-        current = float(details.get("current_profit_pct", 0.0) or 0.0)
-        share = float(details.get("sell_share_pct", 33.0) or 33.0)
+        # Position exits and non-actionable observations never compete for BUY slots.
+        for symbol, decision in decisions.items():
+            if decision.action == "BUY" and str(decision.signal or "").upper() == "BUY":
+                continue
+            tick = ticks.get(symbol) if isinstance(ticks.get(symbol), dict) else {}
+            self._notify_corporate_action(symbol, decision, mode)
+            final = decision
+            if decision.action == "SELL":
+                if decision.scope != "POSITION_MANAGEMENT" and not bot_enabled:
+                    final = self._blocked_decision(decision, "BOT_OFF")
+                else:
+                    result = self._plan_rule_decision(decision, tick, mode)
+                    if result.intent:
+                        self._log(
+                            f"[RULE] {decision.event or decision.reason} → {mode} "
+                            f"{result.intent.side} {result.intent.quantity} {symbol} {result.intent.order_type}",
+                            "bot",
+                        )
+                    elif result.reason != decision.reason:
+                        final = self._blocked_decision(decision, result.reason)
+            self._claim_terminal_buy(final, mode)
+            self._record_signal_decision(final, tick, mode, allocator)
+            self._notify_rule_signal(symbol, final, tick, execution_mode=mode)
 
-        top = ctk.CTkToplevel(self)
-        dialogs[key] = top
-        top.title("NORMAL · CẦN QUYẾT ĐỊNH")
-        top.geometry("520x285")
-        top.resizable(False, False)
-        top.transient(self)
-        top.attributes("-topmost", True)
-        top.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(
-            top, text=f"{symbol} · NORMAL ĐÃ ĐẠT +{arm:g}%",
-            font=("Segoe UI", 18, "bold"), text_color=COL_WARN,
-        ).grid(row=0, column=0, sticky="w", padx=22, pady=(20, 8))
-        ctk.CTkLabel(
-            top,
-            text=f"Hiện tại {current:+.2f}%   ·   MFE {peak:+.2f}%\n"
-                 "Cảnh báo được giữ cho tới khi Ngài chọn một hành động.",
-            font=("Segoe UI", 14), text_color=COL_TEXT, justify="left",
-        ).grid(row=1, column=0, sticky="w", padx=22, pady=(2, 18))
+        ranked_buys = [
+            item for item in decisions.values()
+            if item.action == "BUY" and str(item.signal or "").upper() == "BUY"
+        ]
+        available_cash = max(
+            (
+                float((item.details.get("entry_checks") or {}).get("available_cash", 0.0) or 0.0)
+                for item in ranked_buys
+            ), default=0.0,
+        )
+        available_cash -= sum(
+            max(0.0, float(item.entry_budget or 0.0))
+            for item in current_intents
+            if item.side == "BUY" and item.execution_mode == mode
+            and str(item.status).upper() not in {"FILLED", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"}
+        )
 
-        def finish(action: str) -> None:
-            updated = self.rule_state.resolve_normal_alert(symbol, trade_id, action)
-            if not updated:
-                return
-            self._log(
-                f"[NORMAL] {symbol} #{trade_id[:8]}: "
-                + ("GIỮ TIẾP" if action == "CONTINUE" else f"BÁN {share:g}%"),
-                "bot",
+        def plan_buy(candidate: Any) -> BuyAttempt:
+            nonlocal available_cash
+            decision = candidate.decision
+            tick = ticks.get(candidate.symbol) if isinstance(ticks.get(candidate.symbol), dict) else {}
+            result = self._plan_rule_decision(
+                decision, tick, mode, available_cash=max(0.0, available_cash),
             )
-            dialogs.pop(key, None)
-            top.destroy()
+            intent = result.intent
+            if not intent:
+                return BuyAttempt(reason=result.reason)
+            price = _price_unit(tick.get("ask", tick.get("price", 0.0)) or 0.0)
+            checks = decision.details.get("entry_checks") or {}
+            fee_rate = float(checks.get("buy_fee_rate", 0.0) or 0.0)
+            available_cash -= intent.quantity * price * 1000.0 * (1.0 + fee_rate)
+            return BuyAttempt(payload=intent, reason="PLANNED")
 
-        actions = ctk.CTkFrame(top, fg_color="transparent")
-        actions.grid(row=2, column=0, sticky="ew", padx=22, pady=(8, 20))
-        actions.grid_columnconfigure((0, 1), weight=1, uniform="normal_alert")
-        ctk.CTkButton(
-            actions, text="GIỮ TIẾP", height=44, font=("Segoe UI", 13, "bold"),
-            fg_color="#3A3F47", hover_color="#2B6CB0",
-            command=lambda: finish("CONTINUE"),
-        ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        ctk.CTkButton(
-            actions, text=f"BÁN {share:g}%", height=44, font=("Segoe UI", 13, "bold"),
-            fg_color=COL_RED, hover_color="#B91C1C",
-            command=lambda: finish("SELL"),
-        ).grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        coordinated = coordinate_buy_decisions(
+            decisions, self.settings.watchlist, allocator,
+            bot_enabled=bot_enabled, plan=plan_buy,
+        )
+        for outcome in coordinated:
+            symbol, decision = outcome.candidate.symbol, outcome.candidate.decision
+            tick = ticks.get(symbol) if isinstance(ticks.get(symbol), dict) else {}
+            self._notify_corporate_action(symbol, decision, mode)
+            intent = outcome.payload
+            final = (
+                decision if intent
+                else self._blocked_decision(decision, outcome.blocked_by)
+            )
+            if intent:
+                self._log(
+                    f"[RULE] {decision.event or decision.reason} → {mode} "
+                    f"BUY {intent.quantity} {symbol} {intent.order_type}", "bot",
+                )
+                self._notify_rule_signal(
+                    symbol, decision, tick,
+                    signal_id=intent.trade_id, execution_mode=mode,
+                )
+            else:
+                self._claim_terminal_buy(final, mode)
+                self._notify_rule_signal(
+                    symbol, final, tick, execution_mode=mode,
+                )
+            self._record_signal_decision(final, tick, mode, allocator)
 
-        # Closing the window is not an acknowledgement. It is hidden briefly
-        # and the next persistent daemon decision will surface it again.
-        def hide_only() -> None:
-            dialogs.pop(key, None)
-            top.destroy()
-
-        top.protocol("WM_DELETE_WINDOW", hide_only)
+        final_intents = self.queue.list_all()
+        self._slot_summary.update(
+            used=allocator.used,
+            pending=sum(
+                1 for item in final_intents
+                if item.side == "BUY" and item.execution_mode == mode
+                and str(item.status).upper()
+                not in {"FILLED", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"}
+            ),
+        )
 
     def _latest_sell_decision(self, symbol: str, execution_mode: str) -> dict[str, Any] | None:
         runtime = self.bridge.read_config()
@@ -2053,9 +2155,54 @@ class DashboardActionsMixin:
             return
         message = (
             f"[CHỐT QUYỀN] {str(symbol or '').upper()} đang có position. "
-            f"Ngày sự kiện {occurrence}; operator kiểm tra và xử lý thủ công."
+            f"Ngày GDKHQ {occurrence}; operator kiểm tra và xử lý thủ công."
         )
         self._log(message, "bot")
+        if self.telegram:
+            threading.Thread(
+                target=self.telegram.notify_corporate_action,
+                kwargs={"symbol": str(symbol or "").upper(), "ex_date": occurrence},
+                daemon=True,
+            ).start()
+
+    def _record_failed_buy_execution(
+        self,
+        execution_mode: str,
+        intent: OrderIntent,
+        broker_result: Any,
+    ) -> None:
+        if intent.side != "BUY" or intent.source != "BOT":
+            return
+        status = str(getattr(broker_result, "status", "") or "").upper()
+        ok = bool(getattr(broker_result, "ok", False))
+        if ok and status not in {"REJECTED", "FAILED", "EXPIRED"}:
+            return
+        reason = {
+            "REJECTED": "BROKER_REJECTED",
+            "FAILED": "BROKER_FAILED",
+            "EXPIRED": "BUY_WINDOW_EXPIRED",
+        }.get(status, "BROKER_FAILED")
+        self.rule_state.discard_telegram_signal(intent.symbol)
+        decision = StrategyDecision(
+            "WAIT", intent.symbol, reason, signal="BUY",
+            details={
+                "candle_key": intent.candle_key,
+                "signal_cycle": intent.candle_key,
+            },
+        )
+        mode = str(execution_mode or intent.execution_mode).upper()
+        positions = self.snapshots.get(mode, ({}, [], []))[1]
+        allocator = BuySlotAllocator.from_runtime(
+            int((self.settings.rule_parameters or {}).get("max_positions", 5) or 5),
+            positions,
+            self.queue.list_all(),
+            mode,
+        )
+        tick = self._shared_tick(intent.symbol) or {}
+        self._record_signal_decision(decision, tick, mode, allocator)
+        self._notify_rule_signal(
+            intent.symbol, decision, tick, execution_mode=mode,
+        )
 
     def _process_orders(self) -> None:
         if not self.running:
@@ -2103,6 +2250,9 @@ class DashboardActionsMixin:
                     self._log(
                         f"{selected_mode} {intent.side} {intent.symbol}: "
                         f"{broker_result.status} {broker_result.message}"
+                    )
+                    self._record_failed_buy_execution(
+                        selected_mode, intent, broker_result,
                     )
                 self._refresh_local()
                 self.after(1000, self._process_orders)

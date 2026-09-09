@@ -39,6 +39,8 @@ _SIGNAL_REASONS = {
     "LOCKED_AFTER_LOSSES": "Khóa sau chuỗi lệnh lỗ",
     "NO_AVAILABLE_CAPITAL": "Không còn vốn khả dụng",
     "BUY_ALREADY_PENDING": "Đã có lệnh mua chờ",
+    "BROKER_REJECTED": "Broker từ chối lệnh BUY",
+    "BROKER_FAILED": "Gửi lệnh BUY tới broker thất bại",
     "CORPORATE_ACTION_BLOCK": "Đang chặn vì sự kiện quyền",
     "MARKET_STATE_UNKNOWN": "Chưa xác nhận trạng thái thị trường",
     "NO_NEW_BUY_SIGNAL": "Chỉ là tín hiệu thoát, không mua",
@@ -89,6 +91,7 @@ def signal_rows_by_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         day = timestamp[:10]
         signature = (
             str(raw.get("symbol", "") or "").upper(), signal,
+            str(raw.get("execution_mode", "") or "").upper(),
             str(raw.get("price", "") or ""), str(raw.get("ema_fast", "") or ""),
             str(raw.get("ema_slow", "") or ""), str(raw.get("rsi", "") or ""),
             str(raw.get("market_state", "") or "").upper(),
@@ -720,6 +723,9 @@ class HistoryPopup:
 
     SIGNAL_COLUMNS = (
         ("symbol", "MÃ", 95, "center"),
+        ("execution_mode", "CHẾ ĐỘ", 95, "center"),
+        ("watchlist_priority", "ƯU TIÊN FA", 105, "center"),
+        ("slot_usage", "SLOT", 90, "center"),
         ("suggestion", "GỢI Ý", 180, "center"),
         ("signal", "TÍN HIỆU EMA", 150, "center"),
         ("price", "GIÁ", 100, "center"),
@@ -810,6 +816,7 @@ class HistoryPopup:
             raw_count = int(group.get("buy_count", 0)) + int(group.get("sell_count", 0))
             group_values = (
                 "",
+                "", "", "",
                 f"{int(group.get('allowed_count', 0))} CÓ THỂ VÀO",
                 f"{int(group.get('blocked_count', 0))} BỊ CHẶN",
                 "", "", "", "", "", "",

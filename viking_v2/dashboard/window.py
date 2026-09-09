@@ -18,7 +18,7 @@ from ..rules.planner import StrategyOrderPlanner
 from ..rules.state import RuleStateStore
 from ..rules.window import RuleSettingsPopup
 from ..services.runtime import RuntimeBridge, setup_logging
-from ..storage import DailyFeeTracker, JSONLineJournal
+from ..storage import DailyFeeTracker, JSONLineJournal, SignalLog
 from ..trading.execution import ExecutionService
 from ..trading.orders import OrderQueue
 from ..trading.state import TradeStateStore
@@ -58,6 +58,7 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         self.queue = OrderQueue(self.bridge.pending_orders_path)
         self.trade_state = TradeStateStore(self.bridge.trade_state_path)
         self.rule_state = RuleStateStore(self.bridge.rule_state_path)
+        self.signal_log = SignalLog(self.bridge.signal_log_path)
         self.execution = ExecutionService(
             self.real,
             self.paper,

@@ -289,12 +289,12 @@ class SignalLog:
     """
 
     FIELDS = (
-        "timestamp", "symbol", "signal", "price", "ema_fast", "ema_slow",
+        "timestamp", "execution_mode", "symbol", "signal", "price", "ema_fast", "ema_slow",
         "rsi", "market_state", "acted", "blocked_by", "exchange",
-        "signal_time", "decision_time", "confirmation_state",
+        "candle_key", "signal_cycle", "signal_time", "decision_time", "confirmation_state",
         "confirmation_minutes", "confirmation_required",
         "confirmation_ema", "confirmation_rsi",
-        "buy_window", "buy_window_state",
+        "buy_window", "buy_window_state", "watchlist_priority", "slot_usage",
     )
     RECENT_CSV_ROWS = 500
 
@@ -318,16 +318,22 @@ class SignalLog:
         symbol = str(row.get("symbol", "") or "")
         signal = str(row.get("signal", "") or "")
         candle_key = str(row.get("candle_key", "") or "")
+        signal_cycle = str(row.get("signal_cycle", "") or "")
         confirmation_state = str(row.get("confirmation_state", "") or "")
         confirmation_minutes = str(row.get("confirmation_minutes", "") or "")
+        state_symbol = "|".join((
+            str(row.get("execution_mode", "") or "").upper(), symbol,
+        ))
         state_key = "|".join(value for value in (
-            signal, candle_key, confirmation_state, confirmation_minutes,
+            signal, signal_cycle or candle_key, confirmation_state, confirmation_minutes,
             str(row.get("buy_window_state", "") or ""),
+            str(row.get("acted", "") or ""),
+            str(row.get("blocked_by", "") or ""),
         ) if value)
         with self._lock:
-            if not symbol or self._last.get(symbol) == state_key:
+            if not symbol or self._last.get(state_symbol) == state_key:
                 return False
-            self._last[symbol] = state_key
+            self._last[state_symbol] = state_key
             self.state.write(self._last)
             if not signal:
                 return False

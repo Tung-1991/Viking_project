@@ -18,7 +18,7 @@ from ..models import RuntimeStatus, StrategyDecision
 from ..trading.orders import OrderQueue
 from ..trading.portfolio import PortfolioContextBuilder
 from .runtime import RuntimeBridge
-from ..storage import SignalLog, AtomicJSONStore
+from ..storage import AtomicJSONStore
 from ..rules.state import RuleStateStore
 from ..rules.business import (
     StaticRule,
@@ -103,7 +103,6 @@ def run(account_id: str | None = None) -> int:
     rule_state = RuleStateStore(bridge.rule_state_path)
     trades = TradeStateStore(bridge.trade_state_path)
     queue = OrderQueue(bridge.pending_orders_path)
-    signal_log = SignalLog(bridge.signal_log_path)
     portfolio_builder = PortfolioContextBuilder(
         queue, trades, rule_state, buy_fee_rate=lambda: settings.buy_fee_pct / 100.0,
     )
@@ -357,6 +356,7 @@ def run(account_id: str | None = None) -> int:
                 else:
                     balance = client.get_balance() or {}
                     positions = client.get_positions()
+                cycle_decision_time = datetime.now(VN_TZ)
                 for symbol in symbols:
                     try:
                         symbol_phase = symbol_phases.get(symbol, "UNKNOWN_EXCHANGE")
@@ -414,7 +414,7 @@ def run(account_id: str | None = None) -> int:
                                         symbol, stream, candle_key, current_indicators,
                                     )
                                 else:
-                                    observed_at = datetime.now(VN_TZ)
+                                    observed_at = cycle_decision_time
                                     closed_bars = [
                                         row for row in bars
                                         if isinstance(row, dict) and bool(row.get("closed", True))
@@ -467,56 +467,30 @@ def run(account_id: str | None = None) -> int:
                             else:
                                 decision = rule.evaluate(context, portfolio)
                             trade_id = str(portfolio.get("trade_id", "") or "")
-                            if trade_id and decision.reason in {"NORMAL_ARMED", "NORMAL_ALERT"}:
-                                armed = rule_state.arm_normal(
-                                    symbol, trade_id, alert=decision.reason == "NORMAL_ALERT",
-                                )
-                                if decision.reason == "NORMAL_ALERT":
-                                    decision.details["normal_alert_status"] = str(
-                                        armed.get("normal_alert_status", "PENDING") or "PENDING"
-                                    )
+                            if trade_id and decision.reason == "NORMAL_ARMED":
+                                rule_state.arm_normal(symbol, trade_id)
                             stream = "PAPER" if runtime.paper_mode else "REAL"
                             next_filters, decision = apply_buy_filters(
                                 rule, decision, context, portfolio,
                                 rule_state.buy_confirmation(symbol, stream),
-                                observed_at=datetime.now(VN_TZ), exchange=symbol_exchange,
+                                observed_at=cycle_decision_time, exchange=symbol_exchange,
                                 working_dates=working_dates, holidays=settings.trading_holidays,
                             )
                             rule_state.save_buy_confirmation(symbol, stream, next_filters)
-                            confirmation_details = decision.details.get("buy_confirmation") or {}
-                            confirmation_status = confirmation_details.get("state", "BYPASS")
-                            window_details = decision.details.get("buy_window") or {}
+                            first_seen = rule_state.observe_signal_time(
+                                symbol, stream, decision.signal, candle_key,
+                                cycle_decision_time.isoformat(),
+                            )
+                            if first_seen:
+                                decision.details.setdefault("signal_time", first_seen)
+                                decision.details["signal_cycle"] = (
+                                    f"{candle_key}|{first_seen}"
+                                )
                             decision.details["candle_key"] = candle_key
                             decision.details["order_budget"] = portfolio.get("order_budget", 0.0)
                             decision.details["trade_id"] = portfolio.get("trade_id", "")
                             decision.details["position_quantity"] = portfolio.get("position_quantity", 0)
                             decisions[symbol] = decision.to_dict()
-                            # Sổ tín hiệu ghi cả khi bot tắt hoặc hết slot: nó
-                            # dùng để chấm luật, không phải để chấm bot.
-                            marks = decision.details.get("indicators") or {}
-                            signal_log.record({
-                                "timestamp": datetime.now(VN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
-                                "symbol": symbol,
-                                "signal": decision.signal,
-                                "price": portfolio_tick.get("price", 0.0),
-                                "ema_fast": round(float(marks.get("buy_ema_fast") or 0.0), 4),
-                                "ema_slow": round(float(marks.get("buy_ema_slow") or 0.0), 4),
-                                "rsi": round(float(marks.get("rsi") or 0.0), 2),
-                                "market_state": confirmed_market_state,
-                                "acted": decision.action,
-                                "blocked_by": "" if decision.action != "WAIT" else decision.reason,
-                                "candle_key": candle_key,
-                                "exchange": symbol_exchange,
-                                "signal_time": window_details.get("signal_time") or confirmation_details.get("signal_time", ""),
-                                "decision_time": confirmation_details.get("observed_time", ""),
-                                "confirmation_state": confirmation_status,
-                                "confirmation_minutes": int(confirmation_details.get("minutes_held", 0) or 0),
-                                "confirmation_required": confirmation_details.get("minutes_required", ""),
-                                "confirmation_ema": confirmation_details.get("ema_ok", ""),
-                                "confirmation_rsi": confirmation_details.get("rsi_ok", ""),
-                                "buy_window": (f"{window_details['start']}–{window_details['end']}" if window_details else ""),
-                                "buy_window_state": window_details.get("state", ""),
-                            })
                     except Exception as exc:
                         cycle_error = str(exc)
                         logger.warning("Market update %s failed: %s", symbol, exc)

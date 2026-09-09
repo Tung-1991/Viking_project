@@ -18,7 +18,7 @@ def test_v2_settings_only_keep_two_bot_execution_modes():
 
 def test_execution_defaults_are_explicit_and_minimal():
     settings = AppSettings().normalize()
-    assert settings.bot_em_modes == ["NORMAL", "HIGH", "IND_EXIT"]
+    assert settings.bot_em_modes == ["NORMAL", "IND_EXIT"]
     assert settings.sell_wait_policy == "RECHECK"
     assert settings.signal_mode == "REALTIME"
     assert AppSettings(sell_wait_policy="keep").normalize().sell_wait_policy == "KEEP"
@@ -245,7 +245,7 @@ def test_no_tab_is_wider_than_the_window_it_lives_in(ui_root):
 
 
 def test_signal_log_records_a_change_not_every_loop(tmp_path):
-    """The daemon evaluates every symbol every second; only changes are worth keeping."""
+    """The scanner evaluates every symbol every second; only changes are worth keeping."""
     from viking_v2.storage import SignalLog
 
     log = SignalLog(tmp_path / "signal_log.csv")
@@ -266,6 +266,43 @@ def test_signal_log_records_a_change_not_every_loop(tmp_path):
     ]
     # The reason the bot stood still is the whole point of keeping this.
     assert rows[0]["blocked_by"] == "MAX_POSITIONS"
+
+
+def test_signal_log_records_the_final_arbitration_outcome(tmp_path):
+    from viking_v2.storage import SignalLog
+
+    log = SignalLog(tmp_path / "signal_log.csv")
+    common = {
+        "timestamp": "2026-09-09 10:00:00", "execution_mode": "PAPER",
+        "symbol": "FPT", "signal": "BUY", "candle_key": "D1",
+        "signal_cycle": "D1|2026-09-09T09:45:00+07:00",
+        "signal_time": "2026-09-09T09:45:00+07:00", "watchlist_priority": 2,
+        "slot_usage": "5/5",
+    }
+    assert log.record({**common, "acted": "WAIT", "blocked_by": "MAX_POSITIONS"})
+    assert log.record({**common, "acted": "BUY", "blocked_by": "", "slot_usage": "4/5"})
+    rows = log.read_all()
+    assert [(row["acted"], row["blocked_by"]) for row in rows] == [
+        ("WAIT", "MAX_POSITIONS"), ("BUY", ""),
+    ]
+    assert rows[-1]["execution_mode"] == "PAPER"
+    assert rows[-1]["candle_key"] == "D1"
+    assert rows[-1]["signal_cycle"] == "D1|2026-09-09T09:45:00+07:00"
+    assert rows[-1]["watchlist_priority"] == "2"
+
+
+def test_signal_log_dedupe_keeps_paper_and_real_independent(tmp_path):
+    from viking_v2.storage import SignalLog
+
+    log = SignalLog(tmp_path / "signal_log.csv")
+    common = {
+        "timestamp": "2026-09-09 10:00:00", "symbol": "FPT",
+        "signal": "BUY", "candle_key": "D1", "acted": "WAIT",
+        "blocked_by": "BOT_OFF",
+    }
+    assert log.record({**common, "execution_mode": "PAPER"})
+    assert log.record({**common, "execution_mode": "REAL"})
+    assert [row["execution_mode"] for row in log.read_all()] == ["PAPER", "REAL"]
 
 
 def test_signal_history_groups_detailed_rows_by_day_and_hides_restart_duplicates():
