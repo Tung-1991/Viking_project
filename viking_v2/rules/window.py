@@ -523,17 +523,17 @@ class RuleSettingsPopup:
 
         normal = self._card(
             body, "PROTECT",
-            "CLASSIC giữ nguyên; AUTO trailing tự bán theo MFE.",
+            "AUTO tự bán; ALERT chỉ log và gửi Telegram nếu công tắc thông báo đang bật.",
             1, 1,
         )
         policy_row = ctk.CTkFrame(normal, fg_color="transparent")
         policy_row.pack(fill="x", padx=12, pady=4)
         ctk.CTkLabel(
-            policy_row, text="POLICY", font=FONT_KEY, text_color=self.TITLE,
+            policy_row, text="MODE", font=FONT_KEY, text_color=self.TITLE,
         ).pack(side="left")
         self.normal_policy = tk.StringVar(value=self.params.normal_policy)
         ctk.CTkOptionMenu(
-            policy_row, values=["CLASSIC", "AUTO"],
+            policy_row, values=["AUTO", "ALERT"],
             variable=self.normal_policy, width=140, height=34,
             font=FONT_VALUE, fg_color=self.BLUE,
             button_color="#245C92", button_hover_color="#1D4D7B",
@@ -541,16 +541,25 @@ class RuleSettingsPopup:
         ).pack(side="right")
         self._hint_icon(
             policy_row,
-            "CLASSIC: giảm X% theo giá từ peak. AUTO: mức bảo vệ = MFE − X điểm %.",
+            "AUTO đặt lệnh khi chạm PROTECT. ALERT dùng cùng rule nhưng không đặt lệnh.",
         ).pack(side="right", padx=(0, 6))
-        self.normal_arm = self._field(normal, "Kích hoạt (%)", self.params.normal_arm_pct, "Mặc định +7% tính từ giá vốn.")
-        self.normal_giveback = self._field(normal, "Khoảng trailing (%)", self.params.normal_giveback_pct, "CLASSIC dùng phần trăm giảm theo giá; AUTO dùng số điểm phần trăm trừ khỏi MFE.")
-        self.normal_sell = self._field(normal, "Bán bao nhiêu (%)", self.params.normal_sell_pct, "Phần trăm khối lượng đang giữ sẽ bán. Khi chọn AUTO, mặc định 100%.")
+        self.normal_arm = self._field(normal, "ARM %", self.params.normal_arm_pct, "MFE đạt mức này thì dùng đầy đủ TRAIL đã đặt.")
+        self.normal_giveback = self._field(normal, "TRAIL %", self.params.normal_giveback_pct, "Giá kích hoạt khi giảm X% từ peak; DYNAMIC mở rộng khoảng thở trước ARM.")
+        self.normal_sell = self._field(normal, "SELL %", self.params.normal_sell_pct, "Phần trăm khối lượng đang giữ tại mỗi lần PROTECT thực thi.")
+        self.normal_dynamic = self._switch(
+            normal, "DYNAMIC", self.params.normal_dynamic_enabled,
+            "OFF: chờ đạt ARM. ON: khoảng thở co dần và chỉ quản lý khi mức PROTECT cao hơn SL.",
+        )
+        self.normal_repeat = self._switch(
+            normal, "REPEAT", self.params.normal_repeat_enabled,
+            "Chỉ dùng khi SELL dưới 100%. Peak mới phải vượt peak lần bán trước thêm ít nhất TRAIL%.",
+        )
         self.normal_result = ctk.CTkLabel(normal, text="", font=("Segoe UI", 12), text_color=self.TEXT)
         self.normal_result.pack(anchor="w", padx=14, pady=(8, 12))
 
         self._refresh_share_labels()
         self.normal_sell.bind("<KeyRelease>", self._refresh_share_labels, add="+")
+        self.normal_repeat.trace_add("write", lambda *_args: self._refresh_share_labels())
 
         indicator = self._card(
             body, "E · EXIT SELL",
@@ -600,8 +609,11 @@ class RuleSettingsPopup:
                 label.configure(text="KẾT QUẢ  ·  SỐ KHÔNG HỢP LỆ")
                 continue
             label.configure(
-                text="KẾT QUẢ  ·  BÁN SẠCH VỊ THẾ" if value >= 100
-                else f"KẾT QUẢ  ·  BÁN {value:g}% KHỐI LƯỢNG ĐANG GIỮ, MỘT LẦN",
+                text="KẾT QUẢ  ·  BÁN SẠCH VỊ THẾ  ·  REPEAT KHÔNG ÁP DỤNG" if value >= 100
+                else (
+                    f"KẾT QUẢ  ·  BÁN {value:g}% PHẦN ĐANG GIỮ  ·  "
+                    f"REPEAT {'ON' if self.normal_repeat.get() else 'OFF'}"
+                ),
             )
 
     def _refresh_realtime_interval_state(self) -> None:
@@ -612,10 +624,6 @@ class RuleSettingsPopup:
         )
 
     def _select_normal_policy(self, value: str) -> None:
-        if str(value or "").upper() == "AUTO":
-            for entry, default in ((self.normal_giveback, 2), (self.normal_sell, 100)):
-                entry.delete(0, "end")
-                entry.insert(0, str(default))
         self._refresh_share_labels()
 
     def _exit_b_signal_text(self) -> str:
@@ -958,6 +966,8 @@ class RuleSettingsPopup:
             self.params.normal_arm_pct = normal_arm
             self.params.normal_giveback_pct = normal_giveback
             self.params.normal_sell_pct = normal_sell
+            self.params.normal_dynamic_enabled = bool(self.normal_dynamic.get())
+            self.params.normal_repeat_enabled = bool(self.normal_repeat.get())
             self.params.validate()
             # Activation is per trade. These legacy booleans must never act as
             # an invisible global master after the new UI is saved.
@@ -980,6 +990,9 @@ class RuleSettingsPopup:
             self.settings.rule_parameters = self.params.to_dict()
             save_settings(self.settings, self.account_id)
             self.on_saved()
-            self.status.configure(text="ĐÃ LƯU · DAEMON SẼ TỰ ĐỒNG NHẬN RULE MỚI", text_color=self.GREEN)
+            self.status.configure(
+                text="ĐÃ LƯU · ÁP DỤNG NGAY CẢ VỊ THẾ ĐANG MỞ",
+                text_color=self.GREEN,
+            )
         except (TypeError, ValueError) as exc:
             self.status.configure(text=f"KHÔNG THỂ LƯU · {exc}", text_color="#EF4444")

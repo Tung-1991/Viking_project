@@ -152,7 +152,6 @@ class DashboardTablesMixin:
             params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
             take_profit_pct = float(params.get("take_profit_pct", 7.0) or 7.0)
             normal_tp = float(params.get("normal_arm_pct", 7.0) or 7.0)
-            normal_giveback = float(params.get("normal_giveback_pct", 3.0) or 3.0)
             close_items = [item for item in local_by_mode[mode] if item.action == "CLOSE"]
             consumed_close_ids: set[str] = set()
 
@@ -242,16 +241,31 @@ class DashboardTablesMixin:
                 take_profit_enabled = "TP" in cycle_modes
                 normal_enabled = "NORMAL" in cycle_modes
                 indicator_enabled = "IND_EXIT" in cycle_modes
-                normal_state = "OFF" if not normal_enabled else "DONE" if metrics.get("normal_protection_done") else "ARM" if peak_pct >= normal_tp else "WAIT"
                 decision = runtime_decisions.get(symbol) if isinstance(runtime_decisions.get(symbol), dict) else {}
                 decision_details = decision.get("details") if isinstance(decision.get("details"), dict) else {}
+                repeat_effective = bool(
+                    params.get("normal_repeat_enabled", False)
+                    and float(params.get("normal_sell_pct", 100.0) or 100.0) < 100.0
+                )
+                normal_state = (
+                    "OFF" if not normal_enabled else
+                    "DONE" if metrics.get("normal_protection_done") and not repeat_effective else
+                    str(decision_details.get("normal_state", "WAIT") or "WAIT").upper()
+                )
                 decision_checks = (
                     decision_details.get("entry_checks")
                     if isinstance(decision_details.get("entry_checks"), dict) else {}
                 )
                 indicator_state = "OFF" if not indicator_enabled else "SIGNAL" if str(decision.get("signal", "")).upper() == "SELL" else "WAIT"
-                normal_arm_price = avg_price * (1.0 + normal_tp / 100.0)
-                normal_preview_exit = avg_price * (1.0 + (normal_tp - normal_giveback) / 100.0)
+                protect_mode = str(
+                    decision_details.get("normal_policy", params.get("normal_policy", "AUTO")) or "AUTO"
+                ).upper()
+                protect_mfe = decision_details.get("normal_mfe_pct")
+                protect_trail = decision_details.get("normal_effective_trail_pct")
+                protect_price = decision_details.get("normal_trigger_price")
+                protect_sell = decision_details.get(
+                    "sell_share_pct", params.get("normal_sell_pct", 100.0),
+                )
                 pending_close = next(
                     (
                         item for item in close_items
@@ -262,6 +276,12 @@ class DashboardTablesMixin:
                 )
                 if pending_close:
                     consumed_close_ids.add(pending_close.id)
+                    pending_event = str(pending_close.reason or "").upper()
+                    if (
+                        pending_close.status.upper() == "WAITING_SETTLEMENT"
+                        and pending_event in {"NORMAL_PROTECTION", "PRICE_PROTECTION"}
+                    ):
+                        normal_state = "T+2"
                 settle_short = f"{settle[8:10]}/{settle[5:7]}" if len(settle) == 10 else settle
                 settlement_status = "✓ĐÃ VỀ"
                 if pending:
@@ -302,7 +322,13 @@ class DashboardTablesMixin:
                     entry_context,
                     settlement_status,
                     f"TP {take_profit_state}·+{take_profit_pct:g}%",
-                    f"PROTECT {normal_state}·{_display_price(normal_arm_price)}→{_display_price(normal_preview_exit)}",
+                    (
+                        f"PROTECT {protect_mode}/{normal_state}"
+                        f"·MFE {_number(protect_mfe):.1f}%"
+                        f"·TRAIL {_number(protect_trail):.1f}%"
+                        f"·{_display_price(protect_price)}"
+                        f"·SELL {_number(protect_sell):g}%"
+                    ),
                     f"E {indicator_state}",
                 ]
                 if cycle and cycle.is_reentry:

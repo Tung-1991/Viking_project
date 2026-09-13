@@ -7,6 +7,7 @@ from typing import Any
 
 import customtkinter as ctk
 
+from ..rules.business import protect_level
 from ..trading.market import market_phase
 from ..trading.portfolio import size_buy_order, validate_quantity
 from .view import (
@@ -1202,15 +1203,16 @@ class DashboardPanelsMixin:
         self.preview_route_value.configure(text=route, text_color=badge_fg)
         params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
         normal_arm = float(params.get("normal_arm_pct", 7.0) or 7.0)
-        normal_giveback = float(params.get("normal_giveback_pct", 3.0) or 3.0)
-        normal_policy = str(params.get("normal_policy", "CLASSIC") or "CLASSIC").upper()
+        normal_giveback = float(params.get("normal_giveback_pct", 2.0) or 2.0)
+        normal_policy = str(params.get("normal_policy", "AUTO") or "AUTO").upper()
+        normal_dynamic = bool(params.get("normal_dynamic_enabled", False))
+        normal_repeat = bool(params.get("normal_repeat_enabled", False))
+        normal_sell = float(params.get("normal_sell_pct", 100.0) or 100.0)
         normal_price = entry_price * (1.0 + normal_arm / 100.0) if entry_price > 0 else 0.0
-        normal_preview_sell = (
-            normal_price * (1.0 - normal_giveback / 100.0)
-            if normal_policy == "CLASSIC" else
-            entry_price * (1.0 + (normal_arm - normal_giveback) / 100.0)
-            if normal_policy == "AUTO" else normal_price
-        ) if entry_price > 0 else 0.0
+        normal_preview_sell = protect_level(
+            entry_price, normal_arm, normal_arm, normal_giveback,
+            dynamic_enabled=normal_dynamic,
+        ).trigger_price if entry_price > 0 else 0.0
         self.preview_normal_value.configure(
             text=(
                 f"{_display_price(normal_price)} → {_display_price(normal_preview_sell)}"
@@ -1218,7 +1220,12 @@ class DashboardPanelsMixin:
             ),
         )
         self.preview_normal_detail.configure(
-            text=f"{normal_policy} · +{normal_arm:g}/-{normal_giveback:g} · BÁN {float(params.get('normal_sell_pct', 33) or 33):g}%")
+            text=(
+                f"{normal_policy} · ARM {normal_arm:g}% · TRAIL {normal_giveback:g}% · SELL {normal_sell:g}%"
+                f" · DYN {'ON' if normal_dynamic else 'OFF'}"
+                f" · REPEAT {'OFF' if normal_sell >= 100 else 'ON' if normal_repeat else 'OFF'}"
+            ),
+        )
         em_labels = {
             "normal_protection": "PROTECT",
             "indicator_exit": "E",
@@ -1235,7 +1242,6 @@ class DashboardPanelsMixin:
         decision = decisions.get(symbol) if isinstance(decisions.get(symbol), dict) else {}
         decision_details = decision.get("details") if isinstance(decision.get("details"), dict) else {}
         current_profit = decision_details.get("current_profit_pct")
-        peak_profit = decision_details.get("peak_profit_pct")
         signal = str(decision.get("signal") or "--").upper()
         for key, widget in em_widgets.items():
             enabled = bool(self._em_states.get(key, False))
@@ -1253,14 +1259,20 @@ class DashboardPanelsMixin:
         position_quantity = max(0, int(decision_details.get("position_quantity", 0) or 0))
         self._render_exit_sell_preview(signal, exit_enabled, position_quantity)
         if current_profit is not None and self._em_states.get("normal_protection", False):
-            protected = decision_details.get("normal_protected_profit_pct")
+            protected = decision_details.get("normal_trigger_price")
+            protect_state = str(decision_details.get("normal_state", "WAIT") or "WAIT").upper()
+            effective_trail = decision_details.get("normal_effective_trail_pct")
             self.preview_normal_value.configure(
                 text=(
-                    f"PNL {_number(current_profit):+.1f}% · STOP {_number(protected):+.1f}%"
-                    if normal_policy == "AUTO" and protected is not None else
-                    f"PNL {_number(current_profit):+.1f}% · PEAK -{normal_giveback:g}%"
+                    f"{protect_state} · PNL {_number(current_profit):+.1f}% · PROTECT {_display_price(protected)}"
+                    if protected is not None else
+                    f"{protect_state} · PNL {_number(current_profit):+.1f}%"
                 )
             )
+            if effective_trail is not None:
+                self.preview_normal_detail.configure(
+                    text=f"{normal_policy} · MFE {_number(decision_details.get('normal_mfe_pct')):.1f}% · TRAIL {_number(effective_trail):.1f}% · SELL {normal_sell:g}%",
+                )
         self._refresh_rule_preview(status, symbol)
 
     def _refresh_rule_preview(self, status: dict[str, Any], symbol: str) -> None:

@@ -240,7 +240,13 @@ class InfoPopup:
             ("LOSS LOCK", loss_lock, PALETTE["WARN"]),
             ("MIN LOT", "100 CP" if p.force_min_lot_enabled else "OFF", PALETTE["TEXT"]),
             ("TP", f"{p.take_profit_pct:g}%", PALETTE["GREEN"]),
-            ("PROTECT", f"{p.normal_policy} · +{p.normal_arm_pct:g}/-{p.normal_giveback_pct:g} · {p.normal_sell_pct:g}%", PALETTE["TEXT"]),
+            (
+                "PROTECT",
+                f"{p.normal_policy} · ARM {p.normal_arm_pct:g}% · TRAIL {p.normal_giveback_pct:g}%"
+                f" · SELL {p.normal_sell_pct:g}% · DYN {self._on_off(p.normal_dynamic_enabled)}"
+                f" · REPEAT {self._on_off(p.normal_repeat_enabled and p.normal_sell_pct < 100)}",
+                PALETTE["TEXT"],
+            ),
             ("E/M BẬT", self._em_name(em_modes), PALETTE["TEXT"]),
         ]
         if compact_layout:

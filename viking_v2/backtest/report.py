@@ -22,7 +22,7 @@ _EVENT_NAMES = {
 ROUND_HEADERS = (
     "LẦN CHẠY", "LƯỢT", "MÃ", "VÀO", "GIÁ VÀO", "KHỐI LƯỢNG", "VỐN", "CẮT LỖ",
     "EMA VÀO", "RSI VÀO", "RA", "PHIÊN", "THOÁT BỞI", "EMA RA", "RSI RA",
-    "PHÍ+THUẾ", "LÃI/LỖ", "%", "PROTECT POLICY", "ARM LÚC", "GIÁ ARM",
+    "PHÍ+THUẾ", "LÃI/LỖ", "%", "PROTECT MODE", "ARM LÚC", "GIÁ ARM",
     "MFE SAU ARM %", "+ TRÊN ARM %", "LN THOÁT %", "TRẢ LẠI %", "EXIT MODE",
     "KẾT QUẢ",
 )
@@ -50,6 +50,20 @@ FILL_HEADERS = (
     "LẦN CHẠY", "TÍN HIỆU LÚC", "XÁC NHẬN LÚC", "KHỚP LÚC", "MÃ", "MUA/BÁN", "SỰ KIỆN",
     "KHỐI LƯỢNG", "GIÁ", "PHÍ", "THUẾ", "EMA NHANH", "EMA CHẬM", "RSI",
     "CHẾ ĐỘ", "NGUỒN", "CHẤT LƯỢNG", "LÝ DO",
+)
+
+SIGNAL_HEADERS = SIGNAL_HEADERS + (
+    "PROTECT MODE", "PROTECT STATE", "MFE %", "PEAK", "EFFECTIVE TRAIL %",
+    "PROTECT PRICE", "SELL %", "HYPOTHETICAL QUANTITY",
+)
+FILL_HEADERS = FILL_HEADERS + ("WAITED T+2",)
+PROFIT_PATH_HEADERS = (
+    "Láº¦N CHáº Y", "LÆ¯á»¢T", "MÃƒ", "THá»œI ÄIá»‚M", "NGUá»’N",
+    "OPEN %", "HIGH %", "LOW %", "CLOSE %",
+)
+TRADE_PATH_METRIC_HEADERS = (
+    "Láº¦N CHáº Y", "LÆ¯á»¢T", "MÃƒ", "MFE %", "MAE %", "PEAK LÃšC",
+    "VÃ€Oâ†’PEAK (GIá»œ)", "PEAKâ†’RA (GIá»œ)", "MAX GIVEBACK %",
 )
 
 
@@ -136,6 +150,19 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
             return f"Không dùng · {s.fixed_exposure_pct:g}%"
         return f"{s.fixed_market_phase} · {s.fixed_exposure_pct:g}%"
 
+    def protect_of(result: BacktestResult) -> str:
+        values = result.config.rule_parameters or {}
+        sell = float(values.get("normal_sell_pct", 100.0) or 100.0)
+        repeat = bool(values.get("normal_repeat_enabled", False) and sell < 100.0)
+        return (
+            f"{values.get('normal_policy', 'AUTO')} · "
+            f"ARM {values.get('normal_arm_pct')}% · "
+            f"TRAIL {values.get('normal_giveback_pct')}% · "
+            f"SELL {sell:g}% · "
+            f"DYNAMIC {'ON' if values.get('normal_dynamic_enabled') else 'OFF'} · "
+            f"REPEAT {'ON' if repeat else 'OFF'}"
+        )
+
     line("Giai đoạn", lambda r: f"{r.config.start_date} → {r.config.end_date}")
     line("Chế độ mô phỏng", lambda r: r.config.simulation_mode)
     line("Fallback 1D", lambda r: int((r.data_quality or {}).get("fallback_count", 0) or 0))
@@ -149,7 +176,7 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
     line("Bảo vệ", lambda r: ", ".join(
         exit_mode_label(mode) for mode in r.config.em_modes if exit_mode_label(mode)
     ) or "chỉ cắt lỗ")
-    line("PROTECT policy", lambda r: (r.config.rule_parameters or {}).get("normal_policy", "CLASSIC"))
+    line("PROTECT", protect_of)
     line("Khóa sau LOSS", lambda r: (
         f"{(r.config.rule_parameters or {}).get('loss_lock_count')} LOSS · {r.config.loss_lock_hours} giờ"
         if r.config.loss_lock_enabled else "OFF"
@@ -224,9 +251,6 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
         ("Cắt lỗ", f"{params.get('initial_sl_pct')}% · vào lại {params.get('reentry_sl_pct')}%"
                    f" · bán sạch · luôn bật"),
         ("Ngưỡng TP", f"{params.get('take_profit_pct')}% · bán sạch nếu tactic TP bật"),
-        ("Ngưỡng PROTECT", f"lãi từng ≥ {params.get('normal_arm_pct')}%"
-                          f" · trailing {params.get('normal_giveback_pct')}% · bán"
-                          f" {params.get('normal_sell_pct', 33)}% một lần nếu tactic bật"),
         ("Điều kiện E", f"{' và '.join(sell_terms) or 'OFF'} · bán hết phần còn lại nếu tactic bật"),
         ("Khung giờ mua", (
             f"Từ {params.get('buy_window_start', '14:00')} đến hết phiên hợp lệ · giờ Việt Nam"
@@ -344,13 +368,11 @@ def export_run_excel(results: BacktestResult | list[BacktestResult], directory: 
         for row in round_rows([item]):
             sheet.append(row[1:])
 
-    replay_items = [
-        item for item in items if item.config.simulation_mode in {"REPLAY", "AUTO_HYBRID"}
-    ]
-    if replay_items:
+    signal_items = [item for item in items if item.signals]
+    if signal_items:
         signals = book.create_sheet("TÍN HIỆU")
         signals.append(SIGNAL_HEADERS)
-        for item in replay_items:
+        for item in signal_items:
             label = item.config.run_name or item.run_id
             for row in item.signals:
                 indicators = (row.get("details") or {}).get("indicators") or {}
@@ -373,10 +395,21 @@ def export_run_excel(results: BacktestResult | list[BacktestResult], directory: 
                     row.get("market_state"), row.get("simulation_mode"),
                     row.get("source_resolution"), row.get("data_quality"), confirmation_text,
                     f"{window['start']}–{window['end']}" if window else "",
+                    (row.get("details") or {}).get("normal_policy", ""),
+                    (row.get("details") or {}).get("normal_state", ""),
+                    (row.get("details") or {}).get("normal_mfe_pct", ""),
+                    (row.get("details") or {}).get("normal_peak_price", ""),
+                    (row.get("details") or {}).get("normal_effective_trail_pct", ""),
+                    (row.get("details") or {}).get("normal_trigger_price", ""),
+                    (row.get("details") or {}).get("sell_share_pct", ""),
+                    (row.get("details") or {}).get("hypothetical_quantity", ""),
                 ))
+
+    event_items = [item for item in items if item.events]
+    if event_items:
         fills = book.create_sheet("KHỚP LỆNH")
         fills.append(FILL_HEADERS)
-        for item in replay_items:
+        for item in event_items:
             label = item.config.run_name or item.run_id
             for event in item.events:
                 fills.append((
@@ -386,7 +419,31 @@ def export_run_excel(results: BacktestResult | list[BacktestResult], directory: 
                     event.symbol, event.side, event.event, event.quantity, event.price,
                     event.fee, event.tax, event.ema_fast, event.ema_slow, event.rsi,
                     event.simulation_mode, event.source_resolution, event.data_quality,
-                    event.reason,
+                    event.reason, bool((event.details or {}).get("settlement_waited", False)),
+                ))
+
+    path_items = [
+        (item, trade) for item in items for trade in item.trades if trade.profit_path
+    ]
+    if path_items:
+        metrics = book.create_sheet("PROTECT METRICS")
+        metrics.append(TRADE_PATH_METRIC_HEADERS)
+        path_sheet = book.create_sheet("PROFIT PATH")
+        path_sheet.append(PROFIT_PATH_HEADERS)
+        for item, trade in path_items:
+            label = item.config.run_name or item.run_id
+            metrics.append((
+                label, trade.cycle_id, trade.symbol,
+                round(trade.peak_profit_pct, 4), round(trade.mae_profit_pct, 4),
+                trade.peak_at, round(trade.entry_to_peak_hours, 4),
+                round(trade.peak_to_exit_hours, 4), round(trade.max_giveback_pct, 4),
+            ))
+            for point in trade.profit_path:
+                path_sheet.append((
+                    label, trade.cycle_id, trade.symbol, point.get("time", ""),
+                    point.get("source_resolution", ""),
+                    point.get("open_profit_pct", 0.0), point.get("high_profit_pct", 0.0),
+                    point.get("low_profit_pct", 0.0), point.get("close_profit_pct", 0.0),
                 ))
 
     info = book.create_sheet("THÔNG TIN")

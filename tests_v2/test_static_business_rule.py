@@ -236,15 +236,15 @@ def test_reentry_uses_minus_2_1_percent_stop():
     assert decision.event == "STOP_LOSS"
 
 
-def test_normal_protection_sells_one_third_once_condition_is_met():
+def test_normal_protection_sells_all_by_default_once_condition_is_met():
     decision = StaticRule().evaluate(
         {"symbol": "FPT", "bars": _bars([103.5] * 20), "previous_market_state": "UPTREND"},
-        {"position": {"quantity": 900, "avg_price": 100, "current_price": 103.5, "peak_profit_pct": 7.2, "em_modes": ["NORMAL"]}},
+        {"position": {"quantity": 900, "avg_price": 100, "current_price": 103.5, "peak_profit_pct": 7.2, "normal_armed": True, "em_modes": ["NORMAL"]}},
     )
     assert decision.action == "SELL"
     assert decision.event == "PRICE_PROTECTION"
     assert decision.details["triggered_events"] == ["NORMAL_PROTECTION"]
-    assert math.isclose(decision.quantity_fraction, 0.33)
+    assert math.isclose(decision.quantity_fraction, 1.0)
 
 
 def test_indicator_b_sells_all_remaining_position():
@@ -318,14 +318,14 @@ def test_corporate_action_mark_blocks_new_buy_but_only_warns_for_open_position()
 
 
 def test_protect_sell_share_is_a_setting_not_a_constant():
-    """How much each protection sells is configurable; 33% is only the default."""
+    """How much each protection sells is configurable; 100% is the default."""
     position = {
         "quantity": 300, "avg_price": 100, "current_price": 104,
-        "peak_profit_pct": 8, "em_modes": ["NORMAL"],
+        "peak_profit_pct": 8, "normal_armed": True, "em_modes": ["NORMAL"],
     }
     context = {"symbol": "FPT", "bars": _bars([104] * 24), "confirmed_market_state": "UPTREND"}
     assert math.isclose(
-        StaticRule().evaluate(context, {"position": position}).quantity_fraction, 0.33)
+        StaticRule().evaluate(context, {"position": position}).quantity_fraction, 1.0)
     whole = StaticRule(StaticRuleParameters(normal_sell_pct=100)).evaluate(
         context, {"position": position})
     assert math.isclose(whole.quantity_fraction, 1.0)

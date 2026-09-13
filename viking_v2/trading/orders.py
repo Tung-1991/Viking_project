@@ -394,7 +394,14 @@ class OrderQueue:
             return None
         return self._update(order_id, status="CANCELLED", result="Cancelled locally")
 
-    def replace_local(self, order_id: str, *, quantity: int, limit_price: float = 0.0) -> OrderIntent | None:
+    def replace_local(
+        self,
+        order_id: str,
+        *,
+        quantity: int,
+        limit_price: float = 0.0,
+        details: dict[str, Any] | None = None,
+    ) -> OrderIntent | None:
         item = self.get(order_id)
         if not item or item.status.upper() not in CLAIMABLE_STATUSES:
             return None
@@ -404,12 +411,17 @@ class OrderQueue:
         price = float(limit_price or 0.0)
         if item.order_type == "LO" and price <= 0:
             return None
+        changes: dict[str, Any] = {
+            "quantity": normalized,
+            "remaining_quantity": normalized,
+            "limit_price": price if item.order_type == "LO" else 0.0,
+            "result": "Updated locally",
+        }
+        if details is not None:
+            changes["details"] = dict(details)
         return self._update(
             order_id,
-            quantity=normalized,
-            remaining_quantity=normalized,
-            limit_price=price if item.order_type == "LO" else 0.0,
-            result="Updated locally",
+            **changes,
         )
 
     def mark_broker_replaced(

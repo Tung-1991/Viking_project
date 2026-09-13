@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from viking_v2.models import StrategyDecision
+from viking_v2.models import OrderIntent, StrategyDecision
 from viking_v2.trading.orders import OrderQueue
 from viking_v2.rules.planner import StrategyOrderPlanner
 from viking_v2.rules.state import RuleStateStore
@@ -166,6 +166,47 @@ def test_rule_sell_carries_t2_recheck_policy_and_signal_identity(tmp_path):
     assert result.intent.sell_wait_policy == "RECHECK"
     assert result.intent.signal == "SELL"
     assert result.intent.candle_key == "2026-08-12"
+
+
+def test_e_replaces_unsubmitted_t2_protect_but_never_stacks_unknown(tmp_path):
+    planner, queue = _planner(tmp_path / "replace")
+    protect = OrderIntent.create(
+        "FPT", "SELL", 500, "MARKET", execution_mode="PAPER",
+        source="EM", trade_id="T1", action="CLOSE", reason="NORMAL_PROTECTION",
+    )
+    protect.status = "WAITING_SETTLEMENT"
+    queue.add(protect)
+    result = planner.plan(
+        StrategyDecision(
+            "SELL", "FPT", "SELL_SIGNAL", event="INDICATOR_EXIT",
+            signal="SELL", quantity_fraction=1,
+        ),
+        execution_mode="PAPER", execution_style="MARKET", tick={"bid": 100},
+        portfolio={"position_quantity": 1000, "trade_id": "T1"}, candle_key="E1",
+    )
+    assert result.intent is not None
+    assert result.intent.reason == "INDICATOR_EXIT"
+    assert queue.get(protect.id).status == "CANCELLED"
+    active = queue.find_active("FPT", side="SELL", execution_mode="PAPER")
+    assert [item.id for item in active] == [result.intent.id]
+
+    blocked_planner, blocked_queue = _planner(tmp_path / "unknown")
+    unknown = OrderIntent.create(
+        "FPT", "SELL", 500, "MARKET", execution_mode="PAPER",
+        source="EM", trade_id="T1", action="CLOSE", reason="NORMAL_PROTECTION",
+    )
+    unknown.status = "UNKNOWN"
+    blocked_queue.add(unknown)
+    blocked = blocked_planner.plan(
+        StrategyDecision(
+            "SELL", "FPT", "STOP_LOSS", event="STOP_LOSS", quantity_fraction=1,
+        ),
+        execution_mode="PAPER", execution_style="MARKET", tick={"bid": 95},
+        portfolio={"position_quantity": 1000, "trade_id": "T1"}, candle_key="SL1",
+    )
+    assert blocked.intent is None
+    assert blocked.reason == "SELL_ALREADY_PENDING"
+    assert len(blocked_queue.find_active("FPT", side="SELL", execution_mode="PAPER")) == 1
 
 
 def test_order_budget_takes_the_buy_fee_off_the_cash_first(tmp_path):

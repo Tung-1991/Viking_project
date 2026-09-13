@@ -299,7 +299,9 @@ def test_excel_export_gives_each_run_its_own_sheet(tmp_path):
     assert "MODE 1" in path.name and "FPT" in path.name and "0819" in path.name
     from openpyxl import load_workbook
     book = load_workbook(path, read_only=True)
-    assert book.sheetnames == ["MODE 1", "THÔNG TIN"]
+    assert book.sheetnames[0] == "MODE 1"
+    assert book.sheetnames[-1] == "THÔNG TIN"
+    assert {"TÍN HIỆU", "KHỚP LỆNH", "PROTECT METRICS", "PROFIT PATH"} <= set(book.sheetnames)
     headers = [cell.value for cell in next(book["MODE 1"].iter_rows(min_row=1, max_row=1))]
     # Both modes keep the same shape so their sheets can be compared or pasted
     # together; no blended average exit price anywhere.

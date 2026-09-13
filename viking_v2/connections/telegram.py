@@ -193,6 +193,31 @@ class SignalTelegramService:
             lines.append(f"Bot không vào: {why}")
         return self._send(chr(10).join(lines))
 
+    def notify_protect_alert(
+        self,
+        *,
+        symbol: str,
+        price: float,
+        mfe_pct: float,
+        peak_price: float,
+        protect_price: float,
+        sell_pct: float,
+        dynamic: bool,
+    ) -> bool:
+        """Dry-run notification emitted exactly where AUTO would sell."""
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return False
+        return self._send(
+            "\n".join((
+                f"🟠 PROTECT ALERT · {symbol}",
+                f"Giá: {self._price(price)} · MFE {float(mfe_pct):+.2f}%",
+                f"Peak: {self._price(peak_price)} · PROTECT: {self._price(protect_price)}",
+                f"Giả định bán {float(sell_pct):g}% · DYNAMIC {'ON' if dynamic else 'OFF'}",
+                "ALERT chỉ ghi nhận, không đặt lệnh.",
+            ))
+        )
+
     def notify_corporate_action(self, *, symbol: str, ex_date: str) -> bool:
         symbol = str(symbol or "").strip().upper()
         ex_date = str(ex_date or "").strip()

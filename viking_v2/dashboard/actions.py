@@ -33,6 +33,7 @@ from ..services.signal_coordinator import (
 )
 from ..storage import CSVOrderJournal
 from ..trading.market import VN_TZ, market_phase, market_session_clock, normalize_exchange
+from ..trading.portfolio import sell_quantity_for_fraction
 from .view import (
     COL_GRAY, COL_GREEN, COL_MUTED, COL_PREVIEW_TEXT, COL_RED, COL_SURFACE_2,
     COL_TEXT, COL_TITLE, COL_WARN, _cash, _compact_vnd, _display_price, _equity, _number,
@@ -1092,6 +1093,30 @@ class DashboardActionsMixin:
         price = _price_unit(raw_price)
         signal = str(decision.signal or "").upper()
 
+        if str(decision.event or "").upper() == "PROTECT_ALERT":
+            if not service or not self.settings.telegram_signal_alerts:
+                return None
+            occurrence = str(details.get("protect_occurrence", "") or "")
+            if not self.rule_state.claim_alert(
+                f"PROTECT_ALERT|{str(execution_mode or '').upper()}|{symbol}",
+                occurrence,
+            ):
+                return None
+            threading.Thread(
+                target=service.notify_protect_alert,
+                kwargs={
+                    "symbol": symbol,
+                    "price": price,
+                    "mfe_pct": float(details.get("normal_mfe_pct", 0.0) or 0.0),
+                    "peak_price": float(details.get("normal_peak_price", 0.0) or 0.0),
+                    "protect_price": float(details.get("normal_trigger_price", 0.0) or 0.0),
+                    "sell_pct": float(details.get("sell_share_pct", 0.0) or 0.0),
+                    "dynamic": bool(details.get("normal_dynamic_enabled", False)),
+                },
+                daemon=True,
+            ).start()
+            return None
+
         # A raw SELL signal is never sent to Telegram.  If the earlier BUY did
         # not become a real position, forget it silently so the next BUY can
         # receive a new ID.  An actual position keeps the ID until fully closed.
@@ -1535,10 +1560,12 @@ class DashboardActionsMixin:
         pnl_pct = pnl / (avg_price * quantity * 1000.0) * 100.0 if avg_price > 0 and quantity > 0 else 0.0
         params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
         take_profit = float(params.get("take_profit_pct", 7.0) or 7.0)
-        normal_share = float(params.get("normal_sell_pct", 33.0) or 33.0)
+        normal_share = float(params.get("normal_sell_pct", 100.0) or 100.0)
         normal_arm = float(params.get("normal_arm_pct", 7.0) or 7.0)
-        normal_giveback = float(params.get("normal_giveback_pct", 3.0) or 3.0)
-        normal_policy = str(params.get("normal_policy", "CLASSIC") or "CLASSIC").upper()
+        normal_giveback = float(params.get("normal_giveback_pct", 2.0) or 2.0)
+        normal_policy = str(params.get("normal_policy", "AUTO") or "AUTO").upper()
+        normal_dynamic = bool(params.get("normal_dynamic_enabled", False))
+        normal_repeat = bool(params.get("normal_repeat_enabled", False)) and normal_share < 100.0
 
         top = ctk.CTkToplevel(self)
         top.title("Quản lý vị thế")
@@ -1657,7 +1684,11 @@ class DashboardActionsMixin:
         details.grid_columnconfigure((0, 1, 2), weight=1, uniform="position_details")
         detail_values = (
             ("TP", f"Lãi chạm +{take_profit:g}% · bán sạch vị thế"),
-            ("PROTECT", f"{normal_policy} · bật +{normal_arm:g}% · trailing {normal_giveback:g} · bán {normal_share:g}%"),
+            (
+                "PROTECT",
+                f"{normal_policy} · ARM {normal_arm:g}% · TRAIL {normal_giveback:g}% · SELL {normal_share:g}%"
+                f" · DYN {'ON' if normal_dynamic else 'OFF'} · REPEAT {'ON' if normal_repeat else 'OFF'}",
+            ),
             ("E", "Tín hiệu SELL · bán hết phần còn lại"),
         )
         for col, (title, value) in enumerate(detail_values):
@@ -1958,6 +1989,7 @@ class DashboardActionsMixin:
         confirmation = details.get("buy_confirmation") if isinstance(details.get("buy_confirmation"), dict) else {}
         window = details.get("buy_window") if isinstance(details.get("buy_window"), dict) else {}
         symbol = str(decision.symbol or "").upper()
+        protect_alert = str(decision.event or "").upper() == "PROTECT_ALERT"
         raw_price = (
             tick.get("price") or tick.get("lastPrice") or tick.get("matchPrice")
             or tick.get("expected_price") or tick.get("expectedPrice")
@@ -1969,15 +2001,22 @@ class DashboardActionsMixin:
             priority = 0
         self.signal_log.record({
             "timestamp": datetime.now(VN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
-            "execution_mode": mode, "symbol": symbol, "signal": decision.signal,
+            "execution_mode": mode, "symbol": symbol,
+            "signal": "PROTECT" if protect_alert else decision.signal,
             "price": _price_unit(raw_price),
             "ema_fast": round(float(marks.get("buy_ema_fast") or 0.0), 4),
             "ema_slow": round(float(marks.get("buy_ema_slow") or 0.0), 4),
             "rsi": round(float(marks.get("rsi") or 0.0), 2),
             "market_state": decision.market_state, "acted": decision.action,
             "blocked_by": "" if decision.action != "WAIT" else decision.reason,
-            "candle_key": details.get("candle_key", ""),
-            "signal_cycle": details.get("signal_cycle", ""),
+            "candle_key": (
+                details.get("protect_occurrence", "") if protect_alert
+                else details.get("candle_key", "")
+            ),
+            "signal_cycle": (
+                details.get("protect_occurrence", "") if protect_alert
+                else details.get("signal_cycle", "")
+            ),
             "exchange": self._symbol_exchange(symbol),
             "signal_time": decision_signal_time(decision),
             "decision_time": confirmation.get("observed_time") or datetime.now(VN_TZ).isoformat(),
@@ -1990,6 +2029,20 @@ class DashboardActionsMixin:
             "buy_window_state": window.get("state", ""),
             "watchlist_priority": priority,
             "slot_usage": f"{allocator.used}/{allocator.max_positions}",
+            "trade_id": details.get("trade_id", ""),
+            "protect_mode": details.get("normal_policy", ""),
+            "protect_state": details.get("normal_state", ""),
+            "mfe_pct": details.get("normal_mfe_pct", ""),
+            "peak_price": details.get("normal_peak_price", ""),
+            "effective_trail_pct": details.get("normal_effective_trail_pct", ""),
+            "protect_price": details.get("normal_trigger_price", ""),
+            "sell_pct": details.get("sell_share_pct", ""),
+            "hypothetical_quantity": (
+                sell_quantity_for_fraction(
+                    int(details.get("position_quantity", 0) or 0),
+                    float(details.get("sell_share_pct", 0.0) or 0.0) / 100.0,
+                ) if protect_alert else ""
+            ),
         })
 
     def _claim_terminal_buy(self, decision: StrategyDecision, mode: str) -> None:
@@ -2011,6 +2064,35 @@ class DashboardActionsMixin:
             return
         runtime = self.bridge.read_config()
         mode = "PAPER" if runtime.paper_mode else "REAL"
+        protect_policy = str(
+            (self.settings.rule_parameters or {}).get("normal_policy", "AUTO") or "AUTO"
+        ).upper()
+        if protect_policy == "ALERT":
+            cancelled: list[OrderIntent] = []
+            broker_managed: list[OrderIntent] = []
+            # PROTECT settings are global.  Clear safe local requests in both
+            # execution books so changing PAPER/REAL later cannot revive an
+            # AUTO request created before ALERT was selected.
+            for protect_mode in ("PAPER", "REAL"):
+                local_cancelled, local_broker_managed = (
+                    self.execution.cancel_unsubmitted_protect_sells(protect_mode)
+                )
+                cancelled.extend(local_cancelled)
+                broker_managed.extend(local_broker_managed)
+            if cancelled:
+                self._log(
+                    f"[PROTECT] ALERT · đã hủy {len(cancelled)} lệnh chưa gửi.", "bot",
+                )
+            seen = getattr(self, "_protect_alert_broker_orders", set())
+            current_ids = {item.id for item in broker_managed}
+            for item in broker_managed:
+                if item.id not in seen:
+                    self._log(
+                        f"[PROTECT] ALERT · {item.symbol} còn lệnh {item.status} đã lên luồng broker; "
+                        "operator kiểm tra/hủy thủ công.",
+                        "bot",
+                    )
+            self._protect_alert_broker_orders = current_ids
         bot_enabled = bool(status.get("bot_enabled", False))
         raw_decisions = status.get("decisions") if isinstance(status.get("decisions"), dict) else {}
         decisions: dict[str, StrategyDecision] = {}

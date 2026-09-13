@@ -62,6 +62,7 @@ class OrderIntent:
     entry_market_state: str = "UNKNOWN"
     entry_exposure: float = 0.0
     entry_budget: float = 0.0
+    details: dict[str, Any] = field(default_factory=dict)
     buy_window_start: str = ""
     buy_window_end: str = ""
     buy_window_date: str = ""
@@ -116,6 +117,7 @@ class OrderIntent:
         self.entry_market_state = str(self.entry_market_state or "UNKNOWN").strip().upper()
         self.entry_exposure = max(0.0, float(self.entry_exposure or 0.0))
         self.entry_budget = max(0.0, float(self.entry_budget or 0.0))
+        self.details = dict(self.details) if isinstance(self.details, dict) else {}
 
     @classmethod
     def create(
@@ -146,6 +148,7 @@ class OrderIntent:
         entry_market_state: str = "UNKNOWN",
         entry_exposure: float = 0.0,
         entry_budget: float = 0.0,
+        details: dict[str, Any] | None = None,
     ) -> "OrderIntent":
         return cls(
             id=uuid.uuid4().hex,
@@ -174,6 +177,7 @@ class OrderIntent:
             entry_market_state=entry_market_state,
             entry_exposure=entry_exposure,
             entry_budget=entry_budget,
+            details=dict(details or {}),
         )
 
     def to_dict(self) -> dict[str, Any]:

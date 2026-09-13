@@ -117,12 +117,12 @@ PHASE_GROUPS = (
             ("CHỐT LỜI %", "take_profit_pct", "Lãi chạm mức này thì bán sạch vị thế. Chỉ chạy khi bật ô TP."),
             ("CẮT LỖ LỆNH ĐẦU %", "initial_sl_pct", "Cắt lỗ cho lệnh đầu mỗi chu kỳ. Nhập số âm."),
             ("CẮT LỖ VÀO LẠI %", "reentry_sl_pct", "Cắt lỗ cho lệnh vào lại sau khi vừa lỗ. Nhập số âm."),
-            ("PROTECT · LÃI %", "normal_arm_pct", "Lãi phải từng đạt mức này thì Protect mới bắt đầu theo dõi."),
+            ("PROTECT · ARM %", "normal_arm_pct", "MFE đạt mức này thì PROTECT dùng đầy đủ TRAIL."),
             (
-                "PROTECT · TRAILING %", "normal_giveback_pct",
-                "CLASSIC: phần trăm giảm theo giá từ peak. AUTO: số điểm phần trăm trừ khỏi MFE.",
+                "PROTECT · TRAIL %", "normal_giveback_pct",
+                "Giá kích hoạt khi giảm X% từ peak; DYNAMIC mở rộng khoảng thở trước ARM.",
             ),
-            ("PROTECT · BÁN %", "normal_sell_pct", "Bán bao nhiêu phần trăm khối lượng đang giữ. Khi chọn AUTO, mặc định 100%."),
+            ("PROTECT · SELL %", "normal_sell_pct", "Mỗi lần AUTO bán X% lượng còn lại; SELL 100% làm REPEAT vô hiệu."),
             ("WHIPSAW · SỐ LẦN CẮT", "whipsaw_n", "EMA cắt qua lại bao nhiêu lần thì khóa mua mã đó."),
             ("WHIPSAW · SỐ PHIÊN ĐẾM", "whipsaw_x", "Đếm số lần cắt trong bấy nhiêu phiên gần nhất."),
             ("LOSS · SỐ LỆNH KHÓA", "loss_lock_count", "Số lệnh lỗ liên tiếp làm khóa BUY mới."),
@@ -135,7 +135,7 @@ PHASE_PARAMETER_KEYS = frozenset(
 )
 BACKTEST_RULE_KEYS = PHASE_PARAMETER_KEYS | {
     "exposure", "whipsaw_enabled", "loss_lock_hours", "max_positions",
-    "normal_policy",
+    "normal_policy", "normal_dynamic_enabled", "normal_repeat_enabled",
     "volume_confirmation", "no_compound_enabled", "force_min_lot_enabled",
     "buy_signal_use_ema", "buy_signal_use_rsi",
     "sell_signal_use_ema", "sell_signal_use_rsi",
@@ -621,7 +621,7 @@ class BacktestPopup:
             fg_color=COL_SLATE, hover_color=COL_RED, command=self._delete_scenario,
         ).grid(row=0, column=2, padx=5)
         self.compare_exit_button = ctk.CTkButton(
-            actions, text="SO SÁNH PROTECT CLASSIC / AUTO", width=265, height=36,
+            actions, text="SO SÁNH PROTECT OFF / ON / ALERT", width=290, height=36,
             font=(FONT, 12, "bold"), fg_color=COL_BLUE,
             hover_color=COL_BLUE_HOVER, command=self.run_exit_comparison,
         )
@@ -1343,24 +1343,41 @@ class BacktestPopup:
 
         normal_row = ctk.CTkFrame(card, fg_color="transparent")
         normal_row.grid(row=7, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
-        self._label(normal_row, "PROTECT POLICY", 14, bold=True).grid(
+        self._label(normal_row, "PROTECT MODE", 14, bold=True).grid(
             row=0, column=0, sticky="w", padx=(0, 12),
         )
         self.normal_policy = ctk.StringVar(value=params.normal_policy)
         self.normal_policy_menu = ctk.CTkOptionMenu(
-            normal_row, values=["CLASSIC", "AUTO"],
+            normal_row, values=["AUTO", "ALERT"],
             variable=self.normal_policy, width=180, height=36,
             font=FONT_VALUE, fg_color=COL_BLUE, dynamic_resizing=False,
-            command=self._select_normal_policy,
         )
         self.normal_policy_menu.grid(row=0, column=1, sticky="w")
         self._hint(
             normal_row,
-            "CLASSIC giữ cơ chế cũ. AUTO bảo vệ MFE − khoảng trailing.",
+            "AUTO phát lệnh bán. ALERT dùng cùng điều kiện nhưng chỉ log; Telegram theo công tắc thông báo chung.",
+        ).grid(row=0, column=2, padx=10)
+
+        protect_option_row = ctk.CTkFrame(card, fg_color="transparent")
+        protect_option_row.grid(row=8, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
+        self.normal_dynamic = ctk.BooleanVar(value=params.normal_dynamic_enabled)
+        self.normal_repeat = ctk.BooleanVar(value=params.normal_repeat_enabled)
+        ctk.CTkSwitch(
+            protect_option_row, text="DYNAMIC", variable=self.normal_dynamic,
+            font=(FONT, 12, "bold"), progress_color=COL_GREEN, text_color=COL_TEXT,
+        ).grid(row=0, column=0, sticky="w", padx=(0, 18))
+        ctk.CTkSwitch(
+            protect_option_row, text="REPEAT", variable=self.normal_repeat,
+            font=(FONT, 12, "bold"), progress_color=COL_GREEN, text_color=COL_TEXT,
+        ).grid(row=0, column=1, sticky="w", padx=(0, 18))
+        self._hint(
+            protect_option_row,
+            "DYNAMIC bảo vệ cả MFE dưới ARM khi mức PROTECT cao hơn SL. "
+            "REPEAT chỉ có tác dụng khi SELL < 100% và cần peak mới cao hơn peak lần trước ít nhất TRAIL%.",
         ).grid(row=0, column=2, padx=10)
 
         fill_row = ctk.CTkFrame(card, fg_color="transparent")
-        fill_row.grid(row=8, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
+        fill_row.grid(row=9, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
         self._label(fill_row, "ĐỢT ATO", 14, bold=True).grid(row=0, column=0, sticky="w", padx=(0, 12))
         self.fill_session = ctk.CTkOptionMenu(
             fill_row, values=["CHO PHÉP · khớp giá mở cửa", "KHÔNG · khớp sau 9h15"],
@@ -1379,7 +1396,7 @@ class BacktestPopup:
         ).grid(row=0, column=2, padx=10)
 
         sell_row = ctk.CTkFrame(card, fg_color="transparent")
-        sell_row.grid(row=9, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
+        sell_row.grid(row=10, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
         self._label(sell_row, "BÁN KHI CỔ VỀ", 14, bold=True).grid(row=0, column=0, sticky="w", padx=(0, 12))
         self.sell_wait = ctk.CTkOptionMenu(
             sell_row, values=["KIỂM TRA LẠI ĐIỀU KIỆN", "BÁN THEO YÊU CẦU CŨ"],
@@ -1394,16 +1411,6 @@ class BacktestPopup:
             "KIỂM TRA LẠI: tới lúc bán được thì xem điều kiện thoát còn đúng không, hết đúng thì thôi.\n"
             "BÁN THEO YÊU CẦU CŨ: đã ra lệnh bán thì cổ về bao nhiêu bán bấy nhiêu.",
         ).grid(row=0, column=2, padx=10)
-
-    def _select_normal_policy(self, value: str) -> None:
-        if str(value or "").upper() != "AUTO":
-            return
-        for key, default in (("normal_giveback_pct", 2), ("normal_sell_pct", 100)):
-            entry = self._rule_entries.get(key)
-            if entry is not None:
-                entry.delete(0, "end")
-                entry.insert(0, str(default))
-
 
     def _sync_phase_controls(self) -> None:
         if self.auto_phase.get():
@@ -1435,8 +1442,10 @@ class BacktestPopup:
         self.buy_confirmation_minutes.delete(0, "end")
         self.buy_confirmation_minutes.insert(0, str(params.get("buy_confirmation_minutes", 5)))
         self.buy_window_enabled.set(bool(params.get("buy_window_enabled", False)))
-        normal_policy = str(params.get("normal_policy", "CLASSIC") or "CLASSIC").upper()
-        self.normal_policy.set(normal_policy if normal_policy in {"CLASSIC", "AUTO"} else "CLASSIC")
+        normal_policy = str(params.get("normal_policy", "AUTO") or "AUTO").upper()
+        self.normal_policy.set(normal_policy if normal_policy in {"AUTO", "ALERT"} else "AUTO")
+        self.normal_dynamic.set(bool(params.get("normal_dynamic_enabled", False)))
+        self.normal_repeat.set(bool(params.get("normal_repeat_enabled", False)))
         for key, default in (("start", "14:00"),):
             entry = getattr(self, f"buy_window_{key}")
             entry.delete(0, "end")
@@ -1604,6 +1613,8 @@ class BacktestPopup:
         params.update(buy_window_enabled=bool(self.buy_window_enabled.get()),
                       buy_window_start=window_start)
         params["normal_policy"] = self.normal_policy.get()
+        params["normal_dynamic_enabled"] = bool(self.normal_dynamic.get())
+        params["normal_repeat_enabled"] = bool(self.normal_repeat.get())
         params.pop("buy_window_end", None)
         try:
             params["max_positions"] = int(float(self.mode1_slots.get().strip() or 5))
@@ -1749,7 +1760,7 @@ class BacktestPopup:
         self._start(MODE_2, [job(row) for row in rows])
 
     def run_exit_comparison(self) -> None:
-        """Run E+PROTECT CLASSIC and E+PROTECT AUTO independently."""
+        """Run PROTECT DYNAMIC OFF, DYNAMIC ON, and ALERT independently."""
         rows = self._selected_scenarios()
         if not rows:
             self.tabs.set(MODE_2)

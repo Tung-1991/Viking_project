@@ -403,7 +403,16 @@ class RuleStateStore:
             self.store.write(raw)
             return dict(current)
 
-    def mark_protection_done(self, symbol: str, trade_id: str, events: list[str]) -> None:
+    def mark_protection_done(
+        self,
+        symbol: str,
+        trade_id: str,
+        events: list[str],
+        *,
+        trigger_peak_pct: float = 0.0,
+        rearm_mfe_pct: float = 0.0,
+        execution_id: str = "",
+    ) -> None:
         symbol = str(symbol or "").upper()
         with self._lock:
             raw = self._read()
@@ -415,8 +424,71 @@ class RuleStateStore:
                 return
             normalized = {str(event or "").upper() for event in events}
             if "NORMAL_PROTECTION" in normalized:
+                execution_id = str(execution_id or "")
+                processed = [
+                    str(value) for value in current.get("normal_processed_order_ids", [])
+                    if str(value)
+                ]
+                if execution_id and execution_id in processed:
+                    return
                 current["normal_protection_done"] = True
+                current["normal_protection_count"] = max(
+                    0, int(current.get("normal_protection_count", 0) or 0),
+                ) + 1
+                # REPEAT is anchored to the peak that created this request,
+                # not a later peak observed while the request was waiting for
+                # settlement/fill.  The current MFE is only a compatibility
+                # fallback for old intents that did not persist trigger data.
+                requested_peak = max(0.0, float(trigger_peak_pct or 0.0))
+                peak = requested_peak if requested_peak > 0 else max(
+                    0.0, float(current.get("peak_profit_pct", 0.0) or 0.0),
+                )
+                current["normal_last_trigger_peak_pct"] = peak
+                if float(rearm_mfe_pct or 0.0) > 0:
+                    current["normal_rearm_mfe_pct"] = float(rearm_mfe_pct)
+                current["normal_last_fill_at"] = time.time()
+                current["updated_at"] = time.time()
+                if execution_id:
+                    current["normal_processed_order_ids"] = (processed + [execution_id])[-20:]
             self.store.write(raw)
+
+    def mark_protection_alert(
+        self,
+        symbol: str,
+        trade_id: str,
+        *,
+        occurrence: str,
+        trigger_peak_pct: float,
+        rearm_mfe_pct: float,
+    ) -> dict[str, Any]:
+        """Persist one dry-run PROTECT occurrence across UI/daemon restarts."""
+        symbol = str(symbol or "").upper()
+        trade_id = str(trade_id or "")
+        occurrence = str(occurrence or "")
+        if not symbol or not trade_id or not occurrence:
+            return {}
+        with self._lock:
+            raw = self._read()
+            key = self._position_key(symbol, trade_id)
+            current = raw["symbols"].get(key)
+            if not isinstance(current, dict):
+                return {}
+            if str(current.get("normal_alert_occurrence", "")) != occurrence:
+                current["normal_alert_occurrence"] = occurrence
+                current["normal_alert_count"] = max(
+                    0, int(current.get("normal_alert_count", 0) or 0),
+                ) + 1
+                current["normal_last_alert_peak_pct"] = max(
+                    0.0, float(trigger_peak_pct or 0.0),
+                )
+                current["normal_alert_rearm_mfe_pct"] = max(
+                    0.0, float(rearm_mfe_pct or 0.0),
+                )
+                current["normal_last_alert_at"] = time.time()
+                current["updated_at"] = time.time()
+                raw["symbols"][key] = current
+                self.store.write(raw)
+            return dict(current)
 
     def arm_normal(self, symbol: str, trade_id: str) -> dict[str, Any]:
         """Persist a PROTECT AUTO arm once for the current trade."""

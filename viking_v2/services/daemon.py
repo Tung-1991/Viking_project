@@ -16,7 +16,7 @@ from ..trading.market import MarketDataService
 from ..trading.market import VN_TZ, market_phase, merge_tick_into_daily_bars, normalize_exchange
 from ..models import RuntimeStatus, StrategyDecision
 from ..trading.orders import OrderQueue
-from ..trading.portfolio import PortfolioContextBuilder
+from ..trading.portfolio import PortfolioContextBuilder, sell_quantity_for_fraction
 from .runtime import RuntimeBridge
 from ..storage import AtomicJSONStore
 from ..rules.state import RuleStateStore
@@ -469,6 +469,39 @@ def run(account_id: str | None = None) -> int:
                             trade_id = str(portfolio.get("trade_id", "") or "")
                             if trade_id and decision.reason == "NORMAL_ARMED":
                                 rule_state.arm_normal(symbol, trade_id)
+                            if trade_id and decision.reason == "PROTECT_ALERT":
+                                alert_state = rule_state.mark_protection_alert(
+                                    symbol,
+                                    trade_id,
+                                    occurrence=str(decision.details.get("protect_occurrence", "") or ""),
+                                    trigger_peak_pct=float(
+                                        decision.details.get("normal_trigger_peak_pct", 0.0) or 0.0
+                                    ),
+                                    rearm_mfe_pct=float(
+                                        decision.details.get("normal_rearm_after_pct", 0.0) or 0.0
+                                    ),
+                                )
+                                decision.details["normal_event_count"] = int(
+                                    alert_state.get("normal_alert_count", 0) or 0
+                                )
+                                logger.info(
+                                    "PROTECT ALERT symbol=%s trade=%s price=%.4f mfe=%.4f peak=%.4f "
+                                    "effective_trail=%.4f protect=%.4f sell=%.2f hypothetical_qty=%d "
+                                    "occurrence=%s",
+                                    symbol,
+                                    trade_id,
+                                    float(decision.details.get("current_price", 0.0) or 0.0),
+                                    float(decision.details.get("normal_mfe_pct", 0.0) or 0.0),
+                                    float(decision.details.get("normal_peak_price", 0.0) or 0.0),
+                                    float(decision.details.get("normal_effective_trail_pct", 0.0) or 0.0),
+                                    float(decision.details.get("normal_trigger_price", 0.0) or 0.0),
+                                    float(decision.details.get("sell_share_pct", 0.0) or 0.0),
+                                    sell_quantity_for_fraction(
+                                        int(portfolio.get("position_quantity", 0) or 0),
+                                        float(decision.details.get("sell_share_pct", 0.0) or 0.0) / 100.0,
+                                    ),
+                                    str(decision.details.get("protect_occurrence", "") or ""),
+                                )
                             stream = "PAPER" if runtime.paper_mode else "REAL"
                             next_filters, decision = apply_buy_filters(
                                 rule, decision, context, portfolio,

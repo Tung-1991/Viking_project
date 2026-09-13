@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from viking_v2.connections.dnse.paper import PaperBroker
 from viking_v2.trading.execution import ExecutionService
-from viking_v2.models import OrderIntent
+from viking_v2.models import OrderIntent, StrategyDecision
 from viking_v2.trading.orders import OrderQueue
 from viking_v2.storage import CSVOrderJournal, DailyFeeTracker, JSONLineJournal
 from viking_v2.rules.state import RuleStateStore
@@ -81,6 +81,87 @@ def test_unique_buy_intent_survives_repeated_signal(tmp_path):
     repeated = queue.add_unique(OrderIntent.create("FPT", "BUY", 200, "MARKET", source="BOT"))
     assert repeated.id == first.id
     assert len(queue.find_active("FPT", side="BUY", execution_mode="PAPER")) == 1
+
+
+def test_auto_to_alert_cancels_only_unsubmitted_protect_requests(tmp_path):
+    queue = OrderQueue(tmp_path / "orders.json")
+    pending = OrderIntent.create(
+        "FPT", "SELL", 100, "MARKET", execution_mode="PAPER",
+        source="EM", action="CLOSE", reason="NORMAL_PROTECTION",
+    )
+    waiting = OrderIntent.create(
+        "VNM", "SELL", 100, "MARKET", execution_mode="PAPER",
+        source="EM", action="CLOSE", reason="NORMAL_PROTECTION",
+    )
+    waiting.status = "WAITING_SETTLEMENT"
+    unknown = OrderIntent.create(
+        "HPG", "SELL", 100, "MARKET", execution_mode="PAPER",
+        source="EM", action="CLOSE", reason="NORMAL_PROTECTION",
+    )
+    unknown.status = "UNKNOWN"
+    partial = OrderIntent.create(
+        "VIX", "SELL", 200, "MARKET", execution_mode="PAPER",
+        source="EM", action="CLOSE", reason="NORMAL_PROTECTION",
+    )
+    partial.status = "WAITING_SETTLEMENT"
+    partial.filled_quantity = 100
+    partial.remaining_quantity = 100
+    unrelated = OrderIntent.create(
+        "SSI", "SELL", 100, "MARKET", execution_mode="PAPER",
+        source="EM", action="CLOSE", reason="INDICATOR_EXIT",
+    )
+    for intent in (pending, waiting, unknown, partial, unrelated):
+        queue.add(intent)
+    paper = PaperBroker(
+        tmp_path / "paper.json", tick_provider=lambda _symbol: {"price": 100},
+    )
+    service = ExecutionService(
+        object(), paper, queue, JSONLineJournal(tmp_path / "journal.jsonl"),
+    )
+    cancelled, broker_managed = service.cancel_unsubmitted_protect_sells("PAPER")
+    assert {item.id for item in cancelled} == {pending.id, waiting.id}
+    assert {item.id for item in broker_managed} == {unknown.id, partial.id}
+    assert queue.get(unknown.id).status == "UNKNOWN"
+    assert queue.get(partial.id).status == "WAITING_SETTLEMENT"
+    assert queue.get(unrelated.id).status == "PENDING"
+
+
+def test_t2_recheck_resizes_unfilled_protect_from_latest_sell_percent(tmp_path):
+    paper = PaperBroker(
+        tmp_path / "paper.json",
+        tick_provider=lambda _symbol: {"price": 10, "ask": 10, "bid": 10},
+    )
+    assert paper.place_order(OrderIntent.create("FPT", "BUY", 1000, "MARKET")).ok
+    state = paper.store.read()
+    state["positions"][0]["tradeQuantity"] = 1000
+    paper.store.write(state)
+    queue = OrderQueue(tmp_path / "orders.json")
+    protect = OrderIntent.create(
+        "FPT", "SELL", 500, "MARKET", execution_mode="PAPER", source="EM",
+        action="CLOSE", reason="NORMAL_PROTECTION", sell_wait_policy="RECHECK",
+    )
+    protect.status = "WAITING_SETTLEMENT"
+    protect.settlement_waited = True
+    queue.add(protect)
+    service = ExecutionService(
+        object(), paper, queue, JSONLineJournal(tmp_path / "journal.jsonl"),
+        sell_decision_provider=lambda *_args: StrategyDecision(
+            "SELL", "FPT", "NORMAL_PROTECTION", event="PRICE_PROTECTION",
+            quantity_fraction=1.0, details={
+                "triggered_events": ["NORMAL_PROTECTION"],
+                "normal_trigger_peak_pct": 12.0,
+                "normal_rearm_after_pct": 14.24,
+                "sell_share_pct": 100.0,
+            },
+        ),
+    )
+    service.process_due(phase="OPEN", execution_mode="PAPER")
+    filled = queue.get(protect.id)
+    assert filled.quantity == 1000
+    assert filled.filled_quantity == 1000
+    assert filled.details["normal_trigger_peak_pct"] == 12.0
+    assert filled.details["normal_rearm_after_pct"] == 14.24
+    assert paper.get_positions() == []
 
 
 def test_sell_waits_for_t2_and_executes_sequentially(tmp_path):

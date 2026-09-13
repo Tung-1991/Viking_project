@@ -112,27 +112,28 @@ def test_protect_evaluation_sells_configured_fraction_and_marks_one_event():
                 "avg_price": 100,
                 "current_price": 114,
                 "peak_profit_pct": 21,
+                "normal_armed": True,
                 "em_modes": ["NORMAL"],
             }
         },
     )
     assert decision.details["triggered_events"] == ["NORMAL_PROTECTION"]
-    assert math.isclose(decision.quantity_fraction, 0.33)
+    assert math.isclose(decision.quantity_fraction, 1.0)
 
 
 def test_global_exit_parameters_apply_immediately_without_trade_snapshot():
     context = {"symbol": "FPT", "bars": _bars(), "confirmed_market_state": "UPTREND"}
-    # Peak profit 7.2% means a peak price of 107.2, so NORMAL fires once price
-    # falls 3% below that, at 103.98 - not at a fixed 3 profit points.
+    # Peak profit 7.2% means a peak price of 107.2, so PROTECT fires once price
+    # falls 2% below that, at 105.056 - not at a fixed 2 profit points.
     def at(price: float) -> dict:
         return {"position": {
             "quantity": 900, "avg_price": 100, "current_price": price,
-            "peak_profit_pct": 7.2, "em_modes": ["NORMAL"],
+            "peak_profit_pct": 7.2, "normal_armed": True, "em_modes": ["NORMAL"],
         }}
 
     rule = StaticRule(StaticRuleParameters(normal_arm_pct=7))
-    assert rule.evaluate(context, at(104.0)).action == "WAIT"
-    assert rule.evaluate(context, at(103.5)).action == "SELL"
+    assert rule.evaluate(context, at(105.1)).action == "WAIT"
+    assert rule.evaluate(context, at(105.0)).action == "SELL"
     # Raising the arm threshold above the peak disarms NORMAL entirely.
     assert StaticRule(StaticRuleParameters(normal_arm_pct=9)).evaluate(context, at(103.5)).action == "WAIT"
 

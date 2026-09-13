@@ -314,11 +314,12 @@ class StaticRuleParameters:
     force_min_lot_enabled: bool = True
     take_profit_pct: float = 7.0
     normal_arm_pct: float = 7.0
-    normal_sell_pct: float = 33.0
-    normal_giveback_pct: float = 3.0
-    # CLASSIC keeps the original peak-price drawdown. AUTO protects profit
-    # points behind the maximum favourable excursion.
-    normal_policy: str = "CLASSIC"
+    normal_sell_pct: float = 100.0
+    normal_giveback_pct: float = 2.0
+    # NORMAL remains the compatibility key; operators only see PROTECT.
+    normal_policy: str = "AUTO"
+    normal_dynamic_enabled: bool = False
+    normal_repeat_enabled: bool = False
     whipsaw_enabled: bool = True
     whipsaw_n: int = 3
     whipsaw_x: int = 7
@@ -345,11 +346,16 @@ class StaticRuleParameters:
         self.buy_window_enabled = bool(self.buy_window_enabled)
         self.buy_window_start = str(self.buy_window_start).strip()
         self.normal_policy = normalize_normal_policy(self.normal_policy)
+        self.normal_dynamic_enabled = bool(self.normal_dynamic_enabled)
+        self.normal_repeat_enabled = bool(self.normal_repeat_enabled)
         validate_buy_window(self.buy_window_start, "15:00")
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> "StaticRuleParameters":
-        raw = raw if isinstance(raw, dict) else {}
+        raw = dict(raw) if isinstance(raw, dict) else {}
+        legacy_protect_policy = str(raw.get("normal_policy", "") or "").upper() in {
+            "CLASSIC", "TSL",
+        }
         # Older account settings used one EMA pair for both directions.  Map
         # that pair to BUY and SELL so upgrading never changes live behavior.
         legacy_fast = raw.get("ema_fast", 3)
@@ -363,6 +369,9 @@ class StaticRuleParameters:
         }
         allowed = {name for name in cls.__dataclass_fields__}
         values = {key: value for key, value in raw.items() if key in allowed}
+        if legacy_protect_policy:
+            values["normal_policy"] = "AUTO"
+            values["normal_dynamic_enabled"] = False
         if isinstance(values.get("exposure"), dict):
             values["exposure"] = {
                 **EXPOSURE_DEFAULTS,
@@ -542,17 +551,79 @@ def _working_bars(rows: list[dict[str, Any]], signal_mode: str) -> list[dict[str
     return values
 
 
+@dataclass(frozen=True, slots=True)
+class ProtectLevel:
+    """One trader-facing PROTECT level shared by live, PAPER and backtest."""
+
+    mfe_pct: float
+    peak_price: float
+    effective_trail_pct: float
+    trigger_price: float
+    trigger_profit_pct: float
+    active: bool
+    state: str
+
+
+def protect_level(
+    entry_price: float,
+    peak_profit_pct: float,
+    arm_pct: float,
+    trailing_gap_pct: float,
+    *,
+    dynamic_enabled: bool = False,
+    sl_price: float = 0.0,
+) -> ProtectLevel:
+    """Calculate PROTECT v2 from running MFE without using future data.
+
+    TRAIL is always a percentage drawdown from the running peak price.  With
+    DYNAMIC enabled the distance still missing to ARM is added to TRAIL, so a
+    young trade breathes wider and tightens continuously into the configured
+    trail.  A dynamic level below the actual SL is informational only.
+    """
+    entry = max(0.0, float(entry_price or 0.0))
+    mfe = max(0.0, float(peak_profit_pct or 0.0))
+    arm = max(0.0, float(arm_pct or 0.0))
+    trail = max(0.0, float(trailing_gap_pct or 0.0))
+    armed = mfe + 1e-9 >= arm
+    effective = trail + max(0.0, arm - mfe) if dynamic_enabled else trail
+    peak_price = entry * (1.0 + mfe / 100.0) if entry > 0 else 0.0
+    trigger = peak_price * (1.0 - effective / 100.0) if peak_price > 0 else 0.0
+    trigger_profit = ((trigger / entry) - 1.0) * 100.0 if entry > 0 else 0.0
+    active = bool(
+        trigger > 0
+        and (armed or dynamic_enabled)
+        and trigger > max(0.0, float(sl_price or 0.0)) + 1e-9
+    )
+    state = "ARM" if active and armed else "DYN" if active else "WAIT"
+    return ProtectLevel(
+        mfe_pct=mfe,
+        peak_price=peak_price,
+        effective_trail_pct=effective,
+        trigger_price=trigger,
+        trigger_profit_pct=trigger_profit,
+        active=active,
+        state=state,
+    )
+
+
 def normal_auto_stop_profit(
     peak_profit_pct: float,
     arm_pct: float,
     trailing_gap_pct: float,
 ) -> float:
-    """Profit percentage protected by NORMAL AUTO.
+    """Compatibility helper returning the new peak-percentage trail P/L."""
+    level = protect_level(
+        1.0, peak_profit_pct, arm_pct, trailing_gap_pct,
+        dynamic_enabled=False,
+    )
+    return level.trigger_profit_pct
 
-    ``trailing_gap_pct`` is expressed in percentage points.  The protected
-    level trails MFE by a fixed number of percentage points after arming.
-    """
-    return float(peak_profit_pct) - float(trailing_gap_pct)
+
+def protect_rearm_mfe(peak_profit_pct: float, trail_pct: float) -> float:
+    """MFE required before REPEAT may create another PROTECT event."""
+    peak_factor = 1.0 + max(0.0, float(peak_profit_pct or 0.0)) / 100.0
+    trail_factor = 1.0 + max(0.0, float(trail_pct or 0.0)) / 100.0
+    return (peak_factor * trail_factor - 1.0) * 100.0
 
 def classify_market_state(
     rows: list[dict[str, Any]],
@@ -779,12 +850,17 @@ class StaticRule:
         current = float(position.get("current_price", closes(bars)[-1] if closes(bars) else 0.0) or 0.0)
         current_profit = ((current / entry) - 1.0) * 100.0 if entry > 0 and current > 0 else 0.0
         peak_profit = max(current_profit, float(position.get("peak_profit_pct", current_profit) or current_profit))
-        details.update({"current_profit_pct": current_profit, "peak_profit_pct": peak_profit})
+        details.update({
+            "current_price": current,
+            "current_profit_pct": current_profit,
+            "peak_profit_pct": peak_profit,
+        })
         sl_mode = str(position.get("sl_mode", "DEFAULT") or "DEFAULT").upper()
         sl_value = float(position.get("sl_value", 0.0) or 0.0)
         if sl_mode == "PRICE" and sl_value > 0:
             stop_hit = current > 0 and current <= sl_value
-            details.update(sl_mode="PRICE", sl_value=sl_value)
+            sl_price = sl_value
+            details.update(sl_mode="PRICE", sl_value=sl_value, sl_price=sl_price)
         else:
             sl_pct = (
                 -abs(sl_value)
@@ -792,7 +868,8 @@ class StaticRule:
                 else self.params.reentry_sl_pct if position.get("is_reentry") else self.params.initial_sl_pct
             )
             stop_hit = current_profit <= float(sl_pct)
-            details.update(sl_mode="PERCENT", sl_value=float(sl_pct))
+            sl_price = entry * (1.0 + float(sl_pct) / 100.0) if entry > 0 else 0.0
+            details.update(sl_mode="PERCENT", sl_value=float(sl_pct), sl_price=sl_price)
         if stop_hit:
             return StrategyDecision(
                 "SELL", symbol, "STOP_LOSS", event="STOP_LOSS", signal=signal,
@@ -838,40 +915,85 @@ class StaticRule:
             )
 
         triggered: list[str] = []
-        normal_enabled = (
-            "NORMAL" in em_modes
-            and not bool(position.get("normal_protection_done"))
-            and not bool(position.get("normal_execution_managed"))
-        )
+        normal_enabled = "NORMAL" in em_modes and not bool(position.get("normal_execution_managed"))
         if normal_enabled:
             policy = self.params.normal_policy
+            repeat = bool(
+                self.params.normal_repeat_enabled
+                and self.params.normal_sell_pct < 100.0
+            )
+            level = protect_level(
+                entry,
+                peak_profit,
+                self.params.normal_arm_pct,
+                self.params.normal_giveback_pct,
+                dynamic_enabled=self.params.normal_dynamic_enabled,
+                sl_price=sl_price,
+            )
             details.update(
                 normal_policy=policy,
                 normal_arm_pct=self.params.normal_arm_pct,
                 normal_giveback_pct=self.params.normal_giveback_pct,
                 sell_share_pct=self.params.normal_sell_pct,
+                normal_dynamic_enabled=self.params.normal_dynamic_enabled,
+                normal_repeat_enabled=repeat,
+                normal_mfe_pct=level.mfe_pct,
+                normal_peak_price=level.peak_price,
+                normal_effective_trail_pct=level.effective_trail_pct,
+                normal_trigger_price=level.trigger_price,
+                normal_protected_profit_pct=level.trigger_profit_pct,
             )
-            if policy == "AUTO" and peak_profit >= self.params.normal_arm_pct:
-                protected = normal_auto_stop_profit(
-                    peak_profit, self.params.normal_arm_pct, self.params.normal_giveback_pct,
+            count_key = "normal_alert_count" if policy == "ALERT" else "normal_protection_count"
+            last_key = "normal_last_alert_peak_pct" if policy == "ALERT" else "normal_last_trigger_peak_pct"
+            count = max(0, int(position.get(count_key, 0) or 0))
+            if policy == "AUTO" and bool(position.get("normal_protection_done")):
+                count = max(1, count)
+            last_trigger_peak = max(0.0, float(position.get(last_key, 0.0) or 0.0))
+            rearm_mfe = (
+                protect_rearm_mfe(last_trigger_peak, self.params.normal_giveback_pct)
+                if count > 0 and repeat else 0.0
+            )
+            details.update(
+                normal_event_count=count,
+                normal_last_trigger_peak_pct=last_trigger_peak,
+                normal_rearm_mfe_pct=rearm_mfe,
+            )
+            eligible = level.active
+            state = level.state
+            if count > 0 and not repeat:
+                eligible = False
+                state = "ALERT" if policy == "ALERT" else "DONE"
+            elif count > 0 and peak_profit + 1e-9 < rearm_mfe:
+                eligible = False
+                state = "REARM"
+            details["normal_state"] = state
+
+            # Arming and triggering stay separate observations.  Live ticks do
+            # this naturally; persisting ARM also makes restart behaviour clear.
+            if (
+                level.mfe_pct + 1e-9 >= self.params.normal_arm_pct
+                and not bool(position.get("normal_armed"))
+            ):
+                return StrategyDecision(
+                    "WAIT", symbol, "NORMAL_ARMED", event="NORMAL_ARMED",
+                    signal=signal, market_state=market_state, details=details,
+                    scope="POSITION_MANAGEMENT",
                 )
-                details["normal_protected_profit_pct"] = protected
-                # Arming and triggering are separate observations. This prevents
-                # an exact +7% first touch from selling on that same observation.
-                if not bool(position.get("normal_armed")):
+
+            if eligible and current > 0 and current <= level.trigger_price + 1e-9:
+                details["normal_trigger_peak_pct"] = level.mfe_pct
+                details["normal_rearm_after_pct"] = protect_rearm_mfe(
+                    level.mfe_pct, self.params.normal_giveback_pct,
+                )
+                if policy == "ALERT":
+                    details["normal_state"] = "ALERT"
+                    details["protect_occurrence"] = f"{symbol}|{position.get('trade_id', '')}|{count + 1}"
                     return StrategyDecision(
-                        "WAIT", symbol, "NORMAL_ARMED", event="NORMAL_ARMED",
+                        "WAIT", symbol, "PROTECT_ALERT", event="PROTECT_ALERT",
                         signal=signal, market_state=market_state, details=details,
                         scope="POSITION_MANAGEMENT",
                     )
-                if current_profit <= protected + 1e-9:
-                    triggered.append("NORMAL_PROTECTION")
-            elif policy == "CLASSIC":
-                # Original behaviour: giveback is a percentage of peak price.
-                peak_price = entry * (1.0 + peak_profit / 100.0)
-                trigger = peak_price * (1.0 - self.params.normal_giveback_pct / 100.0)
-                if peak_profit >= self.params.normal_arm_pct and current <= trigger:
-                    triggered.append("NORMAL_PROTECTION")
+                triggered.append("NORMAL_PROTECTION")
         if triggered:
             details["triggered_events"] = triggered
             share = self.params.normal_sell_pct

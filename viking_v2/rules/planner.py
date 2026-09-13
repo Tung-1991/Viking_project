@@ -114,7 +114,32 @@ class StrategyOrderPlanner:
                 if not trade_id or item.trade_id == trade_id
             ]
             if active_sell:
-                return PlanResult(None, "SELL_ALREADY_PENDING")
+                priority = {
+                    "NORMAL_PROTECTION": 1,
+                    "PRICE_PROTECTION": 1,
+                    "INDICATOR_EXIT": 2,
+                    "TAKE_PROFIT": 3,
+                    "STOP_LOSS": 4,
+                }
+                requested_reason = str(decision.event or decision.reason or "").upper()
+                requested_priority = priority.get(requested_reason, 0)
+                replaced = False
+                for existing in active_sell:
+                    existing_reasons = [
+                        value for value in str(existing.reason or "").upper().split("+") if value
+                    ]
+                    existing_priority = max(
+                        (priority.get(value, 0) for value in existing_reasons), default=0,
+                    )
+                    if (
+                        requested_priority > existing_priority
+                        and existing.status.upper() in {"PENDING", "WAITING_TOKEN", "WAITING_SETTLEMENT"}
+                    ):
+                        replaced = bool(self.queue.cancel_local(existing.id)) or replaced
+                        continue
+                    return PlanResult(None, "SELL_ALREADY_PENDING")
+                if not replaced:
+                    return PlanResult(None, "SELL_ALREADY_PENDING")
             if (
                 decision.event == "INDICATOR_EXIT"
                 and not self.rule_state.claim_signal(
@@ -154,6 +179,20 @@ class StrategyOrderPlanner:
             entry_budget=(
                 float(portfolio.get("order_budget", 0.0) or 0.0)
                 if side == "BUY" else 0.0
+            ),
+            details=(
+                {
+                    key: decision.details.get(key)
+                    for key in (
+                        "normal_policy", "normal_dynamic_enabled", "normal_repeat_enabled",
+                        "normal_arm_pct", "normal_giveback_pct", "sell_share_pct",
+                        "normal_mfe_pct", "normal_peak_price", "normal_effective_trail_pct",
+                        "normal_trigger_price", "normal_protected_profit_pct",
+                        "normal_trigger_peak_pct", "normal_rearm_after_pct",
+                    )
+                    if key in decision.details
+                }
+                if side == "SELL" and isinstance(decision.details, dict) else {}
             ),
         )
         if side == "BUY" and window:

@@ -292,7 +292,13 @@ class BacktestTrade:
     entry_value: float = 0.0
     sl_pct: float = 0.0
     peak_profit_pct: float = 0.0
-    normal_policy: str = "CLASSIC"
+    mae_profit_pct: float = 0.0
+    peak_at: str = ""
+    entry_to_peak_hours: float = 0.0
+    peak_to_exit_hours: float = 0.0
+    max_giveback_pct: float = 0.0
+    profit_path: list[dict[str, Any]] = field(default_factory=list)
+    normal_policy: str = "AUTO"
     normal_arm_time: str = ""
     normal_arm_price: float = 0.0
     mfe_after_arm_pct: float = 0.0

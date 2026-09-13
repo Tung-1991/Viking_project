@@ -12,7 +12,7 @@ EXIT_MODE_LABELS: dict[str, str] = {
     "NORMAL": "PROTECT",
     "IND_EXIT": "E",
 }
-NORMAL_POLICIES: tuple[str, ...] = ("CLASSIC", "AUTO")
+NORMAL_POLICIES: tuple[str, ...] = ("AUTO", "ALERT")
 
 
 def normalize_exit_modes(values: Iterable[object] | None) -> list[str]:
@@ -31,5 +31,9 @@ def exit_mode_label(value: object) -> str:
 
 
 def normalize_normal_policy(value: object) -> str:
-    policy = str(value or "CLASSIC").strip().upper()
-    return policy if policy in NORMAL_POLICIES else "CLASSIC"
+    policy = str(value or "AUTO").strip().upper()
+    # CLASSIC already trailed a percentage below peak price, which is exactly
+    # PROTECT v2 with DYNAMIC disabled.  TSL was the short-lived AUTO alias.
+    if policy in {"CLASSIC", "TSL"}:
+        return "AUTO"
+    return policy if policy in NORMAL_POLICIES else "AUTO"

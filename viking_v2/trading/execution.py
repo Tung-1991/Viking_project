@@ -10,7 +10,14 @@ from ..connections.dnse.paper import PaperBroker
 from .market import market_phase
 from ..models import BrokerOrderResult, OrderIntent, TradeCycle
 from .orders import OrderQueue
-from .portfolio import available_to_sell, board_price, round_lot_down, validate_quantity
+from .portfolio import (
+    available_to_sell,
+    board_price,
+    position_quantity,
+    round_lot_down,
+    sell_quantity_for_fraction,
+    validate_quantity,
+)
 from ..storage import CSVOrderJournal, JSONLineJournal
 from .state import TradeStateStore
 from ..rules.state import RuleStateStore
@@ -62,6 +69,53 @@ class ExecutionService:
         if process_immediately:
             self.process_due(phase=phase, execution_mode=intent.execution_mode)
         return self.queue.get(intent.id) or intent
+
+    def cancel_unsubmitted_protect_sells(self, execution_mode: str) -> tuple[list[OrderIntent], list[OrderIntent]]:
+        """Cancel local PROTECT requests when global mode changes to ALERT.
+
+        Orders DNSE may already have accepted are returned separately and are
+        never cancelled or replaced without an explicit broker operation.
+        """
+        mode = "REAL" if str(execution_mode or "").upper() == "REAL" else "PAPER"
+        cancelled: list[OrderIntent] = []
+        broker_managed: list[OrderIntent] = []
+        for intent in self.queue.list_all():
+            if (
+                intent.execution_mode != mode
+                or intent.side != "SELL"
+                or "NORMAL_PROTECTION" not in {
+                    value for value in str(intent.reason or "").upper().split("+") if value
+                }
+                or intent.status.upper() in {"FILLED", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"}
+            ):
+                continue
+            if (
+                intent.filled_quantity > 0
+                or intent.status.upper() not in {"PENDING", "WAITING_TOKEN", "WAITING_SETTLEMENT"}
+            ):
+                broker_managed.append(intent)
+                continue
+            updated = self.queue.cancel_local(intent.id)
+            if not updated:
+                continue
+            cancelled.append(updated)
+            event = {
+                "ts": time.time(),
+                "intent": updated.to_dict(),
+                "queue_status": "CANCELLED",
+                "result": {
+                    "ok": True,
+                    "status": "CANCELLED",
+                    "order_id": "",
+                    "message": "PROTECT chuyển sang ALERT",
+                    "error": "",
+                    "status_code": 0,
+                    "raw": {},
+                },
+            }
+            self.journal.append(event)
+            self.csv_journal.append_event(event)
+        return cancelled, broker_managed
 
     def process_due(
         self, *, phase: str, execution_mode: str,
@@ -191,11 +245,64 @@ class ExecutionService:
         for intent in candidates:
             if round_lot_down(min(intent.remaining_quantity, available_to_sell(positions, intent.symbol))) <= 0:
                 continue
+            raw_decision = self.sell_decision_provider(intent.symbol, intent.execution_mode)
             matches = self._decision_matches_sell(
                 intent,
-                self.sell_decision_provider(intent.symbol, intent.execution_mode),
+                raw_decision,
             )
-            if matches is not False:
+            if matches is True:
+                if intent.filled_quantity <= 0:
+                    if hasattr(raw_decision, "to_dict"):
+                        raw_decision = raw_decision.to_dict()
+                    decision_details = (
+                        raw_decision.get("details")
+                        if isinstance(raw_decision, dict)
+                        and isinstance(raw_decision.get("details"), dict)
+                        else {}
+                    )
+                    fraction = float(
+                        raw_decision.get("quantity_fraction", 1.0)
+                        if isinstance(raw_decision, dict) else 1.0
+                    )
+                    holding = sum(
+                        position_quantity(
+                            row if isinstance(row, dict) else getattr(row, "raw", {}) or {}
+                        )
+                        for row in positions
+                        if str(
+                            (row if isinstance(row, dict) else getattr(row, "raw", {}) or {}).get(
+                                "symbol", getattr(row, "symbol", ""),
+                            ) or ""
+                        ).upper() == intent.symbol
+                    )
+                    desired = sell_quantity_for_fraction(holding, fraction)
+                    refreshed_details = {
+                        key: decision_details.get(key)
+                        for key in (
+                            "normal_policy", "normal_dynamic_enabled", "normal_repeat_enabled",
+                            "normal_arm_pct", "normal_giveback_pct", "sell_share_pct",
+                            "normal_mfe_pct", "normal_peak_price", "normal_effective_trail_pct",
+                            "normal_trigger_price", "normal_protected_profit_pct",
+                            "normal_trigger_peak_pct", "normal_rearm_after_pct",
+                        )
+                        if key in decision_details
+                    }
+                    is_protect = "NORMAL_PROTECTION" in {
+                        value
+                        for value in str(intent.reason or "").upper().split("+")
+                        if value
+                    }
+                    if desired > 0 and (
+                        desired != intent.quantity
+                        or (is_protect and refreshed_details != intent.details)
+                    ):
+                        self.queue.replace_local(
+                            intent.id,
+                            quantity=desired,
+                            details=refreshed_details if is_protect else None,
+                        )
+                continue
+            if matches is None:
                 continue
             cancelled = self.queue.cancel_waiting_sell(
                 intent.id,
@@ -290,7 +397,15 @@ class ExecutionService:
             for event in events:
                 self.trade_state.mark_exit_once(intent.trade_id, event)
         if self.rule_state and events:
-            self.rule_state.mark_protection_done(intent.symbol, intent.trade_id, events)
+            details = intent.details if isinstance(intent.details, dict) else {}
+            self.rule_state.mark_protection_done(
+                intent.symbol,
+                intent.trade_id,
+                events,
+                trigger_peak_pct=float(details.get("normal_trigger_peak_pct", 0.0) or 0.0),
+                rearm_mfe_pct=float(details.get("normal_rearm_after_pct", 0.0) or 0.0),
+                execution_id=intent.id,
+            )
 
     def account_snapshot(self, mode: str) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
         if str(mode).upper() == "PAPER":

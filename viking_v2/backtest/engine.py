@@ -11,7 +11,8 @@ from ..rules.business import (
     StaticRuleParameters,
     classify_market_state,
     indicator_snapshot,
-    normal_auto_stop_profit,
+    protect_level,
+    protect_rearm_mfe,
 )
 from ..rules.entry_filters import apply_buy_filters
 from ..trading.portfolio import (
@@ -34,6 +35,19 @@ from .replay import ReplayDataStore
 
 
 UNKNOWN_SETTLE_DATE = "9999-12-31"
+
+EXIT_PRIORITY = {
+    "NORMAL_PROTECTION": 1,
+    "PRICE_PROTECTION": 1,
+    "INDICATOR_EXIT": 2,
+    "TAKE_PROFIT": 3,
+    "STOP_LOSS": 4,
+}
+
+
+def _exit_priority(event: str, triggered: list[str] | None = None) -> int:
+    values = [str(event or "").upper(), *[str(item or "").upper() for item in (triggered or [])]]
+    return max((EXIT_PRIORITY.get(value, 0) for value in values), default=0)
 
 
 def _buy_rule_text(params: StaticRuleParameters) -> str:
@@ -95,6 +109,17 @@ class _Position:
     normal_arm_time: str = ""
     mfe_after_arm_pct: float = 0.0
     normal_protected_profit_pct: float = 0.0
+    normal_effective_trail_pct: float = 0.0
+    normal_trigger_price: float = 0.0
+    normal_count: int = 0
+    normal_last_trigger_peak_pct: float = 0.0
+    normal_rearm_mfe_pct: float = 0.0
+    normal_alert_count: int = 0
+    normal_last_alert_peak_pct: float = 0.0
+    normal_alert_rearm_mfe_pct: float = 0.0
+    mae_profit_pct: float = 0.0
+    peak_at: str = ""
+    profit_path: list[dict[str, Any]] = field(default_factory=list)
     sold_quantity: int = 0
     exit_value: float = 0.0
     exit_fills: list[dict[str, Any]] = field(default_factory=list)
@@ -119,6 +144,48 @@ class _Position:
     opened_at: str = ""
 
 
+def _protect_repeat_enabled(params: StaticRuleParameters) -> bool:
+    return bool(params.normal_repeat_enabled and params.normal_sell_pct < 100.0)
+
+
+def _protect_event_ready(
+    position: _Position,
+    params: StaticRuleParameters,
+    *,
+    alert: bool = False,
+) -> bool:
+    count = position.normal_alert_count if alert else position.normal_count
+    if count <= 0:
+        return True
+    if not _protect_repeat_enabled(params):
+        return False
+    required = (
+        position.normal_alert_rearm_mfe_pct
+        if alert else position.normal_rearm_mfe_pct
+    )
+    return position.peak_profit_pct + 1e-9 >= required
+
+
+def _record_protect_event(
+    position: _Position,
+    params: StaticRuleParameters,
+    *,
+    alert: bool,
+    peak_profit_pct: float,
+) -> None:
+    peak = max(0.0, float(peak_profit_pct or 0.0))
+    rearm = protect_rearm_mfe(peak, params.normal_giveback_pct)
+    if alert:
+        position.normal_alert_count += 1
+        position.normal_last_alert_peak_pct = peak
+        position.normal_alert_rearm_mfe_pct = rearm
+        return
+    position.normal_count += 1
+    position.normal_last_trigger_peak_pct = peak
+    position.normal_rearm_mfe_pct = rearm
+    position.normal_done = not _protect_repeat_enabled(params)
+
+
 @dataclass(slots=True)
 class _Pending:
     side: str
@@ -135,6 +202,74 @@ class _Pending:
     created_time: str = ""
     source_resolution: str = "1D"
     data_quality: str = "FULL"
+
+
+def _is_pending_protect(order: _Pending) -> bool:
+    values = {
+        str(order.event or "").upper(),
+        *(
+            value
+            for value in str(order.reason or "").upper().split("+")
+            if value
+        ),
+        *(str(value or "").upper() for value in order.triggered_events),
+    }
+    return bool(values & {"NORMAL_PROTECTION", "PRICE_PROTECTION"})
+
+
+def _pending_protect_matches(
+    order: _Pending,
+    position: _Position,
+    params: StaticRuleParameters,
+    price: float,
+) -> bool:
+    """Recheck a T+2 PROTECT request with current price and current rule."""
+    if not _is_pending_protect(order):
+        return False
+    if params.normal_policy != "AUTO" or "NORMAL" not in position.em_modes:
+        return False
+    level = protect_level(
+        position.avg_price,
+        position.peak_profit_pct,
+        params.normal_arm_pct,
+        params.normal_giveback_pct,
+        dynamic_enabled=params.normal_dynamic_enabled,
+        sl_price=position.avg_price * (1.0 + position.sl_pct / 100.0),
+    )
+    current = float(price or 0.0)
+    return bool(level.active and current > 0 and current <= level.trigger_price + 1e-9)
+
+
+def _pending_matches_decision(order: _Pending, raw: Any) -> bool | None:
+    """Mirror live RECHECK event matching for non-PROTECT exits."""
+    if raw is None:
+        return None
+    if hasattr(raw, "to_dict"):
+        raw = raw.to_dict()
+    if isinstance(raw, str):
+        return True if raw.upper() == "SELL" else False
+    if not isinstance(raw, dict):
+        return None
+    if str(raw.get("action", "WAIT") or "WAIT").upper() != "SELL":
+        return False
+    details = raw.get("details") if isinstance(raw.get("details"), dict) else {}
+    current = {
+        str(raw.get("event", "") or "").upper(),
+        str(raw.get("reason", "") or "").upper(),
+        *(str(value or "").upper() for value in details.get("triggered_events", []) or []),
+    }
+    requested = {
+        str(order.event or "").upper(),
+        *(
+            value
+            for value in str(order.reason or "").upper().split("+")
+            if value
+        ),
+        *(str(value or "").upper() for value in order.triggered_events),
+    }
+    current.discard("")
+    requested.discard("")
+    return bool(requested & current) if requested else True
 
 
 class _MarketConfirmation:
@@ -179,12 +314,15 @@ def _normal_trail_fill(
     for bar in bars:
         opened = float(bar.get("open", 0.0) or 0.0)
         low = float(bar.get("low", 0.0) or 0.0)
-        if peak >= arm_pct:
-            trigger = entry_price * (1.0 + peak / 100.0) * (1.0 - giveback_pct / 100.0)
-            if 0 < opened <= trigger:
+        level = protect_level(
+            entry_price, peak, arm_pct, giveback_pct,
+            dynamic_enabled=False,
+        )
+        if level.active:
+            if 0 < opened <= level.trigger_price:
                 return opened, peak
-            if 0 < low <= trigger:
-                return trigger, peak
+            if 0 < low <= level.trigger_price:
+                return level.trigger_price, peak
         high = float(bar.get("high", 0.0) or 0.0)
         if high > 0:
             peak = max(peak, (high / entry_price - 1.0) * 100.0)
@@ -194,11 +332,15 @@ def _normal_trail_fill(
 @dataclass(slots=True)
 class _NormalObservation:
     fill: float
+    triggered: bool
     peak_profit_pct: float
     armed: bool
     armed_at: int
     mfe_after_arm_pct: float
     protected_profit_pct: float
+    effective_trail_pct: float
+    trigger_price: float
+    state: str
 
 
 def _normal_policy_fill(
@@ -211,52 +353,52 @@ def _normal_policy_fill(
     mfe_after_arm_pct: float,
     arm_pct: float,
     giveback_pct: float,
+    dynamic_enabled: bool = False,
+    sl_price: float = 0.0,
 ) -> _NormalObservation:
     """Observe one or more bars using deterministic NORMAL semantics.
 
-    CLASSIC delegates to the original calculation unchanged. AUTO checks the
-    stop carried from a previous observation before accepting the current
-    bar's high, so one OHLC bar can arm or raise the stop but cannot also hit
-    that newly-created level.
+    The carried stop is checked before accepting the current bar's high, so
+    one OHLC bar cannot raise PROTECT and then use an unknowable later low.
+    ALERT observes the same hit but never creates a fill.
     """
-    policy = str(policy or "CLASSIC").upper()
+    policy = "ALERT" if str(policy or "AUTO").upper() == "ALERT" else "AUTO"
     peak = float(peak_profit_pct or 0.0)
     armed = bool(already_armed or peak >= arm_pct)
     armed_at = 0
-    mfe = max(float(mfe_after_arm_pct or 0.0), peak if armed else 0.0)
-    protected = normal_auto_stop_profit(peak, arm_pct, giveback_pct) if armed else 0.0
+    mfe = max(0.0, float(mfe_after_arm_pct or 0.0), peak)
+    level = protect_level(
+        entry_price, peak, arm_pct, giveback_pct,
+        dynamic_enabled=dynamic_enabled, sl_price=sl_price,
+    )
     if entry_price <= 0:
-        return _NormalObservation(0.0, peak, armed, 0, mfe, protected)
-
-    if policy == "CLASSIC":
-        fill, updated_peak = _normal_trail_fill(
-            bars, entry_price=entry_price, peak_profit_pct=peak,
-            arm_pct=arm_pct, giveback_pct=giveback_pct,
+        return _NormalObservation(
+            0.0, False, peak, armed, 0, mfe, level.trigger_profit_pct,
+            level.effective_trail_pct, level.trigger_price, level.state,
         )
-        if not armed and updated_peak >= arm_pct:
-            armed = True
-            for bar in bars:
-                high = float(bar.get("high", 0.0) or 0.0)
-                if high > 0 and (high / entry_price - 1.0) * 100.0 >= arm_pct:
-                    armed_at = int(bar.get("time", 0) or 0)
-                    break
-        mfe = max(mfe, updated_peak if armed else 0.0)
-        protected = (
-            (1.0 + updated_peak / 100.0) * (1.0 - giveback_pct / 100.0) * 100.0 - 100.0
-            if armed else 0.0
-        )
-        return _NormalObservation(fill, updated_peak, armed, armed_at, mfe, protected)
 
     for bar in bars:
         opened = float(bar.get("open", 0.0) or 0.0)
         low = float(bar.get("low", 0.0) or 0.0)
-        if policy == "AUTO" and armed:
-            protected = normal_auto_stop_profit(peak, arm_pct, giveback_pct)
-            stop_price = entry_price * (1.0 + protected / 100.0)
-            if 0 < opened <= stop_price:
-                return _NormalObservation(opened, peak, armed, armed_at, mfe, protected)
-            if 0 < low <= stop_price:
-                return _NormalObservation(stop_price, peak, armed, armed_at, mfe, protected)
+        level = protect_level(
+            entry_price, peak, arm_pct, giveback_pct,
+            dynamic_enabled=dynamic_enabled, sl_price=sl_price,
+        )
+        if level.active:
+            fill = opened if 0 < opened <= level.trigger_price else level.trigger_price if 0 < low <= level.trigger_price else 0.0
+            if fill > 0:
+                return _NormalObservation(
+                    fill if policy == "AUTO" else 0.0,
+                    True,
+                    peak,
+                    armed,
+                    armed_at,
+                    mfe,
+                    level.trigger_profit_pct,
+                    level.effective_trail_pct,
+                    level.trigger_price,
+                    "ALERT" if policy == "ALERT" else level.state,
+                )
 
         high = float(bar.get("high", 0.0) or 0.0)
         if high > 0:
@@ -266,8 +408,16 @@ def _normal_policy_fill(
             armed_at = int(bar.get("time", 0) or 0)
         if armed:
             mfe = max(mfe, peak)
-            protected = normal_auto_stop_profit(peak, arm_pct, giveback_pct)
-    return _NormalObservation(0.0, peak, armed, armed_at, mfe, protected)
+        else:
+            mfe = max(mfe, peak)
+    level = protect_level(
+        entry_price, peak, arm_pct, giveback_pct,
+        dynamic_enabled=dynamic_enabled, sl_price=sl_price,
+    )
+    return _NormalObservation(
+        0.0, False, peak, armed, armed_at, mfe, level.trigger_profit_pct,
+        level.effective_trail_pct, level.trigger_price, level.state,
+    )
 
 
 def _normal_trade_metrics(
@@ -291,6 +441,82 @@ def _normal_trade_metrics(
     }
 
 
+def _elapsed_hours(start: str, end: str) -> float:
+    if not start or not end:
+        return 0.0
+    try:
+        left = datetime.fromisoformat(str(start))
+        right = datetime.fromisoformat(str(end))
+    except ValueError:
+        return 0.0
+    if left.tzinfo is not None and right.tzinfo is None:
+        right = right.replace(tzinfo=left.tzinfo)
+    elif right.tzinfo is not None and left.tzinfo is None:
+        left = left.replace(tzinfo=right.tzinfo)
+    return max(0.0, (right - left).total_seconds() / 3600.0)
+
+
+def _record_profit_path(
+    position: _Position,
+    observed_at: str,
+    *,
+    open_price: float,
+    high_price: float,
+    low_price: float,
+    close_price: float,
+    source_resolution: str,
+) -> None:
+    """Record the observed OHLC path after execution logic consumed the bar."""
+    if position.avg_price <= 0:
+        return
+
+    def pnl(price: float) -> float:
+        return (float(price or 0.0) / position.avg_price - 1.0) * 100.0
+
+    opened = float(open_price or close_price or position.avg_price)
+    high = float(high_price or close_price or opened)
+    low = float(low_price or close_price or opened)
+    closed = float(close_price or opened)
+    point = {
+        "time": str(observed_at or ""),
+        "source_resolution": str(source_resolution or ""),
+        "open_profit_pct": pnl(opened),
+        "high_profit_pct": pnl(high),
+        "low_profit_pct": pnl(low),
+        "close_profit_pct": pnl(closed),
+    }
+    previous_path_peak = max(
+        (float(item.get("high_profit_pct", 0.0) or 0.0) for item in position.profit_path),
+        default=0.0,
+    )
+    position.profit_path.append(point)
+    high_profit = point["high_profit_pct"]
+    low_profit = point["low_profit_pct"]
+    if high_profit > previous_path_peak + 1e-9 or not position.peak_at:
+        position.peak_at = str(observed_at or "")
+    position.peak_profit_pct = max(position.peak_profit_pct, high_profit, 0.0)
+    position.mae_profit_pct = min(position.mae_profit_pct, low_profit)
+
+
+def _profit_path_trade_metrics(
+    position: _Position,
+    exit_at: str,
+    final_profit_pct: float,
+) -> dict[str, Any]:
+    opened_at = position.opened_at or position.opened_date
+    peak_at = position.peak_at or opened_at
+    return {
+        "mae_profit_pct": float(position.mae_profit_pct),
+        "peak_at": peak_at,
+        "entry_to_peak_hours": _elapsed_hours(opened_at, peak_at),
+        "peak_to_exit_hours": _elapsed_hours(peak_at, exit_at),
+        "max_giveback_pct": max(
+            0.0, float(position.peak_profit_pct) - float(final_profit_pct),
+        ),
+        "profit_path": [dict(item) for item in position.profit_path],
+    }
+
+
 def _record_normal_telemetry(
     position: _Position,
     params: StaticRuleParameters,
@@ -311,14 +537,15 @@ def exit_comparison_variants(
     scenario: BacktestScenario,
     rule_parameters: dict[str, Any],
 ) -> list[tuple[BacktestScenario, dict[str, Any]]]:
-    """Build the two supported PROTECT cases from one entry scenario."""
+    """Build DYNAMIC OFF, DYNAMIC ON, and ALERT from one entry scenario."""
     base = StaticRuleParameters.from_dict(rule_parameters)
     specs = (
-        ("E + PROTECT CLASSIC", ["NORMAL", "IND_EXIT"], "CLASSIC"),
-        ("E + PROTECT AUTO", ["NORMAL", "IND_EXIT"], "AUTO"),
+        ("E + PROTECT DYNAMIC OFF", ["NORMAL", "IND_EXIT"], "AUTO", False),
+        ("E + PROTECT DYNAMIC ON", ["NORMAL", "IND_EXIT"], "AUTO", True),
+        ("E + PROTECT ALERT", ["NORMAL", "IND_EXIT"], "ALERT", True),
     )
     variants: list[tuple[BacktestScenario, dict[str, Any]]] = []
-    for label, modes, policy in specs:
+    for label, modes, policy, dynamic in specs:
         scenario_values = scenario.to_dict()
         scenario_values.update(
             id=f"{scenario.id}-{policy}-{label}",
@@ -327,6 +554,7 @@ def exit_comparison_variants(
         )
         params = base.to_dict()
         params["normal_policy"] = policy
+        params["normal_dynamic_enabled"] = dynamic
         variants.append((BacktestScenario.from_dict(scenario_values), params))
     return variants
 
@@ -648,10 +876,24 @@ class BacktestEngine:
                 if name and name not in position.exit_events:
                     position.exit_events.append(name)
             if "NORMAL_PROTECTION" in event_names:
-                position.normal_done = True
+                detail_values = details if isinstance(details, dict) else {}
+                _record_protect_event(
+                    position,
+                    params,
+                    alert=False,
+                    peak_profit_pct=float(
+                        detail_values.get("normal_trigger_peak_pct", position.peak_profit_pct)
+                        or position.peak_profit_pct
+                    ),
+                )
             details = dict(details or {})
             equity_after = portfolio_value(day)[0]
             profit_pct = (price / position.avg_price - 1.0) * 100.0 if position.avg_price > 0 else 0.0
+            _record_profit_path(
+                position, day,
+                open_price=price, high_price=price, low_price=price, close_price=price,
+                source_resolution="1D",
+            )
             indicators = _indicator_columns(details)
             position.exit_fills.append({
                 "event": "+".join(event_names), "quantity": quantity, "price": price,
@@ -711,6 +953,7 @@ class BacktestEngine:
                     exit_ema_slow=position.exit_ema_slow,
                     exit_rsi=position.exit_rsi,
                     exit_fills=list(position.exit_fills),
+                    **_profit_path_trade_metrics(position, day, final_profit_pct),
                     **_normal_trade_metrics(position, params, final_profit_pct),
                 ))
                 if outcome == "WIN":
@@ -830,8 +1073,15 @@ class BacktestEngine:
                                 entry_ema_fast=entry_indicators["ema_fast"],
                                 entry_ema_slow=entry_indicators["ema_slow"],
                                 entry_rsi=entry_indicators["rsi"],
+                                opened_at=day,
                             )
                             positions[symbol] = position
+                            _record_profit_path(
+                                position, day,
+                                open_price=open_price, high_price=open_price,
+                                low_price=open_price, close_price=open_price,
+                                source_resolution="1D",
+                            )
                             total_fees += fee
                             buy_count += 1
                             events.append(BacktestEvent(
@@ -856,10 +1106,26 @@ class BacktestEngine:
                         if day <= position.settle_date:
                             order.settlement_waited = True
                             continue
+                        if (
+                            order.settlement_waited
+                            and settings.sell_wait_policy == "RECHECK"
+                            and _is_pending_protect(order)
+                            and not _pending_protect_matches(
+                                order, position, params, open_price,
+                            )
+                        ):
+                            pending.pop(symbol, None)
+                            continue
                         quantity = sell_quantity_for_fraction(
                             position.quantity, order.fraction
                         )
                         if quantity > 0:
+                            fill_details = {
+                                **dict(order.details or {}),
+                                "settlement_waited": bool(order.settlement_waited),
+                                "trigger_time": order.created_time or order.created_date,
+                                "fill_time": day,
+                            }
                             sell_position(
                                 position,
                                 quantity,
@@ -870,7 +1136,7 @@ class BacktestEngine:
                                 order.triggered_events,
                                 signal_date=order.created_date,
                                 reason=order.reason,
-                                details=order.details,
+                                details=fill_details,
                             )
                         pending.pop(symbol, None)
 
@@ -944,42 +1210,69 @@ class BacktestEngine:
                                 reason="TAKE_PROFIT", details=details,
                             )
                         continue
-                if "NORMAL" in position.em_modes and not position.normal_done:
+                if (
+                    "NORMAL" in position.em_modes
+                    and _protect_event_ready(
+                        position, params, alert=params.normal_policy == "ALERT",
+                    )
+                ):
                     intraday = execution_resolution.get(symbol) != "1D"
-                    # Preserve CLASSIC's historical intraday-only behaviour.
-                    # AUTO may use daily OHLC because its ordering is
-                    # explicitly conservative: a newly armed stop cannot fill
-                    # until a later observation.
-                    if intraday or params.normal_policy != "CLASSIC":
-                        normal_bars = execution_day(symbol, day) if intraday else [row]
-                        observation = _normal_policy_fill(
-                            normal_bars,
-                            policy=params.normal_policy,
-                            entry_price=position.avg_price,
-                            peak_profit_pct=position.peak_profit_pct,
-                            already_armed=position.normal_armed,
-                            mfe_after_arm_pct=position.mfe_after_arm_pct,
-                            arm_pct=params.normal_arm_pct,
-                            giveback_pct=params.normal_giveback_pct,
+                    normal_bars = execution_day(symbol, day) if intraday else [row]
+                    observation = _normal_policy_fill(
+                        normal_bars,
+                        policy=params.normal_policy,
+                        entry_price=position.avg_price,
+                        peak_profit_pct=position.peak_profit_pct,
+                        already_armed=position.normal_armed,
+                        mfe_after_arm_pct=position.mfe_after_arm_pct,
+                        arm_pct=params.normal_arm_pct,
+                        giveback_pct=params.normal_giveback_pct,
+                        dynamic_enabled=params.normal_dynamic_enabled,
+                        sl_price=position.avg_price * (1.0 + position.sl_pct / 100.0),
+                    )
+                    was_armed = position.normal_armed
+                    position.normal_armed = observation.armed
+                    position.peak_profit_pct = max(
+                        position.peak_profit_pct, observation.peak_profit_pct,
+                    )
+                    position.mfe_after_arm_pct = max(
+                        position.mfe_after_arm_pct, observation.mfe_after_arm_pct,
+                    )
+                    position.normal_protected_profit_pct = observation.protected_profit_pct
+                    position.normal_effective_trail_pct = observation.effective_trail_pct
+                    position.normal_trigger_price = observation.trigger_price
+                    if observation.armed and not was_armed and not position.normal_arm_time:
+                        position.normal_arm_time = day
+                        if observation.armed_at:
+                            position.normal_arm_time = datetime.fromtimestamp(
+                                observation.armed_at, VN_TZ,
+                            ).isoformat()
+                    normal_fill = observation.fill
+                    if observation.triggered and params.normal_policy == "ALERT":
+                        _record_protect_event(
+                            position, params, alert=True,
+                            peak_profit_pct=observation.peak_profit_pct,
                         )
-                        was_armed = position.normal_armed
-                        position.normal_armed = observation.armed
-                        position.peak_profit_pct = max(
-                            position.peak_profit_pct, observation.peak_profit_pct,
-                        )
-                        position.mfe_after_arm_pct = max(
-                            position.mfe_after_arm_pct, observation.mfe_after_arm_pct,
-                        )
-                        position.normal_protected_profit_pct = observation.protected_profit_pct
-                        if observation.armed and not was_armed and not position.normal_arm_time:
-                            position.normal_arm_time = day
-                            if observation.armed_at:
-                                position.normal_arm_time = datetime.fromtimestamp(
-                                    observation.armed_at, VN_TZ,
-                                ).isoformat()
-                        normal_fill = observation.fill
-                    else:
-                        normal_fill = 0.0
+                        signal_history.append({
+                            "date": day, "symbol": symbol, "action": "WAIT",
+                            "signal": "PROTECT", "event": "PROTECT_ALERT",
+                            "reason": "PROTECT_ALERT", "market_state": current_phase,
+                            "details": {
+                                "normal_policy": "ALERT",
+                                "normal_state": "ALERT",
+                                "normal_mfe_pct": observation.peak_profit_pct,
+                                "normal_peak_price": position.avg_price * (
+                                    1.0 + observation.peak_profit_pct / 100.0
+                                ),
+                                "normal_effective_trail_pct": observation.effective_trail_pct,
+                                "normal_trigger_price": observation.trigger_price,
+                                "normal_protected_profit_pct": observation.protected_profit_pct,
+                                "sell_share_pct": params.normal_sell_pct,
+                                "hypothetical_quantity": sell_quantity_for_fraction(
+                                    position.quantity, params.normal_sell_pct / 100.0,
+                                ),
+                            },
+                        })
                     if normal_fill > 0:
                         details = {
                             "triggered_events": ["NORMAL_PROTECTION"],
@@ -987,9 +1280,14 @@ class BacktestEngine:
                             "normal_arm_time": position.normal_arm_time,
                             "mfe_after_arm_pct": position.mfe_after_arm_pct,
                             "normal_protected_profit_pct": position.normal_protected_profit_pct,
+                            "normal_effective_trail_pct": position.normal_effective_trail_pct,
+                            "normal_trigger_price": position.normal_trigger_price,
+                            "normal_trigger_peak_pct": position.peak_profit_pct,
+                            "normal_rearm_after_pct": protect_rearm_mfe(
+                                position.peak_profit_pct, params.normal_giveback_pct,
+                            ),
                             "peak_profit_pct": position.peak_profit_pct,
                             "execution_resolution": execution_resolution.get(symbol),
-                            "sticky_exit": params.normal_policy == "AUTO",
                         }
                         share = min(1.0, max(0.0, params.normal_sell_pct / 100.0))
                         if day > position.settle_date:
@@ -1024,11 +1322,15 @@ class BacktestEngine:
                     continue
                 position = positions.get(symbol)
                 if position:
-                    high = float(row.get("high", row.get("close", 0.0)) or 0.0)
-                    close = float(row.get("close", 0.0) or 0.0)
-                    if position.avg_price > 0:
-                        position.peak_profit_pct = max(position.peak_profit_pct, (high / position.avg_price - 1.0) * 100.0)
-                        _record_normal_telemetry(position, params, day)
+                    _record_profit_path(
+                        position, day,
+                        open_price=float(row.get("open", row.get("close", 0.0)) or 0.0),
+                        high_price=float(row.get("high", row.get("close", 0.0)) or 0.0),
+                        low_price=float(row.get("low", row.get("close", 0.0)) or 0.0),
+                        close_price=float(row.get("close", 0.0) or 0.0),
+                        source_resolution=execution_resolution.get(symbol, "1D"),
+                    )
+                    _record_normal_telemetry(position, params, day)
                 locked = False
                 until = loss_locked_until.get(symbol)
                 if until is not None:
@@ -1099,9 +1401,26 @@ class BacktestEngine:
                 if (
                     existing and existing.side == "SELL" and existing.settlement_waited
                     and settings.sell_wait_policy == "RECHECK"
-                    and not bool(existing.details.get("sticky_exit"))
+                    and position is not None
+                    and day >= position.settle_date
                 ):
-                    if decision.action != "SELL":
+                    recheck_price = float(row.get("close", 0.0) or 0.0)
+                    matches = (
+                        _pending_protect_matches(existing, position, params, recheck_price)
+                        if _is_pending_protect(existing)
+                        else _pending_matches_decision(existing, decision)
+                    )
+                    if matches is False:
+                        pending.pop(symbol, None)
+                        existing = None
+                if existing and existing.side == "SELL" and decision.action == "SELL":
+                    triggered = (
+                        decision.details.get("triggered_events", [])
+                        if isinstance(decision.details, dict) else []
+                    )
+                    if _exit_priority(
+                        decision.event or decision.reason, triggered,
+                    ) > _exit_priority(existing.event, existing.triggered_events):
                         pending.pop(symbol, None)
                         existing = None
                 if existing:
@@ -1182,6 +1501,15 @@ class BacktestEngine:
                 entry_ema_fast=position.entry_ema_fast,
                 entry_ema_slow=position.entry_ema_slow,
                 entry_rsi=position.entry_rsi,
+                **_profit_path_trade_metrics(
+                    position,
+                    last_day,
+                    (
+                        position.net_pnl
+                        + (latest_price(position.symbol, last_day) - position.avg_price)
+                        * position.quantity * 1000.0
+                    ) / position.entry_value * 100.0 if position.entry_value else 0.0,
+                ),
                 **_normal_trade_metrics(
                     position,
                     params,
@@ -1447,7 +1775,7 @@ class BacktestEngine:
         capital_ledgers: dict[str, dict[str, float]] = dict(carried.get("capital_ledgers") or {})
         cycle_numbers = {symbol: 0 for symbol in managed_symbols}
         cycle_numbers.update(carried.get("cycle_numbers") or {})
-        last_decisions: dict[str, str] = dict(carried.get("last_decisions") or {})
+        last_decisions: dict[str, Any] = dict(carried.get("last_decisions") or {})
         events: list[BacktestEvent] = []
         completed: list[BacktestTrade] = []
         equity_curve: list[dict[str, Any]] = []
@@ -1506,8 +1834,22 @@ class BacktestEngine:
                 if name and name not in position.exit_events:
                     position.exit_events.append(name)
             if "NORMAL_PROTECTION" in names:
-                position.normal_done = True
+                detail_values = details if isinstance(details, dict) else {}
+                _record_protect_event(
+                    position,
+                    params,
+                    alert=False,
+                    peak_profit_pct=float(
+                        detail_values.get("normal_trigger_peak_pct", position.peak_profit_pct)
+                        or position.peak_profit_pct
+                    ),
+                )
             detail_values = dict(details or {})
+            _record_profit_path(
+                position, iso_time(stamp),
+                open_price=price, high_price=price, low_price=price, close_price=price,
+                source_resolution=resolution,
+            )
             indicators = _indicator_columns(detail_values)
             position.exit_fills.append({
                 "event": "+".join(names), "quantity": quantity, "price": price,
@@ -1560,6 +1902,7 @@ class BacktestEngine:
                 exit_ema_fast=position.exit_ema_fast,
                 exit_ema_slow=position.exit_ema_slow, exit_rsi=position.exit_rsi,
                 exit_fills=list(position.exit_fills),
+                **_profit_path_trade_metrics(position, iso_time(stamp), final_profit_pct),
                 **_normal_trade_metrics(position, params, final_profit_pct),
             ))
             if outcome == "WIN":
@@ -1701,6 +2044,11 @@ class BacktestEngine:
                         opened_at=iso_time(stamp),
                     )
                     positions[symbol] = position
+                    _record_profit_path(
+                        position, iso_time(stamp),
+                        open_price=price, high_price=price, low_price=price, close_price=price,
+                        source_resolution=resolution,
+                    )
                     total_fees += fee
                     buy_count += 1
                     events.append(BacktestEvent(
@@ -1726,17 +2074,27 @@ class BacktestEngine:
                 return
             if (
                 order.settlement_waited and settings.sell_wait_policy == "RECHECK"
-                and not bool(order.details.get("sticky_exit"))
-                and last_decisions.get(symbol) != "SELL"
             ):
-                pending.pop(symbol, None)
-                return
+                matches = (
+                    _pending_protect_matches(order, position, params, price)
+                    if _is_pending_protect(order)
+                    else _pending_matches_decision(order, last_decisions.get(symbol))
+                )
+                if matches is False:
+                    pending.pop(symbol, None)
+                    return
             quantity = sell_quantity_for_fraction(position.quantity, order.fraction)
             if quantity > 0:
+                fill_details = {
+                    **dict(order.details or {}),
+                    "settlement_waited": bool(order.settlement_waited),
+                    "trigger_time": order.created_time or order.created_date,
+                    "fill_time": iso_time(stamp),
+                }
                 sell_position(
                     position, quantity, price, day, order.event, stamp=stamp,
                     signal_time=order.created_time, reason=order.reason,
-                    details=order.details, triggered=order.triggered_events,
+                    details=fill_details, triggered=order.triggered_events,
                     resolution=resolution, quality=quality,
                 )
             pending.pop(symbol, None)
@@ -1910,8 +2268,10 @@ class BacktestEngine:
                             position = positions.get(symbol)
                         elif (
                             position
-                            and (not bar.get("_fallback") or params.normal_policy != "CLASSIC")
-                            and "NORMAL" in position.em_modes and not position.normal_done
+                            and "NORMAL" in position.em_modes
+                            and _protect_event_ready(
+                                position, params, alert=params.normal_policy == "ALERT",
+                            )
                         ):
                             observation = _normal_policy_fill(
                                 [bar], policy=params.normal_policy,
@@ -1921,6 +2281,8 @@ class BacktestEngine:
                                 mfe_after_arm_pct=position.mfe_after_arm_pct,
                                 arm_pct=params.normal_arm_pct,
                                 giveback_pct=params.normal_giveback_pct,
+                                dynamic_enabled=params.normal_dynamic_enabled,
+                                sl_price=position.avg_price * (1.0 + position.sl_pct / 100.0),
                             )
                             was_armed = position.normal_armed
                             position.normal_armed = observation.armed
@@ -1931,11 +2293,42 @@ class BacktestEngine:
                                 position.mfe_after_arm_pct, observation.mfe_after_arm_pct,
                             )
                             position.normal_protected_profit_pct = observation.protected_profit_pct
+                            position.normal_effective_trail_pct = observation.effective_trail_pct
+                            position.normal_trigger_price = observation.trigger_price
                             if observation.armed and not was_armed and not position.normal_arm_time:
                                 position.normal_arm_time = iso_time(
                                     observation.armed_at or stamp,
                                 )
                             fill = observation.fill
+                            if observation.triggered and params.normal_policy == "ALERT":
+                                _record_protect_event(
+                                    position, params, alert=True,
+                                    peak_profit_pct=observation.peak_profit_pct,
+                                )
+                                signal_history.append({
+                                    "date": day, "time": iso_time(stamp),
+                                    "signal_time": iso_time(stamp), "decision_time": iso_time(stamp),
+                                    "symbol": symbol, "action": "WAIT", "signal": "PROTECT",
+                                    "event": "PROTECT_ALERT", "reason": "PROTECT_ALERT",
+                                    "market_state": current_phase,
+                                    "simulation_mode": settings.simulation_mode,
+                                    "source_resolution": resolution, "data_quality": quality,
+                                    "details": {
+                                        "normal_policy": "ALERT",
+                                        "normal_state": "ALERT",
+                                        "normal_mfe_pct": observation.peak_profit_pct,
+                                        "normal_peak_price": position.avg_price * (
+                                            1.0 + observation.peak_profit_pct / 100.0
+                                        ),
+                                        "normal_effective_trail_pct": observation.effective_trail_pct,
+                                        "normal_trigger_price": observation.trigger_price,
+                                        "normal_protected_profit_pct": observation.protected_profit_pct,
+                                        "sell_share_pct": params.normal_sell_pct,
+                                        "hypothetical_quantity": sell_quantity_for_fraction(
+                                            position.quantity, params.normal_sell_pct / 100.0,
+                                        ),
+                                    },
+                                })
                             if fill > 0:
                                 share = min(1.0, max(0.0, params.normal_sell_pct / 100.0))
                                 quantity = sell_quantity_for_fraction(position.quantity, share)
@@ -1945,8 +2338,13 @@ class BacktestEngine:
                                     normal_arm_time=position.normal_arm_time,
                                     mfe_after_arm_pct=position.mfe_after_arm_pct,
                                     normal_protected_profit_pct=position.normal_protected_profit_pct,
+                                    normal_effective_trail_pct=position.normal_effective_trail_pct,
+                                    normal_trigger_price=position.normal_trigger_price,
+                                    normal_trigger_peak_pct=position.peak_profit_pct,
+                                    normal_rearm_after_pct=protect_rearm_mfe(
+                                        position.peak_profit_pct, params.normal_giveback_pct,
+                                    ),
                                     peak_profit_pct=position.peak_profit_pct,
-                                    sticky_exit=params.normal_policy == "AUTO",
                                 )
                                 if quantity > 0 and stock_is_sellable_after_settlement(
                                     position.settle_date, datetime.fromtimestamp(stamp, VN_TZ),
@@ -1963,15 +2361,22 @@ class BacktestEngine:
                                         position.trade_id, current_phase, ["NORMAL_PROTECTION"], True,
                                         "NORMAL_PROTECTION", details, iso_time(stamp), resolution, quality,
                                     )
-                        position = positions.get(symbol)
-                        if position and position.avg_price > 0:
-                            position.peak_profit_pct = max(
-                                position.peak_profit_pct,
-                                (float(bar.get("high", 0.0) or 0.0) / position.avg_price - 1.0) * 100.0,
-                            )
-                            _record_normal_telemetry(
-                                position, params, iso_time(stamp),
-                            )
+                    # A waiting T+2 request does not freeze MFE/MAE.  REAL
+                    # keeps observing the position until shares are sold, so
+                    # replay must keep the same path while an order is pending.
+                    position = positions.get(symbol)
+                    if position and position.avg_price > 0:
+                        _record_profit_path(
+                            position, iso_time(stamp),
+                            open_price=float(bar.get("open", bar.get("close", 0.0)) or 0.0),
+                            high_price=float(bar.get("high", bar.get("close", 0.0)) or 0.0),
+                            low_price=float(bar.get("low", bar.get("close", 0.0)) or 0.0),
+                            close_price=float(bar.get("close", 0.0) or 0.0),
+                            source_resolution=resolution,
+                        )
+                        _record_normal_telemetry(
+                            position, params, iso_time(stamp),
+                        )
 
                     # A real fill already consumed this bar. Do not use the
                     # same close to immediately re-enter or trigger another exit.
@@ -2034,7 +2439,7 @@ class BacktestEngine:
                         buy_confirmations[symbol] = next_filters
                     else:
                         buy_confirmations.pop(symbol, None)
-                    last_decisions[symbol] = decision.action
+                    last_decisions[symbol] = decision.to_dict()
                     details = dict(decision.details or {}) if isinstance(decision.details, dict) else {}
                     signal_value = str(getattr(decision, "signal", "") or "")
                     confirmation_values = details.get("buy_confirmation") or {}
@@ -2066,6 +2471,31 @@ class BacktestEngine:
                         })
                         signal_dedupe[dedupe_key] = signature
                     existing = pending.get(symbol)
+                    if (
+                        existing and existing.side == "SELL" and existing.settlement_waited
+                        and settings.sell_wait_policy == "RECHECK"
+                        and position is not None
+                        and stock_is_sellable_after_settlement(
+                            position.settle_date, datetime.fromtimestamp(stamp, VN_TZ),
+                        )
+                    ):
+                        matches = (
+                            _pending_protect_matches(
+                                existing, position, params, float(partial["close"]),
+                            )
+                            if _is_pending_protect(existing)
+                            else _pending_matches_decision(existing, decision)
+                        )
+                        if matches is False:
+                            pending.pop(symbol, None)
+                            existing = None
+                    if existing and existing.side == "SELL" and decision.action == "SELL":
+                        triggered = details.get("triggered_events", [])
+                        if _exit_priority(
+                            decision.event or decision.reason, triggered,
+                        ) > _exit_priority(existing.event, existing.triggered_events):
+                            pending.pop(symbol, None)
+                            existing = None
                     if existing:
                         continue
                     if decision.action == "BUY" and position is None and not locked:
@@ -2146,6 +2576,15 @@ class BacktestEngine:
                 exit_fills=list(position.exit_fills),
                 avg_exit_price=(position.exit_value / (position.sold_quantity * 1000.0)
                                 if position.sold_quantity else 0.0),
+                **_profit_path_trade_metrics(
+                    position,
+                    last_day,
+                    (
+                        position.net_pnl
+                        + (marks.get(position.symbol, position.avg_price) - position.avg_price)
+                        * position.quantity * 1000.0
+                    ) / position.entry_value * 100.0 if position.entry_value else 0.0,
+                ),
                 **_normal_trade_metrics(
                     position,
                     params,
