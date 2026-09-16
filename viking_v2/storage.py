@@ -296,7 +296,8 @@ class SignalLog:
         "confirmation_ema", "confirmation_rsi",
         "buy_window", "buy_window_state", "watchlist_priority", "slot_usage",
         "trade_id", "protect_mode", "protect_state", "mfe_pct", "peak_price",
-        "effective_trail_pct", "protect_price", "sell_pct", "hypothetical_quantity",
+        "effective_trail_pct", "atr_pct", "atr_multiplier", "protect_price",
+        "sell_pct", "hypothetical_quantity",
     )
     RECENT_CSV_ROWS = 500
 

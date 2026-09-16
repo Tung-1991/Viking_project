@@ -185,7 +185,8 @@ class StrategyOrderPlanner:
                     key: decision.details.get(key)
                     for key in (
                         "normal_policy", "normal_dynamic_enabled", "normal_repeat_enabled",
-                        "normal_arm_pct", "normal_giveback_pct", "sell_share_pct",
+                        "normal_arm_pct", "normal_giveback_pct", "normal_atr_pct",
+                        "normal_atr_multiplier", "sell_share_pct",
                         "normal_mfe_pct", "normal_peak_price", "normal_effective_trail_pct",
                         "normal_trigger_price", "normal_protected_profit_pct",
                         "normal_trigger_peak_pct", "normal_rearm_after_pct",

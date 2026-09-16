@@ -54,7 +54,8 @@ FILL_HEADERS = (
 
 SIGNAL_HEADERS = SIGNAL_HEADERS + (
     "PROTECT MODE", "PROTECT STATE", "MFE %", "PEAK", "EFFECTIVE TRAIL %",
-    "PROTECT PRICE", "SELL %", "HYPOTHETICAL QUANTITY",
+    "ATR14 T-1 %", "ATR MULTIPLIER", "PROTECT PRICE", "SELL %",
+    "HYPOTHETICAL QUANTITY",
 )
 FILL_HEADERS = FILL_HEADERS + ("WAITED T+2",)
 PROFIT_PATH_HEADERS = (
@@ -159,7 +160,8 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
             f"ARM {values.get('normal_arm_pct')}% · "
             f"TRAIL {values.get('normal_giveback_pct')}% · "
             f"SELL {sell:g}% · "
-            f"DYNAMIC {'ON' if values.get('normal_dynamic_enabled') else 'OFF'} · "
+            f"DYNAMIC {'ON' if values.get('normal_dynamic_enabled') else 'OFF'}"
+            f" (ATR×{float(values.get('normal_atr_multiplier', 0.6) or 0.6):g}) · "
             f"REPEAT {'ON' if repeat else 'OFF'}"
         )
 
@@ -400,6 +402,8 @@ def export_run_excel(results: BacktestResult | list[BacktestResult], directory: 
                     (row.get("details") or {}).get("normal_mfe_pct", ""),
                     (row.get("details") or {}).get("normal_peak_price", ""),
                     (row.get("details") or {}).get("normal_effective_trail_pct", ""),
+                    (row.get("details") or {}).get("normal_atr_pct", ""),
+                    (row.get("details") or {}).get("normal_atr_multiplier", ""),
                     (row.get("details") or {}).get("normal_trigger_price", ""),
                     (row.get("details") or {}).get("sell_share_pct", ""),
                     (row.get("details") or {}).get("hypothetical_quantity", ""),

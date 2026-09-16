@@ -263,6 +263,10 @@ class DashboardTablesMixin:
                 protect_mfe = decision_details.get("normal_mfe_pct")
                 protect_trail = decision_details.get("normal_effective_trail_pct")
                 protect_price = decision_details.get("normal_trigger_price")
+                protect_atr = decision_details.get("normal_atr_pct")
+                protect_atr_multiplier = decision_details.get(
+                    "normal_atr_multiplier", params.get("normal_atr_multiplier", 0.6),
+                )
                 protect_sell = decision_details.get(
                     "sell_share_pct", params.get("normal_sell_pct", 100.0),
                 )
@@ -326,6 +330,7 @@ class DashboardTablesMixin:
                         f"PROTECT {protect_mode}/{normal_state}"
                         f"·MFE {_number(protect_mfe):.1f}%"
                         f"·TRAIL {_number(protect_trail):.1f}%"
+                        f"·ATR {_number(protect_atr):.1f}%×{_number(protect_atr_multiplier):g}"
                         f"·{_display_price(protect_price)}"
                         f"·SELL {_number(protect_sell):g}%"
                     ),

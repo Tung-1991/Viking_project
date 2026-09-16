@@ -1206,6 +1206,7 @@ class DashboardPanelsMixin:
         normal_giveback = float(params.get("normal_giveback_pct", 2.0) or 2.0)
         normal_policy = str(params.get("normal_policy", "AUTO") or "AUTO").upper()
         normal_dynamic = bool(params.get("normal_dynamic_enabled", False))
+        normal_atr_multiplier = float(params.get("normal_atr_multiplier", 0.6) or 0.6)
         normal_repeat = bool(params.get("normal_repeat_enabled", False))
         normal_sell = float(params.get("normal_sell_pct", 100.0) or 100.0)
         normal_price = entry_price * (1.0 + normal_arm / 100.0) if entry_price > 0 else 0.0
@@ -1222,7 +1223,7 @@ class DashboardPanelsMixin:
         self.preview_normal_detail.configure(
             text=(
                 f"{normal_policy} · ARM {normal_arm:g}% · TRAIL {normal_giveback:g}% · SELL {normal_sell:g}%"
-                f" · DYN {'ON' if normal_dynamic else 'OFF'}"
+                f" · DYN {'ON' if normal_dynamic else 'OFF'} · ATR×{normal_atr_multiplier:g}"
                 f" · REPEAT {'OFF' if normal_sell >= 100 else 'ON' if normal_repeat else 'OFF'}"
             ),
         )

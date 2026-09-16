@@ -120,7 +120,11 @@ PHASE_GROUPS = (
             ("PROTECT · ARM %", "normal_arm_pct", "MFE đạt mức này thì PROTECT dùng đầy đủ TRAIL."),
             (
                 "PROTECT · TRAIL %", "normal_giveback_pct",
-                "Giá kích hoạt khi giảm X% từ peak; DYNAMIC mở rộng khoảng thở trước ARM.",
+                "Sau ARM, giá kích hoạt khi giảm X% từ peak.",
+            ),
+            (
+                "PROTECT · ATR ×", "normal_atr_multiplier",
+                "DYNAMIC dưới ARM: khoảng thở = ATR14 của phiên T−1 × hệ số này.",
             ),
             ("PROTECT · SELL %", "normal_sell_pct", "Mỗi lần AUTO bán X% lượng còn lại; SELL 100% làm REPEAT vô hiệu."),
             ("WHIPSAW · SỐ LẦN CẮT", "whipsaw_n", "EMA cắt qua lại bao nhiêu lần thì khóa mua mã đó."),
@@ -1372,7 +1376,7 @@ class BacktestPopup:
         ).grid(row=0, column=1, sticky="w", padx=(0, 18))
         self._hint(
             protect_option_row,
-            "DYNAMIC bảo vệ cả MFE dưới ARM khi mức PROTECT cao hơn SL. "
+            "DYNAMIC dùng ATR14 phiên T−1 để bảo vệ dưới ARM khi mức PROTECT cao hơn SL. "
             "REPEAT chỉ có tác dụng khi SELL < 100% và cần peak mới cao hơn peak lần trước ít nhất TRAIL%.",
         ).grid(row=0, column=2, padx=10)
 

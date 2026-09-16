@@ -467,6 +467,27 @@ def run(account_id: str | None = None) -> int:
                             else:
                                 decision = rule.evaluate(context, portfolio)
                             trade_id = str(portfolio.get("trade_id", "") or "")
+                            protect_state = str(
+                                decision.details.get("normal_state", "") or ""
+                            ).upper()
+                            if trade_id and protect_state in {"DYN", "ARM", "ALERT", "REARM"}:
+                                protect_state_row = rule_state.update_protect_metrics(
+                                    symbol,
+                                    trade_id,
+                                    trigger_price=float(
+                                        decision.details.get("normal_trigger_price", 0.0) or 0.0
+                                    ),
+                                    atr_pct=float(
+                                        decision.details.get("normal_atr_pct", 0.0) or 0.0
+                                    ),
+                                    atr_multiplier=float(
+                                        decision.details.get("normal_atr_multiplier", 0.0) or 0.0
+                                    ),
+                                )
+                                if protect_state_row:
+                                    decision.details["normal_trigger_price"] = float(
+                                        protect_state_row.get("normal_trigger_price", 0.0) or 0.0
+                                    )
                             if trade_id and decision.reason == "NORMAL_ARMED":
                                 rule_state.arm_normal(symbol, trade_id)
                             if trade_id and decision.reason == "PROTECT_ALERT":
@@ -486,7 +507,8 @@ def run(account_id: str | None = None) -> int:
                                 )
                                 logger.info(
                                     "PROTECT ALERT symbol=%s trade=%s price=%.4f mfe=%.4f peak=%.4f "
-                                    "effective_trail=%.4f protect=%.4f sell=%.2f hypothetical_qty=%d "
+                                    "effective_trail=%.4f atr=%.4f atr_multiplier=%.4f "
+                                    "protect=%.4f sell=%.2f hypothetical_qty=%d "
                                     "occurrence=%s",
                                     symbol,
                                     trade_id,
@@ -494,6 +516,8 @@ def run(account_id: str | None = None) -> int:
                                     float(decision.details.get("normal_mfe_pct", 0.0) or 0.0),
                                     float(decision.details.get("normal_peak_price", 0.0) or 0.0),
                                     float(decision.details.get("normal_effective_trail_pct", 0.0) or 0.0),
+                                    float(decision.details.get("normal_atr_pct", 0.0) or 0.0),
+                                    float(decision.details.get("normal_atr_multiplier", 0.0) or 0.0),
                                     float(decision.details.get("normal_trigger_price", 0.0) or 0.0),
                                     float(decision.details.get("sell_share_pct", 0.0) or 0.0),
                                     sell_quantity_for_fraction(

@@ -509,6 +509,49 @@ class RuleStateStore:
             self.store.write(raw)
             return dict(current)
 
+    def update_protect_metrics(
+        self,
+        symbol: str,
+        trade_id: str,
+        *,
+        trigger_price: float,
+        atr_pct: float,
+        atr_multiplier: float,
+    ) -> dict[str, Any]:
+        """Persist the active PROTECT floor so it cannot fall after restart."""
+        symbol = str(symbol or "").upper()
+        trade_id = str(trade_id or "")
+        trigger = max(0.0, float(trigger_price or 0.0))
+        if not symbol or not trade_id or trigger <= 0:
+            return {}
+        with self._lock:
+            raw = self._read()
+            key = self._position_key(symbol, trade_id)
+            current = raw["symbols"].get(key)
+            if not isinstance(current, dict):
+                legacy = raw["symbols"].get(symbol)
+                current = (
+                    legacy
+                    if isinstance(legacy, dict)
+                    and str(legacy.get("trade_id", "")) == trade_id
+                    else None
+                )
+            if not isinstance(current, dict) or str(current.get("trade_id", "")) != trade_id:
+                return {}
+            current["normal_trigger_price"] = max(
+                max(0.0, float(current.get("normal_trigger_price", 0.0) or 0.0)),
+                trigger,
+            )
+            current["normal_atr_pct"] = max(0.0, float(atr_pct or 0.0))
+            current["normal_atr_multiplier"] = max(
+                0.0, float(atr_multiplier or 0.0),
+            )
+            current["updated_at"] = time.time()
+            raw["symbols"][key] = current
+            raw["symbols"].pop(symbol, None)
+            self.store.write(raw)
+            return dict(current)
+
     def position_metrics(self, symbol: str, trade_id: str) -> dict[str, Any]:
         raw = self._read()["symbols"]
         current = raw.get(self._position_key(symbol, trade_id))

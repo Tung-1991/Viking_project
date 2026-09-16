@@ -1112,6 +1112,10 @@ class DashboardActionsMixin:
                     "protect_price": float(details.get("normal_trigger_price", 0.0) or 0.0),
                     "sell_pct": float(details.get("sell_share_pct", 0.0) or 0.0),
                     "dynamic": bool(details.get("normal_dynamic_enabled", False)),
+                    "atr_pct": float(details.get("normal_atr_pct", 0.0) or 0.0),
+                    "atr_multiplier": float(
+                        details.get("normal_atr_multiplier", 0.0) or 0.0
+                    ),
                 },
                 daemon=True,
             ).start()
@@ -1565,6 +1569,7 @@ class DashboardActionsMixin:
         normal_giveback = float(params.get("normal_giveback_pct", 2.0) or 2.0)
         normal_policy = str(params.get("normal_policy", "AUTO") or "AUTO").upper()
         normal_dynamic = bool(params.get("normal_dynamic_enabled", False))
+        normal_atr_multiplier = float(params.get("normal_atr_multiplier", 0.6) or 0.6)
         normal_repeat = bool(params.get("normal_repeat_enabled", False)) and normal_share < 100.0
 
         top = ctk.CTkToplevel(self)
@@ -1687,7 +1692,8 @@ class DashboardActionsMixin:
             (
                 "PROTECT",
                 f"{normal_policy} · ARM {normal_arm:g}% · TRAIL {normal_giveback:g}% · SELL {normal_share:g}%"
-                f" · DYN {'ON' if normal_dynamic else 'OFF'} · REPEAT {'ON' if normal_repeat else 'OFF'}",
+                f" · DYN {'ON' if normal_dynamic else 'OFF'} · ATR×{normal_atr_multiplier:g}"
+                f" · REPEAT {'ON' if normal_repeat else 'OFF'}",
             ),
             ("E", "Tín hiệu SELL · bán hết phần còn lại"),
         )
@@ -2035,6 +2041,8 @@ class DashboardActionsMixin:
             "mfe_pct": details.get("normal_mfe_pct", ""),
             "peak_price": details.get("normal_peak_price", ""),
             "effective_trail_pct": details.get("normal_effective_trail_pct", ""),
+            "atr_pct": details.get("normal_atr_pct", ""),
+            "atr_multiplier": details.get("normal_atr_multiplier", ""),
             "protect_price": details.get("normal_trigger_price", ""),
             "sell_pct": details.get("sell_share_pct", ""),
             "hypothetical_quantity": (

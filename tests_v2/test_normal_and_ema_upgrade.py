@@ -21,6 +21,7 @@ from viking_v2.rules.business import (
     StaticRule,
     StaticRuleParameters,
     StrategyDecision,
+    average_true_range_pct,
     protect_level,
     protect_rearm_mfe,
 )
@@ -46,6 +47,30 @@ def _bars(close: float = 107.0) -> list[dict]:
     ]
 
 
+def _atr_bars(current: float = 100.0) -> list[dict]:
+    completed = [
+        {
+            "time": index,
+            "open": 100.0,
+            "high": 102.0,
+            "low": 98.0,
+            "close": 100.0,
+            "volume": 1_000,
+            "closed": True,
+        }
+        for index in range(15)
+    ]
+    return [*completed, {
+        "time": 16,
+        "open": current,
+        "high": current,
+        "low": current,
+        "close": current,
+        "volume": 1_000,
+        "closed": False,
+    }]
+
+
 def _position(**updates) -> dict:
     value = {
         "quantity": 1_000,
@@ -62,6 +87,7 @@ def test_protect_v2_defaults_to_auto_seven_two_and_full_exit() -> None:
     params = StaticRuleParameters()
     assert params.normal_policy == "AUTO"
     assert params.normal_giveback_pct == pytest.approx(2.0)
+    assert params.normal_atr_multiplier == pytest.approx(0.6)
     assert params.normal_sell_pct == pytest.approx(100.0)
     assert params.normal_dynamic_enabled is False
     assert params.normal_repeat_enabled is False
@@ -109,12 +135,35 @@ def test_removed_and_classic_normal_policy_migrate_to_auto() -> None:
     assert migrated.normal_sell_pct == pytest.approx(33.0)
 
 
+def test_dynamic_atr_uses_completed_t_minus_one_daily_bars() -> None:
+    bars = _atr_bars(130.0)
+    assert average_true_range_pct(bars[:-1]) == pytest.approx(4.0)
+    decision = StaticRule(StaticRuleParameters(
+        normal_dynamic_enabled=True,
+    )).evaluate(
+        {"symbol": "FPT", "bars": bars, "confirmed_market_state": "UPTREND"},
+        {"position": _position(current_price=103.0, peak_profit_pct=6.0)},
+    )
+    assert decision.details["normal_atr_pct"] == pytest.approx(4.0)
+    assert decision.details["normal_effective_trail_pct"] == pytest.approx(2.4)
+
+
+def test_dynamic_protect_floor_never_moves_down_when_atr_changes() -> None:
+    level = protect_level(
+        100, 5, 7, 2, dynamic_enabled=True, sl_price=97,
+        atr_pct=6, atr_multiplier=0.6, previous_trigger_price=103,
+    )
+    assert level.trigger_price == pytest.approx(103)
+    assert level.state == "DYN"
+
+
 @pytest.mark.parametrize(
     ("mfe", "effective_trail", "trigger_price", "state", "active"),
     [
-        (2.5, 6.5, 95.8375, "WAIT", False),
-        (4.0, 5.0, 98.8, "DYN", True),
-        (6.0, 3.0, 102.82, "DYN", True),
+        (2.0, 2.4, 0.0, "WAIT", False),
+        (2.5, 2.4, 100.04, "DYN", True),
+        (4.0, 2.4, 101.504, "DYN", True),
+        (6.0, 2.4, 103.456, "DYN", True),
         (7.0, 2.0, 104.86, "ARM", True),
         (10.0, 2.0, 107.8, "ARM", True),
     ],
@@ -124,6 +173,7 @@ def test_dynamic_formula_and_sl_floor(
 ) -> None:
     level = protect_level(
         100.0, mfe, 7.0, 2.0, dynamic_enabled=True, sl_price=97.0,
+        atr_pct=4.0, atr_multiplier=0.6,
     )
     assert level.effective_trail_pct == pytest.approx(effective_trail)
     assert level.trigger_price == pytest.approx(trigger_price)
@@ -133,14 +183,17 @@ def test_dynamic_formula_and_sl_floor(
 
 def test_dynamic_off_waits_for_arm_but_dynamic_on_can_protect_below_arm() -> None:
     off = protect_level(100, 6, 7, 2, dynamic_enabled=False, sl_price=97)
-    on = protect_level(100, 6, 7, 2, dynamic_enabled=True, sl_price=97)
+    on = protect_level(
+        100, 6, 7, 2, dynamic_enabled=True, sl_price=97,
+        atr_pct=4, atr_multiplier=0.6,
+    )
     assert off.state == "WAIT" and off.active is False
     assert on.state == "DYN" and on.active is True
     decision = StaticRule(StaticRuleParameters(
         normal_policy="AUTO", normal_dynamic_enabled=True,
     )).evaluate(
-        {"symbol": "FPT", "bars": _bars(102.8), "confirmed_market_state": "UPTREND"},
-        {"position": _position(current_price=102.8, peak_profit_pct=6)},
+        {"symbol": "FPT", "bars": _atr_bars(103), "confirmed_market_state": "UPTREND"},
+        {"position": _position(current_price=103, peak_profit_pct=6)},
     )
     assert decision.event == "PRICE_PROTECTION"
     assert decision.details["normal_state"] == "DYN"
@@ -151,9 +204,9 @@ def test_alert_uses_auto_condition_but_never_sells() -> None:
         normal_policy="ALERT", normal_dynamic_enabled=True,
     ))
     decision = rule.evaluate(
-        {"symbol": "FPT", "bars": _bars(98.7), "confirmed_market_state": "UPTREND"},
+        {"symbol": "FPT", "bars": _atr_bars(101.4), "confirmed_market_state": "UPTREND"},
         {"position": _position(
-            current_price=98.7, peak_profit_pct=4, trade_id="T1",
+            current_price=101.4, peak_profit_pct=4, trade_id="T1",
         )},
     )
     assert decision.action == "WAIT"
@@ -161,9 +214,9 @@ def test_alert_uses_auto_condition_but_never_sells() -> None:
     assert decision.quantity_fraction == 0.0
     assert decision.details["normal_state"] == "ALERT"
     deduped = rule.evaluate(
-        {"symbol": "FPT", "bars": _bars(98.7), "confirmed_market_state": "UPTREND"},
+        {"symbol": "FPT", "bars": _atr_bars(101.4), "confirmed_market_state": "UPTREND"},
         {"position": _position(
-            current_price=98.7, peak_profit_pct=4, trade_id="T1",
+            current_price=101.4, peak_profit_pct=4, trade_id="T1",
             normal_alert_count=1, normal_last_alert_peak_pct=4,
         )},
     )
@@ -229,6 +282,16 @@ def test_normal_arm_and_indicator_bucket_state_survive_restart(tmp_path) -> None
     store.update_position_metrics("FPT", "T1", profit_pct=8.0)
     store.arm_normal("FPT", "T1")
     assert RuleStateStore(path).position_metrics("FPT", "T1")["normal_armed"] is True
+
+    store.update_protect_metrics(
+        "FPT", "T1", trigger_price=103.4, atr_pct=4.0, atr_multiplier=0.6,
+    )
+    RuleStateStore(path).update_protect_metrics(
+        "FPT", "T1", trigger_price=102.0, atr_pct=4.2, atr_multiplier=0.6,
+    )
+    restarted_metrics = RuleStateStore(path).position_metrics("FPT", "T1")
+    assert restarted_metrics["normal_trigger_price"] == pytest.approx(103.4)
+    assert restarted_metrics["normal_atr_pct"] == pytest.approx(4.2)
 
     base = {
         "buy_ema_fast_period": 3,
@@ -305,8 +368,8 @@ def test_backtest_t2_recheck_uses_current_protect_rule_and_exact_exit_event() ->
         settlement_waited=True, reason="NORMAL_PROTECTION",
     )
     params = StaticRuleParameters(normal_dynamic_enabled=True)
-    assert _pending_protect_matches(protect, position, params, 98.8) is True
-    assert _pending_protect_matches(protect, position, params, 99.0) is False
+    assert _pending_protect_matches(protect, position, params, 101.4, atr_pct=4.0) is True
+    assert _pending_protect_matches(protect, position, params, 101.6, atr_pct=4.0) is False
     params.normal_policy = "ALERT"
     assert _pending_protect_matches(protect, position, params, 98.0) is False
 

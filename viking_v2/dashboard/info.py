@@ -244,6 +244,7 @@ class InfoPopup:
                 "PROTECT",
                 f"{p.normal_policy} · ARM {p.normal_arm_pct:g}% · TRAIL {p.normal_giveback_pct:g}%"
                 f" · SELL {p.normal_sell_pct:g}% · DYN {self._on_off(p.normal_dynamic_enabled)}"
+                f" · ATR×{p.normal_atr_multiplier:g}"
                 f" · REPEAT {self._on_off(p.normal_repeat_enabled and p.normal_sell_pct < 100)}",
                 PALETTE["TEXT"],
             ),

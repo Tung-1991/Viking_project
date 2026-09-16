@@ -544,11 +544,15 @@ class RuleSettingsPopup:
             "AUTO đặt lệnh khi chạm PROTECT. ALERT dùng cùng rule nhưng không đặt lệnh.",
         ).pack(side="right", padx=(0, 6))
         self.normal_arm = self._field(normal, "ARM %", self.params.normal_arm_pct, "MFE đạt mức này thì dùng đầy đủ TRAIL đã đặt.")
-        self.normal_giveback = self._field(normal, "TRAIL %", self.params.normal_giveback_pct, "Giá kích hoạt khi giảm X% từ peak; DYNAMIC mở rộng khoảng thở trước ARM.")
+        self.normal_giveback = self._field(normal, "TRAIL %", self.params.normal_giveback_pct, "Sau ARM, giá kích hoạt khi giảm X% từ peak.")
+        self.normal_atr_multiplier = self._field(
+            normal, "ATR ×", self.params.normal_atr_multiplier,
+            "DYNAMIC dưới ARM: khoảng thở = ATR14 của phiên T−1 × hệ số này.",
+        )
         self.normal_sell = self._field(normal, "SELL %", self.params.normal_sell_pct, "Phần trăm khối lượng đang giữ tại mỗi lần PROTECT thực thi.")
         self.normal_dynamic = self._switch(
             normal, "DYNAMIC", self.params.normal_dynamic_enabled,
-            "OFF: chờ đạt ARM. ON: khoảng thở co dần và chỉ quản lý khi mức PROTECT cao hơn SL.",
+            "OFF: chờ đạt ARM. ON: dùng ATR14 phiên T−1 dưới ARM và chỉ quản lý khi mức PROTECT cao hơn SL.",
         )
         self.normal_repeat = self._switch(
             normal, "REPEAT", self.params.normal_repeat_enabled,
@@ -885,6 +889,9 @@ class RuleSettingsPopup:
             take_profit = self._nonnegative(self.take_profit, "Chốt lời")
             normal_arm = self._nonnegative(self.normal_arm, "Normal kích hoạt")
             normal_giveback = self._nonnegative(self.normal_giveback, "Normal giveback")
+            normal_atr_multiplier = self._number(
+                self.normal_atr_multiplier, "Hệ số ATR PROTECT",
+            )
             normal_sell = self._nonnegative(self.normal_sell, "Protect bán bao nhiêu")
             if min(
                 ma_period, pivot_left, pivot_right, confirm_sessions,
@@ -906,6 +913,8 @@ class RuleSettingsPopup:
                 raise ValueError("High Volume phải lớn hơn hoặc bằng Low Volume")
             if not 0 < normal_sell <= 100:
                 raise ValueError("Tỷ lệ bán PROTECT phải lớn hơn 0 và không quá 100%")
+            if not 0 < normal_atr_multiplier <= 10:
+                raise ValueError("Hệ số ATR PROTECT phải lớn hơn 0 và không quá 10")
             if not (self.buy_signal_ema.get() or self.buy_signal_rsi.get()):
                 raise ValueError("Tín hiệu BUY phải bật ít nhất EMA hoặc RSI")
             if not (self.sell_signal_ema.get() or self.sell_signal_rsi.get()):
@@ -965,6 +974,7 @@ class RuleSettingsPopup:
             self.params.normal_policy = self.normal_policy.get()
             self.params.normal_arm_pct = normal_arm
             self.params.normal_giveback_pct = normal_giveback
+            self.params.normal_atr_multiplier = normal_atr_multiplier
             self.params.normal_sell_pct = normal_sell
             self.params.normal_dynamic_enabled = bool(self.normal_dynamic.get())
             self.params.normal_repeat_enabled = bool(self.normal_repeat.get())

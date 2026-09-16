@@ -316,6 +316,9 @@ class StaticRuleParameters:
     normal_arm_pct: float = 7.0
     normal_sell_pct: float = 100.0
     normal_giveback_pct: float = 2.0
+    # DYNAMIC uses Wilder ATR(14) from completed daily candles; the operator
+    # only adjusts this multiplier.
+    normal_atr_multiplier: float = 0.6
     # NORMAL remains the compatibility key; operators only see PROTECT.
     normal_policy: str = "AUTO"
     normal_dynamic_enabled: bool = False
@@ -420,6 +423,8 @@ class StaticRuleParameters:
             raise ValueError("Tỷ lệ bán PROTECT phải lớn hơn 0 và không quá 100%")
         if not 0 < self.normal_giveback_pct <= 100:
             raise ValueError("Mức giảm PROTECT phải lớn hơn 0 và không quá 100%")
+        if not 0 < self.normal_atr_multiplier <= 10:
+            raise ValueError("Hệ số ATR của PROTECT phải lớn hơn 0 và không quá 10")
         if min(self.take_profit_pct, self.normal_arm_pct) < 0:
             raise ValueError("Ngưỡng lợi nhuận không được là số âm")
         if min(self.pivot_horizontal_pct, self.ma_zone_pct) < 0:
@@ -564,6 +569,40 @@ class ProtectLevel:
     state: str
 
 
+def average_true_range_pct(
+    bars: list[dict[str, Any]],
+    period: int = 14,
+) -> float:
+    """Return Wilder ATR as a percentage of the latest completed close."""
+    values = [row for row in bars if isinstance(row, dict)]
+    length = max(1, int(period or 14))
+    if len(values) < length:
+        return 0.0
+    true_ranges: list[float] = []
+    previous_close = 0.0
+    for row in values:
+        high = float(row.get("high", 0.0) or 0.0)
+        low = float(row.get("low", 0.0) or 0.0)
+        close = float(row.get("close", 0.0) or 0.0)
+        if min(high, low, close) <= 0:
+            continue
+        true_range = high - low
+        if previous_close > 0:
+            true_range = max(
+                true_range,
+                abs(high - previous_close),
+                abs(low - previous_close),
+            )
+        true_ranges.append(true_range)
+        previous_close = close
+    if len(true_ranges) < length or previous_close <= 0:
+        return 0.0
+    atr = sum(true_ranges[:length]) / length
+    for true_range in true_ranges[length:]:
+        atr += (true_range - atr) / length
+    return max(0.0, atr / previous_close * 100.0)
+
+
 def protect_level(
     entry_price: float,
     peak_profit_pct: float,
@@ -572,27 +611,42 @@ def protect_level(
     *,
     dynamic_enabled: bool = False,
     sl_price: float = 0.0,
+    atr_pct: float = 0.0,
+    atr_multiplier: float = 0.6,
+    previous_trigger_price: float = 0.0,
 ) -> ProtectLevel:
     """Calculate PROTECT v2 from running MFE without using future data.
 
-    TRAIL is always a percentage drawdown from the running peak price.  With
-    DYNAMIC enabled the distance still missing to ARM is added to TRAIL, so a
-    young trade breathes wider and tightens continuously into the configured
-    trail.  A dynamic level below the actual SL is informational only.
+    At/above ARM, TRAIL remains the configured percentage drawdown from peak.
+    Below ARM, DYNAMIC uses ``ATR(14, T-1) × multiplier`` and only activates
+    after MFE has travelled at least that volatility distance.  A level below
+    the actual SL is informational only.  A previously active level never
+    moves down when ATR changes on a later session.
     """
     entry = max(0.0, float(entry_price or 0.0))
     mfe = max(0.0, float(peak_profit_pct or 0.0))
     arm = max(0.0, float(arm_pct or 0.0))
     trail = max(0.0, float(trailing_gap_pct or 0.0))
     armed = mfe + 1e-9 >= arm
-    effective = trail + max(0.0, arm - mfe) if dynamic_enabled else trail
+    atr_distance = max(0.0, float(atr_pct or 0.0)) * max(
+        0.0, float(atr_multiplier or 0.0),
+    )
+    effective = trail if armed or not dynamic_enabled else atr_distance
     peak_price = entry * (1.0 + mfe / 100.0) if entry > 0 else 0.0
-    trigger = peak_price * (1.0 - effective / 100.0) if peak_price > 0 else 0.0
+    calculated = peak_price * (1.0 - effective / 100.0) if peak_price > 0 else 0.0
+    previous = max(0.0, float(previous_trigger_price or 0.0))
+    sl_floor = max(0.0, float(sl_price or 0.0))
+    significant = bool(
+        armed
+        or (dynamic_enabled and effective > 0 and mfe + 1e-9 >= effective)
+        or (dynamic_enabled and previous > sl_floor + 1e-9)
+    )
+    trigger = max(calculated, previous) if significant else previous
     trigger_profit = ((trigger / entry) - 1.0) * 100.0 if entry > 0 else 0.0
     active = bool(
         trigger > 0
-        and (armed or dynamic_enabled)
-        and trigger > max(0.0, float(sl_price or 0.0)) + 1e-9
+        and significant
+        and trigger > sl_floor + 1e-9
     )
     state = "ARM" if active and armed else "DYN" if active else "WAIT"
     return ProtectLevel(
@@ -918,6 +972,14 @@ class StaticRule:
         normal_enabled = "NORMAL" in em_modes and not bool(position.get("normal_execution_managed"))
         if normal_enabled:
             policy = self.params.normal_policy
+            # The live daily series marks today's in-progress candle as open.
+            # DYNAMIC must only use information known before the current
+            # session, so ATR never consumes that partial candle.
+            completed_bars = [
+                row for row in bars
+                if isinstance(row, dict) and bool(row.get("closed", True))
+            ]
+            atr_pct = average_true_range_pct(completed_bars)
             repeat = bool(
                 self.params.normal_repeat_enabled
                 and self.params.normal_sell_pct < 100.0
@@ -929,6 +991,11 @@ class StaticRule:
                 self.params.normal_giveback_pct,
                 dynamic_enabled=self.params.normal_dynamic_enabled,
                 sl_price=sl_price,
+                atr_pct=atr_pct,
+                atr_multiplier=self.params.normal_atr_multiplier,
+                previous_trigger_price=float(
+                    position.get("normal_trigger_price", 0.0) or 0.0
+                ),
             )
             details.update(
                 normal_policy=policy,
@@ -936,6 +1003,8 @@ class StaticRule:
                 normal_giveback_pct=self.params.normal_giveback_pct,
                 sell_share_pct=self.params.normal_sell_pct,
                 normal_dynamic_enabled=self.params.normal_dynamic_enabled,
+                normal_atr_pct=atr_pct,
+                normal_atr_multiplier=self.params.normal_atr_multiplier,
                 normal_repeat_enabled=repeat,
                 normal_mfe_pct=level.mfe_pct,
                 normal_peak_price=level.peak_price,

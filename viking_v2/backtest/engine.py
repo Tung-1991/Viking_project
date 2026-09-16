@@ -9,6 +9,7 @@ from ..rules.business import (
     EXPOSURE_DEFAULTS,
     StaticRule,
     StaticRuleParameters,
+    average_true_range_pct,
     classify_market_state,
     indicator_snapshot,
     protect_level,
@@ -222,6 +223,8 @@ def _pending_protect_matches(
     position: _Position,
     params: StaticRuleParameters,
     price: float,
+    *,
+    atr_pct: float = 0.0,
 ) -> bool:
     """Recheck a T+2 PROTECT request with current price and current rule."""
     if not _is_pending_protect(order):
@@ -235,6 +238,9 @@ def _pending_protect_matches(
         params.normal_giveback_pct,
         dynamic_enabled=params.normal_dynamic_enabled,
         sl_price=position.avg_price * (1.0 + position.sl_pct / 100.0),
+        atr_pct=atr_pct,
+        atr_multiplier=params.normal_atr_multiplier,
+        previous_trigger_price=position.normal_trigger_price,
     )
     current = float(price or 0.0)
     return bool(level.active and current > 0 and current <= level.trigger_price + 1e-9)
@@ -355,6 +361,9 @@ def _normal_policy_fill(
     giveback_pct: float,
     dynamic_enabled: bool = False,
     sl_price: float = 0.0,
+    atr_pct: float = 0.0,
+    atr_multiplier: float = 0.6,
+    previous_trigger_price: float = 0.0,
 ) -> _NormalObservation:
     """Observe one or more bars using deterministic NORMAL semantics.
 
@@ -367,9 +376,12 @@ def _normal_policy_fill(
     armed = bool(already_armed or peak >= arm_pct)
     armed_at = 0
     mfe = max(0.0, float(mfe_after_arm_pct or 0.0), peak)
+    carried_trigger = max(0.0, float(previous_trigger_price or 0.0))
     level = protect_level(
         entry_price, peak, arm_pct, giveback_pct,
         dynamic_enabled=dynamic_enabled, sl_price=sl_price,
+        atr_pct=atr_pct, atr_multiplier=atr_multiplier,
+        previous_trigger_price=carried_trigger,
     )
     if entry_price <= 0:
         return _NormalObservation(
@@ -383,7 +395,11 @@ def _normal_policy_fill(
         level = protect_level(
             entry_price, peak, arm_pct, giveback_pct,
             dynamic_enabled=dynamic_enabled, sl_price=sl_price,
+            atr_pct=atr_pct, atr_multiplier=atr_multiplier,
+            previous_trigger_price=carried_trigger,
         )
+        if level.active:
+            carried_trigger = max(carried_trigger, level.trigger_price)
         if level.active:
             fill = opened if 0 < opened <= level.trigger_price else level.trigger_price if 0 < low <= level.trigger_price else 0.0
             if fill > 0:
@@ -413,6 +429,8 @@ def _normal_policy_fill(
     level = protect_level(
         entry_price, peak, arm_pct, giveback_pct,
         dynamic_enabled=dynamic_enabled, sl_price=sl_price,
+        atr_pct=atr_pct, atr_multiplier=atr_multiplier,
+        previous_trigger_price=carried_trigger,
     )
     return _NormalObservation(
         0.0, False, peak, armed, armed_at, mfe, level.trigger_profit_pct,
@@ -1112,6 +1130,7 @@ class BacktestEngine:
                             and _is_pending_protect(order)
                             and not _pending_protect_matches(
                                 order, position, params, open_price,
+                                atr_pct=average_true_range_pct(history[symbol][:-1]),
                             )
                         ):
                             pending.pop(symbol, None)
@@ -1218,6 +1237,7 @@ class BacktestEngine:
                 ):
                     intraday = execution_resolution.get(symbol) != "1D"
                     normal_bars = execution_day(symbol, day) if intraday else [row]
+                    atr_pct = average_true_range_pct(history[symbol][:-1])
                     observation = _normal_policy_fill(
                         normal_bars,
                         policy=params.normal_policy,
@@ -1229,6 +1249,9 @@ class BacktestEngine:
                         giveback_pct=params.normal_giveback_pct,
                         dynamic_enabled=params.normal_dynamic_enabled,
                         sl_price=position.avg_price * (1.0 + position.sl_pct / 100.0),
+                        atr_pct=atr_pct,
+                        atr_multiplier=params.normal_atr_multiplier,
+                        previous_trigger_price=position.normal_trigger_price,
                     )
                     was_armed = position.normal_armed
                     position.normal_armed = observation.armed
@@ -1267,6 +1290,9 @@ class BacktestEngine:
                                 "normal_effective_trail_pct": observation.effective_trail_pct,
                                 "normal_trigger_price": observation.trigger_price,
                                 "normal_protected_profit_pct": observation.protected_profit_pct,
+                                "normal_atr_pct": atr_pct,
+                                "normal_atr_multiplier": params.normal_atr_multiplier,
+                                "normal_dynamic_enabled": params.normal_dynamic_enabled,
                                 "sell_share_pct": params.normal_sell_pct,
                                 "hypothetical_quantity": sell_quantity_for_fraction(
                                     position.quantity, params.normal_sell_pct / 100.0,
@@ -1282,6 +1308,9 @@ class BacktestEngine:
                             "normal_protected_profit_pct": position.normal_protected_profit_pct,
                             "normal_effective_trail_pct": position.normal_effective_trail_pct,
                             "normal_trigger_price": position.normal_trigger_price,
+                            "normal_atr_pct": atr_pct,
+                            "normal_atr_multiplier": params.normal_atr_multiplier,
+                            "normal_dynamic_enabled": params.normal_dynamic_enabled,
                             "normal_trigger_peak_pct": position.peak_profit_pct,
                             "normal_rearm_after_pct": protect_rearm_mfe(
                                 position.peak_profit_pct, params.normal_giveback_pct,
@@ -1406,7 +1435,10 @@ class BacktestEngine:
                 ):
                     recheck_price = float(row.get("close", 0.0) or 0.0)
                     matches = (
-                        _pending_protect_matches(existing, position, params, recheck_price)
+                        _pending_protect_matches(
+                            existing, position, params, recheck_price,
+                            atr_pct=average_true_range_pct(history[symbol][:-1]),
+                        )
                         if _is_pending_protect(existing)
                         else _pending_matches_decision(existing, decision)
                     )
@@ -2076,7 +2108,10 @@ class BacktestEngine:
                 order.settlement_waited and settings.sell_wait_policy == "RECHECK"
             ):
                 matches = (
-                    _pending_protect_matches(order, position, params, price)
+                    _pending_protect_matches(
+                        order, position, params, price,
+                        atr_pct=average_true_range_pct(history[symbol]),
+                    )
                     if _is_pending_protect(order)
                     else _pending_matches_decision(order, last_decisions.get(symbol))
                 )
@@ -2273,6 +2308,7 @@ class BacktestEngine:
                                 position, params, alert=params.normal_policy == "ALERT",
                             )
                         ):
+                            atr_pct = average_true_range_pct(history[symbol])
                             observation = _normal_policy_fill(
                                 [bar], policy=params.normal_policy,
                                 entry_price=position.avg_price,
@@ -2283,6 +2319,9 @@ class BacktestEngine:
                                 giveback_pct=params.normal_giveback_pct,
                                 dynamic_enabled=params.normal_dynamic_enabled,
                                 sl_price=position.avg_price * (1.0 + position.sl_pct / 100.0),
+                                atr_pct=atr_pct,
+                                atr_multiplier=params.normal_atr_multiplier,
+                                previous_trigger_price=position.normal_trigger_price,
                             )
                             was_armed = position.normal_armed
                             position.normal_armed = observation.armed
@@ -2323,6 +2362,9 @@ class BacktestEngine:
                                         "normal_effective_trail_pct": observation.effective_trail_pct,
                                         "normal_trigger_price": observation.trigger_price,
                                         "normal_protected_profit_pct": observation.protected_profit_pct,
+                                        "normal_atr_pct": atr_pct,
+                                        "normal_atr_multiplier": params.normal_atr_multiplier,
+                                        "normal_dynamic_enabled": params.normal_dynamic_enabled,
                                         "sell_share_pct": params.normal_sell_pct,
                                         "hypothetical_quantity": sell_quantity_for_fraction(
                                             position.quantity, params.normal_sell_pct / 100.0,
@@ -2340,6 +2382,9 @@ class BacktestEngine:
                                     normal_protected_profit_pct=position.normal_protected_profit_pct,
                                     normal_effective_trail_pct=position.normal_effective_trail_pct,
                                     normal_trigger_price=position.normal_trigger_price,
+                                    normal_atr_pct=atr_pct,
+                                    normal_atr_multiplier=params.normal_atr_multiplier,
+                                    normal_dynamic_enabled=params.normal_dynamic_enabled,
                                     normal_trigger_peak_pct=position.peak_profit_pct,
                                     normal_rearm_after_pct=protect_rearm_mfe(
                                         position.peak_profit_pct, params.normal_giveback_pct,
@@ -2482,6 +2527,7 @@ class BacktestEngine:
                         matches = (
                             _pending_protect_matches(
                                 existing, position, params, float(partial["close"]),
+                                atr_pct=average_true_range_pct(history[symbol]),
                             )
                             if _is_pending_protect(existing)
                             else _pending_matches_decision(existing, decision)
