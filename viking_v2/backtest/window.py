@@ -123,8 +123,20 @@ PHASE_GROUPS = (
                 "Sau ARM, giá kích hoạt khi giảm X% từ peak.",
             ),
             (
-                "PROTECT · ATR ×", "normal_atr_multiplier",
-                "DYNAMIC dưới ARM: khoảng thở = ATR14 của phiên T−1 × hệ số này.",
+                "PROTECT · START ATR ×", "normal_atr_activation_multiplier",
+                "DYNAMIC chỉ bắt đầu khi MFE đạt ATR14(T−1) × hệ số này.",
+            ),
+            (
+                "PROTECT · TRAIL ATR ×", "normal_atr_multiplier",
+                "Sau khi DYNAMIC bắt đầu: khoảng thở từ peak = ATR14(T−1) × hệ số này.",
+            ),
+            (
+                "PROTECT · GIỮ MFE %", "normal_retention_pct",
+                "Dưới ngưỡng GIỮ ĐẾN, khóa lại X% MFE. Nhập 0 để tắt V3.",
+            ),
+            (
+                "PROTECT · GIỮ ĐẾN %", "normal_retention_until_pct",
+                "Chỉ siết thêm sàn giữ MFE khi còn dưới mức này; sàn đã khóa không hạ, sau đó ATR tiếp tục nâng sàn tới ARM.",
             ),
             ("PROTECT · SELL %", "normal_sell_pct", "Mỗi lần AUTO bán X% lượng còn lại; SELL 100% làm REPEAT vô hiệu."),
             ("WHIPSAW · SỐ LẦN CẮT", "whipsaw_n", "EMA cắt qua lại bao nhiêu lần thì khóa mua mã đó."),
@@ -140,6 +152,10 @@ PHASE_PARAMETER_KEYS = frozenset(
 BACKTEST_RULE_KEYS = PHASE_PARAMETER_KEYS | {
     "exposure", "whipsaw_enabled", "loss_lock_hours", "max_positions",
     "normal_policy", "normal_dynamic_enabled", "normal_repeat_enabled",
+    # Research setting round-trips through BacktestSettings; UI control follows
+    # only if the T+2 candidate passes review.
+    "normal_t2_reset_enabled",
+    "sellable_weak_exit_enabled", "sellable_weak_exit_loss_pct",
     "volume_confirmation", "no_compound_enabled", "force_min_lot_enabled",
     "buy_signal_use_ema", "buy_signal_use_rsi",
     "sell_signal_use_ema", "sell_signal_use_rsi",

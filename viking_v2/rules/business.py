@@ -2,11 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from math import isfinite
 from typing import Any, Iterable
 
 from ..models import StrategyDecision
 from ..exit_modes import normalize_normal_policy
 from ..trading.market import active_trading_minutes, normalize_exchange, validate_buy_window
+
+
+WEAK_EXIT_EMA_FAST = 2
+WEAK_EXIT_EMA_SLOW = 4
 
 
 def closes(rows: Iterable[dict[str, Any]]) -> list[float]:
@@ -220,6 +225,8 @@ def indicator_snapshot(
     slow_values = ema(values, slow) if values else []
     sell_fast_values = ema(values, sell_fast) if values else []
     sell_slow_values = ema(values, sell_slow) if values else []
+    weak_fast_values = ema(values, WEAK_EXIT_EMA_FAST) if values else []
+    weak_slow_values = ema(values, WEAK_EXIT_EMA_SLOW) if values else []
     rsi_values = rsi(values, rsi_period) if values else []
     current_rsi = rsi_values[-1] if rsi_values else None
     previous_rsi = rsi_values[-2] if len(rsi_values) >= 2 else None
@@ -238,6 +245,8 @@ def indicator_snapshot(
         "sell_ema_slow_period": sell_slow,
         "sell_ema_fast": sell_fast_values[-1] if sell_fast_values else None,
         "sell_ema_slow": sell_slow_values[-1] if sell_slow_values else None,
+        "weak_sell_ema_fast": weak_fast_values[-1] if weak_fast_values else None,
+        "weak_sell_ema_slow": weak_slow_values[-1] if weak_slow_values else None,
         "rsi": current_rsi,
         "rsi_previous": previous_rsi,
     }
@@ -305,6 +314,11 @@ class StaticRuleParameters:
     buy_signal_use_rsi: bool = True
     sell_signal_use_ema: bool = True
     sell_signal_use_rsi: bool = True
+    # Experimental E branch: after stock is sellable, an underwater position
+    # may exit on an already-bearish EMA/RSI state instead of waiting for a
+    # fresh EMA cross. Off by default for existing trading accounts.
+    sellable_weak_exit_enabled: bool = False
+    sellable_weak_exit_loss_pct: float = -1.0
     max_positions: int = 5
     initial_sl_pct: float = -3.0
     reentry_sl_pct: float = -2.1
@@ -316,12 +330,21 @@ class StaticRuleParameters:
     normal_arm_pct: float = 7.0
     normal_sell_pct: float = 100.0
     normal_giveback_pct: float = 2.0
-    # DYNAMIC uses Wilder ATR(14) from completed daily candles; the operator
-    # only adjusts this multiplier.
+    # DYNAMIC uses Wilder ATR(14) from completed daily candles.  START and
+    # TRAIL intentionally have separate multipliers: delaying activation must
+    # not also widen the floor once protection is active.
+    normal_atr_activation_multiplier: float = 0.6
     normal_atr_multiplier: float = 0.6
+    # Percentage of running MFE retained by the pre-ARM floor.  Zero keeps
+    # the ATR-only V2 formula; positive values enable the V3 profit floor.
+    normal_retention_pct: float = 0.0
+    normal_retention_until_pct: float = 7.0
     # NORMAL remains the compatibility key; operators only see PROTECT.
     normal_policy: str = "AUTO"
     normal_dynamic_enabled: bool = False
+    # Research switch: start pre-ARM DYNAMIC from the first sellable quote.
+    # Existing accounts keep their pre-settlement floor unless enabled.
+    normal_t2_reset_enabled: bool = False
     normal_repeat_enabled: bool = False
     whipsaw_enabled: bool = True
     whipsaw_n: int = 3
@@ -340,6 +363,7 @@ class StaticRuleParameters:
         self.buy_signal_use_rsi = bool(self.buy_signal_use_rsi)
         self.sell_signal_use_ema = bool(self.sell_signal_use_ema)
         self.sell_signal_use_rsi = bool(self.sell_signal_use_rsi)
+        self.sellable_weak_exit_enabled = bool(self.sellable_weak_exit_enabled)
         try:
             self.buy_confirmation_minutes = max(1, min(120, int(self.buy_confirmation_minutes or 5)))
         except (TypeError, ValueError):
@@ -350,6 +374,7 @@ class StaticRuleParameters:
         self.buy_window_start = str(self.buy_window_start).strip()
         self.normal_policy = normalize_normal_policy(self.normal_policy)
         self.normal_dynamic_enabled = bool(self.normal_dynamic_enabled)
+        self.normal_t2_reset_enabled = bool(self.normal_t2_reset_enabled)
         self.normal_repeat_enabled = bool(self.normal_repeat_enabled)
         validate_buy_window(self.buy_window_start, "15:00")
 
@@ -369,6 +394,12 @@ class StaticRuleParameters:
             "buy_ema_slow": raw.get("buy_ema_slow", legacy_slow),
             "sell_ema_fast": raw.get("sell_ema_fast", legacy_fast),
             "sell_ema_slow": raw.get("sell_ema_slow", legacy_slow),
+            # Before START and TRAIL were split, the one ATR multiplier drove
+            # both.  Preserve that behaviour when loading an older account.
+            "normal_atr_activation_multiplier": raw.get(
+                "normal_atr_activation_multiplier",
+                raw.get("normal_atr_multiplier", 0.6),
+            ),
         }
         allowed = {name for name in cls.__dataclass_fields__}
         values = {key: value for key, value in raw.items() if key in allowed}
@@ -417,6 +448,8 @@ class StaticRuleParameters:
             raise ValueError("Tín hiệu BUY phải bật ít nhất EMA hoặc RSI")
         if not (self.sell_signal_use_ema or self.sell_signal_use_rsi):
             raise ValueError("Tín hiệu SELL phải bật ít nhất EMA hoặc RSI")
+        if not -10.0 <= self.sellable_weak_exit_loss_pct < 0.0:
+            raise ValueError("Sellable weak-exit threshold must be between -10% and 0%")
         if self.initial_sl_pct >= 0 or self.reentry_sl_pct >= 0:
             raise ValueError("Stop Loss phải là số âm")
         if not 0 < self.normal_sell_pct <= 100:
@@ -424,7 +457,16 @@ class StaticRuleParameters:
         if not 0 < self.normal_giveback_pct <= 100:
             raise ValueError("Mức giảm PROTECT phải lớn hơn 0 và không quá 100%")
         if not 0 < self.normal_atr_multiplier <= 10:
-            raise ValueError("Hệ số ATR của PROTECT phải lớn hơn 0 và không quá 10")
+            raise ValueError("Hệ số ATR TRAIL của PROTECT phải lớn hơn 0 và không quá 10")
+        if not 0 < self.normal_atr_activation_multiplier <= 10:
+            raise ValueError("Hệ số ATR START của PROTECT phải lớn hơn 0 và không quá 10")
+        if not 0 <= self.normal_retention_pct <= 100:
+            raise ValueError("Tỷ lệ giữ MFE của PROTECT phải từ 0 đến 100%")
+        if (
+            self.normal_retention_pct > 0
+            and not 0 < self.normal_retention_until_pct <= self.normal_arm_pct
+        ):
+            raise ValueError("Ngưỡng giữ MFE phải nằm từ 0 đến ARM")
         if min(self.take_profit_pct, self.normal_arm_pct) < 0:
             raise ValueError("Ngưỡng lợi nhuận không được là số âm")
         if min(self.pivot_horizontal_pct, self.ma_zone_pct) < 0:
@@ -562,6 +604,7 @@ class ProtectLevel:
 
     mfe_pct: float
     peak_price: float
+    activation_mfe_pct: float
     effective_trail_pct: float
     trigger_price: float
     trigger_profit_pct: float
@@ -613,15 +656,19 @@ def protect_level(
     sl_price: float = 0.0,
     atr_pct: float = 0.0,
     atr_multiplier: float = 0.6,
+    atr_activation_multiplier: float | None = None,
+    retention_pct: float = 0.0,
+    retention_until_pct: float | None = None,
     previous_trigger_price: float = 0.0,
 ) -> ProtectLevel:
-    """Calculate PROTECT v2 from running MFE without using future data.
+    """Calculate PROTECT from running MFE without using future data.
 
     At/above ARM, TRAIL remains the configured percentage drawdown from peak.
     Below ARM, DYNAMIC uses ``ATR(14, T-1) × multiplier`` and only activates
-    after MFE has travelled at least that volatility distance.  A level below
-    the actual SL is informational only.  A previously active level never
-    moves down when ATR changes on a later session.
+    after MFE has travelled its independently configured activation distance.
+    ``None`` preserves the V2 contract by reusing the trail multiplier.  A
+    level below the actual SL is informational only.  A previously active
+    level never moves down when ATR changes on a later session.
     """
     entry = max(0.0, float(entry_price or 0.0))
     mfe = max(0.0, float(peak_profit_pct or 0.0))
@@ -631,14 +678,41 @@ def protect_level(
     atr_distance = max(0.0, float(atr_pct or 0.0)) * max(
         0.0, float(atr_multiplier or 0.0),
     )
+    activation_multiplier = (
+        atr_multiplier
+        if atr_activation_multiplier is None
+        else atr_activation_multiplier
+    )
+    activation_distance = max(0.0, float(atr_pct or 0.0)) * max(
+        0.0, float(activation_multiplier or 0.0),
+    )
     effective = trail if armed or not dynamic_enabled else atr_distance
     peak_price = entry * (1.0 + mfe / 100.0) if entry > 0 else 0.0
     calculated = peak_price * (1.0 - effective / 100.0) if peak_price > 0 else 0.0
+    retention = min(100.0, max(0.0, float(retention_pct or 0.0)))
+    retention_until = (
+        arm
+        if retention_until_pct is None
+        else min(arm, max(0.0, float(retention_until_pct or 0.0)))
+    )
+    if (
+        dynamic_enabled and not armed and retention > 0 and entry > 0
+        and mfe + 1e-9 < retention_until
+    ):
+        retained_profit_pct = mfe * retention / 100.0
+        calculated = max(
+            calculated,
+            entry * (1.0 + retained_profit_pct / 100.0),
+        )
     previous = max(0.0, float(previous_trigger_price or 0.0))
     sl_floor = max(0.0, float(sl_price or 0.0))
     significant = bool(
         armed
-        or (dynamic_enabled and effective > 0 and mfe + 1e-9 >= effective)
+        or (
+            dynamic_enabled
+            and activation_distance > 0
+            and mfe + 1e-9 >= activation_distance
+        )
         or (dynamic_enabled and previous > sl_floor + 1e-9)
     )
     trigger = max(calculated, previous) if significant else previous
@@ -652,12 +726,27 @@ def protect_level(
     return ProtectLevel(
         mfe_pct=mfe,
         peak_price=peak_price,
+        activation_mfe_pct=activation_distance,
         effective_trail_pct=effective,
         trigger_price=trigger,
         trigger_profit_pct=trigger_profit,
         active=active,
         state=state,
     )
+
+
+def protect_peak_for_sellable_phase(
+    whole_peak_profit_pct: float,
+    sellable_peak_profit_pct: float,
+    arm_pct: float,
+    *,
+    reset_applied: bool,
+) -> float:
+    """Use the sellable peak only while an opted-in position is below ARM."""
+    whole_peak = max(0.0, float(whole_peak_profit_pct or 0.0))
+    if not reset_applied or whole_peak + 1e-9 >= float(arm_pct or 0.0):
+        return whole_peak
+    return max(0.0, float(sellable_peak_profit_pct or 0.0))
 
 
 def normal_auto_stop_profit(
@@ -961,6 +1050,52 @@ class StaticRule:
                 market_state=market_state, quantity_fraction=1.0, details=details,
                 scope="POSITION_MANAGEMENT",
             )
+        if (
+            "IND_EXIT" in em_modes
+            and self.params.sellable_weak_exit_enabled
+            and bool(position.get("sellable"))
+            and current_profit <= self.params.sellable_weak_exit_loss_pct
+        ):
+            indicators = details.get("indicators") or {}
+            def snapshot_number(name: str) -> float | None:
+                try:
+                    value = float(indicators.get(name))
+                except (TypeError, ValueError):
+                    return None
+                return value if isfinite(value) else None
+
+            try:
+                count = int(indicators.get("sample_count") or 0)
+            except (TypeError, ValueError):
+                count = 0
+            ema_fast = snapshot_number("weak_sell_ema_fast")
+            ema_slow = snapshot_number("weak_sell_ema_slow")
+            current_rsi = snapshot_number("rsi")
+            previous_rsi = snapshot_number("rsi_previous")
+            enough_history = count >= max(
+                WEAK_EXIT_EMA_SLOW + 1 if self.params.sell_signal_use_ema else 2,
+                self.params.rsi_period + 2 if self.params.sell_signal_use_rsi else 2,
+            )
+            weak = (
+                enough_history
+                and (not self.params.sell_signal_use_ema or (
+                    ema_fast is not None and ema_slow is not None and ema_fast < ema_slow
+                ))
+                and (not self.params.sell_signal_use_rsi or (
+                    current_rsi is not None and previous_rsi is not None
+                    and current_rsi < previous_rsi
+                ))
+            )
+            if weak:
+                details["sellable_weak_exit"] = True
+                details["sellable_weak_exit_loss_pct"] = self.params.sellable_weak_exit_loss_pct
+                details["sellable_weak_exit_ema"] = f"{WEAK_EXIT_EMA_FAST}/{WEAK_EXIT_EMA_SLOW}"
+                return StrategyDecision(
+                    "SELL", symbol, "SELLABLE_WEAK_EXIT", event="INDICATOR_EXIT",
+                    signal="SELL", market_state=market_state,
+                    quantity_fraction=1.0, details=details,
+                    scope="POSITION_MANAGEMENT",
+                )
         if "IND_EXIT" in em_modes and signal == "SELL":
             return StrategyDecision(
                 "SELL", symbol, "SELL_SIGNAL", event="INDICATOR_EXIT", signal="SELL",
@@ -984,15 +1119,28 @@ class StaticRule:
                 self.params.normal_repeat_enabled
                 and self.params.normal_sell_pct < 100.0
             )
+            protection_peak = protect_peak_for_sellable_phase(
+                peak_profit,
+                float(position.get("normal_sellable_peak_profit_pct", 0.0) or 0.0),
+                self.params.normal_arm_pct,
+                reset_applied=bool(
+                    self.params.normal_dynamic_enabled
+                    and self.params.normal_t2_reset_enabled
+                    and position.get("normal_t2_reset_applied")
+                ),
+            )
             level = protect_level(
                 entry,
-                peak_profit,
+                protection_peak,
                 self.params.normal_arm_pct,
                 self.params.normal_giveback_pct,
                 dynamic_enabled=self.params.normal_dynamic_enabled,
                 sl_price=sl_price,
                 atr_pct=atr_pct,
                 atr_multiplier=self.params.normal_atr_multiplier,
+                atr_activation_multiplier=self.params.normal_atr_activation_multiplier,
+                retention_pct=self.params.normal_retention_pct,
+                retention_until_pct=self.params.normal_retention_until_pct,
                 previous_trigger_price=float(
                     position.get("normal_trigger_price", 0.0) or 0.0
                 ),
@@ -1004,7 +1152,11 @@ class StaticRule:
                 sell_share_pct=self.params.normal_sell_pct,
                 normal_dynamic_enabled=self.params.normal_dynamic_enabled,
                 normal_atr_pct=atr_pct,
+                normal_activation_mfe_pct=level.activation_mfe_pct,
+                normal_atr_activation_multiplier=self.params.normal_atr_activation_multiplier,
                 normal_atr_multiplier=self.params.normal_atr_multiplier,
+                normal_retention_pct=self.params.normal_retention_pct,
+                normal_retention_until_pct=self.params.normal_retention_until_pct,
                 normal_repeat_enabled=repeat,
                 normal_mfe_pct=level.mfe_pct,
                 normal_peak_price=level.peak_price,

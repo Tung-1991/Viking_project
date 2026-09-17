@@ -7,7 +7,14 @@ import pytest
 
 from viking_v2.backtest.data import HistoricalDataStore
 from viking_v2 import config as app_config
-from viking_v2.backtest.engine import BacktestEngine, _normal_trail_fill, _opening_fill_price
+from viking_v2.backtest.engine import (
+    BacktestEngine,
+    _Position,
+    _normal_trail_fill,
+    _opening_fill_price,
+    _profit_path_trade_metrics,
+    _record_profit_path,
+)
 from viking_v2.backtest.models import BacktestConfig, BacktestScenario, BacktestSettings, BacktestTrade
 from viking_v2.backtest.report import exit_detail, export_run_excel, round_headers, workbook_name
 from viking_v2.backtest.replay import ReplayDataStore
@@ -46,6 +53,17 @@ def test_historical_store_caches_dnse_daily_data(tmp_path):
     second = store.load_daily("FPT", "2023-08-01", "2023-12-01", warmup_sessions=260)
     assert second == first
     assert calls == []
+
+
+def test_sellable_weak_exit_requires_intraday_replay(tmp_path):
+    engine = BacktestEngine(HistoricalDataStore(root=tmp_path))
+    config = BacktestConfig(
+        ["FPT"], "2026-03-01", "2026-03-31",
+        simulation_mode="DAILY",
+        rule_parameters={"sellable_weak_exit_enabled": True},
+    )
+    with pytest.raises(RuntimeError, match="requires full intraday REPLAY"):
+        engine.run(config, save=False)
 
 
 def test_historical_cache_reports_real_coverage_and_retries_missing_gap(tmp_path, monkeypatch):
@@ -301,7 +319,7 @@ def test_excel_export_gives_each_run_its_own_sheet(tmp_path):
     book = load_workbook(path, read_only=True)
     assert book.sheetnames[0] == "MODE 1"
     assert book.sheetnames[-1] == "THÔNG TIN"
-    assert {"TÍN HIỆU", "KHỚP LỆNH", "PROTECT METRICS", "PROFIT PATH"} <= set(book.sheetnames)
+    assert {"TÍN HIỆU", "KHỚP LỆNH", "MFE T+2", "PROTECT METRICS", "PROFIT PATH"} <= set(book.sheetnames)
     headers = [cell.value for cell in next(book["MODE 1"].iter_rows(min_row=1, max_row=1))]
     # Both modes keep the same shape so their sheets can be compared or pasted
     # together; no blended average exit price anywhere.
@@ -310,6 +328,8 @@ def test_excel_export_gives_each_run_its_own_sheet(tmp_path):
     assert headers[0] == "LƯỢT"
     assert "GIÁ RA" not in headers
     assert {"CẮT LỖ", "PHIÊN", "THOÁT BỞI", "EMA3 / EMA6 RA", "RSI RA"} <= set(headers)
+    info = list(book["THÔNG TIN"].values)
+    assert any(row[0] == "MFE và T+2" for row in info)
 
 
 def test_exit_detail_names_every_sell_with_its_own_price():
@@ -333,6 +353,42 @@ def test_normal_intraday_trail_does_not_use_same_bar_future_low():
     assert peak == pytest.approx(8.0)
     # Giveback is 3% of the peak price: 100 x 1.08 x 0.97, not 100 x 1.05.
     assert fill == pytest.approx(104.76)
+
+
+def test_profit_path_splits_mfe_at_t2_release_and_accepts_a_later_equal_high():
+    position = _Position(
+        trade_id="t", symbol="FPT", quantity=100, entry_quantity=100,
+        avg_price=100.0, opened_date="2026-01-02", settle_date="2026-01-06",
+        buy_fee=0.0, capital_principal=10_000_000.0, em_modes=["NORMAL"],
+        opened_at="2026-01-02T14:00:00+07:00",
+    )
+    for observed_at, high in (
+        ("2026-01-06T12:59:00+07:00", 110.0),
+        ("2026-01-06T13:00:00+07:00", 105.0),
+    ):
+        _record_profit_path(
+            position, observed_at,
+            open_price=high, high_price=high, low_price=high, close_price=high,
+            source_resolution="1",
+        )
+    metrics = _profit_path_trade_metrics(
+        position, "2026-01-06T13:00:00+07:00", 5.0,
+    )
+    assert metrics["mfe_before_settlement_pct"] == pytest.approx(10.0)
+    assert metrics["mfe_after_settlement_pct"] == pytest.approx(5.0)
+    assert metrics["mfe_peak_phase"] == "TRUOC_T2"
+    assert metrics["settlement_release_at"] == "2026-01-06T13:00:00+07:00"
+
+    _record_profit_path(
+        position, "2026-01-06T13:01:00+07:00",
+        open_price=110.0, high_price=110.0, low_price=110.0, close_price=110.0,
+        source_resolution="1",
+    )
+    metrics = _profit_path_trade_metrics(
+        position, "2026-01-06T13:01:00+07:00", 10.0,
+    )
+    assert metrics["mfe_after_settlement_pct"] == pytest.approx(10.0)
+    assert metrics["mfe_peak_phase"] == "SAU_T2"
 
 
 def test_scenario_accepts_runtime_callbacks_without_putting_them_in_config(tmp_path):

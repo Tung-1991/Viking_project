@@ -545,9 +545,21 @@ class RuleSettingsPopup:
         ).pack(side="right", padx=(0, 6))
         self.normal_arm = self._field(normal, "ARM %", self.params.normal_arm_pct, "MFE đạt mức này thì dùng đầy đủ TRAIL đã đặt.")
         self.normal_giveback = self._field(normal, "TRAIL %", self.params.normal_giveback_pct, "Sau ARM, giá kích hoạt khi giảm X% từ peak.")
+        self.normal_atr_activation_multiplier = self._field(
+            normal, "START ATR ×", self.params.normal_atr_activation_multiplier,
+            "DYNAMIC chỉ bắt đầu khi MFE đạt ATR14 của phiên T−1 × hệ số này.",
+        )
         self.normal_atr_multiplier = self._field(
-            normal, "ATR ×", self.params.normal_atr_multiplier,
-            "DYNAMIC dưới ARM: khoảng thở = ATR14 của phiên T−1 × hệ số này.",
+            normal, "TRAIL ATR ×", self.params.normal_atr_multiplier,
+            "Sau khi bắt đầu: khoảng thở từ peak = ATR14 của phiên T−1 × hệ số này.",
+        )
+        self.normal_retention_pct = self._field(
+            normal, "GIỮ MFE %", self.params.normal_retention_pct,
+            "Dưới ngưỡng GIỮ ĐẾN, PROTECT khóa lại X% MFE. 0 = tắt.",
+        )
+        self.normal_retention_until_pct = self._field(
+            normal, "GIỮ ĐẾN %", self.params.normal_retention_until_pct,
+            "Qua mức MFE này, V3 ngừng siết thêm theo MFE; sàn đã khóa không hạ và ATR tiếp tục nâng sàn tới ARM.",
         )
         self.normal_sell = self._field(normal, "SELL %", self.params.normal_sell_pct, "Phần trăm khối lượng đang giữ tại mỗi lần PROTECT thực thi.")
         self.normal_dynamic = self._switch(
@@ -890,7 +902,16 @@ class RuleSettingsPopup:
             normal_arm = self._nonnegative(self.normal_arm, "Normal kích hoạt")
             normal_giveback = self._nonnegative(self.normal_giveback, "Normal giveback")
             normal_atr_multiplier = self._number(
-                self.normal_atr_multiplier, "Hệ số ATR PROTECT",
+                self.normal_atr_multiplier, "Hệ số ATR TRAIL PROTECT",
+            )
+            normal_atr_activation_multiplier = self._number(
+                self.normal_atr_activation_multiplier, "Hệ số ATR START PROTECT",
+            )
+            normal_retention_pct = self._nonnegative(
+                self.normal_retention_pct, "Tỷ lệ giữ MFE PROTECT",
+            )
+            normal_retention_until_pct = self._nonnegative(
+                self.normal_retention_until_pct, "Ngưỡng giữ MFE PROTECT",
             )
             normal_sell = self._nonnegative(self.normal_sell, "Protect bán bao nhiêu")
             if min(
@@ -914,7 +935,16 @@ class RuleSettingsPopup:
             if not 0 < normal_sell <= 100:
                 raise ValueError("Tỷ lệ bán PROTECT phải lớn hơn 0 và không quá 100%")
             if not 0 < normal_atr_multiplier <= 10:
-                raise ValueError("Hệ số ATR PROTECT phải lớn hơn 0 và không quá 10")
+                raise ValueError("Hệ số ATR TRAIL PROTECT phải lớn hơn 0 và không quá 10")
+            if not 0 < normal_atr_activation_multiplier <= 10:
+                raise ValueError("Hệ số ATR START PROTECT phải lớn hơn 0 và không quá 10")
+            if not 0 <= normal_retention_pct <= 100:
+                raise ValueError("Tỷ lệ giữ MFE PROTECT phải từ 0 đến 100%")
+            if (
+                normal_retention_pct > 0
+                and not 0 < normal_retention_until_pct <= normal_arm
+            ):
+                raise ValueError("Ngưỡng giữ MFE PROTECT phải nằm từ 0 đến ARM")
             if not (self.buy_signal_ema.get() or self.buy_signal_rsi.get()):
                 raise ValueError("Tín hiệu BUY phải bật ít nhất EMA hoặc RSI")
             if not (self.sell_signal_ema.get() or self.sell_signal_rsi.get()):
@@ -974,7 +1004,10 @@ class RuleSettingsPopup:
             self.params.normal_policy = self.normal_policy.get()
             self.params.normal_arm_pct = normal_arm
             self.params.normal_giveback_pct = normal_giveback
+            self.params.normal_atr_activation_multiplier = normal_atr_activation_multiplier
             self.params.normal_atr_multiplier = normal_atr_multiplier
+            self.params.normal_retention_pct = normal_retention_pct
+            self.params.normal_retention_until_pct = normal_retention_until_pct
             self.params.normal_sell_pct = normal_sell
             self.params.normal_dynamic_enabled = bool(self.normal_dynamic.get())
             self.params.normal_repeat_enabled = bool(self.normal_repeat.get())

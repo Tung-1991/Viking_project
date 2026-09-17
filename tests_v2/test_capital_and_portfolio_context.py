@@ -141,8 +141,30 @@ def test_real_positions_use_board_price_and_aggregate_same_symbol_rows(tmp_path)
     )
     assert context["position"]["quantity"] == 300
     assert context["position"]["trade_quantity"] == 100
+    assert context["position"]["sellable"] is False
     assert context["position"]["avg_price"] == 101.33333333333333
     assert context["position"]["current_price"] == 101.5
+
+
+def test_live_weak_exit_only_sees_fully_sellable_position(tmp_path):
+    builder = PortfolioContextBuilder(
+        OrderQueue(tmp_path / "orders-sellable.json"),
+        TradeStateStore(tmp_path / "trades-sellable.json"),
+        RuleStateStore(tmp_path / "rules-sellable.json"),
+    )
+    base = {
+        "symbol": "FPT", "openQuantity": 300,
+        "costPrice": 100_000, "marketPrice": 99_000,
+    }
+    kwargs = dict(
+        execution_mode="REAL",
+        balance={"equity": 100_000_000, "stock": {"availableCash": 0}},
+        tick={"price": 99}, exposure=0.9, max_positions=5,
+    )
+    partial = builder.build("FPT", positions=[{**base, "tradeQuantity": 100}], **kwargs)
+    complete = builder.build("FPT", positions=[{**base, "tradeQuantity": 300}], **kwargs)
+    assert partial["position"]["sellable"] is False
+    assert complete["position"]["sellable"] is True
 
 
 def test_paper_position_persists_net_pnl_mae_mfe_input_after_fees(tmp_path):

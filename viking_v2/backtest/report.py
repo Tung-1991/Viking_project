@@ -54,17 +54,25 @@ FILL_HEADERS = (
 
 SIGNAL_HEADERS = SIGNAL_HEADERS + (
     "PROTECT MODE", "PROTECT STATE", "MFE %", "PEAK", "EFFECTIVE TRAIL %",
-    "ATR14 T-1 %", "ATR MULTIPLIER", "PROTECT PRICE", "SELL %",
-    "HYPOTHETICAL QUANTITY",
+    "ATR14 T-1 %", "START ATR MULTIPLIER", "START MFE %",
+    "TRAIL ATR MULTIPLIER", "GIỮ MFE %", "GIỮ ĐẾN %",
+    "PROTECT PRICE", "SELL %", "HYPOTHETICAL QUANTITY",
 )
 FILL_HEADERS = FILL_HEADERS + ("WAITED T+2",)
 PROFIT_PATH_HEADERS = (
-    "Láº¦N CHáº Y", "LÆ¯á»¢T", "MÃƒ", "THá»œI ÄIá»‚M", "NGUá»’N",
+    "LẦN CHẠY", "LƯỢT", "MÃ", "THỜI ĐIỂM", "NGUỒN", "ĐƯỢC BÁN",
     "OPEN %", "HIGH %", "LOW %", "CLOSE %",
 )
 TRADE_PATH_METRIC_HEADERS = (
-    "Láº¦N CHáº Y", "LÆ¯á»¢T", "MÃƒ", "MFE %", "MAE %", "PEAK LÃšC",
-    "VÃ€Oâ†’PEAK (GIá»œ)", "PEAKâ†’RA (GIá»œ)", "MAX GIVEBACK %",
+    "LẦN CHẠY", "LƯỢT", "MÃ", "MFE TỔNG %", "MFE TRƯỚC T+2 %",
+    "MFE SAU T+2 %", "ĐỈNH MFE THUỘC", "BÁN ĐƯỢC LÚC", "MAE %", "PEAK LÚC",
+    "VÀO→PEAK (GIỜ)", "PEAK→RA (GIỜ)", "MAX GIVEBACK %",
+)
+SETTLEMENT_MFE_HEADERS = (
+    "LẦN CHẠY", "MÃ", "LỆNH", "PNL THỰC NHẬN", "MFE TỔNG NET",
+    "MFE TRONG T+2 NET · CÙNG CÁC LỆNH", "MFE SAU T+2 NET · CÙNG CÁC LỆNH",
+    "PNL/MFE TỔNG %", "PNL/MFE SAU T+2 %", "ĐỈNH TRƯỚC T+2 (LỆNH)",
+    "ĐỈNH SAU T+2 (LỆNH)",
 )
 
 
@@ -88,6 +96,69 @@ def exit_detail(trade: BacktestTrade) -> str:
     if trade.outcome == "OPEN" and trade.remaining_quantity > 0:
         return f"{detail} · CÒN GIỮ {trade.remaining_quantity:,}"
     return detail
+
+
+def _mfe_net_pnl(result: BacktestResult, trade: BacktestTrade, profit_pct: float) -> float:
+    """Value one hindsight peak with the same fees/tax as the backtest."""
+    entry_gross = trade.avg_entry_price * trade.entry_quantity * 1_000.0
+    exit_gross = (
+        trade.avg_entry_price * (1.0 + float(profit_pct) / 100.0)
+        * trade.entry_quantity * 1_000.0
+    )
+    return (
+        exit_gross - entry_gross
+        - entry_gross * result.config.buy_fee_rate
+        - exit_gross * (result.config.sell_fee_rate + result.config.sell_tax_rate)
+    )
+
+
+def settlement_mfe_stats(result: BacktestResult) -> dict[str, float | int]:
+    """Measure both phases without ever adding them into one trade's MFE.
+
+    ``raw`` is the sum of each trade's max across both phases. ``before_best``
+    and ``after_best`` describe the same trades in separate phases, so they are
+    never added together. The peak-origin buckets remain internal diagnostics.
+    """
+    values: dict[str, float | int] = {
+        "trades": len(result.trades), "actual": 0.0, "raw": 0.0,
+        "before_best": 0.0,
+        "raw_pre": 0.0, "raw_post": 0.0, "after_best": 0.0,
+        "pre_count": 0, "post_count": 0,
+    }
+    for trade in result.trades:
+        raw = _mfe_net_pnl(result, trade, trade.peak_profit_pct)
+        phase = str(trade.mfe_peak_phase or "UNKNOWN").upper()
+        values["actual"] = float(values["actual"]) + float(trade.net_pnl)
+        values["raw"] = float(values["raw"]) + raw
+        values["before_best"] = float(values["before_best"]) + _mfe_net_pnl(
+            result, trade, trade.mfe_before_settlement_pct,
+        )
+        if phase == "SAU_T2":
+            values["raw_post"] = float(values["raw_post"]) + raw
+            values["post_count"] = int(values["post_count"]) + 1
+        elif phase == "TRUOC_T2":
+            values["raw_pre"] = float(values["raw_pre"]) + raw
+            values["pre_count"] = int(values["pre_count"]) + 1
+        if trade.mfe_after_settlement_pct is not None:
+            values["after_best"] = float(values["after_best"]) + _mfe_net_pnl(
+                result, trade, trade.mfe_after_settlement_pct,
+            )
+    return values
+
+
+def _settlement_mfe_row(
+    label: str, symbol: str, stats: dict[str, float | int],
+) -> tuple[Any, ...]:
+    actual = float(stats["actual"])
+    raw = float(stats["raw"])
+    after = float(stats["after_best"])
+    return (
+        label, symbol, int(stats["trades"]), round(actual), round(raw),
+        round(float(stats["before_best"])), round(after),
+        round(actual / raw * 100.0, 2) if raw else 0.0,
+        round(actual / after * 100.0, 2) if after else 0.0,
+        int(stats["pre_count"]), int(stats["post_count"]),
+    )
 
 
 def round_rows(results: list[BacktestResult]) -> list[tuple[Any, ...]]:
@@ -161,7 +232,11 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
             f"TRAIL {values.get('normal_giveback_pct')}% · "
             f"SELL {sell:g}% · "
             f"DYNAMIC {'ON' if values.get('normal_dynamic_enabled') else 'OFF'}"
-            f" (ATR×{float(values.get('normal_atr_multiplier', 0.6) or 0.6):g}) · "
+            f" · T+2 RESET {'ON' if values.get('normal_t2_reset_enabled') else 'OFF'}"
+            f" (START ATR×{float(values.get('normal_atr_activation_multiplier', 0.6) or 0.6):g}"
+            f" · TRAIL ATR×{float(values.get('normal_atr_multiplier', 0.6) or 0.6):g})"
+            f" · GIỮ {float(values.get('normal_retention_pct', 0.0) or 0.0):g}% MFE"
+            f" TỚI {float(values.get('normal_retention_until_pct', 0.0) or 0.0):g}% · "
             f"REPEAT {'ON' if repeat else 'OFF'}"
         )
 
@@ -270,6 +345,16 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
             "Bán khi cổ về T+2",
             "từ 13:00 phiên chiều · "
             + ("kiểm tra lại điều kiện" if first.sell_wait_policy == "RECHECK" else "vẫn bán"),
+        ),
+        (
+            "MFE và T+2",
+            "Mỗi lệnh có hai phase: chưa bán được và bán được từ 13:00 ngày T+2. "
+            "MFE toàn lệnh = MAX(MFE trong T+2, MFE sau T+2); tuyệt đối không cộng hai phase.",
+        ),
+        (
+            "Đỉnh tốt nhất sau T+2",
+            "Giá tốt nhất quan sát được từ lúc cổ phiếu được bán đến lúc thoát thực tế. "
+            "Đây là benchmark nhìn lại cho exit, không phải lợi nhuận chắc chắn khớp được.",
         ),
         ("Không compound", "ON" if params.get("no_compound_enabled") else "OFF"),
         ("Auto 100 CP", "ON" if params.get("force_min_lot_enabled") else "OFF"),
@@ -403,7 +488,11 @@ def export_run_excel(results: BacktestResult | list[BacktestResult], directory: 
                     (row.get("details") or {}).get("normal_peak_price", ""),
                     (row.get("details") or {}).get("normal_effective_trail_pct", ""),
                     (row.get("details") or {}).get("normal_atr_pct", ""),
+                    (row.get("details") or {}).get("normal_atr_activation_multiplier", ""),
+                    (row.get("details") or {}).get("normal_activation_mfe_pct", ""),
                     (row.get("details") or {}).get("normal_atr_multiplier", ""),
+                    (row.get("details") or {}).get("normal_retention_pct", ""),
+                    (row.get("details") or {}).get("normal_retention_until_pct", ""),
                     (row.get("details") or {}).get("normal_trigger_price", ""),
                     (row.get("details") or {}).get("sell_share_pct", ""),
                     (row.get("details") or {}).get("hypothetical_quantity", ""),
@@ -426,6 +515,28 @@ def export_run_excel(results: BacktestResult | list[BacktestResult], directory: 
                     event.reason, bool((event.details or {}).get("settlement_waited", False)),
                 ))
 
+    trade_items = [(item, trade) for item in items for trade in item.trades]
+    # Saved runs produced before this telemetry existed cannot be split
+    # faithfully because they did not persist the settlement boundary.
+    if any(trade.mfe_peak_phase in {"TRUOC_T2", "SAU_T2"} for _, trade in trade_items):
+        settlement = book.create_sheet("MFE T+2")
+        settlement.append(SETTLEMENT_MFE_HEADERS)
+        total: dict[str, float | int] = {
+            "trades": 0, "actual": 0.0, "raw": 0.0, "before_best": 0.0,
+            "raw_pre": 0.0, "raw_post": 0.0, "after_best": 0.0,
+            "pre_count": 0, "post_count": 0,
+        }
+        for item in items:
+            stats = settlement_mfe_stats(item)
+            settlement.append(_settlement_mfe_row(
+                item.config.run_name or item.run_id,
+                ", ".join(item.config.symbols), stats,
+            ))
+            for key in total:
+                total[key] += stats[key]
+        if len(items) > 1:
+            settlement.append(_settlement_mfe_row("TỔNG", "7 MÃ", total))
+
     path_items = [
         (item, trade) for item in items for trade in item.trades if trade.profit_path
     ]
@@ -438,14 +549,22 @@ def export_run_excel(results: BacktestResult | list[BacktestResult], directory: 
             label = item.config.run_name or item.run_id
             metrics.append((
                 label, trade.cycle_id, trade.symbol,
-                round(trade.peak_profit_pct, 4), round(trade.mae_profit_pct, 4),
-                trade.peak_at, round(trade.entry_to_peak_hours, 4),
+                round(trade.peak_profit_pct, 4),
+                round(trade.mfe_before_settlement_pct, 4),
+                (
+                    round(trade.mfe_after_settlement_pct, 4)
+                    if trade.mfe_after_settlement_pct is not None else "—"
+                ),
+                trade.mfe_peak_phase or "—", trade.settlement_release_at or "—",
+                round(trade.mae_profit_pct, 4), trade.peak_at,
+                round(trade.entry_to_peak_hours, 4),
                 round(trade.peak_to_exit_hours, 4), round(trade.max_giveback_pct, 4),
             ))
             for point in trade.profit_path:
                 path_sheet.append((
                     label, trade.cycle_id, trade.symbol, point.get("time", ""),
                     point.get("source_resolution", ""),
+                    bool(point.get("sellable", False)),
                     point.get("open_profit_pct", 0.0), point.get("high_profit_pct", 0.0),
                     point.get("low_profit_pct", 0.0), point.get("close_profit_pct", 0.0),
                 ))

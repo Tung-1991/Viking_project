@@ -264,8 +264,20 @@ class DashboardTablesMixin:
                 protect_trail = decision_details.get("normal_effective_trail_pct")
                 protect_price = decision_details.get("normal_trigger_price")
                 protect_atr = decision_details.get("normal_atr_pct")
+                protect_atr_activation_multiplier = decision_details.get(
+                    "normal_atr_activation_multiplier",
+                    params.get("normal_atr_activation_multiplier", 0.6),
+                )
+                protect_activation_mfe = decision_details.get("normal_activation_mfe_pct")
                 protect_atr_multiplier = decision_details.get(
                     "normal_atr_multiplier", params.get("normal_atr_multiplier", 0.6),
+                )
+                protect_retention = decision_details.get(
+                    "normal_retention_pct", params.get("normal_retention_pct", 0.0),
+                )
+                protect_retention_until = decision_details.get(
+                    "normal_retention_until_pct",
+                    params.get("normal_retention_until_pct", 0.0),
                 )
                 protect_sell = decision_details.get(
                     "sell_share_pct", params.get("normal_sell_pct", 100.0),
@@ -330,7 +342,10 @@ class DashboardTablesMixin:
                         f"PROTECT {protect_mode}/{normal_state}"
                         f"·MFE {_number(protect_mfe):.1f}%"
                         f"·TRAIL {_number(protect_trail):.1f}%"
-                        f"·ATR {_number(protect_atr):.1f}%×{_number(protect_atr_multiplier):g}"
+                        f"·START {_number(protect_activation_mfe):.1f}%"
+                        f" ({_number(protect_atr_activation_multiplier):g}×ATR)"
+                        f"·ATR TRAIL {_number(protect_atr):.1f}%×{_number(protect_atr_multiplier):g}"
+                        f"·GIỮ {_number(protect_retention):g}%→{_number(protect_retention_until):g}%"
                         f"·{_display_price(protect_price)}"
                         f"·SELL {_number(protect_sell):g}%"
                     ),

@@ -240,6 +240,8 @@ class PortfolioContextBuilder:
         corporate_actions: list[dict[str, Any]] | None = None,
         working_dates: list[str] | None = None,
         today: date | None = None,
+        normal_t2_reset_enabled: bool = False,
+        normal_arm_pct: float = 7.0,
     ) -> dict[str, Any]:
         symbol = str(symbol or "").upper()
         mode = str(execution_mode or "PAPER").upper()
@@ -358,12 +360,16 @@ class PortfolioContextBuilder:
                 config.PAPER_SELL_FEE_RATE + config.PAPER_SELL_TAX_RATE
             )
         current_net_pnl = realized_net + unrealized - estimated_exit_cost
+        fully_sellable = available_to_sell(matching_rows, symbol) >= quantity > 0
         metrics = self.rule_state.update_position_metrics(
             symbol,
             trade_id,
             profit_pct=profit_pct,
             net_pnl=current_net_pnl,
             market_price=current_price,
+            t2_dynamic_enabled=normal_t2_reset_enabled,
+            sellable=fully_sellable,
+            normal_arm_pct=normal_arm_pct,
         ) if trade_id else {}
         context["position"] = {
             "quantity": quantity,
@@ -372,6 +378,7 @@ class PortfolioContextBuilder:
             "trade_quantity": sum(
                 max(0, int(_number(row, "tradeQuantity"))) for row in matching_rows
             ),
+            "sellable": fully_sellable,
             "trade_id": trade_id,
             "managed_by_bot": managed,
             "managed_by_app": managed,

@@ -368,6 +368,9 @@ class RuleStateStore:
         profit_pct: float,
         net_pnl: float | None = None,
         market_price: float = 0.0,
+        t2_dynamic_enabled: bool = False,
+        sellable: bool = False,
+        normal_arm_pct: float = 7.0,
     ) -> dict[str, Any]:
         symbol = str(symbol or "").upper()
         trade_id = str(trade_id or "")
@@ -383,6 +386,24 @@ class RuleStateStore:
             current["current_profit_pct"] = float(profit_pct)
             current["mae_pct"] = min(0.0, float(current.get("mae_pct", 0.0) or 0.0), float(profit_pct))
             current["mfe_pct"] = max(0.0, float(current.get("mfe_pct", 0.0) or 0.0), float(profit_pct))
+            if t2_dynamic_enabled:
+                if not sellable:
+                    current["normal_t2_seen_unsellable"] = True
+                elif not bool(current.get("normal_t2_started")):
+                    current["normal_t2_started"] = True
+                    if (
+                        bool(current.get("normal_t2_seen_unsellable"))
+                        and float(current["peak_profit_pct"]) + 1e-9 < normal_arm_pct
+                        and not bool(current.get("normal_armed"))
+                    ):
+                        current["normal_t2_reset_applied"] = True
+                        current["normal_trigger_price"] = 0.0
+                        current["normal_sellable_peak_profit_pct"] = max(0.0, float(profit_pct))
+                elif bool(current.get("normal_t2_reset_applied")):
+                    current["normal_sellable_peak_profit_pct"] = max(
+                        float(current.get("normal_sellable_peak_profit_pct", 0.0) or 0.0),
+                        max(0.0, float(profit_pct)),
+                    )
             if net_pnl is not None:
                 current["current_net_pnl"] = float(net_pnl)
                 current["mae_net_pnl"] = min(
@@ -517,6 +538,9 @@ class RuleStateStore:
         trigger_price: float,
         atr_pct: float,
         atr_multiplier: float,
+        atr_activation_multiplier: float | None = None,
+        retention_pct: float | None = None,
+        retention_until_pct: float | None = None,
     ) -> dict[str, Any]:
         """Persist the active PROTECT floor so it cannot fall after restart."""
         symbol = str(symbol or "").upper()
@@ -546,6 +570,22 @@ class RuleStateStore:
             current["normal_atr_multiplier"] = max(
                 0.0, float(atr_multiplier or 0.0),
             )
+            current["normal_atr_activation_multiplier"] = max(
+                0.0,
+                float(
+                    atr_multiplier
+                    if atr_activation_multiplier is None
+                    else atr_activation_multiplier
+                ),
+            )
+            if retention_pct is not None:
+                current["normal_retention_pct"] = min(
+                    100.0, max(0.0, float(retention_pct or 0.0)),
+                )
+            if retention_until_pct is not None:
+                current["normal_retention_until_pct"] = max(
+                    0.0, float(retention_until_pct or 0.0),
+                )
             current["updated_at"] = time.time()
             raw["symbols"][key] = current
             raw["symbols"].pop(symbol, None)

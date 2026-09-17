@@ -457,6 +457,12 @@ def run(account_id: str | None = None) -> int:
                                 loss_lock_hours=rule.params.loss_lock_hours,
                                 corporate_actions=settings.corporate_actions,
                                 working_dates=working_dates,
+                                normal_t2_reset_enabled=bool(
+                                    rule.params.normal_dynamic_enabled
+                                    and rule.params.normal_t2_reset_enabled
+                                    and rule.params.normal_policy == "AUTO"
+                                ),
+                                normal_arm_pct=rule.params.normal_arm_pct,
                             )
                             if not symbol_exchange:
                                 decision = StrategyDecision(
@@ -483,6 +489,19 @@ def run(account_id: str | None = None) -> int:
                                     atr_multiplier=float(
                                         decision.details.get("normal_atr_multiplier", 0.0) or 0.0
                                     ),
+                                    atr_activation_multiplier=float(
+                                        decision.details.get(
+                                            "normal_atr_activation_multiplier", 0.0,
+                                        ) or 0.0
+                                    ),
+                                    retention_pct=float(
+                                        decision.details.get("normal_retention_pct", 0.0) or 0.0
+                                    ),
+                                    retention_until_pct=float(
+                                        decision.details.get(
+                                            "normal_retention_until_pct", 0.0,
+                                        ) or 0.0
+                                    ),
                                 )
                                 if protect_state_row:
                                     decision.details["normal_trigger_price"] = float(
@@ -507,7 +526,8 @@ def run(account_id: str | None = None) -> int:
                                 )
                                 logger.info(
                                     "PROTECT ALERT symbol=%s trade=%s price=%.4f mfe=%.4f peak=%.4f "
-                                    "effective_trail=%.4f atr=%.4f atr_multiplier=%.4f "
+                                    "effective_trail=%.4f atr=%.4f start_multiplier=%.4f "
+                                    "trail_multiplier=%.4f "
                                     "protect=%.4f sell=%.2f hypothetical_qty=%d "
                                     "occurrence=%s",
                                     symbol,
@@ -517,6 +537,11 @@ def run(account_id: str | None = None) -> int:
                                     float(decision.details.get("normal_peak_price", 0.0) or 0.0),
                                     float(decision.details.get("normal_effective_trail_pct", 0.0) or 0.0),
                                     float(decision.details.get("normal_atr_pct", 0.0) or 0.0),
+                                    float(
+                                        decision.details.get(
+                                            "normal_atr_activation_multiplier", 0.0,
+                                        ) or 0.0
+                                    ),
                                     float(decision.details.get("normal_atr_multiplier", 0.0) or 0.0),
                                     float(decision.details.get("normal_trigger_price", 0.0) or 0.0),
                                     float(decision.details.get("sell_share_pct", 0.0) or 0.0),

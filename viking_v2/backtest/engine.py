@@ -13,6 +13,7 @@ from ..rules.business import (
     classify_market_state,
     indicator_snapshot,
     protect_level,
+    protect_peak_for_sellable_phase,
     protect_rearm_mfe,
 )
 from ..rules.entry_filters import apply_buy_filters
@@ -112,6 +113,10 @@ class _Position:
     normal_protected_profit_pct: float = 0.0
     normal_effective_trail_pct: float = 0.0
     normal_trigger_price: float = 0.0
+    normal_t2_seen_unsellable: bool = False
+    normal_t2_started: bool = False
+    normal_t2_reset_applied: bool = False
+    normal_sellable_peak_profit_pct: float = 0.0
     normal_count: int = 0
     normal_last_trigger_peak_pct: float = 0.0
     normal_rearm_mfe_pct: float = 0.0
@@ -231,19 +236,56 @@ def _pending_protect_matches(
         return False
     if params.normal_policy != "AUTO" or "NORMAL" not in position.em_modes:
         return False
+    current = float(price or 0.0)
+    sl_price = position.avg_price * (1.0 + position.sl_pct / 100.0)
+    if params.normal_t2_reset_enabled and current <= sl_price:
+        return False
     level = protect_level(
         position.avg_price,
-        position.peak_profit_pct,
+        protect_peak_for_sellable_phase(
+            position.peak_profit_pct,
+            position.normal_sellable_peak_profit_pct,
+            params.normal_arm_pct,
+            reset_applied=position.normal_t2_reset_applied,
+        ),
         params.normal_arm_pct,
         params.normal_giveback_pct,
         dynamic_enabled=params.normal_dynamic_enabled,
-        sl_price=position.avg_price * (1.0 + position.sl_pct / 100.0),
+        sl_price=sl_price,
         atr_pct=atr_pct,
         atr_multiplier=params.normal_atr_multiplier,
+        atr_activation_multiplier=params.normal_atr_activation_multiplier,
+        retention_pct=params.normal_retention_pct,
+        retention_until_pct=params.normal_retention_until_pct,
         previous_trigger_price=position.normal_trigger_price,
     )
-    current = float(price or 0.0)
     return bool(level.active and current > 0 and current <= level.trigger_price + 1e-9)
+
+
+def _start_sellable_dynamic(
+    position: _Position,
+    params: StaticRuleParameters,
+    observed_price: float,
+) -> None:
+    """Apply the optional pre-ARM floor reset using only the sellable open."""
+    if (
+        not params.normal_t2_reset_enabled
+        or not params.normal_dynamic_enabled
+        or params.normal_policy != "AUTO"
+        or position.normal_t2_started
+        or observed_price <= 0
+    ):
+        return
+    position.normal_t2_started = True
+    observed_profit = (observed_price / position.avg_price - 1.0) * 100.0
+    if (
+        position.normal_t2_seen_unsellable
+        and not position.normal_armed
+        and max(position.peak_profit_pct, observed_profit) + 1e-9 < params.normal_arm_pct
+    ):
+        position.normal_t2_reset_applied = True
+        position.normal_trigger_price = 0.0
+        position.normal_sellable_peak_profit_pct = max(0.0, observed_profit)
 
 
 def _pending_matches_decision(order: _Pending, raw: Any) -> bool | None:
@@ -344,6 +386,7 @@ class _NormalObservation:
     armed_at: int
     mfe_after_arm_pct: float
     protected_profit_pct: float
+    activation_mfe_pct: float
     effective_trail_pct: float
     trigger_price: float
     state: str
@@ -363,6 +406,9 @@ def _normal_policy_fill(
     sl_price: float = 0.0,
     atr_pct: float = 0.0,
     atr_multiplier: float = 0.6,
+    atr_activation_multiplier: float | None = None,
+    retention_pct: float = 0.0,
+    retention_until_pct: float | None = None,
     previous_trigger_price: float = 0.0,
 ) -> _NormalObservation:
     """Observe one or more bars using deterministic NORMAL semantics.
@@ -381,12 +427,16 @@ def _normal_policy_fill(
         entry_price, peak, arm_pct, giveback_pct,
         dynamic_enabled=dynamic_enabled, sl_price=sl_price,
         atr_pct=atr_pct, atr_multiplier=atr_multiplier,
+        atr_activation_multiplier=atr_activation_multiplier,
+        retention_pct=retention_pct,
+        retention_until_pct=retention_until_pct,
         previous_trigger_price=carried_trigger,
     )
     if entry_price <= 0:
         return _NormalObservation(
             0.0, False, peak, armed, 0, mfe, level.trigger_profit_pct,
-            level.effective_trail_pct, level.trigger_price, level.state,
+            level.activation_mfe_pct, level.effective_trail_pct,
+            level.trigger_price, level.state,
         )
 
     for bar in bars:
@@ -396,6 +446,9 @@ def _normal_policy_fill(
             entry_price, peak, arm_pct, giveback_pct,
             dynamic_enabled=dynamic_enabled, sl_price=sl_price,
             atr_pct=atr_pct, atr_multiplier=atr_multiplier,
+            atr_activation_multiplier=atr_activation_multiplier,
+            retention_pct=retention_pct,
+            retention_until_pct=retention_until_pct,
             previous_trigger_price=carried_trigger,
         )
         if level.active:
@@ -411,6 +464,7 @@ def _normal_policy_fill(
                     armed_at,
                     mfe,
                     level.trigger_profit_pct,
+                    level.activation_mfe_pct,
                     level.effective_trail_pct,
                     level.trigger_price,
                     "ALERT" if policy == "ALERT" else level.state,
@@ -430,11 +484,15 @@ def _normal_policy_fill(
         entry_price, peak, arm_pct, giveback_pct,
         dynamic_enabled=dynamic_enabled, sl_price=sl_price,
         atr_pct=atr_pct, atr_multiplier=atr_multiplier,
+        atr_activation_multiplier=atr_activation_multiplier,
+        retention_pct=retention_pct,
+        retention_until_pct=retention_until_pct,
         previous_trigger_price=carried_trigger,
     )
     return _NormalObservation(
         0.0, False, peak, armed, armed_at, mfe, level.trigger_profit_pct,
-        level.effective_trail_pct, level.trigger_price, level.state,
+        level.activation_mfe_pct, level.effective_trail_pct,
+        level.trigger_price, level.state,
     )
 
 
@@ -495,9 +553,18 @@ def _record_profit_path(
     high = float(high_price or close_price or opened)
     low = float(low_price or close_price or opened)
     closed = float(close_price or opened)
+    sellable = False
+    try:
+        observed = datetime.fromisoformat(str(observed_at or ""))
+        sellable = stock_is_sellable_after_settlement(position.settle_date, observed)
+    except (TypeError, ValueError):
+        # An unknown/malformed settlement timestamp must never be reported as
+        # an executable opportunity.
+        sellable = False
     point = {
         "time": str(observed_at or ""),
         "source_resolution": str(source_resolution or ""),
+        "sellable": sellable,
         "open_profit_pct": pnl(opened),
         "high_profit_pct": pnl(high),
         "low_profit_pct": pnl(low),
@@ -514,6 +581,10 @@ def _record_profit_path(
         position.peak_at = str(observed_at or "")
     position.peak_profit_pct = max(position.peak_profit_pct, high_profit, 0.0)
     position.mae_profit_pct = min(position.mae_profit_pct, low_profit)
+    if sellable and position.normal_t2_reset_applied:
+        position.normal_sellable_peak_profit_pct = max(
+            position.normal_sellable_peak_profit_pct, high_profit, 0.0,
+        )
 
 
 def _profit_path_trade_metrics(
@@ -523,6 +594,27 @@ def _profit_path_trade_metrics(
 ) -> dict[str, Any]:
     opened_at = position.opened_at or position.opened_date
     peak_at = position.peak_at or opened_at
+    before_release = [
+        item for item in position.profit_path if not bool(item.get("sellable", False))
+    ]
+    after_release = [
+        item for item in position.profit_path if bool(item.get("sellable", False))
+    ]
+    before_mfe = max(
+        (float(item.get("high_profit_pct", 0.0) or 0.0) for item in before_release),
+        default=0.0,
+    )
+    after_mfe = (
+        max(float(item.get("high_profit_pct", 0.0) or 0.0) for item in after_release)
+        if after_release else None
+    )
+    # If the same high occurs again after settlement, the MFE was available to
+    # the exit even when its first occurrence was during T+2.
+    peak_phase = (
+        "SAU_T2"
+        if after_mfe is not None and after_mfe + 1e-9 >= before_mfe
+        else "TRUOC_T2"
+    )
     return {
         "mae_profit_pct": float(position.mae_profit_pct),
         "peak_at": peak_at,
@@ -531,6 +623,12 @@ def _profit_path_trade_metrics(
         "max_giveback_pct": max(
             0.0, float(position.peak_profit_pct) - float(final_profit_pct),
         ),
+        "settlement_release_at": str(
+            after_release[0].get("time", "") if after_release else ""
+        ),
+        "mfe_before_settlement_pct": before_mfe,
+        "mfe_after_settlement_pct": after_mfe,
+        "mfe_peak_phase": peak_phase,
         "profit_path": [dict(item) for item in position.profit_path],
     }
 
@@ -651,6 +749,8 @@ class BacktestEngine:
                 "XÁC NHẬN BUY theo phút chỉ chạy với MODE 2 · REPLAY intraday FULL; "
                 "không dùng DAILY hoặc AUTO HYBRID."
             )
+        if requested_params.sellable_weak_exit_enabled and settings.simulation_mode != "REPLAY":
+            raise RuntimeError("E weak-exit after T+2 requires full intraday REPLAY data.")
         if settings.simulation_mode in {"REPLAY", "AUTO_HYBRID"}:
             return self._run_replay(
                 settings, progress=progress, cancelled=cancelled, save=save, carry=carry,
@@ -1088,6 +1188,7 @@ class BacktestEngine:
                                 cycle_id=cycle_id,
                                 entry_value=gross + fee,
                                 sl_pct=params.reentry_sl_pct if attempt > 0 else params.initial_sl_pct,
+                                normal_t2_seen_unsellable=True,
                                 entry_ema_fast=entry_indicators["ema_fast"],
                                 entry_ema_slow=entry_indicators["ema_slow"],
                                 entry_rsi=entry_indicators["rsi"],
@@ -1124,6 +1225,7 @@ class BacktestEngine:
                         if day <= position.settle_date:
                             order.settlement_waited = True
                             continue
+                        _start_sellable_dynamic(position, params, open_price)
                         if (
                             order.settlement_waited
                             and settings.sell_wait_policy == "RECHECK"
@@ -1168,6 +1270,11 @@ class BacktestEngine:
                 row = rows_by_symbol.get(symbol, {}).get(day)
                 if not row or symbol in pending:
                     continue
+                if day > position.settle_date:
+                    _start_sellable_dynamic(
+                        position, params,
+                        float(row.get("open", 0.0) or row.get("close", 0.0) or 0.0),
+                    )
                 sl_pct = params.reentry_sl_pct if position.is_reentry else params.initial_sl_pct
                 stop_price = position.avg_price * (1.0 + sl_pct / 100.0)
                 fill = stop_fill_price(symbol, day, stop_price)
@@ -1242,7 +1349,12 @@ class BacktestEngine:
                         normal_bars,
                         policy=params.normal_policy,
                         entry_price=position.avg_price,
-                        peak_profit_pct=position.peak_profit_pct,
+                        peak_profit_pct=protect_peak_for_sellable_phase(
+                            position.peak_profit_pct,
+                            position.normal_sellable_peak_profit_pct,
+                            params.normal_arm_pct,
+                            reset_applied=position.normal_t2_reset_applied,
+                        ),
                         already_armed=position.normal_armed,
                         mfe_after_arm_pct=position.mfe_after_arm_pct,
                         arm_pct=params.normal_arm_pct,
@@ -1251,6 +1363,9 @@ class BacktestEngine:
                         sl_price=position.avg_price * (1.0 + position.sl_pct / 100.0),
                         atr_pct=atr_pct,
                         atr_multiplier=params.normal_atr_multiplier,
+                        atr_activation_multiplier=params.normal_atr_activation_multiplier,
+                        retention_pct=params.normal_retention_pct,
+                        retention_until_pct=params.normal_retention_until_pct,
                         previous_trigger_price=position.normal_trigger_price,
                     )
                     was_armed = position.normal_armed
@@ -1258,6 +1373,11 @@ class BacktestEngine:
                     position.peak_profit_pct = max(
                         position.peak_profit_pct, observation.peak_profit_pct,
                     )
+                    if position.normal_t2_reset_applied:
+                        position.normal_sellable_peak_profit_pct = max(
+                            position.normal_sellable_peak_profit_pct,
+                            observation.peak_profit_pct,
+                        )
                     position.mfe_after_arm_pct = max(
                         position.mfe_after_arm_pct, observation.mfe_after_arm_pct,
                     )
@@ -1291,7 +1411,11 @@ class BacktestEngine:
                                 "normal_trigger_price": observation.trigger_price,
                                 "normal_protected_profit_pct": observation.protected_profit_pct,
                                 "normal_atr_pct": atr_pct,
+                                "normal_activation_mfe_pct": observation.activation_mfe_pct,
+                                "normal_atr_activation_multiplier": params.normal_atr_activation_multiplier,
                                 "normal_atr_multiplier": params.normal_atr_multiplier,
+                                "normal_retention_pct": params.normal_retention_pct,
+                                "normal_retention_until_pct": params.normal_retention_until_pct,
                                 "normal_dynamic_enabled": params.normal_dynamic_enabled,
                                 "sell_share_pct": params.normal_sell_pct,
                                 "hypothetical_quantity": sell_quantity_for_fraction(
@@ -1309,7 +1433,11 @@ class BacktestEngine:
                             "normal_effective_trail_pct": position.normal_effective_trail_pct,
                             "normal_trigger_price": position.normal_trigger_price,
                             "normal_atr_pct": atr_pct,
+                            "normal_activation_mfe_pct": observation.activation_mfe_pct,
+                            "normal_atr_activation_multiplier": params.normal_atr_activation_multiplier,
                             "normal_atr_multiplier": params.normal_atr_multiplier,
+                            "normal_retention_pct": params.normal_retention_pct,
+                            "normal_retention_until_pct": params.normal_retention_until_pct,
                             "normal_dynamic_enabled": params.normal_dynamic_enabled,
                             "normal_trigger_peak_pct": position.peak_profit_pct,
                             "normal_rearm_after_pct": protect_rearm_mfe(
@@ -1389,6 +1517,7 @@ class BacktestEngine:
                         "avg_price": position.avg_price,
                         "current_price": float(row.get("close", 0.0) or 0.0),
                         "peak_profit_pct": position.peak_profit_pct,
+                        "sellable": day > position.settle_date,
                         "is_reentry": position.is_reentry,
                         "em_modes": position.em_modes,
                         "normal_protection_done": position.normal_done,
@@ -2071,6 +2200,7 @@ class BacktestEngine:
                         entry_rule=_buy_rule_text(params),
                         cycle_id=cycle_id, entry_value=gross + fee,
                         sl_pct=params.reentry_sl_pct if attempt else params.initial_sl_pct,
+                        normal_t2_seen_unsellable=True,
                         entry_ema_fast=indicators["ema_fast"],
                         entry_ema_slow=indicators["ema_slow"], entry_rsi=indicators["rsi"],
                         opened_at=iso_time(stamp),
@@ -2104,6 +2234,7 @@ class BacktestEngine:
             ):
                 order.settlement_waited = True
                 return
+            _start_sellable_dynamic(position, params, price)
             if (
                 order.settlement_waited and settings.sell_wait_policy == "RECHECK"
             ):
@@ -2242,9 +2373,13 @@ class BacktestEngine:
                     position = positions.get(symbol)
                     event_count_before_exit = len(events)
                     if position and symbol not in pending:
+                        opened = float(bar.get("open", 0.0) or 0.0)
+                        if stock_is_sellable_after_settlement(
+                            position.settle_date, datetime.fromtimestamp(stamp, VN_TZ),
+                        ):
+                            _start_sellable_dynamic(position, params, opened)
                         stop_pct = params.reentry_sl_pct if position.is_reentry else params.initial_sl_pct
                         stop = position.avg_price * (1.0 + stop_pct / 100.0)
-                        opened = float(bar.get("open", 0.0) or 0.0)
                         low = float(bar.get("low", 0.0) or 0.0)
                         high = float(bar.get("high", 0.0) or 0.0)
                         details = {"indicators": indicator_snapshot(
@@ -2312,7 +2447,12 @@ class BacktestEngine:
                             observation = _normal_policy_fill(
                                 [bar], policy=params.normal_policy,
                                 entry_price=position.avg_price,
-                                peak_profit_pct=position.peak_profit_pct,
+                                peak_profit_pct=protect_peak_for_sellable_phase(
+                                    position.peak_profit_pct,
+                                    position.normal_sellable_peak_profit_pct,
+                                    params.normal_arm_pct,
+                                    reset_applied=position.normal_t2_reset_applied,
+                                ),
                                 already_armed=position.normal_armed,
                                 mfe_after_arm_pct=position.mfe_after_arm_pct,
                                 arm_pct=params.normal_arm_pct,
@@ -2321,6 +2461,9 @@ class BacktestEngine:
                                 sl_price=position.avg_price * (1.0 + position.sl_pct / 100.0),
                                 atr_pct=atr_pct,
                                 atr_multiplier=params.normal_atr_multiplier,
+                                atr_activation_multiplier=params.normal_atr_activation_multiplier,
+                                retention_pct=params.normal_retention_pct,
+                                retention_until_pct=params.normal_retention_until_pct,
                                 previous_trigger_price=position.normal_trigger_price,
                             )
                             was_armed = position.normal_armed
@@ -2328,6 +2471,11 @@ class BacktestEngine:
                             position.peak_profit_pct = max(
                                 position.peak_profit_pct, observation.peak_profit_pct,
                             )
+                            if position.normal_t2_reset_applied:
+                                position.normal_sellable_peak_profit_pct = max(
+                                    position.normal_sellable_peak_profit_pct,
+                                    observation.peak_profit_pct,
+                                )
                             position.mfe_after_arm_pct = max(
                                 position.mfe_after_arm_pct, observation.mfe_after_arm_pct,
                             )
@@ -2363,7 +2511,11 @@ class BacktestEngine:
                                         "normal_trigger_price": observation.trigger_price,
                                         "normal_protected_profit_pct": observation.protected_profit_pct,
                                         "normal_atr_pct": atr_pct,
+                                        "normal_activation_mfe_pct": observation.activation_mfe_pct,
+                                        "normal_atr_activation_multiplier": params.normal_atr_activation_multiplier,
                                         "normal_atr_multiplier": params.normal_atr_multiplier,
+                                        "normal_retention_pct": params.normal_retention_pct,
+                                        "normal_retention_until_pct": params.normal_retention_until_pct,
                                         "normal_dynamic_enabled": params.normal_dynamic_enabled,
                                         "sell_share_pct": params.normal_sell_pct,
                                         "hypothetical_quantity": sell_quantity_for_fraction(
@@ -2383,7 +2535,11 @@ class BacktestEngine:
                                     normal_effective_trail_pct=position.normal_effective_trail_pct,
                                     normal_trigger_price=position.normal_trigger_price,
                                     normal_atr_pct=atr_pct,
+                                    normal_activation_mfe_pct=observation.activation_mfe_pct,
+                                    normal_atr_activation_multiplier=params.normal_atr_activation_multiplier,
                                     normal_atr_multiplier=params.normal_atr_multiplier,
+                                    normal_retention_pct=params.normal_retention_pct,
+                                    normal_retention_until_pct=params.normal_retention_until_pct,
                                     normal_dynamic_enabled=params.normal_dynamic_enabled,
                                     normal_trigger_peak_pct=position.peak_profit_pct,
                                     normal_rearm_after_pct=protect_rearm_mfe(
@@ -2466,6 +2622,7 @@ class BacktestEngine:
                             "quantity": position.quantity, "avg_price": position.avg_price,
                             "current_price": float(partial["close"]),
                             "peak_profit_pct": position.peak_profit_pct,
+                            "sellable": stock_is_sellable_after_settlement(position.settle_date, now),
                             "is_reentry": position.is_reentry, "em_modes": position.em_modes,
                             "normal_protection_done": position.normal_done,
                             "normal_execution_managed": True,

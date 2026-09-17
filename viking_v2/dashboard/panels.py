@@ -1206,7 +1206,14 @@ class DashboardPanelsMixin:
         normal_giveback = float(params.get("normal_giveback_pct", 2.0) or 2.0)
         normal_policy = str(params.get("normal_policy", "AUTO") or "AUTO").upper()
         normal_dynamic = bool(params.get("normal_dynamic_enabled", False))
+        normal_atr_activation_multiplier = float(
+            params.get("normal_atr_activation_multiplier", 0.6) or 0.6
+        )
         normal_atr_multiplier = float(params.get("normal_atr_multiplier", 0.6) or 0.6)
+        normal_retention_pct = float(params.get("normal_retention_pct", 0.0) or 0.0)
+        normal_retention_until_pct = float(
+            params.get("normal_retention_until_pct", 0.0) or 0.0
+        )
         normal_repeat = bool(params.get("normal_repeat_enabled", False))
         normal_sell = float(params.get("normal_sell_pct", 100.0) or 100.0)
         normal_price = entry_price * (1.0 + normal_arm / 100.0) if entry_price > 0 else 0.0
@@ -1223,7 +1230,9 @@ class DashboardPanelsMixin:
         self.preview_normal_detail.configure(
             text=(
                 f"{normal_policy} · ARM {normal_arm:g}% · TRAIL {normal_giveback:g}% · SELL {normal_sell:g}%"
-                f" · DYN {'ON' if normal_dynamic else 'OFF'} · ATR×{normal_atr_multiplier:g}"
+                f" · DYN {'ON' if normal_dynamic else 'OFF'}"
+                f" · START×{normal_atr_activation_multiplier:g} · ATR×{normal_atr_multiplier:g}"
+                f" · GIỮ {normal_retention_pct:g}%→{normal_retention_until_pct:g}%"
                 f" · REPEAT {'OFF' if normal_sell >= 100 else 'ON' if normal_repeat else 'OFF'}"
             ),
         )
@@ -1272,7 +1281,12 @@ class DashboardPanelsMixin:
             )
             if effective_trail is not None:
                 self.preview_normal_detail.configure(
-                    text=f"{normal_policy} · MFE {_number(decision_details.get('normal_mfe_pct')):.1f}% · TRAIL {_number(effective_trail):.1f}% · SELL {normal_sell:g}%",
+                    text=(
+                        f"{normal_policy} · MFE {_number(decision_details.get('normal_mfe_pct')):.1f}%"
+                        f" · TRAIL {_number(effective_trail):.1f}%"
+                        f" · GIỮ {_number(decision_details.get('normal_retention_pct')):g}%"
+                        f" · SELL {normal_sell:g}%"
+                    ),
                 )
         self._refresh_rule_preview(status, symbol)
 

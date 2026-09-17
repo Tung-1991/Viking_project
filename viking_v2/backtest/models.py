@@ -297,6 +297,10 @@ class BacktestTrade:
     entry_to_peak_hours: float = 0.0
     peak_to_exit_hours: float = 0.0
     max_giveback_pct: float = 0.0
+    settlement_release_at: str = ""
+    mfe_before_settlement_pct: float = 0.0
+    mfe_after_settlement_pct: float | None = None
+    mfe_peak_phase: str = ""
     profit_path: list[dict[str, Any]] = field(default_factory=list)
     normal_policy: str = "AUTO"
     normal_arm_time: str = ""

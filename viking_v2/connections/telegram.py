@@ -204,7 +204,10 @@ class SignalTelegramService:
         sell_pct: float,
         dynamic: bool,
         atr_pct: float = 0.0,
+        atr_activation_multiplier: float = 0.0,
         atr_multiplier: float = 0.0,
+        retention_pct: float = 0.0,
+        retention_until_pct: float = 0.0,
     ) -> bool:
         """Dry-run notification emitted exactly where AUTO would sell."""
         symbol = str(symbol or "").strip().upper()
@@ -215,7 +218,10 @@ class SignalTelegramService:
                 f"🟠 PROTECT ALERT · {symbol}",
                 f"Giá: {self._price(price)} · MFE {float(mfe_pct):+.2f}%",
                 f"Peak: {self._price(peak_price)} · PROTECT: {self._price(protect_price)}",
-                f"ATR14 T-1: {float(atr_pct):.2f}% × {float(atr_multiplier):g}",
+                f"ATR14 T-1: {float(atr_pct):.2f}% · START×{float(atr_activation_multiplier):g}"
+                f" · TRAIL×{float(atr_multiplier):g}",
+                f"V3: giữ {float(retention_pct):g}% MFE tới {float(retention_until_pct):g}%"
+                if float(retention_pct) > 0 else "V3: OFF",
                 f"Giả định bán {float(sell_pct):g}% · DYNAMIC {'ON' if dynamic else 'OFF'}",
                 "ALERT chỉ ghi nhận, không đặt lệnh.",
             ))
