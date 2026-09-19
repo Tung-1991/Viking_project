@@ -255,8 +255,12 @@ def _pending_protect_matches(
         atr_pct=atr_pct,
         atr_multiplier=params.normal_atr_multiplier,
         atr_activation_multiplier=params.normal_atr_activation_multiplier,
+        atr_activation_enabled=params.normal_atr_activation_enabled,
+        atr_trail_enabled=params.normal_atr_trail_enabled,
         retention_pct=params.normal_retention_pct,
         retention_until_pct=params.normal_retention_until_pct,
+        retention_enabled=params.normal_retention_enabled,
+        retention_until_enabled=params.normal_retention_until_enabled,
         previous_trigger_price=position.normal_trigger_price,
     )
     return bool(level.active and current > 0 and current <= level.trigger_price + 1e-9)
@@ -407,8 +411,12 @@ def _normal_policy_fill(
     atr_pct: float = 0.0,
     atr_multiplier: float = 0.6,
     atr_activation_multiplier: float | None = None,
+    atr_activation_enabled: bool = True,
+    atr_trail_enabled: bool = True,
     retention_pct: float = 0.0,
     retention_until_pct: float | None = None,
+    retention_enabled: bool = True,
+    retention_until_enabled: bool = True,
     previous_trigger_price: float = 0.0,
 ) -> _NormalObservation:
     """Observe one or more bars using deterministic NORMAL semantics.
@@ -428,8 +436,12 @@ def _normal_policy_fill(
         dynamic_enabled=dynamic_enabled, sl_price=sl_price,
         atr_pct=atr_pct, atr_multiplier=atr_multiplier,
         atr_activation_multiplier=atr_activation_multiplier,
+        atr_activation_enabled=atr_activation_enabled,
+        atr_trail_enabled=atr_trail_enabled,
         retention_pct=retention_pct,
         retention_until_pct=retention_until_pct,
+        retention_enabled=retention_enabled,
+        retention_until_enabled=retention_until_enabled,
         previous_trigger_price=carried_trigger,
     )
     if entry_price <= 0:
@@ -447,8 +459,12 @@ def _normal_policy_fill(
             dynamic_enabled=dynamic_enabled, sl_price=sl_price,
             atr_pct=atr_pct, atr_multiplier=atr_multiplier,
             atr_activation_multiplier=atr_activation_multiplier,
+            atr_activation_enabled=atr_activation_enabled,
+            atr_trail_enabled=atr_trail_enabled,
             retention_pct=retention_pct,
             retention_until_pct=retention_until_pct,
+            retention_enabled=retention_enabled,
+            retention_until_enabled=retention_until_enabled,
             previous_trigger_price=carried_trigger,
         )
         if level.active:
@@ -485,8 +501,12 @@ def _normal_policy_fill(
         dynamic_enabled=dynamic_enabled, sl_price=sl_price,
         atr_pct=atr_pct, atr_multiplier=atr_multiplier,
         atr_activation_multiplier=atr_activation_multiplier,
+        atr_activation_enabled=atr_activation_enabled,
+        atr_trail_enabled=atr_trail_enabled,
         retention_pct=retention_pct,
         retention_until_pct=retention_until_pct,
+        retention_enabled=retention_enabled,
+        retention_until_enabled=retention_until_enabled,
         previous_trigger_price=carried_trigger,
     )
     return _NormalObservation(
@@ -653,12 +673,13 @@ def exit_comparison_variants(
     scenario: BacktestScenario,
     rule_parameters: dict[str, Any],
 ) -> list[tuple[BacktestScenario, dict[str, Any]]]:
-    """Build DYNAMIC OFF, DYNAMIC ON, and ALERT from one entry scenario."""
+    """Build the four AUTO/ALERT × DYNAMIC OFF/ON exit variants."""
     base = StaticRuleParameters.from_dict(rule_parameters)
     specs = (
         ("E + PROTECT DYNAMIC OFF", ["NORMAL", "IND_EXIT"], "AUTO", False),
         ("E + PROTECT DYNAMIC ON", ["NORMAL", "IND_EXIT"], "AUTO", True),
-        ("E + PROTECT ALERT", ["NORMAL", "IND_EXIT"], "ALERT", True),
+        ("E + PROTECT ALERT DYNAMIC OFF", ["NORMAL", "IND_EXIT"], "ALERT", False),
+        ("E + PROTECT ALERT DYNAMIC ON", ["NORMAL", "IND_EXIT"], "ALERT", True),
     )
     variants: list[tuple[BacktestScenario, dict[str, Any]]] = []
     for label, modes, policy, dynamic in specs:
@@ -1364,8 +1385,12 @@ class BacktestEngine:
                         atr_pct=atr_pct,
                         atr_multiplier=params.normal_atr_multiplier,
                         atr_activation_multiplier=params.normal_atr_activation_multiplier,
+                        atr_activation_enabled=params.normal_atr_activation_enabled,
+                        atr_trail_enabled=params.normal_atr_trail_enabled,
                         retention_pct=params.normal_retention_pct,
                         retention_until_pct=params.normal_retention_until_pct,
+                        retention_enabled=params.normal_retention_enabled,
+                        retention_until_enabled=params.normal_retention_until_enabled,
                         previous_trigger_price=position.normal_trigger_price,
                     )
                     was_armed = position.normal_armed
@@ -1414,8 +1439,12 @@ class BacktestEngine:
                                 "normal_activation_mfe_pct": observation.activation_mfe_pct,
                                 "normal_atr_activation_multiplier": params.normal_atr_activation_multiplier,
                                 "normal_atr_multiplier": params.normal_atr_multiplier,
+                                "normal_atr_activation_enabled": params.normal_atr_activation_enabled,
+                                "normal_atr_trail_enabled": params.normal_atr_trail_enabled,
                                 "normal_retention_pct": params.normal_retention_pct,
                                 "normal_retention_until_pct": params.normal_retention_until_pct,
+                                "normal_retention_enabled": params.normal_retention_enabled,
+                                "normal_retention_until_enabled": params.normal_retention_until_enabled,
                                 "normal_dynamic_enabled": params.normal_dynamic_enabled,
                                 "sell_share_pct": params.normal_sell_pct,
                                 "hypothetical_quantity": sell_quantity_for_fraction(
@@ -1436,8 +1465,12 @@ class BacktestEngine:
                             "normal_activation_mfe_pct": observation.activation_mfe_pct,
                             "normal_atr_activation_multiplier": params.normal_atr_activation_multiplier,
                             "normal_atr_multiplier": params.normal_atr_multiplier,
+                            "normal_atr_activation_enabled": params.normal_atr_activation_enabled,
+                            "normal_atr_trail_enabled": params.normal_atr_trail_enabled,
                             "normal_retention_pct": params.normal_retention_pct,
                             "normal_retention_until_pct": params.normal_retention_until_pct,
+                            "normal_retention_enabled": params.normal_retention_enabled,
+                            "normal_retention_until_enabled": params.normal_retention_until_enabled,
                             "normal_dynamic_enabled": params.normal_dynamic_enabled,
                             "normal_trigger_peak_pct": position.peak_profit_pct,
                             "normal_rearm_after_pct": protect_rearm_mfe(
@@ -2462,8 +2495,12 @@ class BacktestEngine:
                                 atr_pct=atr_pct,
                                 atr_multiplier=params.normal_atr_multiplier,
                                 atr_activation_multiplier=params.normal_atr_activation_multiplier,
+                                atr_activation_enabled=params.normal_atr_activation_enabled,
+                                atr_trail_enabled=params.normal_atr_trail_enabled,
                                 retention_pct=params.normal_retention_pct,
                                 retention_until_pct=params.normal_retention_until_pct,
+                                retention_enabled=params.normal_retention_enabled,
+                                retention_until_enabled=params.normal_retention_until_enabled,
                                 previous_trigger_price=position.normal_trigger_price,
                             )
                             was_armed = position.normal_armed
@@ -2514,8 +2551,12 @@ class BacktestEngine:
                                         "normal_activation_mfe_pct": observation.activation_mfe_pct,
                                         "normal_atr_activation_multiplier": params.normal_atr_activation_multiplier,
                                         "normal_atr_multiplier": params.normal_atr_multiplier,
+                                        "normal_atr_activation_enabled": params.normal_atr_activation_enabled,
+                                        "normal_atr_trail_enabled": params.normal_atr_trail_enabled,
                                         "normal_retention_pct": params.normal_retention_pct,
                                         "normal_retention_until_pct": params.normal_retention_until_pct,
+                                        "normal_retention_enabled": params.normal_retention_enabled,
+                                        "normal_retention_until_enabled": params.normal_retention_until_enabled,
                                         "normal_dynamic_enabled": params.normal_dynamic_enabled,
                                         "sell_share_pct": params.normal_sell_pct,
                                         "hypothetical_quantity": sell_quantity_for_fraction(
@@ -2538,8 +2579,12 @@ class BacktestEngine:
                                     normal_activation_mfe_pct=observation.activation_mfe_pct,
                                     normal_atr_activation_multiplier=params.normal_atr_activation_multiplier,
                                     normal_atr_multiplier=params.normal_atr_multiplier,
+                                    normal_atr_activation_enabled=params.normal_atr_activation_enabled,
+                                    normal_atr_trail_enabled=params.normal_atr_trail_enabled,
                                     normal_retention_pct=params.normal_retention_pct,
                                     normal_retention_until_pct=params.normal_retention_until_pct,
+                                    normal_retention_enabled=params.normal_retention_enabled,
+                                    normal_retention_until_enabled=params.normal_retention_until_enabled,
                                     normal_dynamic_enabled=params.normal_dynamic_enabled,
                                     normal_trigger_peak_pct=position.peak_profit_pct,
                                     normal_rearm_after_pct=protect_rearm_mfe(

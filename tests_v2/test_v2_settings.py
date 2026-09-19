@@ -202,6 +202,99 @@ def test_no_two_cards_ever_share_a_grid_cell(ui_root):
             rules._close()
 
 
+def test_exit_sell_controls_are_in_em_card_and_save_separately(ui_root, monkeypatch):
+    from viking_v2.config import load_settings
+    from viking_v2.rules import window as rule_window
+
+    settings = load_settings("PAPER")
+    saved = []
+    monkeypatch.setattr(
+        rule_window, "save_settings",
+        lambda current, account_id: saved.append((current, account_id)),
+    )
+    rules = rule_window.RuleSettingsPopup(ui_root, settings, "PAPER", lambda: None)
+    try:
+        assert rules.exit_card.master is rules.exit_left_column
+        assert int(rules.exit_card.grid_info()["row"]) == 1
+        assert rules.sell_ema_fast.master.master is rules.exit_card
+        assert rules.sell_ema_slow.master.master is rules.exit_card
+        assert rules.buy_rsi_period.get() == rules.rsi_period.get()
+        assert rules.dynamic_settings_card.master is rules.protect_card
+        assert rules.normal_arm.master.master is rules.protect_card
+        assert rules.normal_giveback.master.master is rules.protect_card
+        assert rules.normal_sell.master.master is rules.protect_card
+        for entry in (
+            rules.normal_atr_activation_multiplier,
+            rules.normal_atr_multiplier,
+            rules.normal_retention_pct,
+            rules.normal_retention_until_pct,
+        ):
+            assert entry.master.master is rules.dynamic_settings_card
+        for key in (
+            "normal_atr_activation_enabled", "normal_atr_trail_enabled",
+            "normal_retention_enabled", "normal_retention_until_enabled",
+        ):
+            getattr(rules, key).set(False)
+
+        original_buy_ema = (rules.params.buy_ema_fast, rules.params.buy_ema_slow)
+        rules.sell_ema_fast.delete(0, "end")
+        rules.sell_ema_fast.insert(0, "4")
+        rules.sell_ema_slow.delete(0, "end")
+        rules.sell_ema_slow.insert(0, "8")
+        rules.sell_signal_rsi.set(False)
+        rules.shared_rsi_period.set("15")
+        rules.sellable_weak_exit_enabled.set(True)
+        rules.sellable_weak_exit_loss.delete(0, "end")
+        rules.sellable_weak_exit_loss.insert(0, "-1.5")
+        assert rules.buy_rsi_period.get() == rules.rsi_period.get() == "15"
+
+        rules.save()
+        assert saved and saved[0][1] == "PAPER"
+        values = saved[0][0].rule_parameters
+        assert (values["buy_ema_fast"], values["buy_ema_slow"]) == original_buy_ema
+        assert (values["sell_ema_fast"], values["sell_ema_slow"]) == (4, 8)
+        assert values["sell_signal_use_rsi"] is False
+        assert values["rsi_period"] == 15
+        assert values["sellable_weak_exit_enabled"] is True
+        assert values["sellable_weak_exit_loss_pct"] == -1.5
+        for key in (
+            "normal_atr_activation_enabled", "normal_atr_trail_enabled",
+            "normal_retention_enabled", "normal_retention_until_enabled",
+        ):
+            assert values[key] is False
+    finally:
+        if rules.top.winfo_exists():
+            rules._close()
+
+
+def test_backtest_exit_sell_controls_are_separate_and_round_trip(ui_root, monkeypatch):
+    from viking_v2.backtest.window import BacktestPopup
+    from viking_v2.config import load_settings
+
+    back = BacktestPopup(ui_root, load_settings("PAPER"), None)
+    try:
+        monkeypatch.setattr(back.data, "save_settings", lambda _values: None)
+        assert "sell_ema_fast" in back._rule_entries
+        assert "sell_ema_slow" in back._rule_entries
+        assert "sellable_weak_exit_loss_pct" in back._rule_entries
+        assert back.exit_card.winfo_exists()
+
+        back.sellable_weak_exit.set(True)
+        for variable in back.dynamic_subrules.values():
+            variable.set(False)
+        loss = back._rule_entries["sellable_weak_exit_loss_pct"]
+        loss.delete(0, "end")
+        loss.insert(0, "-1.5")
+        result = back._collect()
+        assert result.rule_parameters["sellable_weak_exit_enabled"] is True
+        assert result.rule_parameters["sellable_weak_exit_loss_pct"] == -1.5
+        assert len(back.dynamic_subrules) == 4
+        assert all(result.rule_parameters[key] is False for key in back.dynamic_subrules)
+    finally:
+        if back.top.winfo_exists():
+            back.close()
+
+
 def test_no_tab_is_wider_than_the_window_it_lives_in(ui_root):
     """A tab that needs more width than it has gets its right edge cut off.
 

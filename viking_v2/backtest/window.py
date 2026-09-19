@@ -100,14 +100,24 @@ PHASE_GROUPS = (
         ),
     ),
     (
-        "PHASE 2 · ĐIỂM MUA BÁN",
-        "BUY và SELL dùng độc lập các điều kiện EMA/RSI đang bật ở CÔNG TẮC DÙNG CHUNG.",
+        "PHASE 2 · ENTRY BUY",
+        "Chỉ cấu hình EMA BUY ở đây; chu kỳ RSI hiện dùng chung với E · EXIT SELL.",
         (
             ("EMA MUA NHANH", "buy_ema_fast", "EMA nhanh của tín hiệu mua."),
             ("EMA MUA CHẬM", "buy_ema_slow", "EMA chậm của tín hiệu mua."),
-            ("EMA BÁN NHANH", "sell_ema_fast", "EMA nhanh của tín hiệu thoát."),
-            ("EMA BÁN CHẬM", "sell_ema_slow", "EMA chậm của tín hiệu thoát."),
-            ("RSI", "rsi_period", "Số phiên tính RSI."),
+            ("RSI BUY / E", "rsi_period", "Một chu kỳ RSI dùng chung cho BUY và E trong backend hiện tại."),
+        ),
+    ),
+    (
+        "E · EXIT SELL",
+        "Rule thoát riêng: EMA SELL không thay đổi EMA BUY ở Phase 2.",
+        (
+            ("EMA SELL NHANH", "sell_ema_fast", "EMA nhanh của E chính."),
+            ("EMA SELL CHẬM", "sell_ema_slow", "EMA chậm của E chính."),
+            (
+                "E SỚM TỪ LỖ %", "sellable_weak_exit_loss_pct",
+                "Nhánh thử nghiệm sau T+2, mặc định -1%. Chỉ có tác dụng khi bật E SỚM bên dưới và chạy REPLAY.",
+            ),
         ),
     ),
     (
@@ -124,19 +134,28 @@ PHASE_GROUPS = (
             ),
             (
                 "PROTECT · START ATR ×", "normal_atr_activation_multiplier",
-                "DYNAMIC chỉ bắt đầu khi MFE đạt ATR14(T−1) × hệ số này.",
+                "ATR14(T−1): T−1 là phiên ngày đã đóng gần nhất, KHÔNG phải ATR trừ 1. "
+                "ATR theo đơn vị giá được chia cho giá đóng T−1 để ra ATR%. "
+                "Khi công tắc START ON: lãi cao nhất từ lúc mua phải đạt ATR% × hệ số ở ô này. "
+                "OFF: không đợi ATR; bắt đầu sau khi lệnh từng có lãi >0. Trong T+2 chưa bán được.",
             ),
             (
                 "PROTECT · TRAIL ATR ×", "normal_atr_multiplier",
-                "Sau khi DYNAMIC bắt đầu: khoảng thở từ peak = ATR14(T−1) × hệ số này.",
+                "ON: khoảng giá được lùi = ATR% phiên trước × hệ số, tính theo % của giá cao nhất đã thấy. "
+                "OFF: bỏ cách bảo vệ bằng ATR; START và GIỮ LÃI có công tắc riêng.",
             ),
             (
                 "PROTECT · GIỮ MFE %", "normal_retention_pct",
-                "Dưới ngưỡng GIỮ ĐẾN, khóa lại X% MFE. Nhập 0 để tắt V3.",
+                "ON: mức bảo vệ = giá mua + (giá cao nhất từng thấy − giá mua) × tỷ lệ này. "
+                "Mua 100, từng lên 104, giữ 87,5% ⇒ mức 103,5; không bảo đảm bán đúng 103,5. "
+                "OFF: bỏ cách giữ lãi; vẫn lưu con số để bật lại.",
             ),
             (
                 "PROTECT · GIỮ ĐẾN %", "normal_retention_until_pct",
-                "Chỉ siết thêm sàn giữ MFE khi còn dưới mức này; sàn đã khóa không hạ, sau đó ATR tiếp tục nâng sàn tới ARM.",
+                "ON và nhập 5: chỉ nâng theo GIỮ LÃI khi đỉnh lãi dưới 5% (mua 100 là chưa tới 105). "
+                "Từ 5% tới ARM 7%, mức cũ không hạ; ATR nếu ON vẫn có thể nâng. "
+                "OFF: GIỮ LÃI tiếp tục tới ARM 7%. Trong mẫu 7 mã hiện tại, mốc 5% cho PnL 599,53 triệu, "
+                "còn giữ tới ARM chỉ đạt 466,33 triệu; chưa xác nhận ngoài mẫu.",
             ),
             ("PROTECT · SELL %", "normal_sell_pct", "Mỗi lần AUTO bán X% lượng còn lại; SELL 100% làm REPEAT vô hiệu."),
             ("WHIPSAW · SỐ LẦN CẮT", "whipsaw_n", "EMA cắt qua lại bao nhiêu lần thì khóa mua mã đó."),
@@ -152,6 +171,8 @@ PHASE_PARAMETER_KEYS = frozenset(
 BACKTEST_RULE_KEYS = PHASE_PARAMETER_KEYS | {
     "exposure", "whipsaw_enabled", "loss_lock_hours", "max_positions",
     "normal_policy", "normal_dynamic_enabled", "normal_repeat_enabled",
+    "normal_atr_activation_enabled", "normal_atr_trail_enabled",
+    "normal_retention_enabled", "normal_retention_until_enabled",
     # Research setting round-trips through BacktestSettings; UI control follows
     # only if the T+2 candidate passes review.
     "normal_t2_reset_enabled",
@@ -641,7 +662,7 @@ class BacktestPopup:
             fg_color=COL_SLATE, hover_color=COL_RED, command=self._delete_scenario,
         ).grid(row=0, column=2, padx=5)
         self.compare_exit_button = ctk.CTkButton(
-            actions, text="SO SÁNH PROTECT OFF / ON / ALERT", width=290, height=36,
+            actions, text="SO SÁNH 4 MODE PROTECT", width=290, height=36,
             font=(FONT, 12, "bold"), fg_color=COL_BLUE,
             hover_color=COL_BLUE_HOVER, command=self.run_exit_comparison,
         )
@@ -1131,6 +1152,13 @@ class BacktestPopup:
         self.capital_entry.bind("<KeyRelease>", lambda _e: self._refresh_capital_hint())
 
         self._market_card(body, row_index=2)
+        exit_params = StaticRuleParameters.from_dict(self.config.rule_parameters)
+        self.sell_signal_ema = ctk.BooleanVar(value=exit_params.sell_signal_use_ema)
+        self.sell_signal_rsi = ctk.BooleanVar(value=exit_params.sell_signal_use_rsi)
+        self.sellable_weak_exit = ctk.BooleanVar(
+            value=exit_params.sellable_weak_exit_enabled,
+        )
+        self.dynamic_subrules: dict[str, ctk.BooleanVar] = {}
         row_index = 3
         for title, subtitle, fields in PHASE_GROUPS:
             card = self._card(body, title, subtitle)
@@ -1147,7 +1175,59 @@ class BacktestPopup:
                 entry.grid(row=0, column=1, sticky="e", padx=(8, 5))
                 self._hint(cell, help_text).grid(row=0, column=2, sticky="e")
                 self._rule_entries[key] = entry
-            ctk.CTkLabel(card, text="", height=6).grid(row=2 + (len(fields) + 1) // 2, column=0)
+            if title == "E · EXIT SELL":
+                self.exit_card = card
+                controls = ctk.CTkFrame(card, fg_color="transparent")
+                controls.grid(
+                    row=2 + (len(fields) + 1) // 2, column=0,
+                    columnspan=4, sticky="w", padx=16, pady=(6, 4),
+                )
+                for column, (label, variable) in enumerate((
+                    ("DÙNG EMA", self.sell_signal_ema),
+                    ("DÙNG RSI", self.sell_signal_rsi),
+                )):
+                    ctk.CTkCheckBox(
+                        controls, text=label, variable=variable, width=105,
+                        font=(FONT, 11, "bold"), fg_color=COL_GREEN,
+                        text_color=COL_TEXT,
+                    ).grid(row=0, column=column, padx=(0, 12))
+                ctk.CTkSwitch(
+                    controls, text="E SỚM SAU T+2", variable=self.sellable_weak_exit,
+                    font=(FONT, 12, "bold"), progress_color=COL_GREEN,
+                    text_color=COL_TEXT,
+                ).grid(row=0, column=2, padx=(12, 0))
+                self._hint(
+                    controls,
+                    "Nhánh thử nghiệm, mặc định OFF. Chỉ xét khi cổ bán được, lỗ chạm ngưỡng, "
+                    "EMA2 dưới EMA4 và RSI giảm. Backtest yêu cầu REPLAY intraday.",
+                ).grid(row=0, column=3, padx=10)
+            padding_row = 2 + (len(fields) + 1) // 2
+            if title == "E · EXIT SELL":
+                padding_row += 1
+            if any(key == "normal_atr_activation_multiplier" for _label, key, _help in fields):
+                toggle_hints = (
+                    ("normal_atr_activation_enabled", "START ATR", "OFF: không đợi ATR; bắt đầu sau khi lệnh từng có lãi >0. ATR14(T−1) là ATR 14 phiên ngày đã đóng tới hết phiên trước, không phải ATR trừ 1."),
+                    ("normal_atr_trail_enabled", "TRAIL ATR", "OFF: bỏ mức bảo vệ tính từ ATR; GIỮ LÃI vẫn có thể chạy."),
+                    ("normal_retention_enabled", "GIỮ LÃI", "OFF: bỏ mức bảo vệ giữ một phần lãi cao nhất; con số phần trăm vẫn được lưu."),
+                    ("normal_retention_until_enabled", "MỐC GIỮ ĐẾN", "OFF: bỏ mốc 5%; nếu GIỮ LÃI ON thì tiếp tục nâng mức bảo vệ tới ARM 7%."),
+                )
+                for index, (key, label, hint) in enumerate(toggle_hints):
+                    grid_row, grid_col = divmod(index, 2)
+                    group = ctk.CTkFrame(card, fg_color="transparent")
+                    group.grid(
+                        row=padding_row + grid_row, column=grid_col * 2,
+                        columnspan=2, sticky="w", padx=(16, 12), pady=4,
+                    )
+                    variable = ctk.BooleanVar(value=bool(getattr(exit_params, key)))
+                    self.dynamic_subrules[key] = variable
+                    ctk.CTkSwitch(
+                        group, text=label, variable=variable,
+                        font=(FONT, 11, "bold"), progress_color=COL_GREEN,
+                        text_color=COL_TEXT,
+                    ).pack(side="left")
+                    self._hint(group, hint).pack(side="left", padx=(5, 0))
+                padding_row += 2
+            ctk.CTkLabel(card, text="", height=6).grid(row=padding_row, column=0)
             row_index += 1
 
         self._cost_card(body, row_index)
@@ -1274,14 +1354,10 @@ class BacktestPopup:
         signal_toggle_row.grid(row=3, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
         self.buy_signal_ema = ctk.BooleanVar(value=params.buy_signal_use_ema)
         self.buy_signal_rsi = ctk.BooleanVar(value=params.buy_signal_use_rsi)
-        self.sell_signal_ema = ctk.BooleanVar(value=params.sell_signal_use_ema)
-        self.sell_signal_rsi = ctk.BooleanVar(value=params.sell_signal_use_rsi)
-        self._label(signal_toggle_row, "TÍN HIỆU", 13, bold=True).grid(row=0, column=0, sticky="w", padx=(0, 14))
+        self._label(signal_toggle_row, "TÍN HIỆU BUY", 13, bold=True).grid(row=0, column=0, sticky="w", padx=(0, 14))
         for column, (label, variable) in enumerate((
             ("BUY EMA", self.buy_signal_ema),
             ("BUY RSI", self.buy_signal_rsi),
-            ("SELL EMA", self.sell_signal_ema),
-            ("SELL RSI", self.sell_signal_rsi),
         ), start=1):
             ctk.CTkCheckBox(
                 signal_toggle_row, text=label, variable=variable, width=96,
@@ -1456,6 +1532,7 @@ class BacktestPopup:
         self.buy_signal_rsi.set(bool(params.get("buy_signal_use_rsi", True)))
         self.sell_signal_ema.set(bool(params.get("sell_signal_use_ema", True)))
         self.sell_signal_rsi.set(bool(params.get("sell_signal_use_rsi", True)))
+        self.sellable_weak_exit.set(bool(params.get("sellable_weak_exit_enabled", False)))
         self.buy_confirmation.set(bool(params.get("buy_confirmation_enabled", False)))
         self.buy_confirmation_ema.set(bool(params.get("buy_confirmation_require_ema", True)))
         self.buy_confirmation_rsi.set(bool(params.get("buy_confirmation_require_rsi", True)))
@@ -1466,6 +1543,8 @@ class BacktestPopup:
         self.normal_policy.set(normal_policy if normal_policy in {"AUTO", "ALERT"} else "AUTO")
         self.normal_dynamic.set(bool(params.get("normal_dynamic_enabled", False)))
         self.normal_repeat.set(bool(params.get("normal_repeat_enabled", False)))
+        for key, variable in self.dynamic_subrules.items():
+            variable.set(bool(params.get(key, True)))
         for key, default in (("start", "14:00"),):
             entry = getattr(self, f"buy_window_{key}")
             entry.delete(0, "end")
@@ -1614,6 +1693,7 @@ class BacktestPopup:
         params["buy_signal_use_rsi"] = bool(self.buy_signal_rsi.get())
         params["sell_signal_use_ema"] = bool(self.sell_signal_ema.get())
         params["sell_signal_use_rsi"] = bool(self.sell_signal_rsi.get())
+        params["sellable_weak_exit_enabled"] = bool(self.sellable_weak_exit.get())
         try:
             confirmation_minutes = int(float(self.buy_confirmation_minutes.get().strip() or 5))
         except ValueError as exc:
@@ -1635,6 +1715,8 @@ class BacktestPopup:
         params["normal_policy"] = self.normal_policy.get()
         params["normal_dynamic_enabled"] = bool(self.normal_dynamic.get())
         params["normal_repeat_enabled"] = bool(self.normal_repeat.get())
+        for key, variable in self.dynamic_subrules.items():
+            params[key] = bool(variable.get())
         params.pop("buy_window_end", None)
         try:
             params["max_positions"] = int(float(self.mode1_slots.get().strip() or 5))
@@ -1780,7 +1862,7 @@ class BacktestPopup:
         self._start(MODE_2, [job(row) for row in rows])
 
     def run_exit_comparison(self) -> None:
-        """Run PROTECT DYNAMIC OFF, DYNAMIC ON, and ALERT independently."""
+        """Run AUTO/ALERT × DYNAMIC OFF/ON independently."""
         rows = self._selected_scenarios()
         if not rows:
             self.tabs.set(MODE_2)

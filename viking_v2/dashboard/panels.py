@@ -1214,6 +1214,21 @@ class DashboardPanelsMixin:
         normal_retention_until_pct = float(
             params.get("normal_retention_until_pct", 0.0) or 0.0
         )
+        start_enabled = bool(params.get("normal_atr_activation_enabled", True))
+        atr_enabled = bool(params.get("normal_atr_trail_enabled", True))
+        keep_enabled = bool(normal_dynamic and params.get("normal_retention_enabled", True) and normal_retention_pct > 0)
+        until_enabled = bool(params.get("normal_retention_until_enabled", True))
+        dynamic_summary = "DYN OFF"
+        if normal_dynamic:
+            start_label = f"START×{normal_atr_activation_multiplier:g}" if start_enabled else "START OFF"
+            atr_label = f"ATR×{normal_atr_multiplier:g}" if atr_enabled else "ATR OFF"
+            keep_label = f"GIỮ {normal_retention_pct:g}%" if keep_enabled else "GIỮ OFF"
+            until_label = (
+                f"→{normal_retention_until_pct:g}%" if until_enabled else "→ARM"
+            ) if keep_enabled else ""
+            dynamic_summary = (
+                f"DYN ON · {start_label} · {atr_label} · {keep_label}{until_label}"
+            )
         normal_repeat = bool(params.get("normal_repeat_enabled", False))
         normal_sell = float(params.get("normal_sell_pct", 100.0) or 100.0)
         normal_price = entry_price * (1.0 + normal_arm / 100.0) if entry_price > 0 else 0.0
@@ -1230,9 +1245,7 @@ class DashboardPanelsMixin:
         self.preview_normal_detail.configure(
             text=(
                 f"{normal_policy} · ARM {normal_arm:g}% · TRAIL {normal_giveback:g}% · SELL {normal_sell:g}%"
-                f" · DYN {'ON' if normal_dynamic else 'OFF'}"
-                f" · START×{normal_atr_activation_multiplier:g} · ATR×{normal_atr_multiplier:g}"
-                f" · GIỮ {normal_retention_pct:g}%→{normal_retention_until_pct:g}%"
+                f" · {dynamic_summary}"
                 f" · REPEAT {'OFF' if normal_sell >= 100 else 'ON' if normal_repeat else 'OFF'}"
             ),
         )
@@ -1280,11 +1293,15 @@ class DashboardPanelsMixin:
                 )
             )
             if effective_trail is not None:
+                current_keep = (
+                    f"GIỮ {_number(decision_details.get('normal_retention_pct')):g}%"
+                    if keep_enabled else "GIỮ OFF"
+                )
                 self.preview_normal_detail.configure(
                     text=(
                         f"{normal_policy} · MFE {_number(decision_details.get('normal_mfe_pct')):.1f}%"
                         f" · TRAIL {_number(effective_trail):.1f}%"
-                        f" · GIỮ {_number(decision_details.get('normal_retention_pct')):g}%"
+                        f" · {current_keep}"
                         f" · SELL {normal_sell:g}%"
                     ),
                 )

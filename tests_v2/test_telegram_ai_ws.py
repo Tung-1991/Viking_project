@@ -21,6 +21,39 @@ class Telegram:
         self.sent.append((str(chat_id), text))
 
 
+def test_protect_alert_names_the_enabled_dynamic_layers_without_sending_orders():
+    tele = Telegram()
+    service = SignalTelegramService(tele, chat_id="7")
+    assert service.notify_protect_alert(
+        symbol="VIX", price=14.0, mfe_pct=5.5, peak_price=14.25,
+        protect_price=14.06875, sell_pct=100, dynamic=True,
+        atr_pct=4.118, atr_activation_multiplier=0.6,
+        atr_multiplier=0.8, atr_activation_enabled=False,
+        atr_trail_enabled=False, retention_pct=87.5,
+        retention_until_pct=5, retention_enabled=True,
+        retention_until_enabled=False,
+    )
+    message = tele.sent[0][1]
+    assert "START ATR: OFF · TRAIL ATR: OFF" in message
+    assert "Giữ 87.5% lãi cao nhất tới ARM" in message
+    assert "ALERT chỉ ghi nhận, không đặt lệnh" in message
+
+
+def test_protect_alert_hides_dormant_layers_when_dynamic_is_off():
+    tele = Telegram()
+    service = SignalTelegramService(tele, chat_id="7")
+    assert service.notify_protect_alert(
+        symbol="VIX", price=14.0, mfe_pct=7.0, peak_price=14.25,
+        protect_price=13.9, sell_pct=100, dynamic=False,
+        atr_pct=4.118, atr_activation_multiplier=0.6,
+        atr_multiplier=0.8, retention_pct=87.5,
+        retention_until_pct=5,
+    )
+    message = tele.sent[0][1]
+    assert "START ATR: OFF · TRAIL ATR: OFF" in message
+    assert "Giữ lãi: OFF" in message
+
+
 def test_telegram_sends_one_buy_and_only_its_matching_closed_summary():
     tele = Telegram()
     service = SignalTelegramService(tele, chat_id="7")

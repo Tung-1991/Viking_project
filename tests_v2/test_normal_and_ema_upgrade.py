@@ -219,6 +219,99 @@ def test_dynamic_v3_settings_validate_the_retention_band() -> None:
         ).validate()
 
 
+def test_dynamic_subrule_switches_keep_old_settings_and_change_each_layer() -> None:
+    legacy = StaticRuleParameters.from_dict({
+        "normal_dynamic_enabled": True,
+        "normal_atr_activation_multiplier": 0.6,
+        "normal_atr_multiplier": 0.8,
+        "normal_retention_pct": 87.5,
+        "normal_retention_until_pct": 5,
+    })
+    assert all((
+        legacy.normal_atr_activation_enabled,
+        legacy.normal_atr_trail_enabled,
+        legacy.normal_retention_enabled,
+        legacy.normal_retention_until_enabled,
+    ))
+    assert legacy.to_dict()["normal_retention_until_enabled"] is True
+
+    common = dict(
+        dynamic_enabled=True, sl_price=97, atr_pct=4,
+        atr_multiplier=0.8, atr_activation_multiplier=0.6,
+        retention_pct=87.5, retention_until_pct=5,
+    )
+    waiting = protect_level(100, 1, 7, 2, **common)
+    immediate = protect_level(
+        100, 1, 7, 2, **common,
+        atr_activation_enabled=False, atr_trail_enabled=False,
+    )
+    assert waiting.active is False
+    assert immediate.active is True
+    assert immediate.activation_mfe_pct == 0
+    assert immediate.trigger_price == pytest.approx(100.875)
+
+    atr_only = protect_level(
+        100, 4, 7, 2, **common, retention_enabled=False,
+    )
+    retention_only = protect_level(
+        100, 4, 7, 2, **common, atr_trail_enabled=False,
+    )
+    assert atr_only.trigger_price == pytest.approx(100.672)
+    assert retention_only.trigger_price == pytest.approx(103.5)
+    assert retention_only.effective_trail_pct == 0
+
+    cutoff_at_five = protect_level(
+        100, 6, 7, 2, **common, atr_trail_enabled=False,
+        previous_trigger_price=104.2875,
+    )
+    continue_to_arm = protect_level(
+        100, 6, 7, 2, **common, atr_trail_enabled=False,
+        retention_until_enabled=False, previous_trigger_price=104.2875,
+    )
+    assert cutoff_at_five.trigger_price == pytest.approx(104.2875)
+    assert continue_to_arm.trigger_price == pytest.approx(105.25)
+
+    no_pre_arm_rule = protect_level(
+        100, 4, 7, 2, **common,
+        atr_trail_enabled=False, retention_enabled=False,
+        previous_trigger_price=103.5,
+    )
+    after_arm = protect_level(
+        100, 7, 7, 2, **common,
+        atr_trail_enabled=False, retention_enabled=False,
+    )
+    assert no_pre_arm_rule.active is False
+    assert no_pre_arm_rule.trigger_price == 0
+    assert after_arm.trigger_price == pytest.approx(104.86)
+    assert after_arm.state == "ARM"
+
+
+def test_live_rule_can_use_retention_without_start_or_trail_atr() -> None:
+    params = StaticRuleParameters(
+        normal_dynamic_enabled=True,
+        normal_atr_activation_enabled=False,
+        normal_atr_trail_enabled=False,
+        normal_retention_enabled=True,
+        normal_retention_pct=75,
+        normal_retention_until_enabled=False,
+        normal_arm_pct=7,
+    )
+    context = {
+        "symbol": "FPT", "bars": _atr_bars(102),
+        "confirmed_market_state": "UPTREND",
+    }
+    position = {"position": _position(current_price=102, peak_profit_pct=4)}
+    sold = StaticRule(params).evaluate(context, position)
+    assert sold.reason == "NORMAL_PROTECTION"
+    assert sold.details["normal_trigger_price"] == pytest.approx(103)
+    assert sold.details["normal_atr_trail_enabled"] is False
+
+    params.normal_retention_enabled = False
+    waiting = StaticRule(params).evaluate(context, position)
+    assert waiting.action == "WAIT"
+    assert waiting.details["normal_state"] == "WAIT"
+
+
 @pytest.mark.parametrize(
     ("mfe", "effective_trail", "trigger_price", "state", "active"),
     [
@@ -613,7 +706,7 @@ def test_realtime_bucket_and_setting_normalization() -> None:
     assert AppSettings.from_dict({"realtime_indicator_interval": "bad"}).realtime_indicator_interval == "TICK"
 
 
-def test_exit_comparison_builds_dynamic_off_on_and_alert() -> None:
+def test_exit_comparison_builds_all_four_policy_and_dynamic_modes() -> None:
     scenario = BacktestScenario(
         "CTS", ["CTS"], "2026-03-14", "2026-08-20", "ACCUMULATION",
     )
@@ -621,16 +714,18 @@ def test_exit_comparison_builds_dynamic_off_on_and_alert() -> None:
         scenario, StaticRuleParameters(normal_arm_pct=7, take_profit_pct=7).to_dict(),
     )
     assert [item.em_modes for item, _params in variants] == [
-        ["NORMAL", "IND_EXIT"], ["NORMAL", "IND_EXIT"], ["NORMAL", "IND_EXIT"],
+        ["NORMAL", "IND_EXIT"], ["NORMAL", "IND_EXIT"],
+        ["NORMAL", "IND_EXIT"], ["NORMAL", "IND_EXIT"],
     ]
     assert [params["normal_policy"] for _item, params in variants] == [
-        "AUTO", "AUTO", "ALERT",
+        "AUTO", "AUTO", "ALERT", "ALERT",
     ]
     assert [params["normal_dynamic_enabled"] for _item, params in variants] == [
-        False, True, True,
+        False, True, False, True,
     ]
     assert [item.name.rsplit(" · ", 1)[-1] for item, _params in variants] == [
-        "E + PROTECT DYNAMIC OFF", "E + PROTECT DYNAMIC ON", "E + PROTECT ALERT",
+        "E + PROTECT DYNAMIC OFF", "E + PROTECT DYNAMIC ON",
+        "E + PROTECT ALERT DYNAMIC OFF", "E + PROTECT ALERT DYNAMIC ON",
     ]
 
 

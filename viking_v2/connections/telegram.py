@@ -206,22 +206,37 @@ class SignalTelegramService:
         atr_pct: float = 0.0,
         atr_activation_multiplier: float = 0.0,
         atr_multiplier: float = 0.0,
+        atr_activation_enabled: bool = True,
+        atr_trail_enabled: bool = True,
         retention_pct: float = 0.0,
         retention_until_pct: float = 0.0,
+        retention_enabled: bool = True,
+        retention_until_enabled: bool = True,
     ) -> bool:
         """Dry-run notification emitted exactly where AUTO would sell."""
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return False
+        start_label = (
+            f"×{float(atr_activation_multiplier):g}"
+            if dynamic and atr_activation_enabled else "OFF"
+        )
+        trail_label = (
+            f"×{float(atr_multiplier):g}" if dynamic and atr_trail_enabled else "OFF"
+        )
+        keep_label = (
+            f"Giữ {float(retention_pct):g}% lãi cao nhất "
+            + (f"tới MFE {float(retention_until_pct):g}%" if retention_until_enabled else "tới ARM")
+            if dynamic and retention_enabled and float(retention_pct) > 0 else "Giữ lãi: OFF"
+        )
         return self._send(
             "\n".join((
                 f"🟠 PROTECT ALERT · {symbol}",
                 f"Giá: {self._price(price)} · MFE {float(mfe_pct):+.2f}%",
                 f"Peak: {self._price(peak_price)} · PROTECT: {self._price(protect_price)}",
-                f"ATR14 T-1: {float(atr_pct):.2f}% · START×{float(atr_activation_multiplier):g}"
-                f" · TRAIL×{float(atr_multiplier):g}",
-                f"V3: giữ {float(retention_pct):g}% MFE tới {float(retention_until_pct):g}%"
-                if float(retention_pct) > 0 else "V3: OFF",
+                f"ATR14 (nến ngày đã đóng tới phiên trước): {float(atr_pct):.2f}%",
+                f"START ATR: {start_label} · TRAIL ATR: {trail_label}",
+                keep_label,
                 f"Giả định bán {float(sell_pct):g}% · DYNAMIC {'ON' if dynamic else 'OFF'}",
                 "ALERT chỉ ghi nhận, không đặt lệnh.",
             ))

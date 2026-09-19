@@ -1119,12 +1119,16 @@ class DashboardActionsMixin:
                     "atr_multiplier": float(
                         details.get("normal_atr_multiplier", 0.0) or 0.0
                     ),
+                    "atr_activation_enabled": bool(details.get("normal_atr_activation_enabled", True)),
+                    "atr_trail_enabled": bool(details.get("normal_atr_trail_enabled", True)),
                     "retention_pct": float(
                         details.get("normal_retention_pct", 0.0) or 0.0
                     ),
                     "retention_until_pct": float(
                         details.get("normal_retention_until_pct", 0.0) or 0.0
                     ),
+                    "retention_enabled": bool(details.get("normal_retention_enabled", True)),
+                    "retention_until_enabled": bool(details.get("normal_retention_until_enabled", True)),
                 },
                 daemon=True,
             ).start()
@@ -1586,6 +1590,27 @@ class DashboardActionsMixin:
         normal_retention_until_pct = float(
             params.get("normal_retention_until_pct", 0.0) or 0.0
         )
+        dynamic_summary = "DYN OFF"
+        if normal_dynamic:
+            start_label = (
+                f"START×{normal_atr_activation_multiplier:g}"
+                if params.get("normal_atr_activation_enabled", True) else "START OFF"
+            )
+            atr_label = (
+                f"ATR×{normal_atr_multiplier:g}"
+                if params.get("normal_atr_trail_enabled", True) else "ATR OFF"
+            )
+            keeping = bool(params.get("normal_retention_enabled", True) and normal_retention_pct > 0)
+            keep_label = (
+                f"GIỮ {normal_retention_pct:g}%"
+                if keeping
+                else "GIỮ OFF"
+            )
+            until_label = (
+                f"→{normal_retention_until_pct:g}%"
+                if params.get("normal_retention_until_enabled", True) else "→ARM"
+            ) if keeping else ""
+            dynamic_summary = f"DYN ON · {start_label} · {atr_label} · {keep_label}{until_label}"
         normal_repeat = bool(params.get("normal_repeat_enabled", False)) and normal_share < 100.0
 
         top = ctk.CTkToplevel(self)
@@ -1708,9 +1733,7 @@ class DashboardActionsMixin:
             (
                 "PROTECT",
                 f"{normal_policy} · ARM {normal_arm:g}% · TRAIL {normal_giveback:g}% · SELL {normal_share:g}%"
-                f" · DYN {'ON' if normal_dynamic else 'OFF'}"
-                f" · START×{normal_atr_activation_multiplier:g} · ATR×{normal_atr_multiplier:g}"
-                f" · GIỮ {normal_retention_pct:g}%→{normal_retention_until_pct:g}%"
+                f" · {dynamic_summary}"
                 f" · REPEAT {'ON' if normal_repeat else 'OFF'}",
             ),
             ("E", "Tín hiệu SELL · bán hết phần còn lại"),

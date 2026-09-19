@@ -214,7 +214,6 @@ class InfoPopup:
         ) or "OFF"
         phase2_items = [
             ("BUY", buy_conditions, PALETTE["GREEN"]),
-            ("E", sell_conditions, PALETTE["RED"]),
             ("TÍN HIỆU", signal_mode, PALETTE["TEXT"]),
             (
                 "XÁC NHẬN BUY",
@@ -232,6 +231,14 @@ class InfoPopup:
                 PALETTE["TEXT"],
             ),
         ]
+        dynamic_summary = "DYN OFF"
+        if p.normal_dynamic_enabled:
+            start = f"START×{p.normal_atr_activation_multiplier:g}" if p.normal_atr_activation_enabled else "START OFF"
+            atr = f"ATR×{p.normal_atr_multiplier:g}" if p.normal_atr_trail_enabled else "ATR OFF"
+            keeping = p.normal_retention_enabled and p.normal_retention_pct > 0
+            keep = f"GIỮ {p.normal_retention_pct:g}%" if keeping else "GIỮ OFF"
+            until = (f"→{p.normal_retention_until_pct:g}%" if p.normal_retention_until_enabled else "→ARM") if keeping else ""
+            dynamic_summary = f"DYN ON · {start} · {atr} · {keep}{until}"
         phase3_items = [
             ("VỊ THẾ", str(p.max_positions), PALETTE["TEXT"]),
             ("SL / RE", f"{p.initial_sl_pct:g}% / {p.reentry_sl_pct:g}%", PALETTE["RED"]),
@@ -243,12 +250,18 @@ class InfoPopup:
             (
                 "PROTECT",
                 f"{p.normal_policy} · ARM {p.normal_arm_pct:g}% · TRAIL {p.normal_giveback_pct:g}%"
-                f" · SELL {p.normal_sell_pct:g}% · DYN {self._on_off(p.normal_dynamic_enabled)}"
-                f" · START×{p.normal_atr_activation_multiplier:g}"
-                f" · ATR×{p.normal_atr_multiplier:g}"
-                f" · GIỮ {p.normal_retention_pct:g}%→{p.normal_retention_until_pct:g}%"
+                f" · SELL {p.normal_sell_pct:g}% · {dynamic_summary}"
                 f" · REPEAT {self._on_off(p.normal_repeat_enabled and p.normal_sell_pct < 100)}",
                 PALETTE["TEXT"],
+            ),
+        ]
+        exit_items = [
+            ("E CHÍNH", sell_conditions, PALETTE["RED"]),
+            (
+                "E SỚM T+2",
+                f"ON · LỖ {p.sellable_weak_exit_loss_pct:g}%"
+                if p.sellable_weak_exit_enabled else "OFF",
+                PALETTE["WARN"],
             ),
             ("E/M BẬT", self._em_name(em_modes), PALETTE["TEXT"]),
         ]
@@ -258,17 +271,22 @@ class InfoPopup:
                 columns=2, grid_column=0, grid_span=1,
             )
             self._section(
-                body, row, "PHASE 2 · BUY / E", phase2_items,
+                body, row, "PHASE 2 · ENTRY BUY", phase2_items,
                 columns=2, grid_column=1, grid_span=1,
             )
             self._section(
                 body, row + 1, "PHASE 3 · VỐN / THOÁT", phase3_items,
                 columns=2, grid_column=0, grid_span=1,
             )
+            self._section(
+                body, row + 1, "E · EXIT SELL", exit_items,
+                columns=2, grid_column=1, grid_span=1,
+            )
             return row + 1
         row = self._section(body, row, "PHASE 1 · VNINDEX 1D", phase1_items)
-        row = self._section(body, row, "PHASE 2 · BUY / E", phase2_items)
-        return self._section(body, row, "PHASE 3 · VỐN / THOÁT", phase3_items)
+        row = self._section(body, row, "PHASE 2 · ENTRY BUY", phase2_items)
+        row = self._section(body, row, "PHASE 3 · VỐN / THOÁT", phase3_items)
+        return self._section(body, row, "E · EXIT SELL", exit_items)
 
     def _render_real(self) -> None:
         body = self._clear("REAL")

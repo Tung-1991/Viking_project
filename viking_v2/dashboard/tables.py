@@ -279,6 +279,34 @@ class DashboardTablesMixin:
                     "normal_retention_until_pct",
                     params.get("normal_retention_until_pct", 0.0),
                 )
+                dynamic_active = bool(decision_details.get(
+                    "normal_dynamic_enabled", params.get("normal_dynamic_enabled", False),
+                ))
+                start_active = dynamic_active and bool(decision_details.get(
+                    "normal_atr_activation_enabled", params.get("normal_atr_activation_enabled", True),
+                ))
+                atr_active = dynamic_active and bool(decision_details.get(
+                    "normal_atr_trail_enabled", params.get("normal_atr_trail_enabled", True),
+                ))
+                keep_active = dynamic_active and bool(decision_details.get(
+                    "normal_retention_enabled", params.get("normal_retention_enabled", True),
+                )) and _number(protect_retention) > 0
+                until_active = bool(decision_details.get(
+                    "normal_retention_until_enabled", params.get("normal_retention_until_enabled", True),
+                ))
+                start_text = (
+                    f"START {_number(protect_activation_mfe):.1f}% ({_number(protect_atr_activation_multiplier):g}×ATR)"
+                    if start_active else "START OFF"
+                )
+                atr_text = (
+                    f"ATR TRAIL {_number(protect_atr):.1f}%×{_number(protect_atr_multiplier):g}"
+                    if atr_active else "ATR TRAIL OFF"
+                )
+                until_text = f"{_number(protect_retention_until):g}%" if until_active else "ARM"
+                keep_text = (
+                    f"GIỮ {_number(protect_retention):g}%→{until_text}"
+                    if keep_active else "GIỮ OFF"
+                )
                 protect_sell = decision_details.get(
                     "sell_share_pct", params.get("normal_sell_pct", 100.0),
                 )
@@ -342,10 +370,9 @@ class DashboardTablesMixin:
                         f"PROTECT {protect_mode}/{normal_state}"
                         f"·MFE {_number(protect_mfe):.1f}%"
                         f"·TRAIL {_number(protect_trail):.1f}%"
-                        f"·START {_number(protect_activation_mfe):.1f}%"
-                        f" ({_number(protect_atr_activation_multiplier):g}×ATR)"
-                        f"·ATR TRAIL {_number(protect_atr):.1f}%×{_number(protect_atr_multiplier):g}"
-                        f"·GIỮ {_number(protect_retention):g}%→{_number(protect_retention_until):g}%"
+                        f"·{start_text}"
+                        f"·{atr_text}"
+                        f"·{keep_text}"
                         f"·{_display_price(protect_price)}"
                         f"·SELL {_number(protect_sell):g}%"
                     ),

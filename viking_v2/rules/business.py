@@ -335,10 +335,15 @@ class StaticRuleParameters:
     # not also widen the floor once protection is active.
     normal_atr_activation_multiplier: float = 0.6
     normal_atr_multiplier: float = 0.6
+    # Explicit switches preserve the historical behaviour for saved accounts.
+    normal_atr_activation_enabled: bool = True
+    normal_atr_trail_enabled: bool = True
     # Percentage of running MFE retained by the pre-ARM floor.  Zero keeps
     # the ATR-only V2 formula; positive values enable the V3 profit floor.
     normal_retention_pct: float = 0.0
     normal_retention_until_pct: float = 7.0
+    normal_retention_enabled: bool = True
+    normal_retention_until_enabled: bool = True
     # NORMAL remains the compatibility key; operators only see PROTECT.
     normal_policy: str = "AUTO"
     normal_dynamic_enabled: bool = False
@@ -463,7 +468,8 @@ class StaticRuleParameters:
         if not 0 <= self.normal_retention_pct <= 100:
             raise ValueError("Tỷ lệ giữ MFE của PROTECT phải từ 0 đến 100%")
         if (
-            self.normal_retention_pct > 0
+            self.normal_retention_enabled and self.normal_retention_until_enabled
+            and self.normal_retention_pct > 0
             and not 0 < self.normal_retention_until_pct <= self.normal_arm_pct
         ):
             raise ValueError("Ngưỡng giữ MFE phải nằm từ 0 đến ARM")
@@ -657,15 +663,20 @@ def protect_level(
     atr_pct: float = 0.0,
     atr_multiplier: float = 0.6,
     atr_activation_multiplier: float | None = None,
+    atr_activation_enabled: bool = True,
+    atr_trail_enabled: bool = True,
     retention_pct: float = 0.0,
     retention_until_pct: float | None = None,
+    retention_enabled: bool = True,
+    retention_until_enabled: bool = True,
     previous_trigger_price: float = 0.0,
 ) -> ProtectLevel:
     """Calculate PROTECT from running MFE without using future data.
 
     At/above ARM, TRAIL remains the configured percentage drawdown from peak.
-    Below ARM, DYNAMIC uses ``ATR(14, T-1) × multiplier`` and only activates
-    after MFE has travelled its independently configured activation distance.
+    Below ARM, each enabled floor contributes independently.  START can gate
+    both floors; with START off they begin after the first observed gain.
+    With the retention cutoff off, retention continues until ARM.
     ``None`` preserves the V2 contract by reusing the trail multiplier.  A
     level below the actual SL is informational only.  A previously active
     level never moves down when ATR changes on a later session.
@@ -683,20 +694,32 @@ def protect_level(
         if atr_activation_multiplier is None
         else atr_activation_multiplier
     )
-    activation_distance = max(0.0, float(atr_pct or 0.0)) * max(
-        0.0, float(activation_multiplier or 0.0),
+    activation_distance = (
+        max(0.0, float(atr_pct or 0.0)) * max(0.0, float(activation_multiplier or 0.0))
+        if atr_activation_enabled else 0.0
     )
-    effective = trail if armed or not dynamic_enabled else atr_distance
+    atr_floor_enabled = bool(dynamic_enabled and atr_trail_enabled and float(atr_pct or 0.0) > 0)
+    retention_floor_enabled = bool(
+        dynamic_enabled and retention_enabled and float(retention_pct or 0.0) > 0
+    )
+    any_dynamic_floor = atr_floor_enabled or retention_floor_enabled
+    effective = trail if armed or not dynamic_enabled else atr_distance if atr_floor_enabled else 0.0
     peak_price = entry * (1.0 + mfe / 100.0) if entry > 0 else 0.0
-    calculated = peak_price * (1.0 - effective / 100.0) if peak_price > 0 else 0.0
-    retention = min(100.0, max(0.0, float(retention_pct or 0.0)))
+    calculated = (
+        peak_price * (1.0 - effective / 100.0)
+        if peak_price > 0 and (armed or atr_floor_enabled) else 0.0
+    )
+    retention = (
+        min(100.0, max(0.0, float(retention_pct or 0.0)))
+        if retention_floor_enabled else 0.0
+    )
     retention_until = (
         arm
-        if retention_until_pct is None
+        if not retention_until_enabled or retention_until_pct is None
         else min(arm, max(0.0, float(retention_until_pct or 0.0)))
     )
     if (
-        dynamic_enabled and not armed and retention > 0 and entry > 0
+        retention_floor_enabled and not armed and retention > 0 and entry > 0
         and mfe + 1e-9 < retention_until
     ):
         retained_profit_pct = mfe * retention / 100.0
@@ -709,13 +732,17 @@ def protect_level(
     significant = bool(
         armed
         or (
-            dynamic_enabled
-            and activation_distance > 0
-            and mfe + 1e-9 >= activation_distance
+            any_dynamic_floor and (
+                (atr_activation_enabled and activation_distance > 0
+                 and mfe + 1e-9 >= activation_distance)
+                or (not atr_activation_enabled and mfe > 0)
+            )
         )
-        or (dynamic_enabled and previous > sl_floor + 1e-9)
+        or (any_dynamic_floor and previous > sl_floor + 1e-9)
     )
-    trigger = max(calculated, previous) if significant else previous
+    trigger = max(calculated, previous) if significant else (
+        previous if any_dynamic_floor else 0.0
+    )
     trigger_profit = ((trigger / entry) - 1.0) * 100.0 if entry > 0 else 0.0
     active = bool(
         trigger > 0
@@ -1139,8 +1166,12 @@ class StaticRule:
                 atr_pct=atr_pct,
                 atr_multiplier=self.params.normal_atr_multiplier,
                 atr_activation_multiplier=self.params.normal_atr_activation_multiplier,
+                atr_activation_enabled=self.params.normal_atr_activation_enabled,
+                atr_trail_enabled=self.params.normal_atr_trail_enabled,
                 retention_pct=self.params.normal_retention_pct,
                 retention_until_pct=self.params.normal_retention_until_pct,
+                retention_enabled=self.params.normal_retention_enabled,
+                retention_until_enabled=self.params.normal_retention_until_enabled,
                 previous_trigger_price=float(
                     position.get("normal_trigger_price", 0.0) or 0.0
                 ),
@@ -1155,8 +1186,12 @@ class StaticRule:
                 normal_activation_mfe_pct=level.activation_mfe_pct,
                 normal_atr_activation_multiplier=self.params.normal_atr_activation_multiplier,
                 normal_atr_multiplier=self.params.normal_atr_multiplier,
+                normal_atr_activation_enabled=self.params.normal_atr_activation_enabled,
+                normal_atr_trail_enabled=self.params.normal_atr_trail_enabled,
                 normal_retention_pct=self.params.normal_retention_pct,
                 normal_retention_until_pct=self.params.normal_retention_until_pct,
+                normal_retention_enabled=self.params.normal_retention_enabled,
+                normal_retention_until_enabled=self.params.normal_retention_until_enabled,
                 normal_repeat_enabled=repeat,
                 normal_mfe_pct=level.mfe_pct,
                 normal_peak_price=level.peak_price,

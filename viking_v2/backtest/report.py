@@ -226,6 +226,25 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
         values = result.config.rule_parameters or {}
         sell = float(values.get("normal_sell_pct", 100.0) or 100.0)
         repeat = bool(values.get("normal_repeat_enabled", False) and sell < 100.0)
+        dynamic = bool(values.get("normal_dynamic_enabled", False))
+        start = (
+            f"START ATR×{float(values.get('normal_atr_activation_multiplier', 0.6) or 0.6):g}"
+            if dynamic and values.get("normal_atr_activation_enabled", True) else "START OFF"
+        )
+        atr_trail = (
+            f"TRAIL ATR×{float(values.get('normal_atr_multiplier', 0.6) or 0.6):g}"
+            if dynamic and values.get("normal_atr_trail_enabled", True) else "TRAIL ATR OFF"
+        )
+        keep = (
+            f"GIỮ {float(values.get('normal_retention_pct', 0.0) or 0.0):g}% MFE"
+            if dynamic and values.get("normal_retention_enabled", True)
+            and float(values.get("normal_retention_pct", 0.0) or 0.0) > 0
+            else "GIỮ OFF"
+        )
+        until = (
+            f"TỚI {float(values.get('normal_retention_until_pct', 0.0) or 0.0):g}%"
+            if values.get("normal_retention_until_enabled", True) else "TỚI ARM"
+        ) if keep != "GIỮ OFF" else ""
         return (
             f"{values.get('normal_policy', 'AUTO')} · "
             f"ARM {values.get('normal_arm_pct')}% · "
@@ -233,10 +252,8 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
             f"SELL {sell:g}% · "
             f"DYNAMIC {'ON' if values.get('normal_dynamic_enabled') else 'OFF'}"
             f" · T+2 RESET {'ON' if values.get('normal_t2_reset_enabled') else 'OFF'}"
-            f" (START ATR×{float(values.get('normal_atr_activation_multiplier', 0.6) or 0.6):g}"
-            f" · TRAIL ATR×{float(values.get('normal_atr_multiplier', 0.6) or 0.6):g})"
-            f" · GIỮ {float(values.get('normal_retention_pct', 0.0) or 0.0):g}% MFE"
-            f" TỚI {float(values.get('normal_retention_until_pct', 0.0) or 0.0):g}% · "
+            f" ({start} · {atr_trail})"
+            f" · {keep}{' ' + until if until else ''} · "
             f"REPEAT {'ON' if repeat else 'OFF'}"
         )
 
