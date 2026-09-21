@@ -31,10 +31,11 @@ Không có E sớm, E LOSS hay FAILED RECOVERY trong backend vận hành.
 ## An toàn hàng đợi và bán tay
 
 - 40 mã trong watchlist không phải 40 lệnh chờ. Mỗi chu kỳ chỉ xét các BUY đang hợp lệ; ưu tiên tín hiệu xuất hiện sớm hơn, sau đó theo thứ tự watchlist. Đủ 5 position/lệnh BUY đang hoạt động thì các tín hiệu còn lại bị ghi `MAX_POSITIONS`, không nằm lại trong một hàng đợi bí mật để tự nhảy vào sau.
-- `MUA TỰ ĐỘNG OFF` chặn cả tạo BUY BOT mới lẫn gửi BUY BOT cũ còn trong cache. BUY BOT chưa gửi được hủy; lệnh đã có khả năng lên broker chỉ được cảnh báo để operator kiểm tra. SELL quản lý vị thế và lệnh MANUAL vẫn chạy.
+- `BOT OFF` chặn cả tạo BUY BOT mới lẫn gửi BUY BOT cũ còn trong cache. BUY BOT chưa gửi được hủy; lệnh đã có khả năng lên broker chỉ được cảnh báo để operator kiểm tra. SELL quản lý vị thế và lệnh MANUAL vẫn chạy.
 - Khi SELL nguồn `MANUAL` đặt trong Viking khớp lần đầu, PAPER hoặc REAL tương ứng khóa BUY BOT mặc định 15 phút. Thời gian chỉnh tại `RULE → Phase 3 → VỐN → Dừng BUY sau bán tay`; `0` là tắt. Hết hạn tự mở, không cần bật lại nút bot.
-- Mỗi lệnh cache có `Tạm dừng`, `Tiếp tục`, `Sửa` và `Hủy`. Lệnh `PAUSED` vẫn giữ slot để không có mã khác lấp chỗ ngoài ý muốn.
-- Bán trực tiếp ngoài Viking trên một ứng dụng broker không có nhãn `MANUAL` của Viking. Khi vận hành theo luồng này, operator phải tắt `MUA TỰ ĐỘNG` trước; không suy đoán một thay đổi position là bán tay vì nó cũng có thể là SL/PROTECT.
+- Mỗi lệnh cache có `Sửa lệnh & quản lý` và `Hủy`; bên trong cửa sổ sửa có `Tạm dừng/Tiếp tục`. Lệnh `PAUSED` vẫn giữ slot để không có mã khác lấp chỗ ngoài ý muốn.
+- Bán trực tiếp ngoài Viking trên một ứng dụng broker không có nhãn `MANUAL` của Viking. Khi vận hành theo luồng này, operator phải tắt `BOT` trước; không suy đoán một thay đổi position là bán tay vì nó cũng có thể là SL/PROTECT.
+- Cửa sổ `Sửa lệnh & quản lý` quản lý chung khối lượng, giá LO, TP, SL và các mode TP/PROTECT/E.
 
 ## Đối chứng SL vào lại
 

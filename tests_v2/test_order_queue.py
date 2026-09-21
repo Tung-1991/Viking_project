@@ -170,7 +170,17 @@ def test_cached_order_can_be_paused_resumed_edited_and_cancelled(tmp_path):
     assert queue.claim_due(
         phase="OPEN", execution_mode="PAPER", token_ready=True,
     ) == []
-    assert queue.replace_local(intent.id, quantity=200, limit_price=10.5).quantity == 200
+    edited = queue.replace_local(
+        intent.id, quantity=200, limit_price=10.5,
+        em_modes=["TP", "NORMAL"], sl_enabled=False,
+        sl_mode="PERCENT", sl_value=3.5,
+        tp_mode="PERCENT", tp_value=7.0,
+    )
+    assert edited.quantity == 200
+    assert edited.em_modes == ["TP", "NORMAL"]
+    assert edited.sl_enabled is False
+    assert (edited.sl_mode, edited.sl_value) == ("PERCENT", 3.5)
+    assert (edited.tp_mode, edited.tp_value) == ("PERCENT", 7.0)
     assert queue.resume_local(intent.id).status == "PENDING"
     assert queue.pause_local(intent.id).status == "PAUSED"
     assert queue.cancel_local(intent.id).status == "CANCELLED"

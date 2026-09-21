@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import time
 
+from viking_v2.dashboard.actions import DashboardActionsMixin
 from viking_v2.dashboard.panels import DashboardPanelsMixin, _dynamic_atr_preview_text
-from viking_v2.dashboard.view import COL_TEXT, COL_TITLE
+from viking_v2.dashboard.view import COL_GRAY, COL_GREEN, COL_TEXT, COL_TITLE, COL_WARN
 from viking_v2.dashboard.tables import (
     DashboardTablesMixin,
     RUNNING_COLUMNS,
@@ -89,6 +90,37 @@ class _Entry(_Label):
 
     def get(self) -> str:
         return self.value
+
+
+class _EntryPauseState:
+    def __init__(self, active: bool) -> None:
+        self.active = active
+
+    def entry_pause(self, _mode: str) -> dict[str, object]:
+        return {"active": self.active}
+
+
+def test_bot_button_has_clear_on_pause_and_off_states() -> None:
+    subject = DashboardActionsMixin()
+    subject.bot_button = _Label()
+    subject.mode = _Value("PAPER")
+    subject._bot_enabled = False
+    subject._bot_toggle_busy = False
+    subject._bot_sync_until = 0.0
+
+    subject.rule_state = _EntryPauseState(False)
+    subject._paint_bot(True, force=True)
+    assert subject.bot_button.options["text"] == "BOT · ON"
+    assert subject.bot_button.options["fg_color"] == COL_GREEN
+
+    subject.rule_state = _EntryPauseState(True)
+    subject._paint_bot(True, force=True)
+    assert subject.bot_button.options["text"] == "BOT · PAUSE"
+    assert subject.bot_button.options["fg_color"] == COL_WARN
+
+    subject._paint_bot(False, force=True)
+    assert subject.bot_button.options["text"] == "BOT · OFF"
+    assert subject.bot_button.options["fg_color"] == COL_GRAY
 
 
 def test_auto_quantity_placeholder_is_compact_and_unambiguous() -> None:

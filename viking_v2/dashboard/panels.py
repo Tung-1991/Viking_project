@@ -48,7 +48,7 @@ class DashboardPanelsMixin:
             self.left, fg_color=COL_SURFACE, corner_radius=10,
             border_width=1, border_color=COL_BORDER,
         )
-        account.pack(fill="x", pady=(4, 5), padx=6)
+        account.pack(fill="x", pady=(3, 4), padx=6)
         account.grid_columnconfigure(0, weight=1)
         account.grid_columnconfigure(1, weight=0, minsize=180)
 
@@ -110,7 +110,7 @@ class DashboardPanelsMixin:
             self.left, fg_color=COL_SURFACE, corner_radius=10,
             border_width=1, border_color=COL_BORDER,
         )
-        control.pack(fill="x", padx=6, pady=5)
+        control.pack(fill="x", padx=6, pady=4)
         control.columnconfigure(0, minsize=55)
         control.columnconfigure(1, weight=1)
 
@@ -119,8 +119,8 @@ class DashboardPanelsMixin:
                 control, text=label, font=FONT_KEY,
                 text_color=COL_TITLE, anchor="w", justify="left",
             ).grid(row=index, column=0, sticky="ew", padx=(7, 6), pady=3)
-            frame = ctk.CTkFrame(control, width=1, height=36, fg_color="transparent")
-            frame.grid(row=index, column=1, sticky="ew", padx=(0, 7), pady=3)
+            frame = ctk.CTkFrame(control, width=1, height=34, fg_color="transparent")
+            frame.grid(row=index, column=1, sticky="ew", padx=(0, 7), pady=2)
             # Child buttons must consume the available panel width, not enlarge
             # the whole left dashboard column from their requested widths.
             frame.grid_propagate(False)
@@ -141,8 +141,8 @@ class DashboardPanelsMixin:
         self.symbol_entry.grid(row=0, column=0, sticky="ew")
 
         mode_row = setting_row(1, "MODE")
-        mode_row.grid_columnconfigure(0, weight=3)
-        mode_row.grid_columnconfigure(1, weight=2)
+        mode_row.grid_columnconfigure(0, weight=4)
+        mode_row.grid_columnconfigure(1, weight=1)
         self.mode = tk.StringVar(value="PAPER" if self.settings.paper_mode else "REAL")
         ctk.CTkSegmentedButton(
             mode_row, values=["REAL", "PAPER"], variable=self.mode,
@@ -154,12 +154,18 @@ class DashboardPanelsMixin:
             corner_radius=7,
         ).grid(row=0, column=0, sticky="ew", padx=(0, 5))
         self.bot_button = ctk.CTkButton(
-            mode_row, text="MUA TỰ ĐỘNG · OFF", height=32, font=("Segoe UI", 11, "bold"),
+            mode_row, text="BOT · OFF", height=32, font=("Segoe UI", 11, "bold"),
             width=1,
             fg_color=COL_GRAY, hover_color="#4B515B", corner_radius=7,
             command=self._toggle_bot,
         )
         self.bot_button.grid(row=0, column=1, sticky="ew")
+        _HoverHint(
+            self.bot_button,
+            "BOT ON (xanh): được phép tạo và gửi BUY tự động.\n"
+            "BOT PAUSE (vàng): đang khóa BUY tạm thời sau SELL MANUAL; SELL/SL/PROTECT vẫn chạy.\n"
+            "BOT OFF (xám): không tạo hoặc gửi BUY BOT.",
+        )
 
         tools_row = setting_row(2, "TOOLS")
         tool_specs = [
@@ -191,7 +197,7 @@ class DashboardPanelsMixin:
             em_row.grid_columnconfigure(column, weight=1, uniform="em")
             title = self._em_specs[key]
             button = ctk.CTkButton(
-                em_row, text=f"{title} · OFF", height=36,
+                em_row, text=f"{title} · OFF", height=32,
                 font=("Segoe UI", 11, "bold"),
                 width=1,
                 fg_color="#282D34", hover_color="#363C45",
@@ -206,7 +212,7 @@ class DashboardPanelsMixin:
             self.left, fg_color=COL_SURFACE, corner_radius=10,
             border_width=1, border_color=COL_BORDER,
         )
-        order.pack(fill="x", padx=6, pady=4)
+        order.pack(fill="x", padx=6, pady=3)
 
         quote = ctk.CTkFrame(order, fg_color=COL_SURFACE_2, corner_radius=8)
         quote.pack(fill="x", padx=8, pady=(8, 5))
@@ -288,7 +294,7 @@ class DashboardPanelsMixin:
         )
         self.lbl_order_value.grid(row=0, column=1, sticky="e", padx=(6, 12), pady=2)
 
-        action = ctk.CTkFrame(order, width=1, height=42, fg_color="transparent")
+        action = ctk.CTkFrame(order, width=1, height=38, fg_color="transparent")
         action.pack(fill="x", padx=9, pady=(1, 5))
         action.grid_propagate(False)
         action.grid_columnconfigure(1, weight=1)
@@ -296,7 +302,7 @@ class DashboardPanelsMixin:
         self.order_type_menu = ctk.CTkOptionMenu(
             action, values=["MARKET", "LO", "ATO", "ATC"],
             variable=self.order_type, command=self._order_type_changed,
-            width=115, height=42, font=("Segoe UI", 11, "bold"),
+            width=115, height=38, font=("Segoe UI", 11, "bold"),
             fg_color=COL_GRAY, button_color="#4B515B",
             button_hover_color="#59616D", corner_radius=8,
             dynamic_resizing=False,
@@ -304,13 +310,13 @@ class DashboardPanelsMixin:
         self.order_type_menu.grid(row=0, column=0, sticky="ew", padx=(0, 7))
         self.execute_button = ctk.CTkButton(
             action, text="CACHE", font=("Segoe UI", 13, "bold"),
-            height=42, fg_color="#16A34A", hover_color="#15803D",
+            height=38, fg_color="#16A34A", hover_color="#15803D",
             border_width=1, border_color=COL_GREEN,
             corner_radius=8, command=lambda: self._submit("BUY"),
         )
         self.execute_button.grid(row=0, column=1, sticky="ew")
         action_hint = ctk.CTkButton(
-            action, text="ⓘ", width=30, height=42, corner_radius=8,
+            action, text="ⓘ", width=30, height=38, corner_radius=8,
             font=("Segoe UI Symbol", 13, "bold"),
             fg_color="#343A43", hover_color="#4B515B", text_color=COL_TEXT,
         )
@@ -373,7 +379,7 @@ class DashboardPanelsMixin:
         self._update_order_preview()
 
         brand = ctk.CTkFrame(self.left, fg_color="transparent")
-        brand.pack(fill="x", padx=6, pady=(4, 1))
+        brand.pack(fill="x", padx=6, pady=(1, 0))
         ctk.CTkLabel(
             brand, text="VIKING-beta", font=("Segoe UI", 19, "bold"),
             text_color="#A78BFA",
@@ -405,7 +411,7 @@ class DashboardPanelsMixin:
             text_color=COL_TITLE, anchor="w",
         ).grid(row=0, column=0, sticky="w", padx=(8, 2), pady=4)
         entry = ctk.CTkEntry(
-            box, width=1, font=FONT_MONO_VALUE, height=36,
+            box, width=1, font=FONT_MONO_VALUE, height=32,
             justify="right", fg_color="#1A1E23", border_width=0,
             text_color=COL_MUTED if dimmed else COL_TEXT,
             placeholder_text=placeholder,
@@ -489,13 +495,13 @@ class DashboardPanelsMixin:
         style.theme_use("clam")
         style.configure(
             "Running.Treeview", background=COL_SURFACE_2, foreground=COL_TEXT,
-            fieldbackground=COL_SURFACE_2, rowheight=38, font=("Segoe UI", 10),
+            fieldbackground=COL_SURFACE_2, rowheight=42, font=("Segoe UI", 12),
             borderwidth=0, relief="flat", bordercolor=COL_BORDER,
             lightcolor=COL_BORDER, darkcolor=COL_BORDER,
         )
         style.configure(
             "Running.Treeview.Heading", background=COL_SURFACE, foreground=COL_TITLE,
-            font=("Segoe UI", 11, "bold"), relief="flat", padding=(8, 7),
+            font=("Segoe UI", 12, "bold"), relief="flat", padding=(8, 8),
         )
         style.map(
             "Running.Treeview.Heading",
@@ -1553,7 +1559,7 @@ class DashboardPanelsMixin:
             "HOLD_POSITION": "GIỮ VỊ THẾ",
             "BUY_ALREADY_PENDING": "ĐÃ CÓ LỆNH MUA CHỜ",
             "MAX_POSITIONS": "ĐÃ ĐỦ SỐ MÃ",
-            "BOT_OFF": "MUA TỰ ĐỘNG ĐANG TẮT",
+            "BOT_OFF": "BOT ĐANG TẮT",
             "MANUAL_SELL_PAUSE": "TẠM KHÓA BUY SAU BÁN TAY",
             "NO_AVAILABLE_CAPITAL": "KHÔNG ĐỦ CASH",
             "BROKER_REJECTED": "BROKER TỪ CHỐI",

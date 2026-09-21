@@ -131,8 +131,10 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         screen_w = max(1024, int(self.winfo_screenwidth() or 1024))
         screen_h = max(720, int(self.winfo_screenheight() or 720))
         width = min(1650, max(1100, screen_w - 60))
-        height = min(950, max(720, screen_h - 90))
-        self.geometry(f"{width}x{height}+{max(0, (screen_w-width)//2)}+{max(0, (screen_h-height)//3)}")
+        # Use a little more vertical room on scaled Windows displays so the
+        # compact left panel and VIKING-beta fit without a pointless scrollbar.
+        height = min(1000, max(720, screen_h - 40))
+        self.geometry(f"{width}x{height}+{max(0, (screen_w-width)//2)}+{max(0, (screen_h-height)//2)}")
         self.minsize(1080, 700)
 
     def _build_layout(self) -> None:

@@ -531,8 +531,7 @@ class RuleSettingsPopup:
         self._summary(
             body,
             "VỐN & BẢO VỆ",
-            f"WIN reset chu kỳ · {self.params.loss_lock_count} LOSS khóa BUY "
-            f"{self.params.loss_lock_hours} giờ · position đang giữ vẫn được quản lý",
+            "Giới hạn vốn, vị thế và các khóa BUY an toàn",
             "WIN/LOSS chỉ tính khi trade đóng hoàn toàn và đã trừ phí. Whipsaw và khóa LOSS chỉ chặn BUY/Re-entry mới; không tắt SL hoặc E/M của position đang giữ.",
         )
 
@@ -553,7 +552,7 @@ class RuleSettingsPopup:
             self.settings.manual_sell_pause_minutes,
             "Khi một lệnh SELL nguồn MANUAL khớp, BOT khóa tạo và gửi BUY mới trong số phút này. "
             "Mặc định 15; nhập 0 để tắt. SELL/SL/PROTECT, quản lý vị thế và lệnh MANUAL vẫn chạy. "
-            "Hết giờ BOT tự mở lại, không cần bật lại nút MUA TỰ ĐỘNG.",
+            "Hết giờ BOT tự mở lại, không cần bật lại nút BOT.",
         )
 
         # Hai mức SL nằm ở tab E/M để đứng cùng các cách thoát vị thế.

@@ -85,7 +85,7 @@ def fit_entry_text(
 _SIGNAL_REASONS = {
     "WHIPSAW_LOCK": "EMA nhiễu, khóa mua",
     "MAX_POSITIONS": "Đã đủ số vị thế",
-    "BOT_OFF": "MUA TỰ ĐỘNG đang tắt",
+    "BOT_OFF": "BOT đang tắt",
     "MANUAL_SELL_PAUSE": "Tạm khóa BUY sau khi operator bán tay",
     "LOCKED_AFTER_3_LOSSES": "Khóa sau chuỗi 3 lệnh lỗ",
     "LOCKED_AFTER_LOSSES": "Khóa sau chuỗi lệnh lỗ",

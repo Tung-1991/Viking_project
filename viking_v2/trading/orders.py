@@ -465,6 +465,12 @@ class OrderQueue:
         quantity: int,
         limit_price: float = 0.0,
         details: dict[str, Any] | None = None,
+        em_modes: list[str] | None = None,
+        sl_enabled: bool | None = None,
+        sl_mode: str | None = None,
+        sl_value: float | None = None,
+        tp_mode: str | None = None,
+        tp_value: float | None = None,
     ) -> OrderIntent | None:
         item = self.get(order_id)
         if not item or item.status.upper() not in LOCALLY_CONTROLLABLE_STATUSES:
@@ -483,6 +489,21 @@ class OrderQueue:
         }
         if details is not None:
             changes["details"] = dict(details)
+        # A cached BUY has not created a position yet.  Persist its complete
+        # management policy here so the eventual fill creates the TradeCycle
+        # with exactly the controls shown in the edit popup.
+        if em_modes is not None:
+            changes["em_modes"] = list(em_modes)
+        if sl_enabled is not None:
+            changes["sl_enabled"] = bool(sl_enabled)
+        if sl_mode is not None:
+            changes["sl_mode"] = str(sl_mode)
+        if sl_value is not None:
+            changes["sl_value"] = float(sl_value)
+        if tp_mode is not None:
+            changes["tp_mode"] = str(tp_mode)
+        if tp_value is not None:
+            changes["tp_value"] = float(tp_value)
         return self._update(
             order_id,
             **changes,
