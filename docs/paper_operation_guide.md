@@ -36,7 +36,7 @@ Dashboard chỉ hiện một dòng ngắn: `ATR14 · START · LÙI`. Di chuột 
 
 Cấu hình PAPER mặc định đã chốt: Dynamic ON; START ×0,55; TRAIL ×0,8;
 giữ 90% lãi đỉnh tới MFE 5%; ARM 7%; trail sau ARM 2,5%; bán 100%;
-REPEAT OFF. SL lệnh đầu −3,5%, lệnh vào lại −2,1%; E 3/6 + RSI14 ở ALERT.
+REPEAT OFF. SL lệnh đầu −3,5%, lệnh vào lại −3,0%; E 3/6 + RSI14 ở ALERT.
 
 - `ATR14` dùng dữ liệu các phiên ngày đã đóng, không dùng nến tương lai.
 - `START ×`: ngưỡng MFE bắt đầu Dynamic = ATR% × hệ số START.
@@ -44,6 +44,10 @@ REPEAT OFF. SL lệnh đầu −3,5%, lệnh vào lại −2,1%; E 3/6 + RSI14 �
 - `GIỮ LÃI %`: mức bảo vệ = giá mua + phần trăm đã chọn của đoạn từ giá mua đến đỉnh cao nhất.
 - `TỚI MFE %`: chỉ giới hạn việc tiếp tục nâng theo GIỮ LÃI; mức đã khóa không hạ và TRAIL ATR vẫn có thể nâng.
 - Khi MFE đạt ARM, PROTECT chuyển sang trail sau ARM theo cấu hình chung.
+
+`RECHECK` áp dụng khi tín hiệu bán xuất hiện trong T+2 nhưng cổ phiếu chưa được phép bán.
+Khi cổ về, bot kiểm tra lại điều kiện thoát theo giá và tín hiệu hiện tại: điều kiện còn đúng thì bán,
+điều kiện đã mất thì huỷ yêu cầu bán cũ. Bot không bán chỉ vì đã từng có tín hiệu trong T+2.
 
 ## Preview và Health
 

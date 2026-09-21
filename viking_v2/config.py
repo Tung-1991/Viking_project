@@ -109,7 +109,7 @@ DEFAULT_RULE_PARAMETERS: dict[str, Any] = {
     "indicator_exit_policy": "ALERT",
     "max_positions": 5,
     "initial_sl_pct": -3.5,
-    "reentry_sl_pct": -2.1,
+    "reentry_sl_pct": -3.0,
     "loss_lock_count": 3,
     "loss_lock_hours": 24,
     "no_compound_enabled": True,

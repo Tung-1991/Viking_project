@@ -35,6 +35,7 @@ def test_sparse_account_rules_merge_over_complete_operating_defaults():
     settings = AppSettings(rule_parameters={"loss_lock_hours": 12}).normalize()
     assert settings.rule_parameters["loss_lock_hours"] == 12
     assert settings.rule_parameters["initial_sl_pct"] == -3.5
+    assert settings.rule_parameters["reentry_sl_pct"] == -3.0
     assert settings.rule_parameters["normal_atr_activation_multiplier"] == 0.55
     assert settings.rule_parameters["normal_dynamic_enabled"] is True
 
