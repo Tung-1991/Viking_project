@@ -295,11 +295,13 @@ class DashboardTablesMixin:
                     "normal_retention_until_enabled", params.get("normal_retention_until_enabled", True),
                 ))
                 start_text = (
-                    f"START {_number(protect_activation_mfe):.1f}% ({_number(protect_atr_activation_multiplier):g}×ATR)"
+                    f"START {_number(protect_activation_mfe):.1f}% "
+                    f"(ATR1D T−1 {_number(protect_atr):.1f}%×{_number(protect_atr_activation_multiplier):g})"
                     if start_active else "START OFF"
                 )
                 atr_text = (
-                    f"ATR TRAIL {_number(protect_atr):.1f}%×{_number(protect_atr_multiplier):g}"
+                    f"LÙI ATR {_number(protect_atr) * _number(protect_atr_multiplier):.1f}% "
+                    f"({_number(protect_atr_multiplier):g}×ATR)"
                     if atr_active else "ATR TRAIL OFF"
                 )
                 until_text = f"{_number(protect_retention_until):g}%" if until_active else "ARM"

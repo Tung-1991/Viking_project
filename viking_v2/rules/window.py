@@ -238,20 +238,24 @@ class RuleSettingsPopup:
     ) -> tuple[ctk.CTkEntry, tk.BooleanVar]:
         """Keep each pre-ARM switch, value and explanation on one compact row."""
         row = ctk.CTkFrame(card, fg_color="transparent")
-        row.pack(fill="x", padx=12, pady=4)
-        row.grid_columnconfigure(0, weight=1)
+        row.pack(fill="x", padx=6, pady=4)
+        row.grid_columnconfigure(1, weight=1)
         toggle = tk.BooleanVar(value=enabled)
         ctk.CTkSwitch(
-            row, text=label, variable=toggle, font=("Segoe UI", 12),
+            row, text="", width=36, variable=toggle, font=("Segoe UI", 11),
             progress_color=self.GREEN, button_color=self.TEXT, text_color=self.TEXT,
         ).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(
+            row, text=label, font=("Segoe UI", 11),
+            text_color=self.TEXT, anchor="w",
+        ).grid(row=0, column=1, sticky="w", padx=(2, 2))
         entry = ctk.CTkEntry(
-            row, width=92, height=34, justify="right", font=FONT_VALUE,
+            row, width=58, height=32, justify="right", font=("Segoe UI", 12),
             fg_color="#181B20", border_color="#444B55", text_color=self.TEXT,
         )
         entry.insert(0, str(value))
-        entry.grid(row=0, column=1, padx=(8, 5))
-        self._hint_icon(row, hint).grid(row=0, column=2)
+        entry.grid(row=0, column=2, padx=(2, 4))
+        self._hint_icon(row, hint).grid(row=0, column=3)
         return entry, toggle
 
     def _switch(self, card: ctk.CTkFrame, label: str, value: bool, hint: str) -> tk.BooleanVar:
@@ -568,7 +572,11 @@ class RuleSettingsPopup:
         ).pack(side="right", padx=(0, 6))
         self.normal_arm = self._field(normal, "ARM %", self.params.normal_arm_pct, "MFE đạt mức này thì dùng đầy đủ TRAIL đã đặt.")
         self.normal_giveback = self._field(normal, "TRAIL %", self.params.normal_giveback_pct, "Sau ARM, giá kích hoạt khi giảm X% từ peak.")
-        self.normal_sell = self._field(normal, "SELL %", self.params.normal_sell_pct, "Phần trăm khối lượng đang giữ tại mỗi lần PROTECT thực thi.")
+        self.normal_sell = self._field(
+            normal, "KL BÁN KHI CHẠM %", self.params.normal_sell_pct,
+            "Phần trăm khối lượng đang giữ sẽ bán khi PROTECT chạm mức. "
+            "100% = bán sạch vị thế; 50% = bán một nửa khối lượng đang giữ.",
+        )
 
         dynamic_box = ctk.CTkFrame(
             normal, fg_color="#1A1E24", corner_radius=7,
@@ -589,8 +597,22 @@ class RuleSettingsPopup:
             "OFF: PROTECT chỉ đợi ARM. ON: có thể bảo vệ trước ARM bằng ATR và sàn giữ lãi; "
             "không thay SL, E hay trail sau ARM.",
         ).pack(side="right")
+        dynamic_groups = ctk.CTkFrame(dynamic_box, fg_color="transparent")
+        dynamic_groups.pack(fill="x", padx=8, pady=(4, 2))
+        dynamic_groups.grid_columnconfigure((0, 1), weight=1, uniform="dynamic-groups")
+
+        atr_box = ctk.CTkFrame(
+            dynamic_groups, fg_color="#20252C", corner_radius=7,
+            border_width=1, border_color=self.BORDER,
+        )
+        atr_box.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        self.dynamic_atr_card = atr_box
+        ctk.CTkLabel(
+            atr_box, text="ATR 14 · KHUNG 1D · PHIÊN TRƯỚC",
+            font=("Segoe UI", 11, "bold"), text_color="#60A5FA", anchor="w",
+        ).pack(fill="x", padx=12, pady=(8, 2))
         self.normal_atr_activation_multiplier, self.normal_atr_activation_enabled = self._dynamic_field(
-            dynamic_box, "START ATR ×", self.params.normal_atr_activation_multiplier,
+            atr_box, "START ×", self.params.normal_atr_activation_multiplier,
             self.params.normal_atr_activation_enabled,
             "ATR14(T−1): T là hôm nay, T−1 là PHIÊN GIAO DỊCH ĐÃ ĐÓNG gần nhất, không phải ATR trừ 1. "
             "ATR14 dùng giá cao/thấp và giá đóng trước của các phiên ngày, đo dao động bằng đơn vị giá; "
@@ -601,7 +623,7 @@ class RuleSettingsPopup:
             "START×0,6 ⇒ cần từng lãi 2,471%. Còn T+2 thì chưa thể bán.",
         )
         self.normal_atr_multiplier, self.normal_atr_trail_enabled = self._dynamic_field(
-            dynamic_box, "TRAIL ATR ×", self.params.normal_atr_multiplier,
+            atr_box, "TRAIL ×", self.params.normal_atr_multiplier,
             self.params.normal_atr_trail_enabled,
             "ON: ATR% của phiên trước × hệ số ở ô này = khoảng lùi theo PHẦN TRĂM từ giá cao nhất đã thấy. "
             "Lệnh VIX 24/08/2026 có ATR%=4,118%; TRAIL×0,8 ⇒ được lùi 3,294% của giá cao nhất, "
@@ -609,8 +631,24 @@ class RuleSettingsPopup:
             "OFF: không dùng mức bảo vệ theo ATR. START và GIỮ LÃI vẫn theo công tắc riêng; "
             "muốn chỉ dùng GIỮ LÃI mà không phụ thuộc ATR, tắt cả START ATR.",
         )
+        ctk.CTkLabel(
+            atr_box,
+            text="Preview thật: thẻ PROTECT theo mã",
+            font=("Segoe UI", 10), text_color=self.MUTED, anchor="w",
+        ).pack(fill="x", padx=12, pady=(1, 8))
+
+        retention_box = ctk.CTkFrame(
+            dynamic_groups, fg_color="#20252C", corner_radius=7,
+            border_width=1, border_color=self.BORDER,
+        )
+        retention_box.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        self.dynamic_retention_card = retention_box
+        ctk.CTkLabel(
+            retention_box, text="GIỮ LÃI THEO ĐỈNH",
+            font=("Segoe UI", 11, "bold"), text_color="#60A5FA", anchor="w",
+        ).pack(fill="x", padx=12, pady=(8, 2))
         self.normal_retention_pct, self.normal_retention_enabled = self._dynamic_field(
-            dynamic_box, "GIỮ LÃI ĐỈNH %", self.params.normal_retention_pct,
+            retention_box, "GIỮ LÃI %", self.params.normal_retention_pct,
             self.params.normal_retention_enabled,
             "ON: khi còn dưới mốc GIỮ ĐẾN (nếu mốc đó ON), mức bán bảo vệ = giá mua + "
             "(giá cao nhất đã thấy − giá mua) × tỷ lệ ở ô này. "
@@ -619,7 +657,7 @@ class RuleSettingsPopup:
             "Nếu TRAIL ATR cũng ON, dùng mức bảo vệ cao hơn trong hai cách.",
         )
         self.normal_retention_until_pct, self.normal_retention_until_enabled = self._dynamic_field(
-            dynamic_box, "GIỮ ĐẾN MFE %", self.params.normal_retention_until_pct,
+            retention_box, "TỚI MFE %", self.params.normal_retention_until_pct,
             self.params.normal_retention_until_enabled,
             "MFE là mức lãi cao nhất từng thấy tính từ giá mua; mua 100 thì MFE 5% nghĩa là từng lên 105. "
             "ON và nhập 5: chỉ dùng công thức GIỮ LÃI khi MFE còn DƯỚI 5%; từ 5% đến trước ARM 7%, "
@@ -628,6 +666,11 @@ class RuleSettingsPopup:
             "Trong mẫu 7 mã hiện tại, dừng nâng ở 5% cho PnL 599,53 triệu; giữ tiếp tới ARM 7% chỉ đạt 466,33 triệu. "
             "Đây vẫn là kết quả trong mẫu, chưa được xác nhận ngoài mẫu. Nếu GIỮ LÃI OFF, công tắc này không có tác dụng.",
         )
+        ctk.CTkLabel(
+            retention_box,
+            text="5%→7%: giữ sàn cũ; ATR vẫn có thể nâng",
+            font=("Segoe UI", 10), text_color=self.MUTED, anchor="w",
+        ).pack(fill="x", padx=12, pady=(1, 8))
         ctk.CTkLabel(
             dynamic_box,
             text="DƯỚI ARM: dùng cách đang ON; mức đã khóa không hạ · T+2 chưa bán được",

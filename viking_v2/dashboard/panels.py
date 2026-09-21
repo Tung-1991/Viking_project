@@ -27,6 +27,44 @@ from .windows import (
 )
 
 
+def _dynamic_atr_preview_text(
+    details: dict[str, Any], params: dict[str, Any],
+) -> str:
+    """Render the per-symbol ATR14(1D, T-1) inputs operators actually use."""
+    sell = _number(details.get("sell_share_pct", params.get("normal_sell_pct", 100.0)))
+    dynamic = bool(details.get(
+        "normal_dynamic_enabled", params.get("normal_dynamic_enabled", False),
+    ))
+    if not dynamic:
+        return f"DYNAMIC OFF · BÁN {sell:g}% KHI ARM/TRAIL CHẠM"
+    atr = _number(details.get("normal_atr_pct"))
+    if atr <= 0:
+        return f"ATR14 1D(T−1): CHƯA ĐỦ DỮ LIỆU · BÁN {sell:g}%"
+    start_enabled = bool(details.get(
+        "normal_atr_activation_enabled",
+        params.get("normal_atr_activation_enabled", True),
+    ))
+    trail_enabled = bool(details.get(
+        "normal_atr_trail_enabled", params.get("normal_atr_trail_enabled", True),
+    ))
+    start_multiplier = _number(details.get(
+        "normal_atr_activation_multiplier",
+        params.get("normal_atr_activation_multiplier", 0.6),
+    ))
+    trail_multiplier = _number(details.get(
+        "normal_atr_multiplier", params.get("normal_atr_multiplier", 0.6),
+    ))
+    start = (
+        f"START {atr * start_multiplier:.2f}%"
+        if start_enabled else "START OFF"
+    )
+    trail = (
+        f"LÙI ATR {atr * trail_multiplier:.2f}%"
+        if trail_enabled else "LÙI ATR OFF"
+    )
+    return f"ATR14 1D(T−1) {atr:.2f}% · {start} · {trail} · BÁN {sell:g}%"
+
+
 class DashboardPanelsMixin:
     def _left_panel(self) -> None:
         # GROUP 1 — account snapshot and session state.
@@ -1293,17 +1331,8 @@ class DashboardPanelsMixin:
                 )
             )
             if effective_trail is not None:
-                current_keep = (
-                    f"GIỮ {_number(decision_details.get('normal_retention_pct')):g}%"
-                    if keep_enabled else "GIỮ OFF"
-                )
                 self.preview_normal_detail.configure(
-                    text=(
-                        f"{normal_policy} · MFE {_number(decision_details.get('normal_mfe_pct')):.1f}%"
-                        f" · TRAIL {_number(effective_trail):.1f}%"
-                        f" · {current_keep}"
-                        f" · SELL {normal_sell:g}%"
-                    ),
+                    text=_dynamic_atr_preview_text(decision_details, params),
                 )
         self._refresh_rule_preview(status, symbol)
 

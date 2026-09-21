@@ -226,10 +226,15 @@ def test_exit_sell_controls_are_in_em_card_and_save_separately(ui_root, monkeypa
         for entry in (
             rules.normal_atr_activation_multiplier,
             rules.normal_atr_multiplier,
+        ):
+            assert entry.master.master is rules.dynamic_atr_card
+        for entry in (
             rules.normal_retention_pct,
             rules.normal_retention_until_pct,
         ):
-            assert entry.master.master is rules.dynamic_settings_card
+            assert entry.master.master is rules.dynamic_retention_card
+        assert rules.dynamic_atr_card.master.master is rules.dynamic_settings_card
+        assert rules.dynamic_retention_card.master.master is rules.dynamic_settings_card
         for key in (
             "normal_atr_activation_enabled", "normal_atr_trail_enabled",
             "normal_retention_enabled", "normal_retention_until_enabled",

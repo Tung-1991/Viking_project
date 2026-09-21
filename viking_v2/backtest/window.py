@@ -1205,28 +1205,47 @@ class BacktestPopup:
             if title == "E · EXIT SELL":
                 padding_row += 1
             if any(key == "normal_atr_activation_multiplier" for _label, key, _help in fields):
-                toggle_hints = (
-                    ("normal_atr_activation_enabled", "START ATR", "OFF: không đợi ATR; bắt đầu sau khi lệnh từng có lãi >0. ATR14(T−1) là ATR 14 phiên ngày đã đóng tới hết phiên trước, không phải ATR trừ 1."),
-                    ("normal_atr_trail_enabled", "TRAIL ATR", "OFF: bỏ mức bảo vệ tính từ ATR; GIỮ LÃI vẫn có thể chạy."),
-                    ("normal_retention_enabled", "GIỮ LÃI", "OFF: bỏ mức bảo vệ giữ một phần lãi cao nhất; con số phần trăm vẫn được lưu."),
-                    ("normal_retention_until_enabled", "MỐC GIỮ ĐẾN", "OFF: bỏ mốc 5%; nếu GIỮ LÃI ON thì tiếp tục nâng mức bảo vệ tới ARM 7%."),
+                families = (
+                    (
+                        "ATR 14 · 1D · PHIÊN TRƯỚC",
+                        (
+                            ("normal_atr_activation_enabled", "START ATR", "OFF: không đợi ATR; bắt đầu sau khi lệnh từng có lãi >0. ATR14(T−1) là ATR 14 phiên ngày đã đóng tới hết phiên trước, không phải ATR trừ 1."),
+                            ("normal_atr_trail_enabled", "TRAIL ATR", "OFF: bỏ mức bảo vệ tính từ ATR; GIỮ LÃI vẫn có thể chạy."),
+                        ),
+                    ),
+                    (
+                        "GIỮ LÃI THEO ĐỈNH",
+                        (
+                            ("normal_retention_enabled", "GIỮ LÃI", "OFF: bỏ mức bảo vệ giữ một phần lãi cao nhất; con số phần trăm vẫn được lưu."),
+                            ("normal_retention_until_enabled", "MỐC GIỮ ĐẾN", "OFF: bỏ mốc 5%; nếu GIỮ LÃI ON thì tiếp tục nâng mức bảo vệ tới ARM 7%."),
+                        ),
+                    ),
                 )
-                for index, (key, label, hint) in enumerate(toggle_hints):
-                    grid_row, grid_col = divmod(index, 2)
-                    group = ctk.CTkFrame(card, fg_color="transparent")
-                    group.grid(
-                        row=padding_row + grid_row, column=grid_col * 2,
-                        columnspan=2, sticky="w", padx=(16, 12), pady=4,
+                for family_column, (family_title, controls) in enumerate(families):
+                    family = ctk.CTkFrame(
+                        card, fg_color="#20252C", corner_radius=7,
+                        border_width=1, border_color=COL_BORDER,
                     )
-                    variable = ctk.BooleanVar(value=bool(getattr(exit_params, key)))
-                    self.dynamic_subrules[key] = variable
-                    ctk.CTkSwitch(
-                        group, text=label, variable=variable,
-                        font=(FONT, 11, "bold"), progress_color=COL_GREEN,
-                        text_color=COL_TEXT,
-                    ).pack(side="left")
-                    self._hint(group, hint).pack(side="left", padx=(5, 0))
-                padding_row += 2
+                    family.grid(
+                        row=padding_row, column=family_column * 2,
+                        columnspan=2, sticky="nsew", padx=(16, 8), pady=5,
+                    )
+                    ctk.CTkLabel(
+                        family, text=family_title, font=(FONT, 11, "bold"),
+                        text_color=COL_BLUE, anchor="w",
+                    ).pack(fill="x", padx=10, pady=(7, 2))
+                    for key, label, hint in controls:
+                        group = ctk.CTkFrame(family, fg_color="transparent")
+                        group.pack(fill="x", padx=10, pady=3)
+                        variable = ctk.BooleanVar(value=bool(getattr(exit_params, key)))
+                        self.dynamic_subrules[key] = variable
+                        ctk.CTkSwitch(
+                            group, text=label, variable=variable,
+                            font=(FONT, 11, "bold"), progress_color=COL_GREEN,
+                            text_color=COL_TEXT,
+                        ).pack(side="left")
+                        self._hint(group, hint).pack(side="right", padx=(5, 0))
+                padding_row += 1
             ctk.CTkLabel(card, text="", height=6).grid(row=padding_row, column=0)
             row_index += 1
 

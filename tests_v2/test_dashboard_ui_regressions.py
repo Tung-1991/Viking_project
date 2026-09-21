@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from viking_v2.dashboard.panels import DashboardPanelsMixin
+from viking_v2.dashboard.panels import DashboardPanelsMixin, _dynamic_atr_preview_text
 from viking_v2.dashboard.view import COL_TEXT, COL_TITLE
 from viking_v2.dashboard.tables import (
     DashboardTablesMixin,
@@ -28,6 +28,28 @@ class _Value:
 
     def get(self) -> str:
         return self.value
+
+
+def test_dynamic_atr_preview_uses_the_selected_symbols_completed_daily_atr() -> None:
+    params = {
+        "normal_dynamic_enabled": True,
+        "normal_atr_activation_enabled": True,
+        "normal_atr_trail_enabled": True,
+        "normal_atr_activation_multiplier": 0.6,
+        "normal_atr_multiplier": 0.8,
+        "normal_sell_pct": 100,
+    }
+    text = _dynamic_atr_preview_text({"normal_atr_pct": 4.118}, params)
+    assert text == (
+        "ATR14 1D(T−1) 4.12% · START 2.47% · "
+        "LÙI ATR 3.29% · BÁN 100%"
+    )
+
+    params["normal_atr_activation_enabled"] = False
+    params["normal_atr_trail_enabled"] = False
+    assert "START OFF · LÙI ATR OFF" in _dynamic_atr_preview_text(
+        {"normal_atr_pct": 4.118}, params,
+    )
 
 
 def test_operator_typography_separates_keys_from_values() -> None:
