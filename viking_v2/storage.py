@@ -295,7 +295,7 @@ class SignalLog:
         "confirmation_minutes", "confirmation_required",
         "confirmation_ema", "confirmation_rsi",
         "buy_window", "buy_window_state", "watchlist_priority", "slot_usage",
-        "trade_id", "protect_mode", "protect_state", "mfe_pct", "peak_price",
+        "trade_id", "indicator_exit_policy", "protect_mode", "protect_state", "mfe_pct", "peak_price",
         "effective_trail_pct", "atr_pct", "atr_multiplier", "protect_price",
         "sell_pct", "hypothetical_quantity",
     )

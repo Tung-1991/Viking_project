@@ -543,7 +543,10 @@ def run(account_id: str | None = None) -> int:
                                     decision.details["normal_trigger_price"] = float(
                                         protect_state_row.get("normal_trigger_price", 0.0) or 0.0
                                     )
-                            if trade_id and decision.reason == "NORMAL_ARMED":
+                            if trade_id and (
+                                decision.reason == "NORMAL_ARMED"
+                                or bool(decision.details.get("normal_should_arm"))
+                            ):
                                 rule_state.arm_normal(symbol, trade_id)
                             if trade_id and decision.reason == "PROTECT_ALERT":
                                 alert_state = rule_state.mark_protection_alert(

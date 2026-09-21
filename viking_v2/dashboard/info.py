@@ -263,6 +263,7 @@ class InfoPopup:
             ),
         ]
         exit_items = [
+            ("E MODE", p.indicator_exit_policy, PALETTE["WARN"] if p.indicator_exit_policy == "ALERT" else PALETTE["RED"]),
             ("E CHÍNH", sell_conditions, PALETTE["RED"]),
             ("E/M BẬT", self._em_name(em_modes), PALETTE["TEXT"]),
         ]

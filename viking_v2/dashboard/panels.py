@@ -1240,6 +1240,9 @@ class DashboardPanelsMixin:
         )
         self.preview_route_value.configure(text=route, text_color=badge_fg)
         params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
+        indicator_exit_policy = str(
+            params.get("indicator_exit_policy", "ALERT") or "ALERT"
+        ).upper()
         normal_arm = float(params.get("normal_arm_pct", 7.0) or 7.0)
         normal_giveback = float(params.get("normal_giveback_pct", 2.0) or 2.0)
         normal_policy = str(params.get("normal_policy", "AUTO") or "AUTO").upper()
@@ -1298,9 +1301,16 @@ class DashboardPanelsMixin:
         signal = str(decision.get("signal") or "--").upper()
         for key, widget in em_widgets.items():
             enabled = bool(self._em_states.get(key, False))
+            state_label = (
+                indicator_exit_policy
+                if key == "indicator_exit" and enabled else "ON" if enabled else "OFF"
+            )
             widget.configure(
-                text=f"{em_labels[key]} · {'ON' if enabled else 'OFF'}",
-                text_color=COL_GREEN if enabled else COL_MUTED,
+                text=f"{em_labels[key]} · {state_label}",
+                text_color=(
+                    COL_WARN if key == "indicator_exit" and enabled and indicator_exit_policy == "ALERT"
+                    else COL_GREEN if enabled else COL_MUTED
+                ),
             )
             em_value_widgets[key].configure(
                 text_color=(
@@ -1310,7 +1320,9 @@ class DashboardPanelsMixin:
             )
         exit_enabled = bool(self._em_states.get("indicator_exit", False))
         position_quantity = max(0, int(decision_details.get("position_quantity", 0) or 0))
-        self._render_exit_sell_preview(signal, exit_enabled, position_quantity)
+        self._render_exit_sell_preview(
+            signal, exit_enabled, position_quantity, indicator_exit_policy,
+        )
         if current_profit is not None and self._em_states.get("normal_protection", False):
             protected = decision_details.get("normal_trigger_price")
             protect_state = str(decision_details.get("normal_state", "WAIT") or "WAIT").upper()
@@ -1349,6 +1361,7 @@ class DashboardPanelsMixin:
             signal,
             bool(self._em_states.get("indicator_exit", False)),
             position_quantity,
+            str(rule_params.get("indicator_exit_policy", "ALERT") or "ALERT").upper(),
         )
         bot_enabled = bool(status.get("bot_enabled", False))
         self.preview_rule_title.configure(
@@ -1553,6 +1566,7 @@ class DashboardPanelsMixin:
             "POSITION_MANAGED_SL_ONLY": "CHỈ THEO DÕI SL",
             "STOP_LOSS": "KÍCH HOẠT SL",
             "INDICATOR_EXIT": "KÍCH HOẠT EXIT SELL",
+            "INDICATOR_EXIT_ALERT": "E ALERT · KHÔNG ĐẶT LỆNH",
             "PRICE_PROTECTION": "KÍCH HOẠT BẢO VỆ GIÁ",
             "NORMAL_PROTECTION": "PROTECT",
             "NORMAL_ARMED": "PROTECT AUTO ĐÃ KÍCH HOẠT",
@@ -1572,11 +1586,11 @@ class DashboardPanelsMixin:
         reason_text = str(details.get("status_text") or "") or reason_labels.get(
             reason, reason.replace("_", " ") if reason else "CHỜ DỮ LIỆU"
         )
-        if action == "WAIT" and signal == "SELL":
+        if action == "WAIT" and signal == "SELL" and reason != "INDICATOR_EXIT_ALERT":
             reason_text = "CHỜ BUY"
         if reason == "BUY_SIGNAL":
             reason_color = COL_GREEN
-        elif reason in {"SELL_SIGNAL", "INDICATOR_EXIT"}:
+        elif reason in {"SELL_SIGNAL", "INDICATOR_EXIT", "INDICATOR_EXIT_ALERT"}:
             reason_color = COL_RED
         elif action == "BUY":
             reason_color = COL_GREEN
@@ -1623,15 +1637,21 @@ class DashboardPanelsMixin:
         signal: str,
         enabled: bool,
         position_quantity: int,
+        policy: str = "ALERT",
     ) -> None:
+        policy = str(policy or "ALERT").upper()
         if not enabled:
             value, detail, color = "CHƯA ÁP DỤNG", "ĐANG TẮT", COL_MUTED
         elif position_quantity <= 0:
-            value, detail, color = "SAU KHI MUA", "CHỜ TÍN HIỆU", COL_PREVIEW_TEXT
+            value, detail, color = "SAU KHI MUA", f"{policy} · CHỜ TÍN HIỆU", COL_PREVIEW_TEXT
         elif str(signal or "").upper() == "SELL":
-            value, detail, color = "SELL", "BÁN HẾT", COL_RED
+            if policy == "ALERT":
+                value, detail, color = "E ALERT", "KHÔNG ĐẶT LỆNH", COL_WARN
+            else:
+                value, detail, color = "SELL", "AUTO · BÁN HẾT", COL_RED
         else:
-            value, detail, color = "CHỜ TÍN HIỆU", "BÁN HẾT", COL_PREVIEW_TEXT
+            detail = "ALERT · KHÔNG BÁN" if policy == "ALERT" else "AUTO · BÁN HẾT"
+            value, color = "CHỜ TÍN HIỆU", COL_PREVIEW_TEXT
         self.preview_exit_value.configure(text=value, text_color=color)
         self.preview_exit_detail.configure(
             text=detail,

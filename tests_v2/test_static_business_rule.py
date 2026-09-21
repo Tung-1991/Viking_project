@@ -256,7 +256,7 @@ def test_normal_protection_sells_all_by_default_once_condition_is_met():
 
 
 def test_indicator_b_sells_all_remaining_position():
-    decision = StaticRule().evaluate(
+    decision = StaticRule(StaticRuleParameters(indicator_exit_policy="AUTO")).evaluate(
         {"symbol": "FPT", "bars": _bars(B_VALUES), "previous_market_state": "UPTREND"},
         {"position": {"quantity": 700, "avg_price": 100, "current_price": 99, "em_modes": ["IND_EXIT"]}},
     )
@@ -308,7 +308,9 @@ def test_disabled_trade_stop_loss_does_not_hide_e_or_protect_logic():
     assert no_exit.action == "WAIT"
     assert no_exit.details["sl_mode"] == "OFF"
 
-    indicator_exit = StaticRule().evaluate(
+    indicator_exit = StaticRule(
+        StaticRuleParameters(indicator_exit_policy="AUTO")
+    ).evaluate(
         {"symbol": "FPT", "bars": _bars(B_VALUES), "previous_market_state": "UPTREND"},
         {"position": {
             "quantity": 100, "avg_price": 100, "current_price": 90,
@@ -316,6 +318,38 @@ def test_disabled_trade_stop_loss_does_not_hide_e_or_protect_logic():
         }},
     )
     assert indicator_exit.event == "INDICATOR_EXIT"
+
+
+def test_indicator_exit_alert_reports_signal_without_selling():
+    decision = StaticRule().evaluate(
+        {"symbol": "FPT", "bars": _bars(B_VALUES), "previous_market_state": "UPTREND"},
+        {"position": {
+            "quantity": 700, "avg_price": 100, "current_price": 99,
+            "em_modes": ["IND_EXIT"],
+        }},
+    )
+    assert decision.action == "WAIT"
+    assert decision.event == "INDICATOR_EXIT_ALERT"
+    assert decision.signal == "SELL"
+    assert decision.quantity_fraction == 0.0
+    assert decision.details["indicator_exit_policy"] == "ALERT"
+
+
+def test_indicator_exit_alert_never_blocks_auto_protect_exit():
+    decision = StaticRule(StaticRuleParameters(
+        indicator_exit_policy="ALERT",
+        normal_policy="AUTO",
+    )).evaluate(
+        {"symbol": "FPT", "bars": _bars(B_VALUES), "previous_market_state": "UPTREND"},
+        {"position": {
+            "quantity": 700, "avg_price": 100, "current_price": 99,
+            "peak_profit_pct": 7.2, "normal_armed": True,
+            "em_modes": ["NORMAL", "IND_EXIT"],
+        }},
+    )
+    assert decision.action == "SELL"
+    assert decision.event == "PRICE_PROTECTION"
+    assert decision.details["triggered_events"] == ["NORMAL_PROTECTION"]
 
 
 def test_market_override_is_reported_and_uses_fixed_exposure():

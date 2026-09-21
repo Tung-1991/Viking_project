@@ -721,12 +721,31 @@ class RuleSettingsPopup:
 
         indicator = self._card(
             left_column, "E · EXIT SELL",
-            "Khi E được bật cho một trade, tín hiệu SELL xuất hiện sẽ đóng toàn bộ phần cổ phiếu còn lại. "
+            "OFF nằm ở công tắc E/M của từng trade. Khi E được bật: ALERT chỉ báo; AUTO bán toàn bộ phần còn lại. "
             "EMA SELL chỉnh riêng tại đây; chu kỳ RSI hiện dùng chung với BUY. "
             "Lưu áp dụng cho tài khoản đang chọn, kể cả vị thế đang mở.",
             1, 0,
         )
         self.exit_card = indicator
+        indicator_policy_row = ctk.CTkFrame(indicator, fg_color="transparent")
+        indicator_policy_row.pack(fill="x", padx=12, pady=4)
+        ctk.CTkLabel(
+            indicator_policy_row, text="MODE", font=FONT_KEY, text_color=self.TITLE,
+        ).pack(side="left")
+        self.indicator_exit_policy = tk.StringVar(
+            value=self.params.indicator_exit_policy
+        )
+        ctk.CTkOptionMenu(
+            indicator_policy_row, values=["ALERT", "AUTO"],
+            variable=self.indicator_exit_policy, width=140, height=34,
+            font=FONT_VALUE, fg_color=self.BLUE,
+            button_color="#245C92", button_hover_color="#1D4D7B",
+        ).pack(side="right")
+        self._hint_icon(
+            indicator_policy_row,
+            "ALERT: E vẫn đọc EMA SELL + RSI và gửi Telegram nhưng không đặt lệnh. "
+            "AUTO: E bán 100% phần còn lại. OFF: tắt công tắc E · EXIT SELL trong tab THỰC THI.",
+        ).pack(side="right", padx=(0, 6))
         self.sell_ema_fast = self._field(
             indicator, "EMA SELL nhanh", self.params.sell_ema_fast,
             "E chính: EMA nhanh cắt xuống EMA chậm. Tách biệt EMA BUY ở Phase 2.",
@@ -835,7 +854,11 @@ class RuleSettingsPopup:
                 bot_em, "PROTECT", "NORMAL" in enabled_modes,
                 "Mặc định ON. Đạt ngưỡng rồi giảm từ peak thì bán một lần theo tỷ lệ PROTECT đã đặt.",
             ),
-            "IND_EXIT": self._switch(bot_em, "E · EXIT SELL", "IND_EXIT" in enabled_modes, "Mặc định ON. Có tín hiệu SELL từ EMA/RSI thì bán hết phần còn lại."),
+            "IND_EXIT": self._switch(
+                bot_em, "E · EXIT SELL", "IND_EXIT" in enabled_modes,
+                "OFF: bỏ E khỏi trade BOT mới. ON: E chạy theo MODE ALERT/AUTO trong tab E/M; "
+                "ALERT không đặt lệnh, AUTO bán 100% phần còn lại.",
+            ),
         }
 
         costs = self._card(
@@ -1105,6 +1128,7 @@ class RuleSettingsPopup:
             self.params.buy_volume_min_ratio = buy_volume_minimum / 100.0
             self.params.sell_signal_use_ema = bool(self.sell_signal_ema.get())
             self.params.sell_signal_use_rsi = bool(self.sell_signal_rsi.get())
+            self.params.indicator_exit_policy = self.indicator_exit_policy.get()
             self.params.buy_confirmation_enabled = bool(self.buy_confirmation_enabled.get())
             self.params.buy_confirmation_minutes = buy_confirmation_minutes
             self.params.buy_confirmation_require_ema = bool(self.buy_confirmation_ema.get())

@@ -15,6 +15,7 @@ _EVENT_NAMES = {
     "STOP_LOSS": "SL",
     "TAKE_PROFIT": "TP",
     "INDICATOR_EXIT": "E",
+    "INDICATOR_EXIT_ALERT": "E ALERT",
     "NORMAL_PROTECTION": "PROTECT",
     "PRICE_PROTECTION": "PROTECT",
 }
@@ -345,7 +346,15 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
         ("Cắt lỗ", f"{params.get('initial_sl_pct')}% · vào lại {params.get('reentry_sl_pct')}%"
                    f" · bán sạch · luôn bật"),
         ("Ngưỡng TP", f"{params.get('take_profit_pct')}% · bán sạch nếu tactic TP bật"),
-        ("Điều kiện E", f"{' và '.join(sell_terms) or 'OFF'} · bán hết phần còn lại nếu tactic bật"),
+        (
+            "Điều kiện E",
+            f"{' và '.join(sell_terms) or 'OFF'} · "
+            + (
+                "ALERT, không đặt lệnh"
+                if str(params.get("indicator_exit_policy", "ALERT") or "ALERT").upper() == "ALERT"
+                else "AUTO bán hết phần còn lại"
+            ),
+        ),
         ("Khung giờ mua", (
             f"Từ {params.get('buy_window_start', '14:00')} đến hết phiên hợp lệ · giờ Việt Nam"
             if params.get("buy_window_enabled") else "OFF"

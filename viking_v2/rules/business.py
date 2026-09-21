@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Iterable
 
 from ..models import StrategyDecision
-from ..exit_modes import normalize_normal_policy
+from ..exit_modes import normalize_indicator_exit_policy, normalize_normal_policy
 from ..trading.market import active_trading_minutes, normalize_exchange, validate_buy_window
 
 
@@ -308,6 +308,10 @@ class StaticRuleParameters:
     buy_volume_min_ratio: float = 1.0
     sell_signal_use_ema: bool = True
     sell_signal_use_rsi: bool = True
+    # OFF is controlled per trade by the IND_EXIT E/M switch. When E is ON,
+    # ALERT reports the original VA EMA/RSI exit without placing an order;
+    # AUTO preserves the historical 100% exit behaviour.
+    indicator_exit_policy: str = "ALERT"
     max_positions: int = 5
     initial_sl_pct: float = -3.0
     reentry_sl_pct: float = -2.1
@@ -358,6 +362,9 @@ class StaticRuleParameters:
         self.buy_volume_enabled = bool(self.buy_volume_enabled)
         self.sell_signal_use_ema = bool(self.sell_signal_use_ema)
         self.sell_signal_use_rsi = bool(self.sell_signal_use_rsi)
+        self.indicator_exit_policy = normalize_indicator_exit_policy(
+            self.indicator_exit_policy
+        )
         try:
             self.buy_confirmation_minutes = max(1, min(120, int(self.buy_confirmation_minutes or 5)))
         except (TypeError, ValueError):
@@ -1156,12 +1163,22 @@ class StaticRule:
                 market_state=market_state, quantity_fraction=1.0, details=details,
                 scope="POSITION_MANAGEMENT",
             )
+        indicator_alert = False
         if "IND_EXIT" in em_modes and signal == "SELL":
-            return StrategyDecision(
-                "SELL", symbol, "SELL_SIGNAL", event="INDICATOR_EXIT", signal="SELL",
-                market_state=market_state, quantity_fraction=1.0, details=details,
-                scope="POSITION_MANAGEMENT",
+            indicator_policy = self.params.indicator_exit_policy
+            details.update(
+                indicator_exit_policy=indicator_policy,
+                indicator_exit_use_ema=self.params.sell_signal_use_ema,
+                indicator_exit_use_rsi=self.params.sell_signal_use_rsi,
             )
+            if indicator_policy == "ALERT":
+                indicator_alert = True
+            else:
+                return StrategyDecision(
+                    "SELL", symbol, "SELL_SIGNAL", event="INDICATOR_EXIT", signal="SELL",
+                    market_state=market_state, quantity_fraction=1.0, details=details,
+                    scope="POSITION_MANAGEMENT",
+                )
 
         triggered: list[str] = []
         normal_enabled = "NORMAL" in em_modes and not bool(position.get("normal_execution_managed"))
@@ -1263,11 +1280,13 @@ class StaticRule:
                 level.mfe_pct + 1e-9 >= self.params.normal_arm_pct
                 and not bool(position.get("normal_armed"))
             ):
-                return StrategyDecision(
-                    "WAIT", symbol, "NORMAL_ARMED", event="NORMAL_ARMED",
-                    signal=signal, market_state=market_state, details=details,
-                    scope="POSITION_MANAGEMENT",
-                )
+                details["normal_should_arm"] = True
+                if not indicator_alert:
+                    return StrategyDecision(
+                        "WAIT", symbol, "NORMAL_ARMED", event="NORMAL_ARMED",
+                        signal=signal, market_state=market_state, details=details,
+                        scope="POSITION_MANAGEMENT",
+                    )
 
             if eligible and current > 0 and current <= level.trigger_price + 1e-9:
                 details["normal_trigger_peak_pct"] = level.mfe_pct
@@ -1298,6 +1317,13 @@ class StaticRule:
                 quantity_fraction=fraction,
                 details=details,
                 scope="POSITION_MANAGEMENT",
+            )
+        if indicator_alert:
+            return StrategyDecision(
+                "WAIT", symbol, "INDICATOR_EXIT_ALERT",
+                event="INDICATOR_EXIT_ALERT", signal="SELL",
+                market_state=market_state, quantity_fraction=0.0,
+                details=details, scope="POSITION_MANAGEMENT",
             )
         return StrategyDecision(
             "WAIT", symbol, "HOLD_POSITION", signal=signal,

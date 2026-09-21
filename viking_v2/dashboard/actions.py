@@ -1136,6 +1136,46 @@ class DashboardActionsMixin:
             ).start()
             return None
 
+        if str(decision.event or "").upper() == "INDICATOR_EXIT_ALERT":
+            if not service or not self.settings.telegram_signal_alerts:
+                return None
+            occurrence = str(
+                details.get("signal_cycle") or details.get("candle_key", "") or ""
+            )
+            if not self.rule_state.claim_alert(
+                f"INDICATOR_EXIT_ALERT|{str(execution_mode or '').upper()}|{symbol}",
+                occurrence,
+            ):
+                return None
+            indicators = (
+                details.get("indicators")
+                if isinstance(details.get("indicators"), dict) else {}
+            )
+            threading.Thread(
+                target=service.notify_indicator_exit_alert,
+                kwargs={
+                    "symbol": symbol,
+                    "price": price,
+                    "ema_fast_period": int(
+                        indicators.get("sell_ema_fast_period", 0) or 0
+                    ),
+                    "ema_slow_period": int(
+                        indicators.get("sell_ema_slow_period", 0) or 0
+                    ),
+                    "ema_fast": float(indicators.get("sell_ema_fast", 0.0) or 0.0),
+                    "ema_slow": float(indicators.get("sell_ema_slow", 0.0) or 0.0),
+                    "rsi_period": int(indicators.get("rsi_period", 0) or 0),
+                    "rsi": float(indicators.get("rsi", 0.0) or 0.0),
+                    "rsi_previous": float(
+                        indicators.get("rsi_previous", 0.0) or 0.0
+                    ),
+                    "ema_enabled": bool(details.get("indicator_exit_use_ema", True)),
+                    "rsi_enabled": bool(details.get("indicator_exit_use_rsi", True)),
+                },
+                daemon=True,
+            ).start()
+            return None
+
         # A raw SELL signal is never sent to Telegram.  If the earlier BUY did
         # not become a real position, forget it silently so the next BUY can
         # receive a new ID.  An actual position keeps the ID until fully closed.
@@ -1583,6 +1623,9 @@ class DashboardActionsMixin:
         normal_arm = float(params.get("normal_arm_pct", 7.0) or 7.0)
         normal_giveback = float(params.get("normal_giveback_pct", 2.0) or 2.0)
         normal_policy = str(params.get("normal_policy", "AUTO") or "AUTO").upper()
+        indicator_exit_policy = str(
+            params.get("indicator_exit_policy", "ALERT") or "ALERT"
+        ).upper()
         normal_dynamic = bool(params.get("normal_dynamic_enabled", False))
         normal_atr_activation_multiplier = float(
             params.get("normal_atr_activation_multiplier", 0.6) or 0.6
@@ -1738,7 +1781,12 @@ class DashboardActionsMixin:
                 f" · {dynamic_summary}"
                 f" · REPEAT {'ON' if normal_repeat else 'OFF'}",
             ),
-            ("E", "Tín hiệu SELL · bán hết phần còn lại"),
+            (
+                "E",
+                "Tín hiệu SELL · ALERT, không đặt lệnh"
+                if indicator_exit_policy == "ALERT"
+                else "Tín hiệu SELL · AUTO bán hết phần còn lại",
+            ),
         )
         for col, (title, value) in enumerate(detail_values):
             card_color = COL_GRAY if col % 2 == 0 else "#343A43"
@@ -2039,7 +2087,9 @@ class DashboardActionsMixin:
         confirmation = details.get("buy_confirmation") if isinstance(details.get("buy_confirmation"), dict) else {}
         window = details.get("buy_window") if isinstance(details.get("buy_window"), dict) else {}
         symbol = str(decision.symbol or "").upper()
-        protect_alert = str(decision.event or "").upper() == "PROTECT_ALERT"
+        event = str(decision.event or "").upper()
+        protect_alert = event == "PROTECT_ALERT"
+        indicator_alert = event == "INDICATOR_EXIT_ALERT"
         raw_price = (
             tick.get("price") or tick.get("lastPrice") or tick.get("matchPrice")
             or tick.get("expected_price") or tick.get("expectedPrice")
@@ -2052,19 +2102,28 @@ class DashboardActionsMixin:
         self.signal_log.record({
             "timestamp": datetime.now(VN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
             "execution_mode": mode, "symbol": symbol,
-            "signal": "PROTECT" if protect_alert else decision.signal,
+            "signal": (
+                "PROTECT" if protect_alert else "E ALERT" if indicator_alert
+                else decision.signal
+            ),
             "price": _price_unit(raw_price),
-            "ema_fast": round(float(marks.get("buy_ema_fast") or 0.0), 4),
-            "ema_slow": round(float(marks.get("buy_ema_slow") or 0.0), 4),
+            "ema_fast": round(float(marks.get(
+                "sell_ema_fast" if indicator_alert else "buy_ema_fast"
+            ) or 0.0), 4),
+            "ema_slow": round(float(marks.get(
+                "sell_ema_slow" if indicator_alert else "buy_ema_slow"
+            ) or 0.0), 4),
             "rsi": round(float(marks.get("rsi") or 0.0), 2),
             "market_state": decision.market_state, "acted": decision.action,
             "blocked_by": "" if decision.action != "WAIT" else decision.reason,
             "candle_key": (
                 details.get("protect_occurrence", "") if protect_alert
+                else details.get("candle_key", "") if indicator_alert
                 else details.get("candle_key", "")
             ),
             "signal_cycle": (
                 details.get("protect_occurrence", "") if protect_alert
+                else details.get("signal_cycle", details.get("candle_key", "")) if indicator_alert
                 else details.get("signal_cycle", "")
             ),
             "exchange": self._symbol_exchange(symbol),
@@ -2080,6 +2139,7 @@ class DashboardActionsMixin:
             "watchlist_priority": priority,
             "slot_usage": f"{allocator.used}/{allocator.max_positions}",
             "trade_id": details.get("trade_id", ""),
+            "indicator_exit_policy": details.get("indicator_exit_policy", ""),
             "protect_mode": details.get("normal_policy", ""),
             "protect_state": details.get("normal_state", ""),
             "mfe_pct": details.get("normal_mfe_pct", ""),

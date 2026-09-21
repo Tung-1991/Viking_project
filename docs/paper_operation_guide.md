@@ -7,7 +7,16 @@ Tài liệu này mô tả code hiện hành. Báo cáo `backtest_4_modes_2026091
 1. **P1 · VNINDEX:** tự phân loại `UPTREND / ACCUMULATION / DISTRIBUTION / DOWNTREND` và lấy tỷ trọng cổ phiếu tương ứng.
 2. **P2 · ENTRY BUY:** EMA BUY và RSI tạo điểm mua. `VOLUME ENTRY` mặc định OFF; khi ON, volume tích lũy của nến ngày hiện tại phải đạt tỷ lệ tối thiểu so với trung bình các phiên ngày đã đóng trước đó.
 3. **P3 · Vốn:** giới hạn số vị thế, vốn cho mỗi mã, chống whipsaw và khóa mua sau chuỗi lỗ.
-4. **E/M · Thoát:** SL, TP, PROTECT và E là các nhánh độc lập. E chính chỉ còn EMA SELL + RSI; nhánh E sớm thử nghiệm đã bị xoá hoàn toàn.
+4. **E/M · Thoát:** SL, TP, PROTECT và E là các nhánh độc lập. E chính chỉ còn EMA SELL + RSI; nhánh E sớm thử nghiệm đã bị xoá hoàn toàn. E có ba trạng thái vận hành: `OFF` bằng công tắc E/M của trade, `ALERT` chỉ báo và `AUTO` bán 100% phần còn lại.
+
+## E · EXIT SELL
+
+- Rule E gốc: EMA SELL nhanh cắt xuống EMA SELL chậm và RSI14 giảm. EMA SELL mặc định 3/6, tách khỏi EMA BUY dù hiện cùng giá trị.
+- `ALERT` là mặc định mới: vẫn tính E, ghi signal log, hiện trên dashboard và gửi Telegram khi thông báo tín hiệu đang bật; không tạo pending sell và không đặt lệnh.
+- `AUTO`: cùng tín hiệu E nhưng bán 100% phần còn lại. `OFF`: trade không có `IND_EXIT`, backend bỏ hẳn E cho trade đó.
+- Cùng lúc E ALERT và PROTECT AUTO chạm ngưỡng, PROTECT vẫn được quyền bán; cảnh báo E không được chặn SL, TP hoặc PROTECT.
+- Telegram chống trùng theo `PAPER/REAL + mã + cây nến tín hiệu`. Nội dung ghi EMA SELL, RSI trước/sau và câu xác nhận không đặt lệnh.
+- Không còn E sớm sau T+2 trong UI hoặc backend.
 
 ## Hai tùy chọn vận hành mới
 

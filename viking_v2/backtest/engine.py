@@ -1571,12 +1571,17 @@ class BacktestEngine:
                     },
                 }, portfolio)
 
-                if settings.export_signals or decision.action != "WAIT":
+                if (
+                    settings.export_signals
+                    or decision.action != "WAIT"
+                    or decision.event == "INDICATOR_EXIT_ALERT"
+                ):
                     details = dict(decision.details or {}) if isinstance(decision.details, dict) else {}
                     signal_history.append({
                         "date": day,
                         "symbol": symbol,
                         "action": decision.action,
+                        "signal": decision.signal,
                         "event": decision.event,
                         "reason": decision.reason,
                         "market_state": current_phase,

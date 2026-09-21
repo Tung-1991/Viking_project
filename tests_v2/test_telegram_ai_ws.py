@@ -54,6 +54,22 @@ def test_protect_alert_hides_dormant_layers_when_dynamic_is_off():
     assert "Giữ lãi: OFF" in message
 
 
+def test_indicator_exit_alert_explains_signal_and_never_claims_an_order():
+    tele = Telegram()
+    service = SignalTelegramService(tele, chat_id="7")
+    assert service.notify_indicator_exit_alert(
+        symbol="VIX", price=14.0,
+        ema_fast_period=3, ema_slow_period=6,
+        ema_fast=13.9, ema_slow=14.1,
+        rsi_period=14, rsi=47.2, rsi_previous=51.4,
+    )
+    message = tele.sent[0][1]
+    assert "E ALERT · VIX" in message
+    assert "EMA 3/6" in message
+    assert "RSI14: 51.40 → 47.20" in message
+    assert "ALERT chỉ ghi nhận, không đặt lệnh" in message
+
+
 def test_telegram_sends_one_buy_and_only_its_matching_closed_summary():
     tele = Telegram()
     service = SignalTelegramService(tele, chat_id="7")
@@ -216,6 +232,53 @@ def test_raw_sell_signal_is_silent_when_alerted_buy_never_became_a_position(tmp_
     assert DashboardActionsMixin._notify_rule_signal(Subject(), "FPT", decision, {"price": 74}) is None
     assert tele.sent == []
     assert state.active_telegram_signal("FPT") is None
+
+
+def test_dashboard_sends_each_indicator_exit_alert_once(monkeypatch, tmp_path):
+    calls = []
+
+    class ImmediateThread:
+        def __init__(self, *, target, kwargs, daemon):
+            self.target, self.kwargs = target, kwargs
+
+        def start(self):
+            self.target(**self.kwargs)
+
+    class Service:
+        @staticmethod
+        def notify_indicator_exit_alert(**kwargs):
+            calls.append(kwargs)
+            return True
+
+    class Subject:
+        telegram = Service()
+        rule_state = RuleStateStore(tmp_path / "rule_state.json")
+        settings = SimpleNamespace(telegram_signal_alerts=True)
+
+    monkeypatch.setattr(
+        "viking_v2.dashboard.actions.threading.Thread", ImmediateThread,
+    )
+    decision = StrategyDecision(
+        "WAIT", "FPT", "INDICATOR_EXIT_ALERT",
+        event="INDICATOR_EXIT_ALERT", signal="SELL",
+        details={
+            "candle_key": "2026-09-21|TICK|7",
+            "indicators": {
+                "sell_ema_fast_period": 3, "sell_ema_slow_period": 6,
+                "sell_ema_fast": 99, "sell_ema_slow": 100,
+                "rsi_period": 14, "rsi": 47, "rsi_previous": 51,
+            },
+        },
+    )
+    subject = Subject()
+    DashboardActionsMixin._notify_rule_signal(
+        subject, "FPT", decision, {"price": 99}, execution_mode="PAPER",
+    )
+    DashboardActionsMixin._notify_rule_signal(
+        subject, "FPT", decision, {"price": 99}, execution_mode="PAPER",
+    )
+    assert len(calls) == 1
+    assert calls[0]["symbol"] == "FPT"
 
 
 def test_websocket_decodes_msgpack_and_merges_tick_quote():

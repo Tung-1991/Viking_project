@@ -260,7 +260,18 @@ class DashboardTablesMixin:
                     decision_details.get("entry_checks")
                     if isinstance(decision_details.get("entry_checks"), dict) else {}
                 )
-                indicator_state = "OFF" if not indicator_enabled else "SIGNAL" if str(decision.get("signal", "")).upper() == "SELL" else "WAIT"
+                indicator_policy = str(
+                    decision_details.get(
+                        "indicator_exit_policy",
+                        params.get("indicator_exit_policy", "ALERT"),
+                    ) or "ALERT"
+                ).upper()
+                indicator_signal = str(decision.get("signal", "")).upper() == "SELL"
+                indicator_state = (
+                    "OFF" if not indicator_enabled
+                    else f"{indicator_policy}·SIGNAL" if indicator_signal
+                    else f"{indicator_policy}·WAIT"
+                )
                 protect_mode = str(
                     decision_details.get("normal_policy", params.get("normal_policy", "AUTO")) or "AUTO"
                 ).upper()

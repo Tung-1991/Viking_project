@@ -130,6 +130,8 @@ def test_removed_and_classic_normal_policy_migrate_to_auto() -> None:
     params = StaticRuleParameters.from_dict({"normal_policy": "REMOVED"})
     assert params.normal_policy == "AUTO"
     assert StaticRuleParameters.from_dict({"normal_policy": "CLASSIC"}).normal_policy == "AUTO"
+    assert StaticRuleParameters.from_dict({}).indicator_exit_policy == "ALERT"
+    assert StaticRuleParameters.from_dict({"indicator_exit_policy": "bad"}).indicator_exit_policy == "ALERT"
     migrated = StaticRuleParameters.from_dict({
         "normal_policy": "CLASSIC", "normal_dynamic_enabled": True,
         "normal_giveback_pct": 3, "normal_sell_pct": 33,

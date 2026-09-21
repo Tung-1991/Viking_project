@@ -13,6 +13,7 @@ EXIT_MODE_LABELS: dict[str, str] = {
     "IND_EXIT": "E",
 }
 NORMAL_POLICIES: tuple[str, ...] = ("AUTO", "ALERT")
+INDICATOR_EXIT_POLICIES: tuple[str, ...] = ("AUTO", "ALERT")
 
 
 def normalize_exit_modes(values: Iterable[object] | None) -> list[str]:
@@ -37,3 +38,9 @@ def normalize_normal_policy(value: object) -> str:
     if policy in {"CLASSIC", "TSL"}:
         return "AUTO"
     return policy if policy in NORMAL_POLICIES else "AUTO"
+
+
+def normalize_indicator_exit_policy(value: object) -> str:
+    """Normalize E · EXIT SELL policy; OFF remains the per-trade E/M switch."""
+    policy = str(value or "ALERT").strip().upper()
+    return policy if policy in INDICATOR_EXIT_POLICIES else "ALERT"

@@ -168,6 +168,7 @@ PHASE_PARAMETER_KEYS = frozenset(
 )
 BACKTEST_RULE_KEYS = PHASE_PARAMETER_KEYS | {
     "exposure", "whipsaw_enabled", "loss_lock_hours", "max_positions",
+    "indicator_exit_policy",
     "normal_policy", "normal_dynamic_enabled", "normal_repeat_enabled",
     "normal_atr_activation_enabled", "normal_atr_trail_enabled",
     "normal_retention_enabled", "normal_retention_until_enabled",
@@ -1151,6 +1152,9 @@ class BacktestPopup:
         exit_params = StaticRuleParameters.from_dict(self.config.rule_parameters)
         self.sell_signal_ema = ctk.BooleanVar(value=exit_params.sell_signal_use_ema)
         self.sell_signal_rsi = ctk.BooleanVar(value=exit_params.sell_signal_use_rsi)
+        self.indicator_exit_policy = ctk.StringVar(
+            value=exit_params.indicator_exit_policy
+        )
         self.dynamic_subrules: dict[str, ctk.BooleanVar] = {}
         row_index = 3
         for title, subtitle, fields in PHASE_GROUPS:
@@ -1184,6 +1188,19 @@ class BacktestPopup:
                         font=(FONT, 11, "bold"), fg_color=COL_GREEN,
                         text_color=COL_TEXT,
                     ).grid(row=0, column=column, padx=(0, 12))
+                self._label(controls, "MODE", 12, bold=True).grid(
+                    row=0, column=2, padx=(12, 5)
+                )
+                ctk.CTkOptionMenu(
+                    controls, values=["ALERT", "AUTO"],
+                    variable=self.indicator_exit_policy, width=120, height=32,
+                    font=(FONT, 11, "bold"), fg_color=COL_BLUE,
+                ).grid(row=0, column=3, padx=(0, 5))
+                self._hint(
+                    controls,
+                    "ALERT ghi tín hiệu E nhưng không bán; AUTO bán 100%. "
+                    "OFF bằng công tắc E trong phần E/M.",
+                ).grid(row=0, column=4)
             padding_row = 2 + (len(fields) + 1) // 2
             if title == "E · EXIT SELL":
                 padding_row += 1
@@ -1543,6 +1560,13 @@ class BacktestPopup:
         self.buy_signal_rsi.set(bool(params.get("buy_signal_use_rsi", True)))
         self.sell_signal_ema.set(bool(params.get("sell_signal_use_ema", True)))
         self.sell_signal_rsi.set(bool(params.get("sell_signal_use_rsi", True)))
+        indicator_exit_policy = str(
+            params.get("indicator_exit_policy", "ALERT") or "ALERT"
+        ).upper()
+        self.indicator_exit_policy.set(
+            indicator_exit_policy
+            if indicator_exit_policy in {"AUTO", "ALERT"} else "ALERT"
+        )
         self.buy_volume_enabled.set(bool(params.get("buy_volume_enabled", False)))
         self.buy_confirmation.set(bool(params.get("buy_confirmation_enabled", False)))
         self.buy_confirmation_ema.set(bool(params.get("buy_confirmation_require_ema", True)))
@@ -1705,6 +1729,7 @@ class BacktestPopup:
         params["buy_signal_use_rsi"] = bool(self.buy_signal_rsi.get())
         params["sell_signal_use_ema"] = bool(self.sell_signal_ema.get())
         params["sell_signal_use_rsi"] = bool(self.sell_signal_rsi.get())
+        params["indicator_exit_policy"] = self.indicator_exit_policy.get()
         try:
             confirmation_minutes = int(float(self.buy_confirmation_minutes.get().strip() or 5))
         except ValueError as exc:

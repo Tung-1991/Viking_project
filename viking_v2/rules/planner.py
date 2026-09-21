@@ -196,6 +196,7 @@ class StrategyOrderPlanner:
                         "normal_mfe_pct", "normal_peak_price", "normal_effective_trail_pct",
                         "normal_trigger_price", "normal_protected_profit_pct",
                         "normal_trigger_peak_pct", "normal_rearm_after_pct",
+                        "indicator_exit_policy",
                     )
                     if key in decision.details
                 }

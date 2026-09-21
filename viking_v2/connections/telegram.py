@@ -242,6 +242,43 @@ class SignalTelegramService:
             ))
         )
 
+    def notify_indicator_exit_alert(
+        self,
+        *,
+        symbol: str,
+        price: float,
+        ema_fast_period: int,
+        ema_slow_period: int,
+        ema_fast: float,
+        ema_slow: float,
+        rsi_period: int,
+        rsi: float,
+        rsi_previous: float,
+        ema_enabled: bool = True,
+        rsi_enabled: bool = True,
+    ) -> bool:
+        """Report the original VA indicator exit without placing an order."""
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return False
+        lines = [f"🔴 E ALERT · {symbol}", f"Giá: {self._price(price)}"]
+        if ema_enabled:
+            lines.append(
+                (
+                    f"EMA {int(ema_fast_period)}/{int(ema_slow_period)}: "
+                    f"{self._price(ema_fast)} / {self._price(ema_slow)} · EMA nhanh < EMA chậm"
+                )
+            )
+        if rsi_enabled:
+            lines.append(
+                (
+                    f"RSI{int(rsi_period)}: {float(rsi_previous):.2f} → "
+                    f"{float(rsi):.2f} · giảm"
+                )
+            )
+        lines.append("ALERT chỉ ghi nhận, không đặt lệnh.")
+        return self._send("\n".join(lines))
+
     def notify_corporate_action(self, *, symbol: str, ex_date: str) -> bool:
         symbol = str(symbol or "").strip().upper()
         ex_date = str(ex_date or "").strip()
