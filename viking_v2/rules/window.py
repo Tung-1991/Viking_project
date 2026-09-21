@@ -547,6 +547,14 @@ class RuleSettingsPopup:
             "ON: tính theo exposure trước. Nếu vốn/mã không đủ một lô, BOT có thể fallback sang 100 CP. "
             "Lệnh được vượt phần chia theo slot nhưng không vượt room Phase 1, vốn no-compound hoặc cash gồm phí.",
         )
+        self.manual_sell_pause = self._field(
+            capital,
+            "Dừng BUY sau bán tay (phút)",
+            self.settings.manual_sell_pause_minutes,
+            "Khi một lệnh SELL nguồn MANUAL khớp, BOT khóa tạo và gửi BUY mới trong số phút này. "
+            "Mặc định 15; nhập 0 để tắt. SELL/SL/PROTECT, quản lý vị thế và lệnh MANUAL vẫn chạy. "
+            "Hết giờ BOT tự mở lại, không cần bật lại nút MUA TỰ ĐỘNG.",
+        )
 
         # Hai mức SL nằm ở tab E/M để đứng cùng các cách thoát vị thế.
         stops = self._card(body, "KHÓA SAU LỖ", "Bộ chặn entry sau chuỗi lệnh thua. Hai mức cắt lỗ nằm ở tab E/M.", 1, 1)
@@ -1021,6 +1029,9 @@ class RuleSettingsPopup:
             max_positions = int(self._number(self.max_positions, "Tối đa position"))
             loss_lock = int(self._number(self.loss_lock, "Khóa sau LOSS"))
             loss_lock_hours = int(self._number(self.loss_lock_hours, "Mở lại sau"))
+            manual_sell_pause = int(self._number(
+                self.manual_sell_pause, "Dừng BUY sau bán tay",
+            ))
             whipsaw_n = int(self._number(self.whipsaw_n, "Whipsaw N"))
             whipsaw_x = int(self._number(self.whipsaw_x, "Whipsaw X"))
             exposures = {
@@ -1063,6 +1074,8 @@ class RuleSettingsPopup:
                 raise ValueError("SELL EMA chậm phải lớn hơn SELL EMA nhanh")
             if whipsaw_x < 2:
                 raise ValueError("Whipsaw X phải từ 2 phiên")
+            if not 0 <= manual_sell_pause <= 1440:
+                raise ValueError("Dừng BUY sau bán tay phải từ 0 đến 1440 phút")
             if any(value < 0 or value > 100 for value in exposures.values()):
                 raise ValueError("Exposure phải nằm trong 0–100%")
             if not 0 <= override_exposure <= 100:
@@ -1144,6 +1157,7 @@ class RuleSettingsPopup:
             self.params.reentry_sl_pct = reentry_sl
             self.params.loss_lock_count = loss_lock
             self.params.loss_lock_hours = loss_lock_hours
+            self.settings.manual_sell_pause_minutes = manual_sell_pause
             self.params.whipsaw_enabled = bool(self.whipsaw_enabled.get())
             self.params.whipsaw_n = whipsaw_n
             self.params.whipsaw_x = whipsaw_x

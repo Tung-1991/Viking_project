@@ -252,6 +252,12 @@ class InfoPopup:
             ("COMPOUND", "OFF" if p.no_compound_enabled else "ON", PALETTE["TEXT"]),
             ("WHIPSAW", f"{self._on_off(whipsaw_enabled)} · {p.whipsaw_n}/{p.whipsaw_x}", PALETTE["WARN"]),
             ("LOSS LOCK", loss_lock, PALETTE["WARN"]),
+            (
+                "BÁN TAY → DỪNG BUY",
+                f"{self.settings.manual_sell_pause_minutes} PHÚT"
+                if self.settings.manual_sell_pause_minutes else "OFF",
+                PALETTE["WARN"],
+            ),
             ("MIN LOT", "100 CP" if p.force_min_lot_enabled else "OFF", PALETTE["TEXT"]),
             ("TP", f"{p.take_profit_pct:g}%", PALETTE["GREEN"]),
             (

@@ -27,6 +27,7 @@ def test_execution_defaults_are_explicit_and_minimal():
     assert StaticRuleParameters().whipsaw_n == 3
     assert StaticRuleParameters().whipsaw_x == 7
     assert StaticRuleParameters().loss_lock_hours == 24
+    assert settings.manual_sell_pause_minutes == 15
     assert StaticRuleParameters().initial_sl_pct == -3.5
     assert StaticRuleParameters().reentry_sl_pct == -2.5
     assert settings.rule_parameters == config.DEFAULT_RULE_PARAMETERS
@@ -40,6 +41,7 @@ def test_sparse_account_rules_merge_over_complete_operating_defaults():
     assert settings.rule_parameters["reentry_sl_pct"] == -2.5
     assert settings.rule_parameters["normal_atr_activation_multiplier"] == 0.55
     assert settings.rule_parameters["normal_dynamic_enabled"] is True
+    assert settings.manual_sell_pause_minutes == 15
 
 
 def test_phase1_override_settings_are_normalized():

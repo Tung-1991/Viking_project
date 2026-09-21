@@ -330,3 +330,47 @@ def test_t2_keep_policy_sells_when_stock_arrives_without_rechecking(tmp_path):
     broker.store.write(state)
     service.process_due(phase="OPEN", execution_mode="PAPER")
     assert queue.get(sell.id).status == "FILLED"
+
+
+def test_manual_sell_fill_closes_cycle_pauses_entry_and_cancels_same_batch_bot_buy(tmp_path):
+    paper = PaperBroker(
+        tmp_path / "paper-manual-sell.json",
+        tick_provider=lambda symbol: {
+            "price": 100 if symbol == "FPT" else 20,
+            "ask": 100 if symbol == "FPT" else 20,
+            "bid": 100 if symbol == "FPT" else 20,
+        },
+    )
+    assert paper.place_order(OrderIntent.create("FPT", "BUY", 100, "MARKET")).ok
+    paper_state = paper.store.read()
+    paper_state["positions"][0]["tradeQuantity"] = 100
+    paper.store.write(paper_state)
+
+    trades = TradeStateStore(tmp_path / "trades-manual-sell.json")
+    cycle = trades.create("FPT", "PAPER", source="MANUAL")
+    trades.record_buy_fill(cycle.id, 100, 100)
+    rules = RuleStateStore(tmp_path / "rules-manual-sell.json")
+    queue = OrderQueue(tmp_path / "orders-manual-sell.json")
+    stale_buy = queue.add(OrderIntent.create(
+        "MBB", "BUY", 100, "MARKET", source="BOT", trade_id="MBB-BOT",
+    ))
+    manual_sell = queue.add(OrderIntent.create(
+        "FPT", "SELL", 100, "MARKET", source="MANUAL",
+        action="CLOSE", trade_id=cycle.id,
+    ))
+    service = ExecutionService(
+        object(), paper, queue,
+        JSONLineJournal(tmp_path / "journal-manual-sell.jsonl"),
+        trade_state=trades,
+        rule_state=rules,
+        manual_sell_pause_seconds_provider=lambda: 15 * 60,
+    )
+
+    completed = service.process_due(phase="OPEN", execution_mode="PAPER")
+
+    assert [item.id for item, _result in completed] == [manual_sell.id, stale_buy.id]
+    assert queue.get(manual_sell.id).status == "FILLED"
+    assert queue.get(stale_buy.id).status == "CANCELLED"
+    assert rules.entry_pause("PAPER")["active"] is True
+    assert trades.get(cycle.id).status == "CLOSED"
+    assert all(row.get("symbol") != "MBB" for row in paper.get_positions())

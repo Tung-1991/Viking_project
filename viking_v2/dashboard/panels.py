@@ -19,8 +19,6 @@ from .view import (
 from .windows import (
     FONT_KEY,
     FONT_MONO_VALUE,
-    FONT_TABLE_HEADING,
-    FONT_TABLE_VALUE,
     FONT_VALUE,
     _HoverHint,
     fit_entry_text,
@@ -491,13 +489,13 @@ class DashboardPanelsMixin:
         style.theme_use("clam")
         style.configure(
             "Running.Treeview", background=COL_SURFACE_2, foreground=COL_TEXT,
-            fieldbackground=COL_SURFACE_2, rowheight=48, font=FONT_TABLE_VALUE,
+            fieldbackground=COL_SURFACE_2, rowheight=38, font=("Segoe UI", 10),
             borderwidth=0, relief="flat", bordercolor=COL_BORDER,
             lightcolor=COL_BORDER, darkcolor=COL_BORDER,
         )
         style.configure(
             "Running.Treeview.Heading", background=COL_SURFACE, foreground=COL_TITLE,
-            font=FONT_TABLE_HEADING, relief="flat", padding=(10, 9),
+            font=("Segoe UI", 11, "bold"), relief="flat", padding=(8, 7),
         )
         style.map(
             "Running.Treeview.Heading",
@@ -1555,6 +1553,8 @@ class DashboardPanelsMixin:
             "HOLD_POSITION": "GIỮ VỊ THẾ",
             "BUY_ALREADY_PENDING": "ĐÃ CÓ LỆNH MUA CHỜ",
             "MAX_POSITIONS": "ĐÃ ĐỦ SỐ MÃ",
+            "BOT_OFF": "MUA TỰ ĐỘNG ĐANG TẮT",
+            "MANUAL_SELL_PAUSE": "TẠM KHÓA BUY SAU BÁN TAY",
             "NO_AVAILABLE_CAPITAL": "KHÔNG ĐỦ CASH",
             "BROKER_REJECTED": "BROKER TỪ CHỐI",
             "BROKER_FAILED": "GỬI BROKER THẤT BẠI",

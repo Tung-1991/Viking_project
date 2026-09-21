@@ -139,3 +139,38 @@ def test_queue_forgets_finished_orders_after_a_day_but_never_live_ones(tmp_path)
     queue.expire()
     kept = {order.id for order in queue.list_all()}
     assert kept == {"live-30h", "done-1h", "done-20h"}
+
+
+def test_bot_off_blocks_cached_bot_buy_but_not_manual_buy_or_sell(tmp_path):
+    queue = OrderQueue(tmp_path / "bot-off.json")
+    bot_buy = queue.add(OrderIntent.create(
+        "FPT", "BUY", 100, "MARKET", source="BOT",
+    ))
+    manual_buy = queue.add(OrderIntent.create(
+        "MBB", "BUY", 100, "MARKET", source="MANUAL",
+    ))
+    sell = queue.add(OrderIntent.create(
+        "VCB", "SELL", 100, "MARKET", source="EM", action="CLOSE",
+    ))
+
+    due = queue.claim_due(
+        phase="OPEN", execution_mode="PAPER", token_ready=True,
+        allow_bot_buys=False,
+    )
+
+    assert {item.id for item in due} == {manual_buy.id, sell.id}
+    assert queue.get(bot_buy.id).status == "PENDING"
+
+
+def test_cached_order_can_be_paused_resumed_edited_and_cancelled(tmp_path):
+    queue = OrderQueue(tmp_path / "pause.json")
+    intent = queue.add(OrderIntent.create("FPT", "BUY", 100, "LO", limit_price=10))
+
+    assert queue.pause_local(intent.id).status == "PAUSED"
+    assert queue.claim_due(
+        phase="OPEN", execution_mode="PAPER", token_ready=True,
+    ) == []
+    assert queue.replace_local(intent.id, quantity=200, limit_price=10.5).quantity == 200
+    assert queue.resume_local(intent.id).status == "PENDING"
+    assert queue.pause_local(intent.id).status == "PAUSED"
+    assert queue.cancel_local(intent.id).status == "CANCELLED"

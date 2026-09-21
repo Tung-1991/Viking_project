@@ -40,6 +40,7 @@ class RuleStateStore:
                 "indicator_streams": {},
                 "buy_confirmations": {},
                 "signal_observations": {},
+                "entry_pauses": {},
             },
         )
         self._lock = threading.RLock()
@@ -59,7 +60,67 @@ class RuleStateStore:
         raw["indicator_streams"] = raw.get("indicator_streams") if isinstance(raw.get("indicator_streams"), dict) else {}
         raw["buy_confirmations"] = raw.get("buy_confirmations") if isinstance(raw.get("buy_confirmations"), dict) else {}
         raw["signal_observations"] = raw.get("signal_observations") if isinstance(raw.get("signal_observations"), dict) else {}
+        raw["entry_pauses"] = raw.get("entry_pauses") if isinstance(raw.get("entry_pauses"), dict) else {}
         return raw
+
+    def start_entry_pause(
+        self,
+        execution_mode: str,
+        seconds: float,
+        *,
+        reason: str = "MANUAL_SELL",
+        symbol: str = "",
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Persist a mode-specific BUY pause across UI/daemon restarts."""
+        mode = "REAL" if str(execution_mode or "").upper() == "REAL" else "PAPER"
+        started_at = time.time() if now is None else float(now)
+        duration = max(0.0, float(seconds or 0.0))
+        if duration <= 0:
+            return self.entry_pause(mode, now=started_at)
+        with self._lock:
+            raw = self._read()
+            current = raw["entry_pauses"].get(mode)
+            current_until = (
+                float(current.get("until", 0.0) or 0.0)
+                if isinstance(current, dict) else 0.0
+            )
+            pause = {
+                "active": True,
+                "started_at": started_at,
+                "until": max(current_until, started_at + duration),
+                "reason": str(reason or "MANUAL_SELL").upper(),
+                "symbol": str(symbol or "").upper(),
+            }
+            raw["entry_pauses"][mode] = pause
+            self.store.write(raw)
+            return dict(pause)
+
+    def entry_pause(
+        self,
+        execution_mode: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Return the active BUY pause, removing it once its deadline passes."""
+        mode = "REAL" if str(execution_mode or "").upper() == "REAL" else "PAPER"
+        checked_at = time.time() if now is None else float(now)
+        with self._lock:
+            raw = self._read()
+            current = raw["entry_pauses"].get(mode)
+            if not isinstance(current, dict):
+                return {"active": False, "until": 0.0, "remaining_seconds": 0.0}
+            until = float(current.get("until", 0.0) or 0.0)
+            if until <= checked_at:
+                raw["entry_pauses"].pop(mode, None)
+                self.store.write(raw)
+                return {"active": False, "until": 0.0, "remaining_seconds": 0.0}
+            return {
+                **current,
+                "active": True,
+                "until": until,
+                "remaining_seconds": max(0.0, until - checked_at),
+            }
 
     @staticmethod
     def _buy_confirmation_key(symbol: str, stream: str) -> str:

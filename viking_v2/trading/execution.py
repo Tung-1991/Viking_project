@@ -35,6 +35,7 @@ class ExecutionService:
         rule_state: RuleStateStore | None = None,
         sell_decision_provider: Callable[[str, str], Any | None] | None = None,
         trade_event_callback: Callable[[str, TradeCycle, OrderIntent], None] | None = None,
+        manual_sell_pause_seconds_provider: Callable[[], float] | None = None,
     ):
         self.real = real
         self.paper = paper
@@ -46,6 +47,7 @@ class ExecutionService:
         self.rule_state = rule_state
         self.sell_decision_provider = sell_decision_provider
         self.trade_event_callback = trade_event_callback
+        self.manual_sell_pause_seconds_provider = manual_sell_pause_seconds_provider
 
     def submit(
         self,
@@ -117,9 +119,65 @@ class ExecutionService:
             self.csv_journal.append_event(event)
         return cancelled, broker_managed
 
+    def cancel_unsubmitted_bot_buys(
+        self,
+        execution_mode: str,
+        *,
+        reason: str = "MUA TỰ ĐỘNG chuyển sang OFF",
+    ) -> tuple[list[OrderIntent], list[OrderIntent]]:
+        """Cancel safe local BOT BUYs when automatic entry is switched off.
+
+        A request that may already be at the broker is never guessed away;
+        those rows are returned for an explicit operator check/cancel instead.
+        MANUAL BUYs are deliberately untouched because they carry separate
+        operator authority.
+        """
+        mode = "REAL" if str(execution_mode or "").upper() == "REAL" else "PAPER"
+        cancelled: list[OrderIntent] = []
+        broker_managed: list[OrderIntent] = []
+        for intent in self.queue.list_all():
+            if (
+                intent.execution_mode != mode
+                or intent.side != "BUY"
+                or intent.source != "BOT"
+                or intent.status.upper() in {
+                    "FILLED", "REJECTED", "FAILED", "CANCELLED", "EXPIRED",
+                }
+            ):
+                continue
+            if (
+                intent.filled_quantity > 0
+                or intent.broker_order_id
+                or intent.status.upper() in {"SENDING", "WORKING", "PARTIAL", "UNKNOWN"}
+            ):
+                broker_managed.append(intent)
+                continue
+            updated = self.queue.cancel_local(intent.id)
+            if not updated:
+                continue
+            cancelled.append(updated)
+            event = {
+                "ts": time.time(),
+                "intent": updated.to_dict(),
+                "queue_status": "CANCELLED",
+                "result": {
+                    "ok": True,
+                    "status": "CANCELLED",
+                    "order_id": "",
+                    "message": str(reason or "MUA TỰ ĐỘNG chuyển sang OFF"),
+                    "error": "",
+                    "status_code": 0,
+                    "raw": {},
+                },
+            }
+            self.journal.append(event)
+            self.csv_journal.append_event(event)
+        return cancelled, broker_managed
+
     def process_due(
         self, *, phase: str, execution_mode: str,
         phase_provider: Callable[[str], str] | None = None,
+        allow_bot_buys: bool = True,
     ) -> list[tuple[OrderIntent, BrokerOrderResult]]:
         mode = str(execution_mode).upper()
         token_ready = True if mode == "PAPER" else self.real.has_trading_token()
@@ -129,11 +187,52 @@ class ExecutionService:
             phase=phase,
             execution_mode=mode,
             token_ready=token_ready,
+            allow_bot_buys=allow_bot_buys,
             quote_provider=self.quote_provider,
             phase_provider=phase_provider,
         )
         completed: list[tuple[OrderIntent, BrokerOrderResult]] = []
+        # Exit risk first.  Besides being the safer order, this lets a filled
+        # MANUAL SELL activate its BUY cooldown before another cached BOT BUY
+        # from the same worker batch can reach the broker.
+        due.sort(key=lambda item: 0 if item.side == "SELL" else 1)
         for intent in due:
+            pause_active = bool(
+                self.rule_state
+                and self.rule_state.entry_pause(mode).get("active", False)
+            )
+            if (
+                intent.side == "BUY"
+                and intent.source == "BOT"
+                and (not allow_bot_buys or pause_active)
+            ):
+                message = (
+                    "Khóa BUY sau SELL MANUAL"
+                    if pause_active else "MUA TỰ ĐỘNG đang OFF"
+                )
+                cancelled = self.queue.cancel_claimed_local(intent.id, message)
+                if cancelled:
+                    result = BrokerOrderResult(
+                        True, "CANCELLED", message=message,
+                    )
+                    event = {
+                        "ts": time.time(),
+                        "intent": cancelled.to_dict(),
+                        "queue_status": "CANCELLED",
+                        "result": {
+                            "ok": True,
+                            "status": "CANCELLED",
+                            "order_id": "",
+                            "message": message,
+                            "error": "",
+                            "status_code": 0,
+                            "raw": {},
+                        },
+                    }
+                    self.journal.append(event)
+                    self.csv_journal.append_event(event)
+                    completed.append((intent, result))
+                continue
             intent_phase = phase_provider(intent.symbol) if phase_provider else phase
             send_quantity = intent.remaining_quantity or intent.quantity
             if intent.side == "SELL":
@@ -349,10 +448,42 @@ class ExecutionService:
         *,
         mark_events: bool = False,
     ) -> None:
-        if not self.trade_state or not intent.trade_id or not result.ok:
+        if not result.ok:
             return
         filled, _leaves = self.queue._fill_quantities(result, submitted)
         if filled <= 0:
+            return
+        # A manual exit is an explicit operator judgement. On its first fill,
+        # pause only automatic entry for this PAPER/REAL book and discard safe
+        # unsent BOT BUYs so a stale signal cannot immediately refill the slot.
+        if (
+            intent.side == "SELL"
+            and intent.source == "MANUAL"
+            and intent.filled_quantity <= 0
+            and self.rule_state
+        ):
+            try:
+                pause_seconds = max(
+                    0.0,
+                    float(
+                        self.manual_sell_pause_seconds_provider()
+                        if self.manual_sell_pause_seconds_provider else 0.0
+                    ),
+                )
+            except (TypeError, ValueError):
+                pause_seconds = 0.0
+            if pause_seconds > 0:
+                self.rule_state.start_entry_pause(
+                    intent.execution_mode,
+                    pause_seconds,
+                    reason="MANUAL_SELL",
+                    symbol=intent.symbol,
+                )
+                self.cancel_unsubmitted_bot_buys(
+                    intent.execution_mode,
+                    reason=f"Khóa BUY sau SELL MANUAL {intent.symbol}",
+                )
+        if not self.trade_state or not intent.trade_id:
             return
         raw = result.raw if isinstance(result.raw, dict) else {}
         body = raw.get("data") if isinstance(raw.get("data"), dict) else raw

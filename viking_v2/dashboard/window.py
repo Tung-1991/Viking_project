@@ -69,6 +69,12 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
             rule_state=self.rule_state,
             sell_decision_provider=self._latest_sell_decision,
             trade_event_callback=self._notify_bot_trade_event,
+            manual_sell_pause_seconds_provider=lambda: max(
+                0.0,
+                float(
+                    self.settings.manual_sell_pause_minutes or 0.0
+                ) * 60.0,
+            ),
         )
         self.daily_fees = DailyFeeTracker(
             self.bridge.history_csv_path,

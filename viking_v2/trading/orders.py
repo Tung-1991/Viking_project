@@ -20,6 +20,7 @@ FINAL_STATUSES = {"FILLED", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"}
 # every single add.
 SETTLED_KEEP_SECONDS = 24 * 60 * 60
 CLAIMABLE_STATUSES = {"PENDING", "WAITING_TOKEN", "WAITING_SETTLEMENT"}
+LOCALLY_CONTROLLABLE_STATUSES = CLAIMABLE_STATUSES | {"PAUSED"}
 
 
 class OrderQueue:
@@ -129,7 +130,7 @@ class OrderQueue:
                 if bool(row.get("defer_expiry_until_eligible", False)) and not bool(row.get("eligible_session_seen", False)):
                     continue
                 if (float(row.get("expires_at", 0.0) or 0.0) <= now
-                        and (not row.get("buy_window_end") or status in CLAIMABLE_STATUSES)):
+                        and (not row.get("buy_window_end") or status in LOCALLY_CONTROLLABLE_STATUSES)):
                     row["status"] = "EXPIRED"
                     row["result"] = "Hết khung giờ mua" if row.get("buy_window_end") else "Expired after 24 hours"
                     expired.append(OrderIntent.from_dict(row))
@@ -179,6 +180,7 @@ class OrderQueue:
         phase: str,
         execution_mode: str,
         token_ready: bool,
+        allow_bot_buys: bool = True,
         limit: int = 20,
         quote_provider: Callable[[str], dict[str, Any] | None] | None = None,
         phase_provider: Callable[[str], str] | None = None,
@@ -195,6 +197,16 @@ class OrderQueue:
                     continue
                 intent = OrderIntent.from_dict(row)
                 if intent.execution_mode != str(execution_mode).upper():
+                    continue
+                # BOT OFF is a hard execution boundary, not merely a planner
+                # hint.  A BUY cached before the operator switched the bot off
+                # must never leak through the serialized worker afterwards.
+                # MANUAL orders remain operator-authorised and are unaffected.
+                if (
+                    not allow_bot_buys
+                    and intent.side == "BUY"
+                    and intent.source == "BOT"
+                ):
                     continue
                 if not self.buy_window_is_due(intent):
                     continue
@@ -390,9 +402,61 @@ class OrderQueue:
 
     def cancel_local(self, order_id: str) -> OrderIntent | None:
         item = self.get(order_id)
-        if not item or item.status.upper() not in CLAIMABLE_STATUSES:
+        if not item or item.status.upper() not in LOCALLY_CONTROLLABLE_STATUSES:
             return None
         return self._update(order_id, status="CANCELLED", result="Cancelled locally")
+
+    def cancel_claimed_local(self, order_id: str, result: str) -> OrderIntent | None:
+        """Cancel a worker-claimed intent only before any broker hand-off."""
+        item = self.get(order_id)
+        if (
+            not item
+            or item.status.upper() != "SENDING"
+            or item.broker_order_id
+            or item.filled_quantity > 0
+        ):
+            return None
+        return self._update(
+            order_id,
+            status="CANCELLED",
+            result=str(result or "Cancelled before broker hand-off"),
+            claimed_at=0.0,
+            working_quantity=0,
+        )
+
+    def pause_local(self, order_id: str) -> OrderIntent | None:
+        """Pause one unsent local intent without freeing its reserved slot."""
+        item = self.get(order_id)
+        if not item or item.status.upper() not in CLAIMABLE_STATUSES:
+            return None
+        details = dict(item.details or {})
+        details["_operator_paused_from_status"] = item.status.upper()
+        return self._update(
+            order_id,
+            status="PAUSED",
+            result="Tạm dừng bởi operator",
+            claimed_at=0.0,
+            details=details,
+        )
+
+    def resume_local(self, order_id: str) -> OrderIntent | None:
+        """Return a paused local intent to the serialized execution queue."""
+        item = self.get(order_id)
+        if not item or item.status.upper() != "PAUSED":
+            return None
+        details = dict(item.details or {})
+        previous_status = str(
+            details.pop("_operator_paused_from_status", "PENDING") or "PENDING"
+        ).upper()
+        if previous_status not in CLAIMABLE_STATUSES:
+            previous_status = "PENDING"
+        return self._update(
+            order_id,
+            status=previous_status,
+            result="Tiếp tục bởi operator",
+            claimed_at=0.0,
+            details=details,
+        )
 
     def replace_local(
         self,
@@ -403,7 +467,7 @@ class OrderQueue:
         details: dict[str, Any] | None = None,
     ) -> OrderIntent | None:
         item = self.get(order_id)
-        if not item or item.status.upper() not in CLAIMABLE_STATUSES:
+        if not item or item.status.upper() not in LOCALLY_CONTROLLABLE_STATUSES:
             return None
         valid, _reason, normalized = validate_quantity(quantity)
         if not valid:

@@ -8,9 +8,8 @@ from tkinter import ttk
 from typing import Any
 
 from .. import config
-from ..trading.orders import CLAIMABLE_STATUSES, FINAL_STATUSES
+from ..trading.orders import CLAIMABLE_STATUSES, FINAL_STATUSES, LOCALLY_CONTROLLABLE_STATUSES
 from .view import _compact_vnd, _display_price, _number, _price_unit
-from .windows import FONT_TABLE_HEADING
 
 
 RUNNING_COLUMNS = (
@@ -36,14 +35,14 @@ RUNNING_HEADERS = {
     "X": "✖",
 }
 RUNNING_WIDTHS = {
-    "Ticket": 125,
-    "Time": 145,
-    "Order": 330,
-    "Targets": 250,
-    "CostInfo": 240,
-    "RR": 225,
-    "PnL_MAE_MFE": 310,
-    "Status": 610,
+    "Ticket": 145,
+    "Time": 165,
+    "Order": 430,
+    "Targets": 310,
+    "CostInfo": 310,
+    "RR": 280,
+    "PnL_MAE_MFE": 390,
+    "Status": 920,
     "X": 56,
 }
 RUNNING_ANCHORS = {
@@ -65,7 +64,7 @@ class DashboardTablesMixin:
         """Return a width that fits both content policy and the rendered header."""
         configured = RUNNING_WIDTHS.get(column, 180)
         try:
-            family, size, *styles = FONT_TABLE_HEADING
+            family, size, *styles = ("Segoe UI", 11, "bold")
             options: dict[str, Any] = {
                 "root": tree.winfo_toplevel(), "family": family, "size": size,
             }
@@ -114,8 +113,6 @@ class DashboardTablesMixin:
 
     @staticmethod
     def _configure_tree(tree: ttk.Treeview, columns: tuple[str, ...]) -> None:
-        if tuple(tree["columns"]) == columns:
-            return
         tree.configure(columns=columns)
         for column in columns:
             width = DashboardTablesMixin._running_column_width(tree, column)
@@ -496,10 +493,10 @@ class DashboardTablesMixin:
                 )
                 status_upper = item.status.upper()
                 is_working = status_upper in {"WORKING", "PARTIAL", "UNKNOWN"}
-                cancellable = status_upper in CLAIMABLE_STATUSES or (
+                cancellable = status_upper in LOCALLY_CONTROLLABLE_STATUSES or (
                     mode == "REAL" and bool(item.broker_order_id) and is_working
                 )
-                editable = status_upper in CLAIMABLE_STATUSES or (
+                editable = status_upper in LOCALLY_CONTROLLABLE_STATUSES or (
                     mode == "REAL" and bool(item.broker_order_id) and item.order_type == "LO" and is_working
                 )
                 iid = f"LOCAL:{item.id}"
@@ -514,6 +511,7 @@ class DashboardTablesMixin:
                     "PENDING": "[CACHE] CHỜ PHIÊN",
                     "WAITING_TOKEN": "[CACHE] CHỜ TOKEN",
                     "WAITING_SETTLEMENT": "[T+2] CHỜ CỔ VỀ",
+                    "PAUSED": "[CACHE] TẠM DỪNG",
                     "SENDING": "[DNSE] ĐANG GỬI",
                     "WORKING": "[DNSE] ĐANG KHỚP",
                     "PARTIAL": "[DNSE] KHỚP MỘT PHẦN",
@@ -545,6 +543,11 @@ class DashboardTablesMixin:
                     "local_id": item.id, "broker_order_id": item.broker_order_id,
                     "order_type": item.order_type, "quantity": item.quantity,
                     "price": item.limit_price, "editable": editable, "cancellable": cancellable,
+                    "pausable": status_upper in CLAIMABLE_STATUSES,
+                    "resumable": status_upper == "PAUSED",
+                    "status": status_upper, "source": item.source, "side": item.side,
+                    "result": item.result, "reason": item.reason,
+                    "expires_at": item.expires_at,
                 }
 
             for index, row in enumerate(reversed(broker_orders)):

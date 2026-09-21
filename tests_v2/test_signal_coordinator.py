@@ -105,3 +105,15 @@ def test_real_and_paper_pending_orders_do_not_share_slots() -> None:
     real = OrderIntent.create("TCB", "BUY", 100, "MARKET", execution_mode="REAL")
     allocator = BuySlotAllocator.from_runtime(5, [], [paper, real], "PAPER")
     assert allocator.occupied_symbols == {"MBB"}
+
+
+def test_coordinator_reports_operator_pause_instead_of_generic_bot_off() -> None:
+    decision = _buy("FPT", "2026-09-09T10:15:00+07:00")
+    outcomes = coordinate_buy_decisions(
+        {"FPT": decision}, ["FPT"], BuySlotAllocator(5),
+        bot_enabled=False,
+        disabled_reason="MANUAL_SELL_PAUSE",
+        plan=lambda _row: BuyAttempt(payload="must-not-run"),
+    )
+
+    assert outcomes[0].blocked_by == "MANUAL_SELL_PAUSE"

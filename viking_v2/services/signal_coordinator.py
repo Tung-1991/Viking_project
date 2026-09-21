@@ -107,6 +107,7 @@ def coordinate_buy_decisions(
     *,
     bot_enabled: bool,
     plan: Callable[[RankedDecision], BuyAttempt],
+    disabled_reason: str = "BOT_OFF",
 ) -> list[CoordinatedBuy]:
     """Arbitrate every current BUY without importing dashboard or broker code.
 
@@ -118,7 +119,10 @@ def coordinate_buy_decisions(
         if candidate.symbol in allocator.occupied_symbols:
             continue
         if not bot_enabled:
-            output.append(CoordinatedBuy(candidate, blocked_by="BOT_OFF"))
+            output.append(CoordinatedBuy(
+                candidate,
+                blocked_by=str(disabled_reason or "BOT_OFF").upper(),
+            ))
             continue
         if not allocator.reserve(candidate.symbol):
             output.append(CoordinatedBuy(candidate, blocked_by="MAX_POSITIONS"))

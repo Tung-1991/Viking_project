@@ -17,7 +17,7 @@ Thứ tự ưu tiên cấu hình:
 | Phase 1 | MA200; Pivot 3/3; sai số Pivot 1%; vùng MA 1%; xác nhận 3 phiên; Volume phase 1 OFF |
 | Tỷ trọng | UPTREND 90%; DOWNTREND 10%; ACCUMULATION 60%; DISTRIBUTION 50% |
 | Entry | EMA 3/6 + RSI14; chỉ mua từ 14:00; đọc REALTIME/TICK; Volume BUY OFF; xác nhận BUY phút OFF |
-| Vốn | Tối đa 5 position; không compound; tối thiểu 100 cổ; khóa sau 3 LOSS trong 24 giờ; Whipsaw ON 3 lần/7 phiên |
+| Vốn | Tối đa 5 position; không compound; tối thiểu 100 cổ; khóa sau 3 LOSS trong 24 giờ; Whipsaw ON 3 lần/7 phiên; dừng BUY BOT 15 phút sau SELL MANUAL khớp |
 | Phí | Mua 0,045%; bán 0,045%; thuế bán 0,1% |
 | SL | ON; lệnh đầu −3,5%; lệnh vào lại −2,5%; bán 100% |
 | TP | Giá trị 7% nhưng mode TP mặc định OFF |
@@ -27,6 +27,14 @@ Thứ tự ưu tiên cấu hình:
 
 Mode mặc định của BOT là `PROTECT + E`; TP không được gắn vào trade. SL có công tắc riêng và mặc định ON.
 Không có E sớm, E LOSS hay FAILED RECOVERY trong backend vận hành.
+
+## An toàn hàng đợi và bán tay
+
+- 40 mã trong watchlist không phải 40 lệnh chờ. Mỗi chu kỳ chỉ xét các BUY đang hợp lệ; ưu tiên tín hiệu xuất hiện sớm hơn, sau đó theo thứ tự watchlist. Đủ 5 position/lệnh BUY đang hoạt động thì các tín hiệu còn lại bị ghi `MAX_POSITIONS`, không nằm lại trong một hàng đợi bí mật để tự nhảy vào sau.
+- `MUA TỰ ĐỘNG OFF` chặn cả tạo BUY BOT mới lẫn gửi BUY BOT cũ còn trong cache. BUY BOT chưa gửi được hủy; lệnh đã có khả năng lên broker chỉ được cảnh báo để operator kiểm tra. SELL quản lý vị thế và lệnh MANUAL vẫn chạy.
+- Khi SELL nguồn `MANUAL` đặt trong Viking khớp lần đầu, PAPER hoặc REAL tương ứng khóa BUY BOT mặc định 15 phút. Thời gian chỉnh tại `RULE → Phase 3 → VỐN → Dừng BUY sau bán tay`; `0` là tắt. Hết hạn tự mở, không cần bật lại nút bot.
+- Mỗi lệnh cache có `Tạm dừng`, `Tiếp tục`, `Sửa` và `Hủy`. Lệnh `PAUSED` vẫn giữ slot để không có mã khác lấp chỗ ngoài ý muốn.
+- Bán trực tiếp ngoài Viking trên một ứng dụng broker không có nhãn `MANUAL` của Viking. Khi vận hành theo luồng này, operator phải tắt `MUA TỰ ĐỘNG` trước; không suy đoán một thay đổi position là bán tay vì nó cũng có thể là SL/PROTECT.
 
 ## Đối chứng SL vào lại
 

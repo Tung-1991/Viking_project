@@ -168,3 +168,21 @@ def test_signals_claimed_before_the_buy_sell_rename_stay_claimed(tmp_path):
     assert not store.claim_signal("FPT", "BUY", "2026-08-11")
     assert not store.claim_signal("FPT", "SELL", "2026-08-11")
     assert store.claim_signal("FPT", "BUY", "2026-08-12")
+
+
+def test_manual_sell_entry_pause_is_mode_specific_persistent_and_expires(tmp_path):
+    path = tmp_path / "rule-pause.json"
+    store = RuleStateStore(path)
+    pause = store.start_entry_pause(
+        "PAPER", 15 * 60, symbol="FPT", now=1_000.0,
+    )
+
+    assert pause["until"] == 1_900.0
+    assert pause["symbol"] == "FPT"
+    assert store.entry_pause("REAL", now=1_001.0)["active"] is False
+
+    restarted = RuleStateStore(path)
+    active = restarted.entry_pause("PAPER", now=1_300.0)
+    assert active["active"] is True
+    assert active["remaining_seconds"] == 600.0
+    assert restarted.entry_pause("PAPER", now=1_900.0)["active"] is False

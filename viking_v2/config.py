@@ -264,6 +264,8 @@ class AppSettings:
     # hơn hẳn: mỗi phiên có thể vài chục mã báo mua mà chỉ năm chỗ để vào.
     telegram_signal_alerts: bool = False
     bot_order_mode: str = "MARKET"
+    # Operational guard: after a MANUAL SELL fill, pause only new BOT BUYs.
+    manual_sell_pause_minutes: int = 15
     allow_ato: bool = False
     allow_atc: bool = False
     # Defaults attached to each new BOT trade. Existing/manual trades keep
@@ -323,6 +325,12 @@ class AppSettings:
         self.bot_order_mode = str(self.bot_order_mode or "MARKET").strip().upper()
         if self.bot_order_mode not in {"MARKET", "LO_LOCAL"}:
             self.bot_order_mode = "MARKET"
+        try:
+            self.manual_sell_pause_minutes = max(
+                0, min(1440, int(float(self.manual_sell_pause_minutes or 0))),
+            )
+        except (TypeError, ValueError):
+            self.manual_sell_pause_minutes = 15
         self.allow_ato = bool(self.allow_ato)
         self.allow_atc = bool(self.allow_atc)
         self.bot_sl_enabled = bool(self.bot_sl_enabled)

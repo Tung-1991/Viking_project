@@ -920,6 +920,26 @@ class DashboardActionsMixin:
             return
         self._bot_sync_until = time.time() + 3.0
         self._paint_bot(enabled, force=True)
+        if not enabled:
+            cancelled: list[OrderIntent] = []
+            broker_managed: list[OrderIntent] = []
+            for mode in ("PAPER", "REAL"):
+                local_cancelled, local_broker_managed = (
+                    self.execution.cancel_unsubmitted_bot_buys(mode)
+                )
+                cancelled.extend(local_cancelled)
+                broker_managed.extend(local_broker_managed)
+            if cancelled:
+                self._log(
+                    f"MUA TỰ ĐỘNG OFF · đã hủy {len(cancelled)} BUY BOT chưa gửi.",
+                    "bot",
+                )
+            for intent in broker_managed:
+                self._log(
+                    f"MUA TỰ ĐỘNG OFF · {intent.symbol} có BUY {intent.status} "
+                    "đã lên luồng broker; cần kiểm tra/hủy thủ công.",
+                    "bot",
+                )
         self._log(
             "MUA TỰ ĐỘNG ON · cho phép mở lệnh mới."
             if enabled
@@ -1343,7 +1363,12 @@ class DashboardActionsMixin:
         except ValueError:
             messagebox.showerror("Manual order", "Take Profit không hợp lệ.", parent=self)
             return
-        trade_id = uuid.uuid4().hex if side == "BUY" else ""
+        # A manual SELL of a Viking-managed position must close the same trade
+        # cycle.  Leaving trade_id blank made the broker position disappear
+        # while the backend cycle stayed OPEN, which could corrupt re-entry,
+        # loss-streak and position-management state.
+        active_cycle = self.trade_state.active_for(symbol, mode) if side == "SELL" else None
+        trade_id = uuid.uuid4().hex if side == "BUY" else (active_cycle.id if active_cycle else "")
         exchange = self._symbol_exchange(symbol)
         if not exchange:
             messagebox.showerror("Order", f"Chưa xác định sàn của {symbol}.", parent=self)
@@ -1460,8 +1485,31 @@ class DashboardActionsMixin:
             selected = (row_id,)
         action = self._running_row_actions.get(mode, {}).get(row_id, {})
         menu = tk.Menu(self, tearoff=0, font=("Segoe UI", 11))
+        if len(selected) == 1 and action.get("pausable"):
+            menu.add_command(
+                label="Ⅱ  Tạm dừng lệnh cache",
+                command=lambda: self._pause_running_order(action),
+            )
+        if len(selected) == 1 and action.get("resumable"):
+            menu.add_command(
+                label="▶  Tiếp tục lệnh cache",
+                command=lambda: self._resume_running_order(action),
+            )
         if len(selected) == 1 and action.get("editable"):
             menu.add_command(label="✎  Sửa lệnh", command=lambda: self._edit_running_order(action))
+        if (
+            len(selected) == 1
+            and action.get("kind") == "local"
+            and action.get("side") == "BUY"
+            and action.get("source") == "BOT"
+        ):
+            menu.add_command(
+                label=(
+                    "■  Tắt MUA TỰ ĐỘNG"
+                    if self._bot_enabled else "▶  Bật MUA TỰ ĐỘNG"
+                ),
+                command=self._toggle_bot,
+            )
         if len(selected) == 1 and action.get("kind") == "position":
             menu.add_command(
                 label="⚙  Quản lý vị thế",
@@ -1495,6 +1543,24 @@ class DashboardActionsMixin:
         if menu.index("end") is not None:
             menu.post(event.x_root, event.y_root)
 
+    def _pause_running_order(self, action: dict[str, Any]) -> None:
+        local_id = str(action.get("local_id", "") or "")
+        updated = self.queue.pause_local(local_id) if local_id else None
+        self._log(
+            f"CACHE #{local_id[:8]} · "
+            f"{'ĐÃ TẠM DỪNG' if updated else 'KHÔNG THỂ TẠM DỪNG'}"
+        )
+        self._refresh_local()
+
+    def _resume_running_order(self, action: dict[str, Any]) -> None:
+        local_id = str(action.get("local_id", "") or "")
+        updated = self.queue.resume_local(local_id) if local_id else None
+        self._log(
+            f"CACHE #{local_id[:8]} · "
+            f"{'ĐÃ TIẾP TỤC' if updated else 'KHÔNG THỂ TIẾP TỤC'}"
+        )
+        self._refresh_local()
+
     def _set_position_modes(self, action: dict[str, Any], modes: list[str]) -> None:
         trade_id = str(action.get("trade_id", "") or "")
         cycle = self.trade_state.update_management(trade_id, em_modes=modes) if trade_id else None
@@ -1522,7 +1588,7 @@ class DashboardActionsMixin:
         price_value = item.limit_price if item else float(action.get("price", 0.0) or 0.0)
         top = ctk.CTkToplevel(self)
         top.title("Sửa lệnh")
-        top.geometry("460x260")
+        top.geometry("520x350")
         top.transient(self)
         top.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(
@@ -1544,8 +1610,17 @@ class DashboardActionsMixin:
         price_entry.grid(row=2, column=1, sticky="ew", padx=(8, 18), pady=7)
         if order_type != "LO":
             price_entry.configure(state="disabled")
+        ctk.CTkLabel(
+            top,
+            text=(
+                f"TRẠNG THÁI: {str(action.get('status', '') or 'DNSE')} · "
+                f"{str(action.get('result', '') or action.get('reason', '') or 'Đang chờ')}"
+            ),
+            font=("Segoe UI", 11), text_color=COL_WARN,
+            anchor="w", wraplength=480, justify="left",
+        ).grid(row=3, column=0, columnspan=2, sticky="ew", padx=18, pady=(6, 0))
         status = ctk.CTkLabel(top, text="", font=("Segoe UI", 11), text_color=COL_WARN)
-        status.grid(row=3, column=0, columnspan=2, sticky="w", padx=18, pady=(5, 0))
+        status.grid(row=4, column=0, columnspan=2, sticky="w", padx=18, pady=(5, 0))
 
         def save() -> None:
             try:
@@ -1593,7 +1668,27 @@ class DashboardActionsMixin:
         ctk.CTkButton(
             top, text="LƯU THAY ĐỔI", height=36, font=("Segoe UI", 11, "bold"),
             fg_color=COL_GREEN, hover_color="#16A34A", command=save,
-        ).grid(row=4, column=0, columnspan=2, sticky="ew", padx=18, pady=14)
+        ).grid(row=5, column=0, columnspan=2, sticky="ew", padx=18, pady=(12, 6))
+        controls = ctk.CTkFrame(top, fg_color="transparent")
+        controls.grid(row=6, column=0, columnspan=2, sticky="ew", padx=18, pady=(2, 14))
+        if action.get("pausable"):
+            ctk.CTkButton(
+                controls, text="TẠM DỪNG", height=34,
+                fg_color=COL_WARN, hover_color="#D97706",
+                command=lambda: (self._pause_running_order(action), top.destroy()),
+            ).pack(side="left", expand=True, fill="x", padx=(0, 5))
+        if action.get("resumable"):
+            ctk.CTkButton(
+                controls, text="TIẾP TỤC", height=34,
+                fg_color=COL_GREEN, hover_color="#16A34A",
+                command=lambda: (self._resume_running_order(action), top.destroy()),
+            ).pack(side="left", expand=True, fill="x", padx=(0, 5))
+        if action.get("cancellable"):
+            ctk.CTkButton(
+                controls, text="HỦY LỆNH", height=34,
+                fg_color=COL_RED, hover_color="#DC2626",
+                command=lambda: (top.destroy(), self._cancel_selected()),
+            ).pack(side="left", expand=True, fill="x", padx=(5, 0))
 
     def _show_position_management(self, action: dict[str, Any]) -> None:
         symbol = str(action.get("symbol", "") or "").upper()
@@ -2212,6 +2307,18 @@ class DashboardActionsMixin:
                     )
             self._protect_alert_broker_orders = current_ids
         bot_enabled = bool(status.get("bot_enabled", False))
+        entry_pause = self.rule_state.entry_pause(mode)
+        buy_enabled = bot_enabled and not bool(entry_pause.get("active", False))
+        buy_block_reason = "MANUAL_SELL_PAUSE" if entry_pause.get("active") else "BOT_OFF"
+        pause_until = float(entry_pause.get("until", 0.0) or 0.0)
+        if pause_until > float(getattr(self, "_entry_pause_logged_until", 0.0) or 0.0):
+            remaining = max(1, int(float(entry_pause.get("remaining_seconds", 0.0) or 0.0) / 60.0 + 0.999))
+            self._log(
+                f"[ENTRY] Khóa BUY BOT {mode} còn khoảng {remaining} phút sau SELL MANUAL "
+                f"{entry_pause.get('symbol', '')}. SELL/SL/PROTECT và MANUAL vẫn chạy.",
+                "bot",
+            )
+            self._entry_pause_logged_until = pause_until
         raw_decisions = status.get("decisions") if isinstance(status.get("decisions"), dict) else {}
         decisions: dict[str, StrategyDecision] = {}
         for symbol, raw in raw_decisions.items():
@@ -2295,7 +2402,8 @@ class DashboardActionsMixin:
 
         coordinated = coordinate_buy_decisions(
             decisions, self.settings.watchlist, allocator,
-            bot_enabled=bot_enabled, plan=plan_buy,
+            bot_enabled=buy_enabled, plan=plan_buy,
+            disabled_reason=buy_block_reason,
         )
         for outcome in coordinated:
             symbol, decision = outcome.candidate.symbol, outcome.candidate.decision
@@ -2428,11 +2536,17 @@ class DashboardActionsMixin:
         def work() -> list[tuple[str, OrderIntent, Any]]:
             self.execution.reconcile_working("REAL")
             completed: list[tuple[str, OrderIntent, Any]] = []
+            runtime = self.bridge.read_config()
             for selected_mode in ("PAPER", "REAL"):
+                entry_pause = self.rule_state.entry_pause(selected_mode)
                 for intent, result in self.execution.process_due(
                     phase=phase,
                     execution_mode=selected_mode,
                     phase_provider=phase_for,
+                    allow_bot_buys=(
+                        bool(runtime.bot_enabled)
+                        and not bool(entry_pause.get("active", False))
+                    ),
                 ):
                     completed.append((selected_mode, intent, result))
             return completed
