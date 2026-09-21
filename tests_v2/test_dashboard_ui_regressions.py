@@ -183,7 +183,7 @@ def test_health_panel_renders_runtime_state_instead_of_staying_on_dashes() -> No
         "ticks": {"AAA": {"price": 7.15, "timestamp": now}},
     })
 
-    assert subject.preview_health_title.options["text"] == "HEALTH OK ⓘ"
+    assert subject.preview_health_title.options["text"] == "HEALTH OK"
     assert subject.preview_health_daemon.options["text"] == "DAEMON OK"
     assert subject.preview_health_core.options["text"] == "DNSE OK"
     assert subject.preview_health_ws.options["text"] == "WS OK"

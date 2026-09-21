@@ -1499,7 +1499,7 @@ class DashboardActionsMixin:
             tree.selection_set(row_id)
             selected = (row_id,)
         action = self._running_row_actions.get(mode, {}).get(row_id, {})
-        menu = tk.Menu(self, tearoff=0, font=("Segoe UI", 12))
+        menu = tk.Menu(self, tearoff=0, font=("Segoe UI", 14))
         if len(selected) == 1 and action.get("editable"):
             menu.add_command(
                 label="✎  Sửa lệnh & quản lý",
@@ -1587,48 +1587,48 @@ class DashboardActionsMixin:
 
         top = ctk.CTkToplevel(self)
         top.title("Sửa lệnh & quản lý")
-        top.geometry("820x590")
-        top.minsize(760, 550)
+        top.geometry("650x420")
+        top.minsize(620, 400)
         top.transient(self)
         top.grab_set()
         top.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             top,
             text=f"{action.get('symbol', '')} · {action.get('side', '')} · {order_type} · {action.get('mode', '')}",
-            font=("Segoe UI", 19, "bold"), text_color=COL_TITLE,
-        ).grid(row=0, column=0, sticky="w", padx=22, pady=(18, 5))
+            font=("Segoe UI", 16, "bold"), text_color=COL_TITLE,
+        ).grid(row=0, column=0, sticky="w", padx=14, pady=(11, 2))
         ctk.CTkLabel(
             top,
             text=(
                 f"{str(action.get('status', '') or 'DNSE')} · "
                 f"{str(action.get('result', '') or action.get('reason', '') or 'Đang chờ')}"
             ),
-            font=("Segoe UI", 13), text_color=COL_WARN,
-            anchor="w", wraplength=760, justify="left",
-        ).grid(row=1, column=0, sticky="ew", padx=22, pady=(0, 10))
+            font=("Segoe UI", 11), text_color=COL_WARN,
+            anchor="w", wraplength=610, justify="left",
+        ).grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 5))
 
         order_frame = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
-        order_frame.grid(row=2, column=0, sticky="ew", padx=22, pady=5)
+        order_frame.grid(row=2, column=0, sticky="ew", padx=14, pady=3)
         order_frame.grid_columnconfigure((1, 3), weight=1)
         ctk.CTkLabel(
-            order_frame, text="KHỐI LƯỢNG", font=("Segoe UI", 13, "bold", "italic"),
+            order_frame, text="KHỐI LƯỢNG", font=("Segoe UI", 12, "bold", "italic"),
             text_color=COL_TITLE,
-        ).grid(row=0, column=0, sticky="w", padx=(14, 8), pady=12)
-        quantity_entry = ctk.CTkEntry(order_frame, font=("Cascadia Mono", 14), height=40)
+        ).grid(row=0, column=0, sticky="w", padx=(10, 6), pady=8)
+        quantity_entry = ctk.CTkEntry(order_frame, font=("Cascadia Mono", 13), height=34)
         quantity_entry.insert(0, str(quantity_value))
-        quantity_entry.grid(row=0, column=1, sticky="ew", padx=(0, 18), pady=10)
+        quantity_entry.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=6)
         ctk.CTkLabel(
-            order_frame, text="GIÁ LO", font=("Segoe UI", 13, "bold", "italic"),
+            order_frame, text="GIÁ LO", font=("Segoe UI", 12, "bold", "italic"),
             text_color=COL_TITLE,
-        ).grid(row=0, column=2, sticky="w", padx=(14, 8), pady=12)
-        price_entry = ctk.CTkEntry(order_frame, font=("Cascadia Mono", 14), height=40)
+        ).grid(row=0, column=2, sticky="w", padx=(10, 6), pady=8)
+        price_entry = ctk.CTkEntry(order_frame, font=("Cascadia Mono", 13), height=34)
         price_entry.insert(0, _display_price(price_value) if price_value > 0 else "")
-        price_entry.grid(row=0, column=3, sticky="ew", padx=(0, 14), pady=10)
+        price_entry.grid(row=0, column=3, sticky="ew", padx=(0, 10), pady=6)
         if order_type != "LO":
             price_entry.configure(state="disabled")
 
         mode_frame = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
-        mode_frame.grid(row=3, column=0, sticky="ew", padx=22, pady=5)
+        mode_frame.grid(row=3, column=0, sticky="ew", padx=14, pady=3)
         mode_buttons: dict[str, ctk.CTkButton] = {}
 
         def paint_mode(name: str) -> None:
@@ -1647,19 +1647,19 @@ class DashboardActionsMixin:
         for column, (key, label) in enumerate(EM_TACTICS):
             mode_frame.grid_columnconfigure(column, weight=1, uniform="cached_modes")
             button = ctk.CTkButton(
-                mode_frame, text="", height=43, font=("Segoe UI", 13, "bold"),
+                mode_frame, text="", height=36, font=("Segoe UI", 12, "bold"),
                 corner_radius=7, command=lambda name=key: toggle_mode(name),
             )
-            button.grid(row=0, column=column, sticky="ew", padx=6, pady=9)
+            button.grid(row=0, column=column, sticky="ew", padx=5, pady=6)
             mode_buttons[key] = button
             paint_mode(key)
 
         target_frame = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
-        target_frame.grid(row=4, column=0, sticky="ew", padx=22, pady=5)
+        target_frame.grid(row=4, column=0, sticky="ew", padx=14, pady=3)
         target_frame.grid_columnconfigure((1, 3), weight=1)
         sl_button = ctk.CTkButton(
-            target_frame, text="", width=116, height=40,
-            font=("Segoe UI", 13, "bold"), corner_radius=7,
+            target_frame, text="", width=88, height=34,
+            font=("Segoe UI", 12, "bold"), corner_radius=7,
         )
 
         def paint_sl() -> None:
@@ -1676,28 +1676,28 @@ class DashboardActionsMixin:
             paint_sl()
 
         sl_button.configure(command=toggle_sl)
-        sl_button.grid(row=0, column=0, sticky="w", padx=(12, 8), pady=11)
+        sl_button.grid(row=0, column=0, sticky="w", padx=(8, 6), pady=7)
         paint_sl()
-        sl_entry = ctk.CTkEntry(target_frame, font=("Cascadia Mono", 14), height=40)
+        sl_entry = ctk.CTkEntry(target_frame, font=("Cascadia Mono", 13), height=34)
         if item and item.sl_mode == "PRICE":
             sl_entry.insert(0, _display_price(item.sl_value))
         elif item and item.sl_mode == "PERCENT":
             sl_entry.insert(0, f"{-abs(item.sl_value):g}%")
         else:
             sl_entry.insert(0, "AUTO")
-        sl_entry.grid(row=0, column=1, sticky="ew", padx=(0, 18), pady=11)
+        sl_entry.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=7)
         ctk.CTkLabel(
-            target_frame, text="TP", font=("Segoe UI", 13, "bold", "italic"),
+            target_frame, text="TP", font=("Segoe UI", 12, "bold", "italic"),
             text_color=COL_GREEN,
-        ).grid(row=0, column=2, sticky="w", padx=(12, 8), pady=11)
-        tp_entry = ctk.CTkEntry(target_frame, font=("Cascadia Mono", 14), height=40)
+        ).grid(row=0, column=2, sticky="w", padx=(8, 6), pady=7)
+        tp_entry = ctk.CTkEntry(target_frame, font=("Cascadia Mono", 13), height=34)
         if item and item.tp_mode == "PRICE":
             tp_entry.insert(0, _display_price(item.tp_value))
         elif item and item.tp_mode == "PERCENT":
             tp_entry.insert(0, f"{abs(item.tp_value):g}%")
         else:
             tp_entry.insert(0, "AUTO")
-        tp_entry.grid(row=0, column=3, sticky="ew", padx=(0, 14), pady=11)
+        tp_entry.grid(row=0, column=3, sticky="ew", padx=(0, 10), pady=7)
 
         help_text = (
             "AUTO dùng SL mặc định; TP AUTO dùng % mặc định khi TP đang ON. "
@@ -1706,11 +1706,11 @@ class DashboardActionsMixin:
             "Lệnh đã gửi DNSE: chỉ sửa được khối lượng/giá LO. TP, SL và mode quản lý sau khi khớp sửa tại dòng vị thế."
         )
         ctk.CTkLabel(
-            top, text=help_text, font=("Segoe UI", 12), text_color=COL_MUTED,
-            anchor="w", wraplength=760, justify="left",
-        ).grid(row=5, column=0, sticky="ew", padx=24, pady=(4, 1))
-        status = ctk.CTkLabel(top, text="", font=("Segoe UI", 13, "bold"), text_color=COL_WARN)
-        status.grid(row=6, column=0, sticky="w", padx=24, pady=(3, 0))
+            top, text=help_text, font=("Segoe UI", 10), text_color=COL_MUTED,
+            anchor="w", wraplength=610, justify="left",
+        ).grid(row=5, column=0, sticky="ew", padx=16, pady=(2, 0))
+        status = ctk.CTkLabel(top, text="", height=18, font=("Segoe UI", 11, "bold"), text_color=COL_WARN)
+        status.grid(row=6, column=0, sticky="w", padx=16, pady=(1, 0))
 
         if not local_editable:
             sl_button.configure(state="disabled")
@@ -1791,31 +1791,31 @@ class DashboardActionsMixin:
             top.destroy()
 
         controls = ctk.CTkFrame(top, fg_color="transparent")
-        controls.grid(row=7, column=0, sticky="ew", padx=22, pady=(10, 18))
+        controls.grid(row=7, column=0, sticky="ew", padx=14, pady=(5, 10))
         action_column = 0
         if action.get("pausable"):
             ctk.CTkButton(
-                controls, text="TẠM DỪNG LỆNH", height=42, font=("Segoe UI", 12, "bold"),
+                controls, text="TẠM DỪNG", height=36, font=("Segoe UI", 11, "bold"),
                 fg_color=COL_WARN, hover_color="#D97706",
                 command=lambda: (self._pause_running_order(action), top.destroy()),
             ).grid(row=0, column=action_column, sticky="ew", padx=(0, 6))
             action_column += 1
         if action.get("resumable"):
             ctk.CTkButton(
-                controls, text="TIẾP TỤC LỆNH", height=42, font=("Segoe UI", 12, "bold"),
+                controls, text="TIẾP TỤC", height=36, font=("Segoe UI", 11, "bold"),
                 fg_color=COL_GREEN, hover_color="#16A34A",
                 command=lambda: (self._resume_running_order(action), top.destroy()),
             ).grid(row=0, column=action_column, sticky="ew", padx=(0, 6))
             action_column += 1
         if action.get("cancellable"):
             ctk.CTkButton(
-                controls, text="HỦY LỆNH", height=42, font=("Segoe UI", 12, "bold"),
+                controls, text="HỦY LỆNH", height=36, font=("Segoe UI", 11, "bold"),
                 fg_color=COL_RED, hover_color="#DC2626",
                 command=lambda: (top.destroy(), self._cancel_selected()),
             ).grid(row=0, column=action_column, sticky="ew", padx=(0, 6))
             action_column += 1
         ctk.CTkButton(
-            controls, text="LƯU THAY ĐỔI", height=42, font=("Segoe UI", 13, "bold"),
+            controls, text="LƯU", height=36, font=("Segoe UI", 12, "bold"),
             fg_color=COL_GREEN, hover_color="#16A34A", command=save,
         ).grid(row=0, column=action_column, sticky="ew")
         controls.grid_columnconfigure(

@@ -64,7 +64,7 @@ class DashboardTablesMixin:
         """Return a width that fits both content policy and the rendered header."""
         configured = RUNNING_WIDTHS.get(column, 180)
         try:
-            family, size, *styles = ("Segoe UI", 12, "bold")
+            family, size, *styles = ("Segoe UI", 14, "bold")
             options: dict[str, Any] = {
                 "root": tree.winfo_toplevel(), "family": family, "size": size,
             }
