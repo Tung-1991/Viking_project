@@ -767,14 +767,23 @@ class DashboardPanelsMixin:
         management = ctk.CTkFrame(order_group, height=84, fg_color="transparent")
         management.grid(row=2, column=0, sticky="nsew", padx=6, pady=(3, 6))
         management.grid_propagate(False)
-        management.grid_rowconfigure((0, 2), weight=1, uniform="preview_management_rows")
-        management.grid_rowconfigure(1, weight=0)
-        for column in range(2):
+        management.grid_rowconfigure((0, 1), weight=1, uniform="preview_management_rows")
+        for column in range(3):
             management.grid_columnconfigure(column, weight=1, uniform="preview_management")
 
-        def level_card(row: int, column: int, title: str, title_color: str):
+        def level_card(
+            row: int,
+            column: int,
+            title: str,
+            title_color: str,
+            *,
+            columnspan: int = 1,
+        ):
             card = ctk.CTkFrame(management, width=1, fg_color=COL_SURFACE_2, corner_radius=6)
-            card.grid(row=row, column=column, sticky="nsew", padx=3, pady=3)
+            card.grid(
+                row=row, column=column, columnspan=columnspan,
+                sticky="nsew", padx=3, pady=3,
+            )
             card.grid_columnconfigure(0, weight=1)
             title_widget = ctk.CTkLabel(
                 card, text=title, width=1, height=18, font=("Segoe UI", 11, "bold", "italic"),
@@ -795,22 +804,21 @@ class DashboardPanelsMixin:
 
         _tp_title, self.preview_tp_value, self.preview_tp_detail = level_card(0, 0, "TP MANUAL", COL_GREEN)
         _sl_title, self.preview_sl_value, self.preview_sl_detail = level_card(0, 1, "STOP LOSS", COL_RED)
-        self.preview_atr = ctk.CTkLabel(
-            management, text="ATR14 -- · START -- · LÙI --", width=1, height=18,
-            font=("Cascadia Mono", 10), text_color="#60A5FA",
-            fg_color=COL_SURFACE_2, corner_radius=5, anchor="w",
-        )
-        self.preview_atr.grid(
-            row=1, column=0, columnspan=2, sticky="ew", padx=3, pady=2,
+        atr_title, self.preview_atr, self.preview_atr_detail = level_card(
+            0, 2, "ATR14 · 1D", "#60A5FA",
         )
         _HoverHint(
-            self.preview_atr,
+            atr_title,
             "ATR14 dùng 14 phiên ngày đã đóng gần nhất. START là mức lãi đỉnh cần đạt để Dynamic bắt đầu; "
             "LÙI là khoảng giảm từ đỉnh theo ATR. Dashboard chỉ hiện kết quả; công thức nằm trong RULE → E/M.",
             placement="inside",
         )
-        self.preview_em_normal, self.preview_normal_value, self.preview_normal_detail = level_card(2, 0, "PROTECT · OFF", COL_RED)
-        self.preview_em_exit, self.preview_exit_value, self.preview_exit_detail = level_card(2, 1, "E · OFF", COL_RED)
+        self.preview_em_normal, self.preview_normal_value, self.preview_normal_detail = level_card(
+            1, 0, "PROTECT · OFF", COL_RED, columnspan=2,
+        )
+        self.preview_em_exit, self.preview_exit_value, self.preview_exit_detail = level_card(
+            1, 2, "E · OFF", COL_RED,
+        )
 
         rule_group.grid_columnconfigure(0, weight=1)
         for row in (1, 2, 3, 4):
@@ -1274,11 +1282,17 @@ class DashboardPanelsMixin:
         start_pct = _number(decision_details.get("dynamic_start_pct"))
         trail_pct = _number(decision_details.get("dynamic_trail_pct"))
         self.preview_atr.configure(
-            text=(
-                f"ATR14 {atr_pct:.2f}% · START {start_pct:.2f}% · LÙI {trail_pct:.2f}%"
-                if atr_pct > 0 else "ATR14 -- · START -- · LÙI --"
-            ),
+            text=f"{atr_pct:.2f}%" if atr_pct > 0 else "--",
             text_color=(COL_GREEN if normal_dynamic and atr_pct > 0 else "#60A5FA"),
+        )
+        start_enabled = bool(params.get("normal_atr_activation_enabled", True))
+        trail_enabled = bool(params.get("normal_atr_trail_enabled", True))
+        self.preview_atr_detail.configure(
+            text=(
+                f"{'START ' + format(start_pct, '.2f') + '%' if start_enabled else 'START OFF'} · "
+                f"{'LÙI ' + format(trail_pct, '.2f') + '%' if trail_enabled else 'LÙI OFF'}"
+                if atr_pct > 0 else "START -- · LÙI --"
+            ),
         )
         current_profit = decision_details.get("current_profit_pct")
         signal = str(decision.get("signal") or "--").upper()

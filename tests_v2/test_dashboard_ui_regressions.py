@@ -344,9 +344,10 @@ def test_phase2_preview_uses_readable_stacked_rows(ui_root) -> None:
         assert {
             (int(card.grid_info()["row"]), int(card.grid_info()["column"]))
             for card in management_cards
-        } == {(0, 0), (0, 1), (2, 0), (2, 1)}
-        assert int(subject.preview_atr.grid_info()["row"]) == 1
-        assert int(subject.preview_atr.grid_info()["columnspan"]) == 2
+        } == {(0, 0), (0, 1), (1, 0), (1, 2)}
+        assert int(subject.preview_atr.master.grid_info()["row"]) == 0
+        assert int(subject.preview_atr.master.grid_info()["column"]) == 2
+        assert int(subject.preview_normal_value.master.grid_info()["columnspan"]) == 2
         for card in management_cards:
             content_bottom = max(
                 child.winfo_y() + child.winfo_height()
