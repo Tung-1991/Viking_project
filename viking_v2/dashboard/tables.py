@@ -181,7 +181,11 @@ class DashboardTablesMixin:
                     trade_id = cycle.id
                 metrics = self.rule_state.position_metrics(symbol, trade_id) if trade_id else {}
                 cycle_modes = set(cycle.em_modes if cycle else [])
-                if cycle and cycle.sl_mode == "PRICE" and cycle.sl_value > 0 and avg_price > 0:
+                sl_enabled = bool(cycle.sl_enabled) if cycle else True
+                if not sl_enabled:
+                    sl_pct = 0.0
+                    sl_price = 0.0
+                elif cycle and cycle.sl_mode == "PRICE" and cycle.sl_value > 0 and avg_price > 0:
                     sl_pct = (cycle.sl_value / avg_price - 1.0) * 100.0
                     sl_price = float(cycle.sl_value)
                 elif cycle and cycle.sl_mode == "PERCENT" and cycle.sl_value:
@@ -408,7 +412,11 @@ class DashboardTablesMixin:
                 rr_text = (
                     f"R {risk_pct:.2f}% · E {reward_pct:.2f}% · 1:{reward_pct / risk_pct:.2f}"
                     if risk_pct > 0 and reward_pct > 0
-                    else f"R {risk_pct:.2f}% · E --"
+                    else (f"R -- · E {reward_pct:.2f}%" if not sl_enabled else f"R {risk_pct:.2f}% · E --")
+                )
+                sl_text = (
+                    f"SL▼ {_display_price(sl_price)} ({sl_pct:+g}%)"
+                    if sl_enabled else "SL OFF"
                 )
                 tree.insert(
                     "", "end", iid=iid, tags=(row_tag,),
@@ -416,7 +424,7 @@ class DashboardTablesMixin:
                         f"#{(trade_id or str(row.get('positionId', index)))[:12]}",
                         self._row_time(opened),
                         f"{mode} · {source} · BUY {symbol} @ {_display_price(avg_price)} · KL {quantity}",
-                        f"SL▼ {_display_price(sl_price)} ({sl_pct:+g}%) · "
+                        f"{sl_text} · "
                         + (f"TP▲ {_display_price(tp_price)} ({tp_pct:+g}%)" if tp_price > 0 else "TP▲ --"),
                         f"FEE {_compact_vnd(buy_fee)} · DỰ KIẾN BÁN {_compact_vnd(estimated_exit_cost)}",
                         rr_text,
@@ -448,7 +456,10 @@ class DashboardTablesMixin:
                 item_take_profit = "TP" in item_modes
                 item_normal = "NORMAL" in item_modes
                 item_indicator = "IND_EXIT" in item_modes
-                if item.sl_mode == "PRICE" and item.sl_value > 0:
+                item_sl_enabled = bool(cycle.sl_enabled) if cycle else bool(item.sl_enabled)
+                if not item_sl_enabled:
+                    item_sl_label = "OFF"
+                elif item.sl_mode == "PRICE" and item.sl_value > 0:
                     item_sl_label = _display_price(item.sl_value)
                 elif item.sl_mode == "PERCENT" and item.sl_value:
                     item_sl_label = f"{-abs(item.sl_value):+g}%"

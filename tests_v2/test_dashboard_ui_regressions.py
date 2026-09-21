@@ -40,16 +40,11 @@ def test_dynamic_atr_preview_uses_the_selected_symbols_completed_daily_atr() -> 
         "normal_sell_pct": 100,
     }
     text = _dynamic_atr_preview_text({"normal_atr_pct": 4.118}, params)
-    assert text == (
-        "ATR14 1D(T−1) 4.12% · START 2.47% · "
-        "LÙI ATR 3.29% · BÁN 100%"
-    )
+    assert text == "DYN · ATR 4.12% · BÁN 100%"
 
     params["normal_atr_activation_enabled"] = False
     params["normal_atr_trail_enabled"] = False
-    assert "START OFF · LÙI ATR OFF" in _dynamic_atr_preview_text(
-        {"normal_atr_pct": 4.118}, params,
-    )
+    assert _dynamic_atr_preview_text({"normal_atr_pct": 4.118}, params) == text
 
 
 def test_operator_typography_separates_keys_from_values() -> None:
@@ -156,12 +151,13 @@ def test_health_panel_renders_runtime_state_instead_of_staying_on_dashes() -> No
         "ticks": {"AAA": {"price": 7.15, "timestamp": now}},
     })
 
-    assert subject.preview_health_daemon.options["text"] == "DAEMON RUNNING"
-    assert subject.preview_health_core.options["text"] == "DNSE READY"
-    assert subject.preview_health_ws.options["text"] == "WS ONLINE"
+    assert subject.preview_health_title.options["text"] == "HEALTH OK ⓘ"
+    assert subject.preview_health_daemon.options["text"] == "DAEMON OK"
+    assert subject.preview_health_core.options["text"] == "DNSE OK"
+    assert subject.preview_health_ws.options["text"] == "WS OK"
     assert subject.preview_health_rest.options["text"] == "API OK"
     assert subject.preview_health_token.options["text"] == "OTP OK"
-    assert subject.preview_health_trade.options["text"] == "PRICE OPEN"
+    assert subject.preview_health_trade.options["text"] == "GIÁ MỞ"
 
 
 class _Tree:
@@ -348,7 +344,9 @@ def test_phase2_preview_uses_readable_stacked_rows(ui_root) -> None:
         assert {
             (int(card.grid_info()["row"]), int(card.grid_info()["column"]))
             for card in management_cards
-        } == {(0, 0), (0, 1), (1, 0), (1, 1)}
+        } == {(0, 0), (0, 1), (2, 0), (2, 1)}
+        assert int(subject.preview_atr.grid_info()["row"]) == 1
+        assert int(subject.preview_atr.grid_info()["columnspan"]) == 2
         for card in management_cards:
             content_bottom = max(
                 child.winfo_y() + child.winfo_height()

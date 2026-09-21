@@ -6,6 +6,7 @@ import pytest
 from viking_v2.rules.business import (
     crossover_signal,
     crossover_signal_from_snapshots,
+    entry_volume_snapshot,
     indicator_snapshot,
 )
 from viking_v2.rules.business import StaticRule, StaticRuleParameters, classify_market_state
@@ -127,8 +128,6 @@ def test_indicator_snapshot_exposes_the_exact_preview_values():
     assert snapshot["sell_ema_slow_period"] == 10
     assert snapshot["sell_ema_fast"] is not None
     assert snapshot["sell_ema_slow"] is not None
-    assert snapshot["weak_sell_ema_fast"] is not None
-    assert snapshot["weak_sell_ema_slow"] is not None
     assert snapshot["rsi"] is not None
     assert snapshot["rsi_previous"] is not None
 
@@ -266,49 +265,73 @@ def test_indicator_b_sells_all_remaining_position():
     assert decision.quantity_fraction == 1.0
 
 
-def test_sellable_weak_e_exits_only_after_t2_and_when_underwater():
-    indicators = {
-        "sample_count": 30,
-        "buy_ema_fast": 99.0, "buy_ema_slow": 100.0,
-        "sell_ema_fast": 99.0, "sell_ema_slow": 100.0,
-        "weak_sell_ema_fast": 99.0, "weak_sell_ema_slow": 100.0,
-        "rsi": 40.0, "rsi_previous": 45.0,
-    }
+def test_entry_volume_compares_current_daily_candle_with_prior_closed_sessions():
+    bars = _bars([100] * 5)
+    for row, volume in zip(bars, [100, 200, 300, 400, 600]):
+        row["volume"] = volume
+    snapshot = entry_volume_snapshot(bars, sessions=3)
+    assert snapshot["ready"] is True
+    assert snapshot["average"] == 300
+    assert snapshot["ratio"] == 2
+
+
+def test_entry_volume_filter_blocks_low_volume_and_allows_high_volume_buy():
     context = {
-        "symbol": "FPT", "bars": _bars(B_VALUES),
-        "signal_mode": "REALTIME", "indicator_snapshot": indicators,
-        "previous_indicators": indicators,
+        "symbol": "FPT", "bars": _bars(M_VALUES),
         "previous_market_state": "UPTREND",
     }
-    rule = StaticRule(StaticRuleParameters(sellable_weak_exit_enabled=True))
-
-    def evaluate(*, sellable: bool, price: float, enabled: bool = True):
-        current_rule = rule if enabled else StaticRule()
-        return current_rule.evaluate(context, {
-            "position": {
-                "quantity": 100, "avg_price": 100, "current_price": price,
-                "em_modes": ["IND_EXIT"], "sellable": sellable,
-            },
-        })
-
-    assert evaluate(sellable=False, price=98).action == "WAIT"
-    assert evaluate(sellable=True, price=99.5).action == "WAIT"
-    assert evaluate(sellable=True, price=98, enabled=False).action == "WAIT"
-    decision = evaluate(sellable=True, price=98)
-    assert decision.action == "SELL"
-    assert decision.event == "INDICATOR_EXIT"
-    assert decision.reason == "SELLABLE_WEAK_EXIT"
-    assert decision.details["sellable_weak_exit"] is True
-
-
-def test_sellable_weak_e_never_overrides_stop_loss():
-    rule = StaticRule(StaticRuleParameters(sellable_weak_exit_enabled=True))
-    decision = rule.evaluate(
-        {"symbol": "FPT", "bars": _bars([99] * 30), "previous_market_state": "UPTREND"},
-        {"position": {"quantity": 100, "avg_price": 100, "current_price": 96,
-                      "em_modes": ["IND_EXIT"], "sellable": True}},
+    portfolio = {"available_capital": 100_000_000, "open_positions": 0}
+    params = StaticRuleParameters(
+        buy_volume_enabled=True,
+        buy_volume_average_sessions=3,
+        buy_volume_min_ratio=1.2,
     )
-    assert decision.event == "STOP_LOSS"
+    low_bars = _bars(M_VALUES)
+    low_bars[-1]["volume"] = 1_000
+    low = StaticRule(params).evaluate({**context, "bars": low_bars}, portfolio)
+    assert low.reason == "BUY_VOLUME_LOW"
+    high_bars = _bars(M_VALUES)
+    high_bars[-1]["volume"] = 2_000_000
+    high = StaticRule(params).evaluate({**context, "bars": high_bars}, portfolio)
+    assert high.action == "BUY"
+
+
+def test_disabled_trade_stop_loss_does_not_hide_e_or_protect_logic():
+    context = {"symbol": "FPT", "bars": _bars([90] * 20), "previous_market_state": "UPTREND"}
+    no_exit = StaticRule().evaluate(
+        context,
+        {"position": {
+            "quantity": 100, "avg_price": 100, "current_price": 90,
+            "sl_enabled": False, "em_modes": [],
+        }},
+    )
+    assert no_exit.action == "WAIT"
+    assert no_exit.details["sl_mode"] == "OFF"
+
+    indicator_exit = StaticRule().evaluate(
+        {"symbol": "FPT", "bars": _bars(B_VALUES), "previous_market_state": "UPTREND"},
+        {"position": {
+            "quantity": 100, "avg_price": 100, "current_price": 90,
+            "sl_enabled": False, "em_modes": ["IND_EXIT"],
+        }},
+    )
+    assert indicator_exit.event == "INDICATOR_EXIT"
+
+
+def test_market_override_is_reported_and_uses_fixed_exposure():
+    decision = StaticRule().evaluate(
+        {
+            "symbol": "FPT", "bars": _bars(M_VALUES),
+            "previous_market_state": "DOWNTREND",
+            "confirmed_market_state": "ACCUMULATION",
+            "effective_exposure": 0.65,
+            "market_override": {"enabled": True, "state": "ACCUMULATION"},
+        },
+        {"available_capital": 100_000_000, "open_positions": 0},
+    )
+    assert decision.market_state == "ACCUMULATION"
+    assert decision.details["exposure"] == 0.65
+    assert decision.details["market"]["override_enabled"] is True
 
 
 def test_phase1_identifies_rising_and_falling_market_structure():

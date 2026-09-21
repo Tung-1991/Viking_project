@@ -38,6 +38,7 @@ class StrategyOrderPlanner:
         candle_key: str,
         allow_ato: bool = False,
         allow_atc: bool = False,
+        bot_sl_enabled: bool = True,
         bot_em_modes: list[str] | None = None,
         sell_wait_policy: str = "RECHECK",
     ) -> PlanResult:
@@ -168,6 +169,7 @@ class StrategyOrderPlanner:
             allow_ato=bool(allow_ato and not local_limit),
             allow_atc=bool(allow_atc and not local_limit),
             em_modes=list(bot_em_modes or []) if side == "BUY" else [],
+            sl_enabled=bool(bot_sl_enabled) if side == "BUY" else True,
             sell_wait_policy=sell_wait_policy if side == "SELL" else "KEEP",
             signal=decision.signal,
             candle_key=candle_key,

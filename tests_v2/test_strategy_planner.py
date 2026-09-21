@@ -49,6 +49,24 @@ def test_buy_plan_uses_budget_round_lot_and_claims_signal_once(tmp_path):
     assert repeated.reason == "BUY_ALREADY_PENDING"
 
 
+def test_bot_sl_setting_is_snapshotted_on_new_buy_intent(tmp_path):
+    planner, _queue = _planner(tmp_path)
+    result = planner.plan(
+        StrategyDecision(
+            "BUY", "FPT", "BUY_SIGNAL", event="ENTRY_BUY", signal="BUY",
+            market_state="ACCUMULATION",
+        ),
+        execution_mode="PAPER",
+        execution_style="MARKET",
+        tick={"ask": 100},
+        portfolio={"order_budget": 20_000_000},
+        candle_key="sl-off",
+        bot_sl_enabled=False,
+    )
+    assert result.intent is not None
+    assert result.intent.sl_enabled is False
+
+
 def test_local_lo_stays_local_and_never_uses_ato_atc(tmp_path):
     planner, _queue = _planner(tmp_path)
     result = planner.plan(

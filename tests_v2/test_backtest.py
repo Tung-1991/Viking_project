@@ -55,17 +55,6 @@ def test_historical_store_caches_dnse_daily_data(tmp_path):
     assert calls == []
 
 
-def test_sellable_weak_exit_requires_intraday_replay(tmp_path):
-    engine = BacktestEngine(HistoricalDataStore(root=tmp_path))
-    config = BacktestConfig(
-        ["FPT"], "2026-03-01", "2026-03-31",
-        simulation_mode="DAILY",
-        rule_parameters={"sellable_weak_exit_enabled": True},
-    )
-    with pytest.raises(RuntimeError, match="requires full intraday REPLAY"):
-        engine.run(config, save=False)
-
-
 def test_historical_cache_reports_real_coverage_and_retries_missing_gap(tmp_path, monkeypatch):
     clock = [1_000.0]
     monkeypatch.setattr("viking_v2.backtest.data.time.time", lambda: clock[0])

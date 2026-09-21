@@ -51,6 +51,7 @@ class OrderIntent:
     broker_fee_logged: float = 0.0
     broker_tax_logged: float = 0.0
     em_modes: list[str] = field(default_factory=list)
+    sl_enabled: bool = True
     sl_mode: str = "DEFAULT"
     sl_value: float = 0.0
     tp_mode: str = "NONE"
@@ -100,6 +101,7 @@ class OrderIntent:
         self.broker_fee_logged = max(0.0, float(self.broker_fee_logged or 0.0))
         self.broker_tax_logged = max(0.0, float(self.broker_tax_logged or 0.0))
         self.em_modes = normalize_exit_modes(self.em_modes)
+        self.sl_enabled = bool(self.sl_enabled)
         self.sl_mode = str(self.sl_mode or "DEFAULT").strip().upper()
         if self.sl_mode not in {"DEFAULT", "PERCENT", "PRICE"}:
             self.sl_mode = "DEFAULT"
@@ -138,6 +140,7 @@ class OrderIntent:
         allow_atc: bool = False,
         defer_expiry_until_eligible: bool = False,
         em_modes: list[str] | None = None,
+        sl_enabled: bool = True,
         sl_mode: str = "DEFAULT",
         sl_value: float = 0.0,
         tp_mode: str = "NONE",
@@ -167,6 +170,7 @@ class OrderIntent:
             allow_atc=allow_atc,
             defer_expiry_until_eligible=defer_expiry_until_eligible,
             em_modes=list(em_modes or []),
+            sl_enabled=sl_enabled,
             sl_mode=sl_mode,
             sl_value=sl_value,
             tp_mode=tp_mode,
@@ -219,6 +223,7 @@ class TradeCycle:
     closed_at: float = 0.0
     exit_events: list[str] = field(default_factory=list)
     em_modes: list[str] = field(default_factory=list)
+    sl_enabled: bool = True
     sl_mode: str = "DEFAULT"
     sl_value: float = 0.0
     tp_mode: str = "NONE"
@@ -243,6 +248,7 @@ class TradeCycle:
         self.fees_paid = max(0.0, float(self.fees_paid or 0.0))
         self.exit_events = list(dict.fromkeys(str(value) for value in self.exit_events if str(value)))
         self.em_modes = normalize_exit_modes(self.em_modes)
+        self.sl_enabled = bool(self.sl_enabled)
         self.sl_mode = str(self.sl_mode or "DEFAULT").strip().upper()
         if self.sl_mode not in {"DEFAULT", "PERCENT", "PRICE"}:
             self.sl_mode = "DEFAULT"

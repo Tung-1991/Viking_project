@@ -383,6 +383,7 @@ class PortfolioContextBuilder:
             "managed_by_bot": managed,
             "managed_by_app": managed,
             "is_reentry": bool(active_trade.is_reentry) if active_trade else False,
+            "sl_enabled": bool(active_trade.sl_enabled) if active_trade else True,
             "sl_mode": str(active_trade.sl_mode) if active_trade else "DEFAULT",
             "sl_value": float(active_trade.sl_value) if active_trade else 0.0,
             "tp_mode": str(active_trade.tp_mode) if active_trade else "NONE",

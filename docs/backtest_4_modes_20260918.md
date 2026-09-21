@@ -1,4 +1,6 @@
-# Viking — 4 mode với SL −3% (18/09/2026)
+# Viking — 4 mode với SL −3% (18/09/2026, lưu trữ)
+
+> Báo cáo này lưu kết quả lịch sử có nhánh E sớm thử nghiệm. Nhánh đó đã bị gỡ hoàn toàn khỏi UI/backend vì chỉ cải thiện trong mẫu, chưa đủ bằng chứng ngoài mẫu và làm tăng độ phức tạp vận hành. Không dùng tài liệu này làm mô tả cấu hình hiện hành.
 
 ## Phạm vi
 
@@ -64,7 +66,7 @@ Nếu AUTO đổi thành ALERT thì cùng phép tính chỉ ghi log/gửi Telegr
 ## Rà soát backend/UI
 
 - Backend live và backtest cùng gọi một công thức `protect_level`. Bốn công tắc START ATR, TRAIL ATR, GIỮ LÃI và MỐC GIỮ ĐẾN đã được truyền qua settings, quyết định, pending T+2, báo cáo, bảng dashboard, Telegram và execution metadata. Cấu hình cũ không có các khóa mới sẽ mặc định ON để không âm thầm đổi hành vi.
-- UI live và UI backtest đều có bốn công tắc riêng cùng hint. E được tách khỏi Phase 2 ENTRY BUY; EMA SELL/E sớm chỉnh trong card E · EXIT SELL. Cờ thử nghiệm reset sàn ở T+2 vẫn không hiện trên UI và mặc định OFF.
+- UI hiện hành vẫn tách E khỏi Phase 2 ENTRY BUY; E chỉ còn EMA SELL + RSI. Nhánh E sớm trong lần nghiên cứu này không còn trong code.
 - Trong PROTECT, START + TRAIL được gom thành nhóm **ATR14 · 1D · phiên trước**; GIỮ LÃI + GIỮ ĐẾN được gom thành nhóm **GIỮ LÃI THEO ĐỈNH**. Thẻ PROTECT ở màn hình chính hiển thị preview theo đúng mã đang chọn: ATR%, ngưỡng START, khoảng LÙI ATR và tỷ lệ bán. `KL BÁN KHI CHẠM 100%` nghĩa là bán sạch khối lượng đang giữ.
 - GIỮ LÃI áp dụng lên **phần lãi từ giá mua**, không nhân trực tiếp giá đỉnh. Ví dụ mua 10, đỉnh 13 thì lãi đỉnh là 3; giữ 87,5% tạo mức bảo vệ `10 + 3 × 87,5% = 12,625`. Khi giá giảm về mức này và cổ đã bán được, AUTO bán theo tỷ lệ KL BÁN KHI CHẠM.
 - Nút **SO SÁNH 4 MODE PROTECT** tạo đủ AUTO OFF, AUTO ON, ALERT OFF và ALERT ON độc lập. ALERT chỉ thông báo; không tạo fill PROTECT.

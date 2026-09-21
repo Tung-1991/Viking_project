@@ -180,6 +180,7 @@ class DNSEMarketWS:
         if action == "auth_success":
             self._authenticated = True
             self._consecutive_failures = 0
+            self._last_error = ""
             with self._lock:
                 symbols = set(self._symbols)
             self._send_channels("subscribe", symbols)

@@ -315,6 +315,46 @@ class RuleSettingsPopup:
         self.exp_acc = self._field(exposure, "Tích lũy (%)", self.params.exposure["ACCUMULATION"] * 100, "ACCUMULATION. Mặc định tối đa 60% NAV.")
         self.exp_dist = self._field(exposure, "Phân phối (%)", self.params.exposure["DISTRIBUTION"] * 100, "DISTRIBUTION. Mặc định tối đa 50% NAV.")
 
+        override = self._card(
+            body, "OVERRIDE P1",
+            "Mặc định OFF. Khi ON, trạng thái và tỷ trọng cố định bên dưới thay P1 tự động cho BUY mới. "
+            "Bộ phân loại VNINDEX vẫn chạy để theo dõi; vị thế đang giữ không bị sửa.",
+            2, 0, span=3,
+        )
+        override_row = ctk.CTkFrame(override, fg_color="transparent")
+        override_row.pack(fill="x", padx=12, pady=(2, 10))
+        override_row.grid_columnconfigure(3, weight=1)
+        self.market_phase_override_enabled = tk.BooleanVar(
+            value=self.settings.market_phase_override_enabled,
+        )
+        ctk.CTkSwitch(
+            override_row, text="BẬT", variable=self.market_phase_override_enabled,
+            font=("Segoe UI", 12, "bold"), progress_color=self.WARN,
+            text_color=self.TEXT,
+        ).grid(row=0, column=0, sticky="w", padx=(0, 14))
+        self.market_phase_override = tk.StringVar(
+            value=self.settings.market_phase_override,
+        )
+        ctk.CTkOptionMenu(
+            override_row,
+            values=["UPTREND", "ACCUMULATION", "DISTRIBUTION", "DOWNTREND"],
+            variable=self.market_phase_override, width=170, height=34,
+            font=("Segoe UI", 12), fg_color=self.BLUE,
+            button_color="#245C92", button_hover_color="#1D4D7B",
+        ).grid(row=0, column=1, sticky="w")
+        ctk.CTkLabel(
+            override_row, text="CP %", font=FONT_KEY, text_color=self.TITLE,
+        ).grid(row=0, column=2, sticky="w", padx=(18, 7))
+        self.market_phase_override_exposure = ctk.CTkEntry(
+            override_row, width=78, height=34, justify="right",
+            font=FONT_VALUE, fg_color="#181B20", border_color="#444B55",
+            text_color=self.TEXT,
+        )
+        self.market_phase_override_exposure.insert(
+            0, f"{self.settings.market_phase_override_exposure_pct:g}",
+        )
+        self.market_phase_override_exposure.grid(row=0, column=3, sticky="w")
+
     def _phase2(self, frame: ctk.CTkFrame) -> None:
         body = self._content(frame, columns=2, weights=(3, 2))
         self._summary(
@@ -468,6 +508,24 @@ class RuleSettingsPopup:
                 text_color=self.TEXT,
             ).pack(side="left", padx=(0, 12))
 
+        buy_volume = self._card(
+            right_column, "VOLUME ENTRY",
+            "Mặc định OFF. Khi ON, BUY chỉ được qua nếu volume tích lũy của nến hiện tại đạt tỷ lệ tối thiểu so với trung bình các phiên đã đóng trước đó. Không dùng dữ liệu tương lai.",
+            2, 0,
+        )
+        self.buy_volume_enabled = self._switch(
+            buy_volume, "DÙNG VOLUME", self.params.buy_volume_enabled,
+            "OFF không ảnh hưởng chiến lược hiện tại. ON biến volume thành điều kiện bắt buộc trước khi tạo BUY.",
+        )
+        self.buy_volume_average = self._field(
+            buy_volume, "Trung bình (phiên)", self.params.buy_volume_average_sessions,
+            "Số phiên ngày đã đóng dùng làm mẫu. Mặc định 20.",
+        )
+        self.buy_volume_minimum = self._field(
+            buy_volume, "Tối thiểu (%)", self.params.buy_volume_min_ratio * 100.0,
+            "100% nghĩa volume hiện tại phải ít nhất bằng trung bình các phiên trước. Nếu chưa đủ lịch sử, BUY bị chặn rõ lý do.",
+        )
+
     def _phase3(self, frame: ctk.CTkFrame) -> None:
         body = self._content(frame)
         self._summary(
@@ -515,8 +573,8 @@ class RuleSettingsPopup:
         self._summary(
             body,
             "E/M · QUẢN LÝ THOÁT",
-            "SL luôn bật · TP / PROTECT / E được gắn theo từng trade · thay đổi có hiệu lực ngay",
-            "Popup này chỉ đặt tham số global. Tactic nào chạy cho trade nào được chọn ở panel manual hoặc popup QUẢN LÝ VỊ THẾ.",
+            "",
+            "Đặt tham số global cho SL, TP, PROTECT và E. Tactic mặc định của BOT chọn ở tab THỰC THI; vị thế manual quản lý riêng.",
             columns=2,
         )
         left_column = ctk.CTkFrame(body, fg_color="transparent")
@@ -524,17 +582,14 @@ class RuleSettingsPopup:
         left_column.grid_columnconfigure(0, weight=1)
         self.exit_left_column = left_column
 
-        # Cắt lỗ và chốt lời là hai đầu của cùng một quyết định nên đứng chung
-        # một thẻ; cắt lỗ không có công tắc vì nó luôn chạy.
         take = self._card(
             left_column, "CẮT LỖ (SL) VÀ CHỐT LỜI (TP)",
-            "Cả hai đều bán sạch vị thế. Cắt lỗ luôn bật cho mọi trade và được xét trước mọi thứ khác. "
-            "Chốt lời chỉ chạy với trade có gắn tactic TP.",
+            "Cả hai đều bán sạch vị thế. SL của BOT có thể bật/tắt ở tab THỰC THI và được lưu theo từng trade; TP chỉ chạy khi trade có gắn TP.",
             0, 0,
         )
         self.initial_sl = self._field(
             take, "Cắt lỗ lệnh đầu (%)", self.params.initial_sl_pct,
-            "Mặc định -3% tính từ giá vốn, kiểm tra realtime. Luôn bật, không tắt được.",
+            "Mặc định -3% tính từ giá vốn, kiểm tra realtime khi SL của trade đang ON.",
         )
         self.reentry_sl = self._field(
             take, "Cắt lỗ vào lại (%)", self.params.reentry_sl_pct,
@@ -544,8 +599,6 @@ class RuleSettingsPopup:
             take, "Chốt lời (%)", self.params.take_profit_pct,
             "Mặc định +7% tính từ giá vốn. Đặt 0 để tắt hẳn.",
         )
-        ctk.CTkLabel(take, text="KẾT QUẢ  ·  BÁN SẠCH VỊ THẾ  ·  CẮT LỖ ƯU TIÊN TRƯỚC CHỐT LỜI",
-                     font=("Segoe UI", 12), text_color=self.TEXT).pack(anchor="w", padx=14, pady=(8, 12))
 
         normal = self._card(
             body, "PROTECT",
@@ -631,11 +684,6 @@ class RuleSettingsPopup:
             "OFF: không dùng mức bảo vệ theo ATR. START và GIỮ LÃI vẫn theo công tắc riêng; "
             "muốn chỉ dùng GIỮ LÃI mà không phụ thuộc ATR, tắt cả START ATR.",
         )
-        ctk.CTkLabel(
-            atr_box,
-            text="Preview thật: thẻ PROTECT theo mã",
-            font=("Segoe UI", 10), text_color=self.MUTED, anchor="w",
-        ).pack(fill="x", padx=12, pady=(1, 8))
 
         retention_box = ctk.CTkFrame(
             dynamic_groups, fg_color="#20252C", corner_radius=7,
@@ -666,26 +714,10 @@ class RuleSettingsPopup:
             "Trong mẫu 7 mã hiện tại, dừng nâng ở 5% cho PnL 599,53 triệu; giữ tiếp tới ARM 7% chỉ đạt 466,33 triệu. "
             "Đây vẫn là kết quả trong mẫu, chưa được xác nhận ngoài mẫu. Nếu GIỮ LÃI OFF, công tắc này không có tác dụng.",
         )
-        ctk.CTkLabel(
-            retention_box,
-            text="5%→7%: giữ sàn cũ; ATR vẫn có thể nâng",
-            font=("Segoe UI", 10), text_color=self.MUTED, anchor="w",
-        ).pack(fill="x", padx=12, pady=(1, 8))
-        ctk.CTkLabel(
-            dynamic_box,
-            text="DƯỚI ARM: dùng cách đang ON; mức đã khóa không hạ · T+2 chưa bán được",
-            font=("Segoe UI", 11), text_color=self.MUTED, anchor="w",
-        ).pack(fill="x", padx=12, pady=(3, 9))
         self.normal_repeat = self._switch(
             normal, "REPEAT", self.params.normal_repeat_enabled,
             "Chỉ dùng khi SELL dưới 100%. Peak mới phải vượt peak lần bán trước thêm ít nhất TRAIL%.",
         )
-        self.normal_result = ctk.CTkLabel(normal, text="", font=("Segoe UI", 12), text_color=self.TEXT)
-        self.normal_result.pack(anchor="w", padx=14, pady=(8, 12))
-
-        self._refresh_share_labels()
-        self.normal_sell.bind("<KeyRelease>", self._refresh_share_labels, add="+")
-        self.normal_repeat.trace_add("write", lambda *_args: self._refresh_share_labels())
 
         indicator = self._card(
             left_column, "E · EXIT SELL",
@@ -716,63 +748,9 @@ class RuleSettingsPopup:
             ctk.CTkCheckBox(
                 sell_conditions, text=label, variable=variable, width=105,
                 font=("Segoe UI", 11, "bold"), fg_color="#EF4444",
-                text_color=self.TEXT, command=self._refresh_exit_b_signal,
+                text_color=self.TEXT,
             ).pack(side="left", padx=(0, 12))
 
-        weak_row = ctk.CTkFrame(indicator, fg_color="transparent")
-        weak_row.pack(fill="x", padx=12, pady=(1, 4))
-        self.sellable_weak_exit_enabled = tk.BooleanVar(
-            value=self.params.sellable_weak_exit_enabled,
-        )
-        ctk.CTkSwitch(
-            weak_row, text="E SỚM SAU T+2", variable=self.sellable_weak_exit_enabled,
-            font=("Segoe UI", 12), progress_color=self.GREEN,
-            button_color=self.TEXT, text_color=self.TEXT,
-        ).pack(side="left")
-        self._hint_icon(
-            weak_row,
-            "Nhánh thử nghiệm, mặc định OFF. Chỉ xét khi E được gắn cho trade và cổ đã bán được: "
-            "lỗ chạm ngưỡng, EMA2 dưới EMA4 và RSI giảm. Không thay EMA của E chính.",
-        ).pack(side="right")
-        self.sellable_weak_exit_loss = self._field(
-            indicator, "E sớm từ lỗ (%)", self.params.sellable_weak_exit_loss_pct,
-            "Ngưỡng lỗ âm từ -10% đến dưới 0%, mặc định -1%. Chỉ có tác dụng khi bật E SỚM SAU T+2.",
-        )
-        self.exit_b_signal_label = ctk.CTkLabel(
-            indicator, text=self._exit_b_signal_text(),
-            font=("Segoe UI", 12), text_color=self.TEXT,
-            anchor="w", justify="left",
-        )
-        self.exit_b_signal_label.pack(fill="x", padx=14, pady=(4, 1))
-        ctk.CTkLabel(
-            indicator, text="E bán 100% phần còn lại · không chỉnh khối lượng",
-            font=("Segoe UI", 11), text_color=self.MUTED, anchor="w",
-        ).pack(fill="x", padx=14, pady=(0, 10))
-
-        for entry in (self.sell_ema_fast, self.sell_ema_slow):
-            entry.bind("<KeyRelease>", self._refresh_exit_b_signal, add="+")
-        self.shared_rsi_period.trace_add("write", lambda *_args: self._refresh_exit_b_signal())
-
-    def _refresh_share_labels(self, _event: Any = None) -> None:
-        """Say in words what the percent box will actually do."""
-        for entry, label, fallback in (
-            (self.normal_sell, self.normal_result, self.params.normal_sell_pct),
-        ):
-            if not label.winfo_exists():
-                continue
-            raw = str(entry.get()).strip()
-            try:
-                value = min(100.0, max(0.0, float(raw or fallback)))
-            except ValueError:
-                label.configure(text="KẾT QUẢ  ·  SỐ KHÔNG HỢP LỆ")
-                continue
-            label.configure(
-                text="KẾT QUẢ  ·  BÁN SẠCH VỊ THẾ  ·  REPEAT KHÔNG ÁP DỤNG" if value >= 100
-                else (
-                    f"KẾT QUẢ  ·  BÁN {value:g}% PHẦN ĐANG GIỮ  ·  "
-                    f"REPEAT {'ON' if self.normal_repeat.get() else 'OFF'}"
-                ),
-            )
 
     def _refresh_realtime_interval_state(self) -> None:
         if not hasattr(self, "realtime_interval_menu"):
@@ -782,27 +760,7 @@ class RuleSettingsPopup:
         )
 
     def _select_normal_policy(self, value: str) -> None:
-        self._refresh_share_labels()
-
-    def _exit_b_signal_text(self) -> str:
-        def value(entry: ctk.CTkEntry, fallback: int) -> str:
-            current = str(entry.get()).strip()
-            return current or str(fallback)
-
-        fast = value(self.sell_ema_fast, self.params.sell_ema_fast)
-        slow = value(self.sell_ema_slow, self.params.sell_ema_slow)
-        rsi = value(self.rsi_period, self.params.rsi_period)
-        conditions: list[str] = []
-        if self.sell_signal_ema.get():
-            conditions.append(f"EMA{fast} ↓ EMA{slow}")
-        if self.sell_signal_rsi.get():
-            conditions.append(f"RSI{rsi} GIẢM")
-        return "E CHÍNH · " + (" + ".join(conditions) or "CHƯA CHỌN ĐIỀU KIỆN")
-
-    def _refresh_exit_b_signal(self, _event: Any = None) -> None:
-        label = getattr(self, "exit_b_signal_label", None)
-        if label is not None and label.winfo_exists():
-            label.configure(text=self._exit_b_signal_text())
+        return None
 
     def _execution_tab(self, frame: ctk.CTkFrame) -> None:
         body = self._content(frame, columns=2)
@@ -857,10 +815,15 @@ class RuleSettingsPopup:
 
         bot_em = self._card(
             body, "E/M MẶC ĐỊNH",
-            "BOT và manual dùng chung TP, PROTECT và E. Các nút dưới đây chọn tactic mặc định gắn vào trade do BOT mở; SL luôn bật.",
+            "Các nút dưới đây được chụp vào từng trade mới do BOT mở. Đổi cấu hình không sửa vị thế đang giữ; manual quản lý riêng.",
             1, 1,
         )
         enabled_modes = set(self.settings.bot_em_modes)
+        self.bot_sl_enabled = self._switch(
+            bot_em, "SL", self.settings.bot_sl_enabled,
+            "Mặc định ON. OFF chỉ áp dụng cho trade BOT mở sau khi lưu; vị thế đã có không mất SL. "
+            "Khi OFF, vị thế chỉ còn TP/PROTECT/E hoặc operator bảo vệ.",
+        )
         self.bot_em_vars = {
             "TP": self._switch(
                 bot_em, "TP",
@@ -1015,14 +978,20 @@ class RuleSettingsPopup:
             pivot_right = int(self._number(self.pivot_right, "Pivot Right"))
             confirm_sessions = int(self._number(self.confirm_sessions, "Xác nhận state"))
             volume_average = int(self._number(self.volume_average, "Volume Average"))
+            buy_volume_average = int(self._number(
+                self.buy_volume_average, "Volume Entry Average",
+            ))
+            buy_volume_minimum = self._nonnegative(
+                self.buy_volume_minimum, "Volume Entry tối thiểu",
+            )
+            override_exposure = self._nonnegative(
+                self.market_phase_override_exposure, "Override P1 tỷ trọng",
+            )
             buy_ema_fast = int(self._number(self.buy_ema_fast, "BUY EMA nhanh"))
             buy_ema_slow = int(self._number(self.buy_ema_slow, "BUY EMA chậm"))
             sell_ema_fast = int(self._number(self.sell_ema_fast, "SELL EMA nhanh"))
             sell_ema_slow = int(self._number(self.sell_ema_slow, "SELL EMA chậm"))
             rsi_period = int(self._number(self.rsi_period, "RSI"))
-            sellable_weak_exit_loss = self._number(
-                self.sellable_weak_exit_loss, "E sớm từ lỗ",
-            )
             buy_confirmation_minutes = int(self._number(
                 self.buy_confirmation_minutes, "Xác nhận BUY",
             ))
@@ -1061,7 +1030,7 @@ class RuleSettingsPopup:
             normal_sell = self._nonnegative(self.normal_sell, "Protect bán bao nhiêu")
             if min(
                 ma_period, pivot_left, pivot_right, confirm_sessions,
-                volume_average, buy_ema_fast, sell_ema_fast, rsi_period,
+                volume_average, buy_volume_average, buy_ema_fast, sell_ema_fast, rsi_period,
                 max_positions, loss_lock, loss_lock_hours, whipsaw_n,
             ) < 1:
                 raise ValueError("Các chu kỳ và giới hạn phải lớn hơn 0")
@@ -1069,12 +1038,14 @@ class RuleSettingsPopup:
                 raise ValueError("BUY EMA chậm phải lớn hơn BUY EMA nhanh")
             if sell_ema_slow <= sell_ema_fast:
                 raise ValueError("SELL EMA chậm phải lớn hơn SELL EMA nhanh")
-            if not -10.0 <= sellable_weak_exit_loss < 0.0:
-                raise ValueError("E sớm từ lỗ phải nằm từ -10% đến dưới 0%")
             if whipsaw_x < 2:
                 raise ValueError("Whipsaw X phải từ 2 phiên")
             if any(value < 0 or value > 100 for value in exposures.values()):
                 raise ValueError("Exposure phải nằm trong 0–100%")
+            if not 0 <= override_exposure <= 100:
+                raise ValueError("Override P1 phải nằm trong 0–100%")
+            if not 0 < buy_volume_minimum <= 1000:
+                raise ValueError("Volume Entry tối thiểu phải lớn hơn 0 và không quá 1000%")
             if initial_sl >= 0 or reentry_sl >= 0:
                 raise ValueError("Stop Loss phải là số âm")
             if high_volume < low_volume:
@@ -1129,12 +1100,11 @@ class RuleSettingsPopup:
             self.params.rsi_period = rsi_period
             self.params.buy_signal_use_ema = bool(self.buy_signal_ema.get())
             self.params.buy_signal_use_rsi = bool(self.buy_signal_rsi.get())
+            self.params.buy_volume_enabled = bool(self.buy_volume_enabled.get())
+            self.params.buy_volume_average_sessions = buy_volume_average
+            self.params.buy_volume_min_ratio = buy_volume_minimum / 100.0
             self.params.sell_signal_use_ema = bool(self.sell_signal_ema.get())
             self.params.sell_signal_use_rsi = bool(self.sell_signal_rsi.get())
-            self.params.sellable_weak_exit_enabled = bool(
-                self.sellable_weak_exit_enabled.get()
-            )
-            self.params.sellable_weak_exit_loss_pct = sellable_weak_exit_loss
             self.params.buy_confirmation_enabled = bool(self.buy_confirmation_enabled.get())
             self.params.buy_confirmation_minutes = buy_confirmation_minutes
             self.params.buy_confirmation_require_ema = bool(self.buy_confirmation_ema.get())
@@ -1177,9 +1147,15 @@ class RuleSettingsPopup:
             self.settings.allow_ato = bool(self.execution_allow_ato.get())
             self.settings.allow_atc = bool(self.execution_allow_atc.get())
             self.settings.confirm_real_orders = bool(self.confirm_real_orders.get())
+            self.settings.bot_sl_enabled = bool(self.bot_sl_enabled.get())
             self.settings.bot_em_modes = [
                 name for name, variable in self.bot_em_vars.items() if bool(variable.get())
             ]
+            self.settings.market_phase_override_enabled = bool(
+                self.market_phase_override_enabled.get()
+            )
+            self.settings.market_phase_override = self.market_phase_override.get()
+            self.settings.market_phase_override_exposure_pct = override_exposure
             self.settings.buy_fee_pct = min(5.0, self._nonnegative(self.buy_fee, "Phí mua"))
             self.settings.sell_fee_pct = min(5.0, self._nonnegative(self.sell_fee, "Phí bán"))
             self.settings.sell_tax_pct = min(5.0, self._nonnegative(self.sell_tax, "Thuế bán"))
@@ -1191,7 +1167,7 @@ class RuleSettingsPopup:
             save_settings(self.settings, self.account_id)
             self.on_saved()
             self.status.configure(
-                text="ĐÃ LƯU · ÁP DỤNG NGAY CẢ VỊ THẾ ĐANG MỞ",
+                text="ĐÃ LƯU · DAEMON TỰ ĐỘNG NHẬN CẤU HÌNH",
                 text_color=self.GREEN,
             )
         except (TypeError, ValueError) as exc:

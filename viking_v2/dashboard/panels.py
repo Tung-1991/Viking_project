@@ -30,39 +30,17 @@ from .windows import (
 def _dynamic_atr_preview_text(
     details: dict[str, Any], params: dict[str, Any],
 ) -> str:
-    """Render the per-symbol ATR14(1D, T-1) inputs operators actually use."""
+    """Render a compact state; full ATR explanation lives in the hover hint."""
     sell = _number(details.get("sell_share_pct", params.get("normal_sell_pct", 100.0)))
     dynamic = bool(details.get(
         "normal_dynamic_enabled", params.get("normal_dynamic_enabled", False),
     ))
     if not dynamic:
-        return f"DYNAMIC OFF · BÁN {sell:g}% KHI ARM/TRAIL CHẠM"
+        return f"DYN OFF · BÁN {sell:g}%"
     atr = _number(details.get("normal_atr_pct"))
     if atr <= 0:
-        return f"ATR14 1D(T−1): CHƯA ĐỦ DỮ LIỆU · BÁN {sell:g}%"
-    start_enabled = bool(details.get(
-        "normal_atr_activation_enabled",
-        params.get("normal_atr_activation_enabled", True),
-    ))
-    trail_enabled = bool(details.get(
-        "normal_atr_trail_enabled", params.get("normal_atr_trail_enabled", True),
-    ))
-    start_multiplier = _number(details.get(
-        "normal_atr_activation_multiplier",
-        params.get("normal_atr_activation_multiplier", 0.6),
-    ))
-    trail_multiplier = _number(details.get(
-        "normal_atr_multiplier", params.get("normal_atr_multiplier", 0.6),
-    ))
-    start = (
-        f"START {atr * start_multiplier:.2f}%"
-        if start_enabled else "START OFF"
-    )
-    trail = (
-        f"LÙI ATR {atr * trail_multiplier:.2f}%"
-        if trail_enabled else "LÙI ATR OFF"
-    )
-    return f"ATR14 1D(T−1) {atr:.2f}% · {start} · {trail} · BÁN {sell:g}%"
+        return f"DYN · ATR -- · BÁN {sell:g}%"
+    return f"DYN · ATR {atr:.2f}% · BÁN {sell:g}%"
 
 
 class DashboardPanelsMixin:
@@ -718,13 +696,13 @@ class DashboardPanelsMixin:
         order_header.grid_columnconfigure(2, weight=0)
         self.preview_order_title = ctk.CTkLabel(
             order_header, text="--- · PAPER · BUY · MARKET",
-            width=230, height=22, font=("Segoe UI", 13, "bold"), text_color=COL_TITLE, anchor="w",
+            width=230, height=22, font=("Segoe UI", 12, "bold"), text_color=COL_TITLE, anchor="w",
         )
         self.preview_order_title.grid(
             row=0, column=0, sticky="ew", padx=(2, 5)
         )
         self.preview_status_reason = ctk.CTkLabel(
-            order_header, text="--", width=1, height=22, font=("Segoe UI", 12),
+            order_header, text="--", width=1, height=22, font=("Segoe UI", 11),
             text_color=COL_PREVIEW_TEXT, fg_color=COL_SURFACE_2, corner_radius=5,
             anchor="w", justify="left",
         )
@@ -733,7 +711,7 @@ class DashboardPanelsMixin:
         )
         self.preview_status_badge = ctk.CTkLabel(
             order_header, text="CHỜ", width=82, height=24,
-            font=("Segoe UI", 11, "bold"), fg_color="#4A3B16",
+            font=("Segoe UI", 10, "bold"), fg_color="#4A3B16",
             text_color="#FFF3B0", corner_radius=6,
         )
         self.preview_status_badge.grid(
@@ -757,7 +735,7 @@ class DashboardPanelsMixin:
             card.grid_columnconfigure(0, weight=1)
             title_widget = ctk.CTkLabel(
                 card, text=f"{title}{'  ⓘ' if hint else ''}", height=22,
-                font=("Segoe UI", 13, "bold", "italic"),
+                font=("Segoe UI", 12, "bold", "italic"),
                 text_color=title_color, anchor="w",
             )
             title_widget.grid(row=0, column=0, sticky="ew", padx=9, pady=(6, 0))
@@ -767,7 +745,7 @@ class DashboardPanelsMixin:
                 _HoverHint(title_widget, hint, placement="inside")
             value = ctk.CTkLabel(
                 card, text="NA", width=1, height=30,
-                font=FONT_MONO_VALUE, text_color=COL_TEXT,
+                font=("Cascadia Mono", 13), text_color=COL_TEXT,
                 anchor="w", justify="left", wraplength=190,
             )
             value.grid(row=1, column=0, sticky="ew", padx=9, pady=(1, 6))
@@ -789,36 +767,50 @@ class DashboardPanelsMixin:
         management = ctk.CTkFrame(order_group, height=84, fg_color="transparent")
         management.grid(row=2, column=0, sticky="nsew", padx=6, pady=(3, 6))
         management.grid_propagate(False)
-        management.grid_rowconfigure((0, 1), weight=1, uniform="preview_management_rows")
+        management.grid_rowconfigure((0, 2), weight=1, uniform="preview_management_rows")
+        management.grid_rowconfigure(1, weight=0)
         for column in range(2):
             management.grid_columnconfigure(column, weight=1, uniform="preview_management")
 
-        def level_card(index: int, title: str, title_color: str):
-            row, column = divmod(index, 2)
+        def level_card(row: int, column: int, title: str, title_color: str):
             card = ctk.CTkFrame(management, width=1, fg_color=COL_SURFACE_2, corner_radius=6)
             card.grid(row=row, column=column, sticky="nsew", padx=3, pady=3)
             card.grid_columnconfigure(0, weight=1)
             title_widget = ctk.CTkLabel(
-                card, text=title, width=1, height=18, font=("Segoe UI", 12, "bold", "italic"),
+                card, text=title, width=1, height=18, font=("Segoe UI", 11, "bold", "italic"),
                 text_color=title_color, anchor="w",
             )
             title_widget.grid(row=0, column=0, sticky="ew", padx=9, pady=(3, 0))
             value = ctk.CTkLabel(
-                card, text="NA", width=1, height=20, font=("Cascadia Mono", 13),
+                card, text="NA", width=1, height=20, font=("Cascadia Mono", 12),
                 text_color=title_color, anchor="w",
             )
             value.grid(row=1, column=0, sticky="ew", padx=9, pady=(1, 0))
             detail = ctk.CTkLabel(
-                card, text="", width=1, height=18, font=("Segoe UI", 11),
+                card, text="", width=1, height=18, font=("Segoe UI", 10),
                 text_color=COL_PREVIEW_TEXT, anchor="w",
             )
             detail.grid(row=2, column=0, sticky="ew", padx=9, pady=(0, 2))
             return title_widget, value, detail
 
-        _tp_title, self.preview_tp_value, self.preview_tp_detail = level_card(0, "TP MANUAL", COL_GREEN)
-        _sl_title, self.preview_sl_value, self.preview_sl_detail = level_card(1, "STOP LOSS", COL_RED)
-        self.preview_em_normal, self.preview_normal_value, self.preview_normal_detail = level_card(2, "PROTECT · OFF", COL_RED)
-        self.preview_em_exit, self.preview_exit_value, self.preview_exit_detail = level_card(3, "E · OFF", COL_RED)
+        _tp_title, self.preview_tp_value, self.preview_tp_detail = level_card(0, 0, "TP MANUAL", COL_GREEN)
+        _sl_title, self.preview_sl_value, self.preview_sl_detail = level_card(0, 1, "STOP LOSS", COL_RED)
+        self.preview_atr = ctk.CTkLabel(
+            management, text="ATR14 -- · START -- · LÙI --", width=1, height=18,
+            font=("Cascadia Mono", 10), text_color="#60A5FA",
+            fg_color=COL_SURFACE_2, corner_radius=5, anchor="w",
+        )
+        self.preview_atr.grid(
+            row=1, column=0, columnspan=2, sticky="ew", padx=3, pady=2,
+        )
+        _HoverHint(
+            self.preview_atr,
+            "ATR14 dùng 14 phiên ngày đã đóng gần nhất. START là mức lãi đỉnh cần đạt để Dynamic bắt đầu; "
+            "LÙI là khoảng giảm từ đỉnh theo ATR. Dashboard chỉ hiện kết quả; công thức nằm trong RULE → E/M.",
+            placement="inside",
+        )
+        self.preview_em_normal, self.preview_normal_value, self.preview_normal_detail = level_card(2, 0, "PROTECT · OFF", COL_RED)
+        self.preview_em_exit, self.preview_exit_value, self.preview_exit_detail = level_card(2, 1, "E · OFF", COL_RED)
 
         rule_group.grid_columnconfigure(0, weight=1)
         for row in (1, 2, 3, 4):
@@ -827,7 +819,7 @@ class DashboardPanelsMixin:
         rule_header.grid(row=0, column=0, sticky="ew", padx=8, pady=(4, 2))
         rule_header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            rule_header, text="QUYẾT ĐỊNH HỆ THỐNG", height=14, font=("Segoe UI", 14, "bold"),
+            rule_header, text="QUYẾT ĐỊNH HỆ THỐNG", height=14, font=("Segoe UI", 13, "bold"),
             text_color="#60A5FA", anchor="w",
         ).grid(row=0, column=0, sticky="w")
         rule_hint = ctk.CTkButton(
@@ -856,7 +848,7 @@ class DashboardPanelsMixin:
             card.grid_columnconfigure(0, weight=0)
             card.grid_columnconfigure(1, weight=1)
             title_widget = ctk.CTkLabel(
-                card, text=f"{title}{'  ⓘ' if hint else ''}", font=("Segoe UI", 13, "bold", "italic"),
+                card, text=f"{title}{'  ⓘ' if hint else ''}", font=("Segoe UI", 12, "bold", "italic"),
                 text_color="#60A5FA", anchor="w",
             )
             title_widget.grid(row=0, column=0, sticky="w", padx=(8, 6), pady=4)
@@ -867,12 +859,12 @@ class DashboardPanelsMixin:
         phase1 = phase_card(1, "P1 · VNINDEX")
         self.preview_rule_market = ctk.CTkLabel(
             phase1, text="VNINDEX --", width=1, height=16,
-            font=("Cascadia Mono", 13), text_color=COL_PREVIEW_TEXT,
+            font=("Cascadia Mono", 12), text_color=COL_PREVIEW_TEXT,
             anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_market.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=4)
         self.preview_rule_market_detail = ctk.CTkLabel(
-            phase1, text="CHỜ PHÂN LOẠI", font=("Segoe UI", 11),
+            phase1, text="CHỜ PHÂN LOẠI", font=("Segoe UI", 10),
             text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_market_detail.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 4))
@@ -880,13 +872,13 @@ class DashboardPanelsMixin:
 
         phase2 = phase_card(
             2,
-            "P2 · BUY / SELL",
+            "P2 · BUY / E",
             "RSI hiển thị giá trị hiện tại và chiều thay đổi so với phiên trước.\n"
             "WAIT nghĩa là hiện chưa xuất hiện điểm cắt đủ điều kiện BUY hoặc SELL.",
         )
         self.preview_rule_ema = ctk.CTkLabel(
             phase2, text="BUY EMA 3/6 · --/--", width=1, height=14,
-            font=("Cascadia Mono", 13), text_color=COL_PREVIEW_TEXT,
+            font=("Cascadia Mono", 12), text_color=COL_PREVIEW_TEXT,
             anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_ema.grid(
@@ -894,7 +886,7 @@ class DashboardPanelsMixin:
         )
         self.preview_rule_sell_ema = ctk.CTkLabel(
             phase2, text="SELL EMA 3/6 · --/--", width=1, height=14,
-            font=("Cascadia Mono", 13), text_color=COL_PREVIEW_TEXT,
+            font=("Cascadia Mono", 12), text_color=COL_PREVIEW_TEXT,
             anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_sell_ema.grid(
@@ -902,7 +894,7 @@ class DashboardPanelsMixin:
         )
         self.preview_rule_rsi = ctk.CTkLabel(
             phase2, text="RSI14 -- · WAIT", width=1, height=14,
-            font=("Cascadia Mono", 13), text_color=COL_PREVIEW_TEXT,
+            font=("Cascadia Mono", 12), text_color=COL_PREVIEW_TEXT,
             anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_rsi.grid(
@@ -911,7 +903,7 @@ class DashboardPanelsMixin:
 
         phase3 = phase_card(
             3,
-            "P3 · GIỚI HẠN",
+            "P3 · VỐN & KHÓA",
             "VỊ THẾ: số mã đang giữ / số mã tối đa. VỐN/MÃ là mức vốn mục tiêu do Phase 1 chia.\n"
             "AUTO 100 CP: hệ thống luôn tính theo vốn Phase 1 trước. Nếu vốn/mã không mua đủ "
             "một lô, hệ thống chỉ fallback sang 100 CP khi room Phase 1, vốn no-compound và cash gồm phí đều còn đủ.\n"
@@ -921,14 +913,14 @@ class DashboardPanelsMixin:
             "LỖ: số lệnh lỗ liên tiếp / mức khóa mã.",
         )
         self.preview_rule_phase3 = ctk.CTkLabel(
-            phase3, text="--/-- · --/MÃ", width=1, font=("Cascadia Mono", 13),
+            phase3, text="--/-- · --/MÃ", width=1, font=("Cascadia Mono", 12),
             text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_phase3.grid(
             row=0, column=1, sticky="ew", padx=(0, 8), pady=4
         )
         self.preview_rule_phase3_detail = ctk.CTkLabel(
-            phase3, text="AUTO --", font=("Segoe UI", 13),
+            phase3, text="AUTO --", font=("Segoe UI", 12),
             text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_phase3_detail.grid(
@@ -941,8 +933,8 @@ class DashboardPanelsMixin:
         self.preview_rule_phase3_guard.grid_remove()
 
         self.preview_rule_reason = ctk.CTkLabel(
-            rule_group, text="CHỜ DỮ LIỆU", width=1, height=24,
-            font=("Segoe UI", 11, "bold"), text_color=COL_WARN,
+            rule_group, text="CHỜ DỮ LIỆU", width=1, height=22,
+            font=("Segoe UI", 9, "bold"), text_color=COL_WARN,
             fg_color=COL_SURFACE_2, corner_radius=6,
             anchor="w", justify="left", wraplength=300,
         )
@@ -954,7 +946,7 @@ class DashboardPanelsMixin:
         for column in range(7):
             health_group.grid_columnconfigure(column, weight=1, uniform="health_pills")
         self.preview_health_title = ctk.CTkLabel(
-            health_group, text="HEALTH ⓘ", width=1, font=("Segoe UI", 13, "bold", "italic"),
+            health_group, text="HEALTH ⓘ", width=1, font=("Segoe UI", 11, "bold", "italic"),
             text_color="#60A5FA", anchor="w",
         )
         self.preview_health_title.grid(row=0, column=0, sticky="ew", padx=(10, 3))
@@ -969,7 +961,7 @@ class DashboardPanelsMixin:
         def health_cell(column: int, text: str) -> ctk.CTkLabel:
             label = ctk.CTkLabel(
                 health_group, text=text, width=1, height=24,
-                font=("Cascadia Mono", 13), text_color=COL_PREVIEW_TEXT,
+                font=("Cascadia Mono", 11), text_color=COL_PREVIEW_TEXT,
                 fg_color=COL_SURFACE_2, corner_radius=5,
             )
             label.grid(row=0, column=column, sticky="ew", padx=3, pady=5)
@@ -1244,29 +1236,6 @@ class DashboardPanelsMixin:
         normal_giveback = float(params.get("normal_giveback_pct", 2.0) or 2.0)
         normal_policy = str(params.get("normal_policy", "AUTO") or "AUTO").upper()
         normal_dynamic = bool(params.get("normal_dynamic_enabled", False))
-        normal_atr_activation_multiplier = float(
-            params.get("normal_atr_activation_multiplier", 0.6) or 0.6
-        )
-        normal_atr_multiplier = float(params.get("normal_atr_multiplier", 0.6) or 0.6)
-        normal_retention_pct = float(params.get("normal_retention_pct", 0.0) or 0.0)
-        normal_retention_until_pct = float(
-            params.get("normal_retention_until_pct", 0.0) or 0.0
-        )
-        start_enabled = bool(params.get("normal_atr_activation_enabled", True))
-        atr_enabled = bool(params.get("normal_atr_trail_enabled", True))
-        keep_enabled = bool(normal_dynamic and params.get("normal_retention_enabled", True) and normal_retention_pct > 0)
-        until_enabled = bool(params.get("normal_retention_until_enabled", True))
-        dynamic_summary = "DYN OFF"
-        if normal_dynamic:
-            start_label = f"START×{normal_atr_activation_multiplier:g}" if start_enabled else "START OFF"
-            atr_label = f"ATR×{normal_atr_multiplier:g}" if atr_enabled else "ATR OFF"
-            keep_label = f"GIỮ {normal_retention_pct:g}%" if keep_enabled else "GIỮ OFF"
-            until_label = (
-                f"→{normal_retention_until_pct:g}%" if until_enabled else "→ARM"
-            ) if keep_enabled else ""
-            dynamic_summary = (
-                f"DYN ON · {start_label} · {atr_label} · {keep_label}{until_label}"
-            )
         normal_repeat = bool(params.get("normal_repeat_enabled", False))
         normal_sell = float(params.get("normal_sell_pct", 100.0) or 100.0)
         normal_price = entry_price * (1.0 + normal_arm / 100.0) if entry_price > 0 else 0.0
@@ -1282,9 +1251,8 @@ class DashboardPanelsMixin:
         )
         self.preview_normal_detail.configure(
             text=(
-                f"{normal_policy} · ARM {normal_arm:g}% · TRAIL {normal_giveback:g}% · SELL {normal_sell:g}%"
-                f" · {dynamic_summary}"
-                f" · REPEAT {'OFF' if normal_sell >= 100 else 'ON' if normal_repeat else 'OFF'}"
+                f"{normal_policy} · ARM {normal_arm:g}% · TRAIL {normal_giveback:g}% · BÁN {normal_sell:g}%"
+                f"{' · LẶP' if normal_repeat and normal_sell < 100 else ''}"
             ),
         )
         em_labels = {
@@ -1302,6 +1270,16 @@ class DashboardPanelsMixin:
         decisions = status.get("decisions") if isinstance(status.get("decisions"), dict) else {}
         decision = decisions.get(symbol) if isinstance(decisions.get(symbol), dict) else {}
         decision_details = decision.get("details") if isinstance(decision.get("details"), dict) else {}
+        atr_pct = _number(decision_details.get("atr14_daily_pct"))
+        start_pct = _number(decision_details.get("dynamic_start_pct"))
+        trail_pct = _number(decision_details.get("dynamic_trail_pct"))
+        self.preview_atr.configure(
+            text=(
+                f"ATR14 {atr_pct:.2f}% · START {start_pct:.2f}% · LÙI {trail_pct:.2f}%"
+                if atr_pct > 0 else "ATR14 -- · START -- · LÙI --"
+            ),
+            text_color=(COL_GREEN if normal_dynamic and atr_pct > 0 else "#60A5FA"),
+        )
         current_profit = decision_details.get("current_profit_pct")
         signal = str(decision.get("signal") or "--").upper()
         for key, widget in em_widgets.items():
@@ -1358,7 +1336,6 @@ class DashboardPanelsMixin:
             bool(self._em_states.get("indicator_exit", False)),
             position_quantity,
         )
-        signal_label = "BUY" if signal == "BUY" else "SELL" if signal == "SELL" else "WAIT"
         bot_enabled = bool(status.get("bot_enabled", False))
         self.preview_rule_title.configure(
             text=f"MUA · {'ON' if bot_enabled else 'OFF'}",
@@ -1372,10 +1349,10 @@ class DashboardPanelsMixin:
             or "UNKNOWN"
         ).upper()
         state_labels = {
-            "UPTREND": "UPTREND",
-            "DOWNTREND": "DOWNTREND",
-            "ACCUMULATION": "ACCUMULATION",
-            "DISTRIBUTION": "DISTRIBUTION",
+            "UPTREND": "TĂNG",
+            "DOWNTREND": "GIẢM",
+            "ACCUMULATION": "TÍCH LŨY",
+            "DISTRIBUTION": "PHÂN PHỐI",
             "TRANSITION": "ĐANG TÍNH",
             "UNKNOWN": "ĐANG TÍNH",
         }
@@ -1390,19 +1367,38 @@ class DashboardPanelsMixin:
         exposure_pct = exposure * 100.0 if abs(exposure) <= 1.0 else exposure
         cash_pct = max(0.0, 100.0 - exposure_pct)
         self.preview_rule_market.configure(
-            text=f"{state_label} ({exposure_pct:g}/{cash_pct:g})",
+            text=f"{state_label} · CP {exposure_pct:g}% · TIỀN {cash_pct:g}%",
             text_color=market_color,
         )
         market_notes: list[str] = []
+        override_enabled = bool(market_details.get("override_enabled", False))
+        market_notes.append("OVERRIDE" if override_enabled else "AUTO")
         if pending_confirmation:
-            market_notes.append("ĐANG XÁC NHẬN")
+            confirmation_count = max(
+                0, int(market_details.get("confirmation_count", 0) or 0),
+            )
+            confirmation_required = max(
+                1, int(market_details.get("confirmation_required", 1) or 1),
+            )
+            market_notes.append(
+                f"XÁC NHẬN {confirmation_count}/{confirmation_required}"
+            )
         volume_confidence = str(market_details.get("volume_confidence") or "OFF").upper()
         if volume_confidence != "OFF":
             market_notes.append(f"VOLUME {volume_confidence}")
+        updated_at = str(details.get("updated_at") or "")
+        if len(updated_at) >= 16:
+            market_notes.append(updated_at[11:16])
         self.preview_rule_market_detail.configure(
             text=" · ".join(market_notes),
-            text_color=COL_WARN if pending_confirmation else COL_PREVIEW_TEXT,
+            text_color=COL_WARN if pending_confirmation or override_enabled else COL_PREVIEW_TEXT,
         )
+        if market_notes:
+            self.preview_rule_market_detail.grid(
+                row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 3),
+            )
+        else:
+            self.preview_rule_market_detail.grid_remove()
 
         def ema_preview(prefix: str, key_prefix: str) -> tuple[str, str]:
             fast_period = int(indicators.get(f"{key_prefix}_ema_fast_period", indicators.get("ema_fast_period", 3)) or 3)
@@ -1415,17 +1411,19 @@ class DashboardPanelsMixin:
             except (TypeError, ValueError):
                 return f"{prefix} EMA {fast_period}/{slow_period} · --/--", COL_PREVIEW_TEXT
             relation = ">" if fast_number > slow_number else "<" if fast_number < slow_number else "="
-            fast_text = f"{fast_number:,.2f}".rstrip("0").rstrip(".")
-            slow_text = f"{slow_number:,.2f}".rstrip("0").rstrip(".")
+            spread = abs(fast_number - slow_number)
+            decimals = 2 if spread >= 0.01 else 3 if spread >= 0.001 else 4
+            fast_text = f"{fast_number:,.{decimals}f}".rstrip("0").rstrip(".")
+            slow_text = f"{slow_number:,.{decimals}f}".rstrip("0").rstrip(".")
             color = COL_GREEN if fast_number > slow_number else COL_RED if fast_number < slow_number else COL_TEXT
             return f"{prefix} EMA {fast_period}/{slow_period} · {fast_text}{relation}{slow_text}", color
 
         buy_ema_text, buy_ema_color = ema_preview("BUY", "buy")
-        sell_ema_text, sell_ema_color = ema_preview("SELL", "sell")
+        sell_ema_text, sell_ema_color = ema_preview("E", "sell")
         if not buy_ema_enabled:
             buy_ema_text, buy_ema_color = buy_ema_text.replace("BUY EMA", "BUY EMA OFF", 1), COL_MUTED
         if not sell_ema_enabled:
-            sell_ema_text, sell_ema_color = sell_ema_text.replace("SELL EMA", "SELL EMA OFF", 1), COL_MUTED
+            sell_ema_text, sell_ema_color = sell_ema_text.replace("E EMA", "E EMA OFF", 1), COL_MUTED
         rsi_period = int(indicators.get("rsi_period", 14) or 14)
         current_rsi = indicators.get("rsi")
         previous_rsi = indicators.get("rsi_previous")
@@ -1435,13 +1433,12 @@ class DashboardPanelsMixin:
         except (TypeError, ValueError):
             rsi_number = previous_number = None
         if rsi_number is None:
-            rsi_text, rsi_color = f"RSI{rsi_period} -- · {signal_label}", COL_PREVIEW_TEXT
+            rsi_text, rsi_color = f"RSI{rsi_period} -- · BUY {'BẬT' if buy_rsi_enabled else 'TẮT'} · E {'BẬT' if sell_rsi_enabled else 'TẮT'}", COL_PREVIEW_TEXT
         else:
             arrow = "↑" if previous_number is not None and rsi_number > previous_number else "↓" if previous_number is not None and rsi_number < previous_number else "→"
             rsi_text = (
                 f"RSI{rsi_period} {rsi_number:.1f} {arrow} · "
-                f"BUY {'ON' if buy_rsi_enabled else 'OFF'} / SELL {'ON' if sell_rsi_enabled else 'OFF'} · "
-                f"{signal_label}"
+                f"BUY {'BẬT' if buy_rsi_enabled else 'TẮT'} · E {'BẬT' if sell_rsi_enabled else 'TẮT'}"
             )
             rsi_color = COL_GREEN if signal == "BUY" else COL_RED if signal == "SELL" else (
                 COL_GREEN if previous_number is not None and rsi_number > previous_number
@@ -1472,11 +1469,11 @@ class DashboardPanelsMixin:
         slot_used = max(open_positions, int(slot_summary.get("used", 0) or 0))
         slot_max = int(slot_summary.get("max", max_positions) or max_positions)
         pending_buys = int(slot_summary.get("pending", 0) or 0)
-        phase3_parts = [f"{slot_used}/{slot_max or '--'} SLOT"]
+        phase3_parts = [f"VỊ THẾ {slot_used}/{slot_max or '--'}"]
         if pending_buys:
-            phase3_parts.append(f"{pending_buys} BUY CHỜ")
+            phase3_parts.append(f"BUY CHỜ {pending_buys}")
         if capital > 0:
-            phase3_parts.append(f"{_compact_vnd(capital)}/MÃ")
+            phase3_parts.append(f"VỐN KẾ { _compact_vnd(capital)}")
         self.preview_rule_phase3.configure(
             text=" · ".join(phase3_parts),
             text_color=COL_WARN if guard_warn else COL_TEXT,
@@ -1509,9 +1506,9 @@ class DashboardPanelsMixin:
         )
         self.preview_rule_phase3_detail.configure(
             text=(
-                f"⚠ AUTO 100 · WHIPSAW {whipsaw_status} · LOSS {losses}/{loss_limit or '--'}"
+                f"⚠ AUTO 100 · CHỐNG NHIỄU {whipsaw_status} · LỖ {losses}/{loss_limit or '--'}"
                 if forced_minimum
-                else f"WHIPSAW {whipsaw_status} · LOSS {losses}/{loss_limit or '--'}"
+                else f"CHỐNG NHIỄU {whipsaw_status} · LỖ {losses}/{loss_limit or '--'}"
             ),
             text_color=COL_RED if guard_warn else COL_WARN if forced_minimum else COL_PREVIEW_TEXT,
         )
@@ -1554,6 +1551,8 @@ class DashboardPanelsMixin:
             "BUY_CONFIRMATION_BROKEN": "HỦY BUY · TÍN HIỆU KHÔNG GIỮ ĐỦ",
             "BUY_CONFIRMATION_NEEDS_REALTIME": "XÁC NHẬN BUY CẦN REALTIME",
             "BUY_CONFIRMATION_NO_CONDITION": "XÁC NHẬN BUY CHƯA CHỌN CHỈ BÁO",
+            "BUY_VOLUME_NOT_READY": "CHỜ BUY · CHƯA ĐỦ DỮ LIỆU VOLUME",
+            "BUY_VOLUME_LOW": "CHỜ BUY · VOLUME CHƯA ĐẠT",
             "UNKNOWN_EXCHANGE": "CHƯA XÁC ĐỊNH SÀN",
         }
         reason_text = str(details.get("status_text") or "") or reason_labels.get(
@@ -1663,7 +1662,6 @@ class DashboardPanelsMixin:
         rest_rows = [row for row in (ui_rest, daemon_rest) if isinstance(row, dict)]
         latest = max(rest_rows, key=lambda row: int(row.get("total_requests", 0) or 0), default={})
         last_status = latest.get("last_status")
-        last_error = next((str(row.get("last_error") or "") for row in rest_rows if row.get("last_error")), "")
 
         heartbeat_age = max(0.0, time.time() - _number(status.get("heartbeat_at")))
         daemon_state = str(status.get("daemon_status") or "STARTING").upper()
@@ -1679,13 +1677,16 @@ class DashboardPanelsMixin:
             daemon_state = "STALE"
         daemon_ok = daemon_state == "RUNNING"
         self.preview_health_daemon.configure(
-            text=f"DAEMON {daemon_state}",
+            text="DAEMON OK" if daemon_ok else "DAEMON SYNC" if daemon_state == "SYNC" else "DAEMON LỖI",
             text_color=COL_GREEN if daemon_ok else COL_WARN if daemon_state == "SYNC" else COL_RED,
         )
 
         configured = self.real.configured()
-        dnse_ok = configured and not last_error
-        dnse_text = "READY" if dnse_ok else "N/A" if not configured else "ERROR"
+        total_requests = sum(int(row.get("total_requests", 0) or 0) for row in rest_rows)
+        rest_ok = total_requests > 0 and isinstance(last_status, (int, float)) and 200 <= int(last_status) < 300
+        rest_state = "OK" if rest_ok else "WAIT" if total_requests == 0 else "ERROR"
+        dnse_ok = configured and rest_state != "ERROR"
+        dnse_text = "OK" if dnse_ok else "CHỜ" if not configured else "LỖI"
         ws_online = bool(ws.get("connected") and ws.get("authenticated"))
         ws_connecting = bool(ws.get("running")) and not ws_online
         self.preview_health_core.configure(
@@ -1693,7 +1694,7 @@ class DashboardPanelsMixin:
             text_color=COL_GREEN if dnse_ok else COL_RED if configured else COL_WARN,
         )
         self.preview_health_ws.configure(
-            text=f"WS {'ONLINE' if ws_online else 'CONNECTING' if ws_connecting else 'OFFLINE'}",
+            text=f"WS {'OK' if ws_online else 'CHỜ' if ws_connecting else 'OFF'}",
             text_color=(
                 COL_GREEN if ws_online
                 else COL_WARN if ws_connecting or not configured
@@ -1701,9 +1702,6 @@ class DashboardPanelsMixin:
             ),
         )
 
-        total_requests = sum(int(row.get("total_requests", 0) or 0) for row in rest_rows)
-        rest_ok = total_requests > 0 and isinstance(last_status, (int, float)) and 200 <= int(last_status) < 300
-        rest_state = "OK" if rest_ok else "WAIT" if total_requests == 0 else "ERROR"
         self.preview_health_rest.configure(
             text={"OK": "API OK", "WAIT": "API CHỜ", "ERROR": "API LỖI"}[rest_state],
             text_color=COL_GREEN if rest_ok else COL_RED if rest_state == "ERROR" else COL_PREVIEW_TEXT,
@@ -1741,27 +1739,45 @@ class DashboardPanelsMixin:
         elif market_status == "ATC":
             price_state = "ATC"
         elif market_status in {"OPEN", "CONTINUOUS"}:
-            price_state = "OPEN"
+            price_state = "MỞ"
         elif data_frozen:
-            price_state = "CLOSED"
+            price_state = "ĐÓNG"
         elif tick_age is None:
             price_state = "CHỜ"
         else:
-            price_state = f"LIVE {tick_age:.0f}s"
+            price_state = "CHẬM"
         self.preview_health_trade.configure(
-            text=f"PRICE {price_state}",
+            text=f"GIÁ {price_state}",
             text_color=(
                 COL_GREEN if data_ok
-                else COL_RED if price_state == "CLOSED"
-                else COL_PREVIEW_TEXT if tick
+                else COL_PREVIEW_TEXT if price_state == "ĐÓNG"
+                else COL_WARN if tick
                 else COL_WARN
             ),
         )
 
-        error_text = str(ws.get("last_error") or last_error or status.get("error") or "")
+        current_cycle_error = bool(str(status.get("error") or "").strip())
+        ws_error = bool(configured and market_active and not ws_online and not ws_connecting)
+        price_error = bool(market_active and not data_ok)
+        has_error = bool(
+            daemon_state in {"STOPPED", "STALE"}
+            or rest_state == "ERROR"
+            or ws_error
+            or price_error
+            or current_cycle_error
+        )
+        has_warning = bool(
+            not has_error and (
+                daemon_state == "SYNC"
+                or not configured
+                or ws_connecting
+                or rest_state == "WAIT"
+                or (mode == "REAL" and not token_ready)
+            )
+        )
         self.preview_health_title.configure(
-            text="HEALTH LỖI ⓘ" if error_text else "HEALTH ⓘ",
-            text_color=COL_RED if error_text else "#60A5FA",
+            text="HEALTH LỖI ⓘ" if has_error else "HEALTH CẢNH BÁO ⓘ" if has_warning else "HEALTH OK ⓘ",
+            text_color=COL_RED if has_error else COL_WARN if has_warning else COL_GREEN,
         )
 
     def _show_running_legend(self) -> None:

@@ -241,7 +241,14 @@ class InfoPopup:
             dynamic_summary = f"DYN ON · {start} · {atr} · {keep}{until}"
         phase3_items = [
             ("VỊ THẾ", str(p.max_positions), PALETTE["TEXT"]),
-            ("SL / RE", f"{p.initial_sl_pct:g}% / {p.reentry_sl_pct:g}%", PALETTE["RED"]),
+            (
+                "SL BOT / RE",
+                (
+                    f"ON · {p.initial_sl_pct:g}% / {p.reentry_sl_pct:g}%"
+                    if self.settings.bot_sl_enabled else "OFF · LỆNH BOT MỚI"
+                ),
+                PALETTE["RED"] if self.settings.bot_sl_enabled else PALETTE["MUTED"],
+            ),
             ("COMPOUND", "OFF" if p.no_compound_enabled else "ON", PALETTE["TEXT"]),
             ("WHIPSAW", f"{self._on_off(whipsaw_enabled)} · {p.whipsaw_n}/{p.whipsaw_x}", PALETTE["WARN"]),
             ("LOSS LOCK", loss_lock, PALETTE["WARN"]),
@@ -257,12 +264,6 @@ class InfoPopup:
         ]
         exit_items = [
             ("E CHÍNH", sell_conditions, PALETTE["RED"]),
-            (
-                "E SỚM T+2",
-                f"ON · LỖ {p.sellable_weak_exit_loss_pct:g}%"
-                if p.sellable_weak_exit_enabled else "OFF",
-                PALETTE["WARN"],
-            ),
             ("E/M BẬT", self._em_name(em_modes), PALETTE["TEXT"]),
         ]
         if compact_layout:

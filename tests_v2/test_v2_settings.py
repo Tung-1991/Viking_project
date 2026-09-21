@@ -18,6 +18,7 @@ def test_v2_settings_only_keep_two_bot_execution_modes():
 
 def test_execution_defaults_are_explicit_and_minimal():
     settings = AppSettings().normalize()
+    assert settings.bot_sl_enabled is True
     assert settings.bot_em_modes == ["NORMAL", "IND_EXIT"]
     assert settings.sell_wait_policy == "RECHECK"
     assert settings.signal_mode == "REALTIME"
@@ -26,6 +27,17 @@ def test_execution_defaults_are_explicit_and_minimal():
     assert StaticRuleParameters().whipsaw_n == 3
     assert StaticRuleParameters().whipsaw_x == 7
     assert StaticRuleParameters().loss_lock_hours == 24
+
+
+def test_phase1_override_settings_are_normalized():
+    settings = AppSettings(
+        market_phase_override_enabled=1,
+        market_phase_override="bad",
+        market_phase_override_exposure_pct=150,
+    ).normalize()
+    assert settings.market_phase_override_enabled is True
+    assert settings.market_phase_override == "ACCUMULATION"
+    assert settings.market_phase_override_exposure_pct == 100
 
 
 def test_default_watchlist_keeps_the_40_legacy_ckcs_symbols(monkeypatch):
@@ -248,9 +260,6 @@ def test_exit_sell_controls_are_in_em_card_and_save_separately(ui_root, monkeypa
         rules.sell_ema_slow.insert(0, "8")
         rules.sell_signal_rsi.set(False)
         rules.shared_rsi_period.set("15")
-        rules.sellable_weak_exit_enabled.set(True)
-        rules.sellable_weak_exit_loss.delete(0, "end")
-        rules.sellable_weak_exit_loss.insert(0, "-1.5")
         assert rules.buy_rsi_period.get() == rules.rsi_period.get() == "15"
 
         rules.save()
@@ -260,8 +269,6 @@ def test_exit_sell_controls_are_in_em_card_and_save_separately(ui_root, monkeypa
         assert (values["sell_ema_fast"], values["sell_ema_slow"]) == (4, 8)
         assert values["sell_signal_use_rsi"] is False
         assert values["rsi_period"] == 15
-        assert values["sellable_weak_exit_enabled"] is True
-        assert values["sellable_weak_exit_loss_pct"] == -1.5
         for key in (
             "normal_atr_activation_enabled", "normal_atr_trail_enabled",
             "normal_retention_enabled", "normal_retention_until_enabled",
@@ -281,18 +288,11 @@ def test_backtest_exit_sell_controls_are_separate_and_round_trip(ui_root, monkey
         monkeypatch.setattr(back.data, "save_settings", lambda _values: None)
         assert "sell_ema_fast" in back._rule_entries
         assert "sell_ema_slow" in back._rule_entries
-        assert "sellable_weak_exit_loss_pct" in back._rule_entries
         assert back.exit_card.winfo_exists()
 
-        back.sellable_weak_exit.set(True)
         for variable in back.dynamic_subrules.values():
             variable.set(False)
-        loss = back._rule_entries["sellable_weak_exit_loss_pct"]
-        loss.delete(0, "end")
-        loss.insert(0, "-1.5")
         result = back._collect()
-        assert result.rule_parameters["sellable_weak_exit_enabled"] is True
-        assert result.rule_parameters["sellable_weak_exit_loss_pct"] == -1.5
         assert len(back.dynamic_subrules) == 4
         assert all(result.rule_parameters[key] is False for key in back.dynamic_subrules)
     finally:

@@ -616,7 +616,9 @@ class DashboardActionsMixin:
             if cycle:
                 trade_id = cycle.id
             source = str(row.get("source", "DNSE" if mode == "REAL" else "PAPER") or "")
-            if cycle and cycle.sl_mode == "PRICE" and cycle.sl_value > 0:
+            if cycle and not cycle.sl_enabled:
+                sl_text = "OFF"
+            elif cycle and cycle.sl_mode == "PRICE" and cycle.sl_value > 0:
                 sl_text = _display_price(cycle.sl_value)
             elif cycle and cycle.sl_mode == "PERCENT" and cycle.sl_value:
                 sl_text = f"{-abs(cycle.sl_value):g}%"
@@ -2023,6 +2025,7 @@ class DashboardActionsMixin:
             ),
             allow_ato=self.settings.allow_ato and self._symbol_exchange(decision.symbol) == "HOSE",
             allow_atc=self.settings.allow_atc and self._symbol_exchange(decision.symbol) != "UPCOM",
+            bot_sl_enabled=self.settings.bot_sl_enabled,
             bot_em_modes=self.settings.bot_em_modes,
             sell_wait_policy=self.settings.sell_wait_policy,
         )

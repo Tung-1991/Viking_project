@@ -367,6 +367,7 @@ class ExecutionService:
                     source=intent.source,
                     trade_id=intent.trade_id,
                     em_modes=intent.em_modes,
+                    sl_enabled=intent.sl_enabled,
                     sl_mode=intent.sl_mode,
                     sl_value=intent.sl_value,
                     tp_mode=intent.tp_mode,

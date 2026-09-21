@@ -165,7 +165,15 @@ class AppSettings:
     bot_order_mode: str = "MARKET"
     allow_ato: bool = False
     allow_atc: bool = False
+    # Defaults attached to each new BOT trade. Existing/manual trades keep
+    # their own persisted management flags.
+    bot_sl_enabled: bool = True
     bot_em_modes: list[str] = field(default_factory=lambda: ["NORMAL", "IND_EXIT"])
+    # Optional live/PAPER Phase-1 override. The automatic classifier keeps
+    # running for observability while this state/exposure drives new entries.
+    market_phase_override_enabled: bool = False
+    market_phase_override: str = "ACCUMULATION"
+    market_phase_override_exposure_pct: float = 60.0
     # Real DNSE rates.  The bot needs them to leave room for the fee when
     # sizing an order, and the paper broker charges with them.
     buy_fee_pct: float = DEFAULT_BUY_FEE_PCT
@@ -216,9 +224,25 @@ class AppSettings:
             self.bot_order_mode = "MARKET"
         self.allow_ato = bool(self.allow_ato)
         self.allow_atc = bool(self.allow_atc)
+        self.bot_sl_enabled = bool(self.bot_sl_enabled)
         for name in ("buy_fee_pct", "sell_fee_pct", "sell_tax_pct"):
             setattr(self, name, min(5.0, max(0.0, float(getattr(self, name) or 0.0))))
         self.bot_em_modes = normalize_exit_modes(self.bot_em_modes)
+        self.market_phase_override_enabled = bool(self.market_phase_override_enabled)
+        self.market_phase_override = str(
+            self.market_phase_override or "ACCUMULATION"
+        ).strip().upper()
+        if self.market_phase_override not in {
+            "UPTREND", "DOWNTREND", "ACCUMULATION", "DISTRIBUTION",
+        }:
+            self.market_phase_override = "ACCUMULATION"
+        try:
+            self.market_phase_override_exposure_pct = min(
+                100.0,
+                max(0.0, float(self.market_phase_override_exposure_pct or 0.0)),
+            )
+        except (TypeError, ValueError):
+            self.market_phase_override_exposure_pct = 60.0
         self.sell_wait_policy = str(self.sell_wait_policy or "RECHECK").strip().upper()
         if self.sell_wait_policy not in {"RECHECK", "KEEP"}:
             self.sell_wait_policy = "RECHECK"

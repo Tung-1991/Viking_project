@@ -770,8 +770,6 @@ class BacktestEngine:
                 "XÁC NHẬN BUY theo phút chỉ chạy với MODE 2 · REPLAY intraday FULL; "
                 "không dùng DAILY hoặc AUTO HYBRID."
             )
-        if requested_params.sellable_weak_exit_enabled and settings.simulation_mode != "REPLAY":
-            raise RuntimeError("E weak-exit after T+2 requires full intraday REPLAY data.")
         if settings.simulation_mode in {"REPLAY", "AUTO_HYBRID"}:
             return self._run_replay(
                 settings, progress=progress, cancelled=cancelled, save=save, carry=carry,

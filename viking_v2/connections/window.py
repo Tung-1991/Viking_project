@@ -540,17 +540,17 @@ class ConnectionPopup:
         ctk.CTkSwitch(
             card, text="BÁO TÍN HIỆU KHÔNG THÀNH LỆNH", variable=self.tele_signal_alerts,
             font=("Segoe UI", 12, "bold"), text_color=self.TEXT, progress_color=self.GREEN,
-        ).grid(row=6, column=0, columnspan=3, sticky="w", padx=12, pady=(8, 2))
-        ctk.CTkLabel(
+        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=12, pady=(8, 4))
+        self._hint_icon(
             card,
-            text="Gửi một lần kèm lý do khi tín hiệu BUY hợp lệ nhưng không thể tạo lệnh.",
-            font=("Segoe UI", 11), text_color=self.MUTED, justify="left", anchor="w",
-        ).grid(row=7, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
+            "Bật để Telegram báo một lần, kèm lý do, khi tín hiệu BUY hợp lệ "
+            "nhưng hệ thống không thể tạo lệnh.",
+        ).grid(row=5, column=2, sticky="e", padx=12, pady=(8, 4))
 
         alert_row = ctk.CTkFrame(card, fg_color="transparent")
         alert_row.grid(row=4, column=0, columnspan=3, sticky="w", padx=12, pady=(6, 3))
         ctk.CTkLabel(
-            alert_row, text="● BUY · GOM", font=("Segoe UI", 11, "bold"), text_color=self.GREEN,
+            alert_row, text="GOM BUY TRONG", font=("Segoe UI", 11, "bold"), text_color=self.GREEN,
         ).grid(row=0, column=0, sticky="w", padx=(0, 8))
         self.tele_batch = ctk.CTkEntry(
             alert_row, width=58, height=30, justify="center", font=("Segoe UI", 11, "bold")
@@ -559,31 +559,14 @@ class ConnectionPopup:
         self.tele_batch.grid(row=0, column=1, sticky="w")
         ctk.CTkLabel(
             alert_row, text="PHÚT", font=("Segoe UI", 11, "bold"), text_color=self.TEXT,
-        ).grid(row=0, column=2, sticky="w", padx=(7, 28))
-        ctk.CTkLabel(
-            alert_row, text="● CLOSED · GỬI NGAY", font=("Segoe UI", 11, "bold"), text_color=self.RED,
+        ).grid(row=0, column=2, sticky="w", padx=(7, 8))
+        self._hint_icon(
+            alert_row,
+            "Các BUY trùng mã trong khoảng này được gom. CLOSED chỉ gửi một lần mỗi trade; "
+            "thông báo chốt quyền chỉ gửi một lần cho mỗi mã và ngày GDKHQ.",
         ).grid(row=0, column=3, sticky="w")
-        anti_spam = ctk.CTkFrame(
-            card, fg_color=self.SURFACE_2, corner_radius=7,
-            border_width=1, border_color=self.BORDER,
-        )
-        anti_spam.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(5, 3))
-        ctk.CTkLabel(
-            anti_spam, text="CHỐNG SPAM", width=132,
-            font=FONT_KEY, text_color=self.WARN, anchor="w",
-        ).grid(row=0, column=0, rowspan=2, sticky="w", padx=(10, 8), pady=6)
-        ctk.CTkLabel(
-            anti_spam,
-            text="BUY trùng mã trong batch: gộp · Tín hiệu trùng chu kỳ + lý do: bỏ",
-            font=("Segoe UI", 11, "bold"), text_color=self.TEXT, anchor="w",
-        ).grid(row=0, column=1, sticky="w", padx=(0, 10), pady=(5, 0))
-        ctk.CTkLabel(
-            anti_spam,
-            text="CLOSED: 1 lần/trade · Chốt quyền: 1 lần/mã + ngày GDKHQ",
-            font=("Segoe UI", 11), text_color=self.MUTED, anchor="w",
-        ).grid(row=1, column=1, sticky="w", padx=(0, 10), pady=(0, 5))
         tele_actions = ctk.CTkFrame(card, fg_color="transparent")
-        tele_actions.grid(row=8, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 3))
+        tele_actions.grid(row=6, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 3))
         tele_actions.grid_columnconfigure(0, weight=1)
         self.btn_tele_test = ctk.CTkButton(
             tele_actions, text="GỬI THỬ", width=100, height=32, fg_color="#3A3F47",
@@ -598,7 +581,7 @@ class ConnectionPopup:
             card, text="",
             font=("Segoe UI", 11), text_color=self.MUTED, anchor="w",
         )
-        self.tele_status.grid(row=9, column=0, columnspan=3, sticky="ew", padx=12, pady=(1, 10))
+        self.tele_status.grid(row=7, column=0, columnspan=3, sticky="ew", padx=12, pady=(1, 10))
 
     @staticmethod
     def _account_payload(data: Any) -> tuple[list[dict[str, Any]], str, str]:

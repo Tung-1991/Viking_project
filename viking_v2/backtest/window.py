@@ -106,6 +106,8 @@ PHASE_GROUPS = (
             ("EMA MUA NHANH", "buy_ema_fast", "EMA nhanh của tín hiệu mua."),
             ("EMA MUA CHẬM", "buy_ema_slow", "EMA chậm của tín hiệu mua."),
             ("RSI BUY / E", "rsi_period", "Một chu kỳ RSI dùng chung cho BUY và E trong backend hiện tại."),
+            ("VOLUME BUY TB", "buy_volume_average_sessions", "Số phiên đã đóng dùng tính volume trung bình cho bộ lọc Entry."),
+            ("VOLUME BUY TỐI THIỂU", "buy_volume_min_ratio", "Tỷ lệ dạng 1.0 = 100% volume trung bình; chỉ áp dụng khi bật VOLUME ENTRY."),
         ),
     ),
     (
@@ -114,10 +116,6 @@ PHASE_GROUPS = (
         (
             ("EMA SELL NHANH", "sell_ema_fast", "EMA nhanh của E chính."),
             ("EMA SELL CHẬM", "sell_ema_slow", "EMA chậm của E chính."),
-            (
-                "E SỚM TỪ LỖ %", "sellable_weak_exit_loss_pct",
-                "Nhánh thử nghiệm sau T+2, mặc định -1%. Chỉ có tác dụng khi bật E SỚM bên dưới và chạy REPLAY.",
-            ),
         ),
     ),
     (
@@ -173,11 +171,9 @@ BACKTEST_RULE_KEYS = PHASE_PARAMETER_KEYS | {
     "normal_policy", "normal_dynamic_enabled", "normal_repeat_enabled",
     "normal_atr_activation_enabled", "normal_atr_trail_enabled",
     "normal_retention_enabled", "normal_retention_until_enabled",
-    # Research setting round-trips through BacktestSettings; UI control follows
-    # only if the T+2 candidate passes review.
     "normal_t2_reset_enabled",
-    "sellable_weak_exit_enabled", "sellable_weak_exit_loss_pct",
     "volume_confirmation", "no_compound_enabled", "force_min_lot_enabled",
+    "buy_volume_enabled", "buy_volume_average_sessions", "buy_volume_min_ratio",
     "buy_signal_use_ema", "buy_signal_use_rsi",
     "sell_signal_use_ema", "sell_signal_use_rsi",
     "buy_confirmation_enabled", "buy_confirmation_minutes",
@@ -187,7 +183,7 @@ BACKTEST_RULE_KEYS = PHASE_PARAMETER_KEYS | {
 
 INTEGER_KEYS = {
     "ma_period", "pivot_left", "pivot_right", "confirm_sessions",
-    "volume_average_sessions", "loss_lock_count",
+    "volume_average_sessions", "buy_volume_average_sessions", "loss_lock_count",
     "buy_ema_fast", "buy_ema_slow", "sell_ema_fast", "sell_ema_slow",
     "rsi_period", "max_positions", "whipsaw_n", "whipsaw_x",
 }
@@ -1155,9 +1151,6 @@ class BacktestPopup:
         exit_params = StaticRuleParameters.from_dict(self.config.rule_parameters)
         self.sell_signal_ema = ctk.BooleanVar(value=exit_params.sell_signal_use_ema)
         self.sell_signal_rsi = ctk.BooleanVar(value=exit_params.sell_signal_use_rsi)
-        self.sellable_weak_exit = ctk.BooleanVar(
-            value=exit_params.sellable_weak_exit_enabled,
-        )
         self.dynamic_subrules: dict[str, ctk.BooleanVar] = {}
         row_index = 3
         for title, subtitle, fields in PHASE_GROUPS:
@@ -1191,16 +1184,6 @@ class BacktestPopup:
                         font=(FONT, 11, "bold"), fg_color=COL_GREEN,
                         text_color=COL_TEXT,
                     ).grid(row=0, column=column, padx=(0, 12))
-                ctk.CTkSwitch(
-                    controls, text="E SỚM SAU T+2", variable=self.sellable_weak_exit,
-                    font=(FONT, 12, "bold"), progress_color=COL_GREEN,
-                    text_color=COL_TEXT,
-                ).grid(row=0, column=2, padx=(12, 0))
-                self._hint(
-                    controls,
-                    "Nhánh thử nghiệm, mặc định OFF. Chỉ xét khi cổ bán được, lỗ chạm ngưỡng, "
-                    "EMA2 dưới EMA4 và RSI giảm. Backtest yêu cầu REPLAY intraday.",
-                ).grid(row=0, column=3, padx=10)
             padding_row = 2 + (len(fields) + 1) // 2
             if title == "E · EXIT SELL":
                 padding_row += 1
@@ -1386,12 +1369,17 @@ class BacktestPopup:
         rule_toggle_row = ctk.CTkFrame(card, fg_color="transparent")
         rule_toggle_row.grid(row=4, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
         self.volume_confirmation = ctk.BooleanVar(value=params.volume_confirmation)
+        self.buy_volume_enabled = ctk.BooleanVar(value=params.buy_volume_enabled)
         self.no_compound = ctk.BooleanVar(value=params.no_compound_enabled)
         self.force_min_lot = ctk.BooleanVar(value=params.force_min_lot_enabled)
-        for column, (label, variable, help_text) in enumerate((
+        for index, (label, variable, help_text) in enumerate((
             (
                 "ĐỘ TIN CẬY VOLUME", self.volume_confirmation,
                 "Tính và hiện nhãn CAO/TRUNG BÌNH/THẤP; không thay đổi state hoặc quyết định giao dịch.",
+            ),
+            (
+                "VOLUME ENTRY", self.buy_volume_enabled,
+                "Khi ON, BUY phải đạt tỷ lệ volume tối thiểu đã đặt trong Phase 2.",
             ),
             (
                 "KHÔNG COMPOUND", self.no_compound,
@@ -1402,8 +1390,12 @@ class BacktestPopup:
                 "Nếu ngân sách hợp lệ chưa đủ một lô, cho phép mua tối thiểu 100 CP khi vẫn còn room và đủ tiền gồm phí.",
             ),
         )):
+            grid_row, grid_column = divmod(index, 2)
             group = ctk.CTkFrame(rule_toggle_row, fg_color="transparent")
-            group.grid(row=0, column=column, sticky="w", padx=(0, 22))
+            group.grid(
+                row=grid_row, column=grid_column, sticky="w",
+                padx=(0, 22), pady=2,
+            )
             ctk.CTkSwitch(
                 group, text=label, variable=variable,
                 font=(FONT, 12, "bold"), progress_color=COL_GREEN, text_color=COL_TEXT,
@@ -1551,7 +1543,7 @@ class BacktestPopup:
         self.buy_signal_rsi.set(bool(params.get("buy_signal_use_rsi", True)))
         self.sell_signal_ema.set(bool(params.get("sell_signal_use_ema", True)))
         self.sell_signal_rsi.set(bool(params.get("sell_signal_use_rsi", True)))
-        self.sellable_weak_exit.set(bool(params.get("sellable_weak_exit_enabled", False)))
+        self.buy_volume_enabled.set(bool(params.get("buy_volume_enabled", False)))
         self.buy_confirmation.set(bool(params.get("buy_confirmation_enabled", False)))
         self.buy_confirmation_ema.set(bool(params.get("buy_confirmation_require_ema", True)))
         self.buy_confirmation_rsi.set(bool(params.get("buy_confirmation_require_rsi", True)))
@@ -1702,6 +1694,7 @@ class BacktestPopup:
         params["exposure"] = exposure
         params["whipsaw_enabled"] = bool(self.whipsaw.get())
         params["volume_confirmation"] = bool(self.volume_confirmation.get())
+        params["buy_volume_enabled"] = bool(self.buy_volume_enabled.get())
         params["no_compound_enabled"] = bool(self.no_compound.get())
         params["force_min_lot_enabled"] = bool(self.force_min_lot.get())
         if not (self.buy_signal_ema.get() or self.buy_signal_rsi.get()):
@@ -1712,7 +1705,6 @@ class BacktestPopup:
         params["buy_signal_use_rsi"] = bool(self.buy_signal_rsi.get())
         params["sell_signal_use_ema"] = bool(self.sell_signal_ema.get())
         params["sell_signal_use_rsi"] = bool(self.sell_signal_rsi.get())
-        params["sellable_weak_exit_enabled"] = bool(self.sellable_weak_exit.get())
         try:
             confirmation_minutes = int(float(self.buy_confirmation_minutes.get().strip() or 5))
         except ValueError as exc:

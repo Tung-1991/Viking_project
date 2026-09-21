@@ -23,6 +23,7 @@ from ..rules.state import RuleStateStore
 from ..rules.business import (
     StaticRule,
     StaticRuleParameters,
+    average_true_range_pct,
     classify_market_state,
     indicator_snapshot,
 )
@@ -350,6 +351,16 @@ def run(account_id: str | None = None) -> int:
                     rule.params.confirm_sessions,
                 )
                 market_confirmation = rule_state.market_confirmation(rule.params.confirm_sessions)
+                override_enabled = bool(settings.market_phase_override_enabled)
+                effective_market_state = (
+                    settings.market_phase_override
+                    if override_enabled else confirmed_market_state
+                )
+                effective_exposure = (
+                    settings.market_phase_override_exposure_pct / 100.0
+                    if override_enabled
+                    else rule.params.exposure.get(effective_market_state, 0.0)
+                )
                 if runtime.paper_mode:
                     balance = paper.get_balance()
                     positions = paper.get_positions()
@@ -398,8 +409,15 @@ def run(account_id: str | None = None) -> int:
                             context["vnindex_bars"] = vnindex_bars
                             context["signal_mode"] = settings.signal_mode
                             context["previous_market_state"] = rule_state.confirmed_market_state()
-                            context["confirmed_market_state"] = confirmed_market_state
+                            context["confirmed_market_state"] = effective_market_state
                             context["market_confirmation"] = market_confirmation
+                            context["effective_exposure"] = effective_exposure
+                            context["market_override"] = {
+                                "enabled": override_enabled,
+                                "state": settings.market_phase_override,
+                                "exposure": settings.market_phase_override_exposure_pct / 100.0,
+                                "auto_state": confirmed_market_state,
+                            }
                             candle_key = str((bars[-1] if bars else {}).get("time", "") or "")
                             current_indicators: dict = {}
                             if settings.signal_mode == "REALTIME" and bars:
@@ -443,7 +461,7 @@ def run(account_id: str | None = None) -> int:
                                     accepted_bucket = int(observation.get("bucket", 0) or 0)
                                     candle_key = f"{candle_key}|{interval}|{accepted_bucket or 'INIT'}"
                                 context["indicator_snapshot"] = current_indicators
-                            exposure = rule.params.exposure.get(confirmed_market_state, 0.0)
+                            exposure = effective_exposure
                             portfolio = portfolio_builder.build(
                                 symbol,
                                 execution_mode="PAPER" if runtime.paper_mode else "REAL",
@@ -467,11 +485,29 @@ def run(account_id: str | None = None) -> int:
                             if not symbol_exchange:
                                 decision = StrategyDecision(
                                     "WAIT", symbol, "UNKNOWN_EXCHANGE",
-                                    market_state=confirmed_market_state,
+                                    market_state=effective_market_state,
                                     details={"indicators": current_indicators if settings.signal_mode == "REALTIME" and bars else {}},
                                 )
                             else:
                                 decision = rule.evaluate(context, portfolio)
+                            completed_daily = [
+                                row for row in bars
+                                if isinstance(row, dict) and bool(row.get("closed", True))
+                            ]
+                            atr14_daily_pct = average_true_range_pct(completed_daily)
+                            decision.details["atr14_daily_pct"] = atr14_daily_pct
+                            decision.details["atr14_daily_asof"] = (
+                                (completed_daily[-1] if completed_daily else {}).get("time", "")
+                            )
+                            decision.details["dynamic_start_pct"] = (
+                                atr14_daily_pct * rule.params.normal_atr_activation_multiplier
+                                if rule.params.normal_atr_activation_enabled else 0.0
+                            )
+                            decision.details["dynamic_trail_pct"] = (
+                                atr14_daily_pct * rule.params.normal_atr_multiplier
+                                if rule.params.normal_atr_trail_enabled else 0.0
+                            )
+                            decision.details["updated_at"] = cycle_decision_time.isoformat()
                             trade_id = str(portfolio.get("trade_id", "") or "")
                             protect_state = str(
                                 decision.details.get("normal_state", "") or ""

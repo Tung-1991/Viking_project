@@ -2,16 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from math import isfinite
 from typing import Any, Iterable
 
 from ..models import StrategyDecision
 from ..exit_modes import normalize_normal_policy
 from ..trading.market import active_trading_minutes, normalize_exchange, validate_buy_window
-
-
-WEAK_EXIT_EMA_FAST = 2
-WEAK_EXIT_EMA_SLOW = 4
 
 
 def closes(rows: Iterable[dict[str, Any]]) -> list[float]:
@@ -225,8 +220,6 @@ def indicator_snapshot(
     slow_values = ema(values, slow) if values else []
     sell_fast_values = ema(values, sell_fast) if values else []
     sell_slow_values = ema(values, sell_slow) if values else []
-    weak_fast_values = ema(values, WEAK_EXIT_EMA_FAST) if values else []
-    weak_slow_values = ema(values, WEAK_EXIT_EMA_SLOW) if values else []
     rsi_values = rsi(values, rsi_period) if values else []
     current_rsi = rsi_values[-1] if rsi_values else None
     previous_rsi = rsi_values[-2] if len(rsi_values) >= 2 else None
@@ -245,8 +238,6 @@ def indicator_snapshot(
         "sell_ema_slow_period": sell_slow,
         "sell_ema_fast": sell_fast_values[-1] if sell_fast_values else None,
         "sell_ema_slow": sell_slow_values[-1] if sell_slow_values else None,
-        "weak_sell_ema_fast": weak_fast_values[-1] if weak_fast_values else None,
-        "weak_sell_ema_slow": weak_slow_values[-1] if weak_slow_values else None,
         "rsi": current_rsi,
         "rsi_previous": previous_rsi,
     }
@@ -312,13 +303,11 @@ class StaticRuleParameters:
     rsi_period: int = 14
     buy_signal_use_ema: bool = True
     buy_signal_use_rsi: bool = True
+    buy_volume_enabled: bool = False
+    buy_volume_average_sessions: int = 20
+    buy_volume_min_ratio: float = 1.0
     sell_signal_use_ema: bool = True
     sell_signal_use_rsi: bool = True
-    # Experimental E branch: after stock is sellable, an underwater position
-    # may exit on an already-bearish EMA/RSI state instead of waiting for a
-    # fresh EMA cross. Off by default for existing trading accounts.
-    sellable_weak_exit_enabled: bool = False
-    sellable_weak_exit_loss_pct: float = -1.0
     max_positions: int = 5
     initial_sl_pct: float = -3.0
     reentry_sl_pct: float = -2.1
@@ -366,9 +355,9 @@ class StaticRuleParameters:
         self.buy_confirmation_enabled = bool(self.buy_confirmation_enabled)
         self.buy_signal_use_ema = bool(self.buy_signal_use_ema)
         self.buy_signal_use_rsi = bool(self.buy_signal_use_rsi)
+        self.buy_volume_enabled = bool(self.buy_volume_enabled)
         self.sell_signal_use_ema = bool(self.sell_signal_use_ema)
         self.sell_signal_use_rsi = bool(self.sell_signal_use_rsi)
-        self.sellable_weak_exit_enabled = bool(self.sellable_weak_exit_enabled)
         try:
             self.buy_confirmation_minutes = max(1, min(120, int(self.buy_confirmation_minutes or 5)))
         except (TypeError, ValueError):
@@ -429,6 +418,7 @@ class StaticRuleParameters:
             "Pivot phải": self.pivot_right,
             "Số phiên xác nhận": self.confirm_sessions,
             "Volume trung bình": self.volume_average_sessions,
+            "Volume BUY trung bình": self.buy_volume_average_sessions,
             "BUY EMA nhanh": self.buy_ema_fast,
             "BUY EMA chậm": self.buy_ema_slow,
             "SELL EMA nhanh": self.sell_ema_fast,
@@ -453,8 +443,8 @@ class StaticRuleParameters:
             raise ValueError("Tín hiệu BUY phải bật ít nhất EMA hoặc RSI")
         if not (self.sell_signal_use_ema or self.sell_signal_use_rsi):
             raise ValueError("Tín hiệu SELL phải bật ít nhất EMA hoặc RSI")
-        if not -10.0 <= self.sellable_weak_exit_loss_pct < 0.0:
-            raise ValueError("Sellable weak-exit threshold must be between -10% and 0%")
+        if not 0 < self.buy_volume_min_ratio <= 10:
+            raise ValueError("Tỷ lệ Volume BUY phải lớn hơn 0 và không quá 10")
         if self.initial_sl_pct >= 0 or self.reentry_sl_pct >= 0:
             raise ValueError("Stop Loss phải là số âm")
         if not 0 < self.normal_sell_pct <= 100:
@@ -602,6 +592,52 @@ def _working_bars(rows: list[dict[str, Any]], signal_mode: str) -> list[dict[str
     if str(signal_mode or "CLOSED").upper() != "REALTIME" and values and not bool(values[-1].get("closed", True)):
         values.pop()
     return values
+
+
+def entry_volume_snapshot(
+    bars: list[dict[str, Any]],
+    sessions: int = 20,
+) -> dict[str, Any]:
+    """Compare the current candle volume with completed prior sessions.
+
+    In REALTIME the last daily candle is cumulative volume known at the current
+    instant. Historical input only uses preceding candles, so LIVE/PAPER and
+    intraday replay never consume future volume.
+    """
+    rows = [row for row in bars if isinstance(row, dict)]
+    lookback = max(1, int(sessions or 20))
+    if not rows:
+        return {
+            "ready": False,
+            "current": 0.0,
+            "average": 0.0,
+            "ratio": 0.0,
+            "history_count": 0,
+            "sessions": lookback,
+        }
+    try:
+        current = max(0.0, float(rows[-1].get("volume", 0.0) or 0.0))
+    except (TypeError, ValueError):
+        current = 0.0
+    history: list[float] = []
+    for row in rows[:-1]:
+        try:
+            volume = float(row.get("volume", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if volume > 0 and bool(row.get("closed", True)):
+            history.append(volume)
+    history = history[-lookback:]
+    average = sum(history) / len(history) if history else 0.0
+    ready = len(history) >= lookback and average > 0
+    return {
+        "ready": ready,
+        "current": current,
+        "average": average,
+        "ratio": current / average if average > 0 else 0.0,
+        "history_count": len(history),
+        "sessions": lookback,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -886,6 +922,18 @@ class StaticRule:
                 1, int(confirmation.get("required", self.params.confirm_sessions) or self.params.confirm_sessions)
             )
             market_details["confirmation_pending"] = bool(confirmation.get("pending", False))
+        market_override = context.get("market_override")
+        if isinstance(market_override, dict) and bool(market_override.get("enabled")):
+            market_details["auto_display_state"] = market_details.get(
+                "display_state", raw_market_state,
+            )
+            market_details["display_state"] = market_state
+            market_details["override_enabled"] = True
+            market_details["override_state"] = market_state
+            market_details["override_exposure"] = float(
+                context.get("effective_exposure", 0.0) or 0.0
+            )
+            market_details["confirmation_pending"] = False
         position = portfolio.get("position") if isinstance(portfolio.get("position"), dict) else {}
         quantity = max(0, int(position.get("quantity", portfolio.get("position_quantity", 0)) or 0))
         supplied_indicators = context.get("indicator_snapshot")
@@ -938,10 +986,20 @@ class StaticRule:
             )
             if self.params.buy_signal_use_ema else 0
         )
+        buy_volume = entry_volume_snapshot(
+            bars, self.params.buy_volume_average_sessions,
+        )
+        buy_volume["enabled"] = self.params.buy_volume_enabled
+        buy_volume["minimum_ratio"] = self.params.buy_volume_min_ratio
         details = {
             "exchange": normalize_exchange(context.get("exchange")),
             "market": market_details,
-            "exposure": self.params.exposure.get(market_state, 0.0),
+            "exposure": float(
+                context.get(
+                    "effective_exposure",
+                    self.params.exposure.get(market_state, 0.0),
+                ) or 0.0
+            ),
             "indicators": indicators,
             "indicator_interval": str(context.get("indicator_interval", "") or ""),
             "buy_confirmation_forced": bool(context.get("confirmed_buy")),
@@ -964,6 +1022,7 @@ class StaticRule:
                 "whipsaw_window": self.params.whipsaw_x,
                 "corporate_action_blocked": bool(portfolio.get("corporate_action_blocked", False)),
                 "pending_buy": bool(portfolio.get("pending_buy", False)),
+                "buy_volume": buy_volume,
             },
         }
         corporate_action = portfolio.get("corporate_action")
@@ -981,6 +1040,20 @@ class StaticRule:
 
         if signal != "BUY":
             return StrategyDecision("WAIT", symbol, "NO_NEW_BUY_SIGNAL", signal=signal, market_state=market_state, details=details)
+        if self.params.buy_volume_enabled and not bool(buy_volume.get("ready")):
+            return StrategyDecision(
+                "WAIT", symbol, "BUY_VOLUME_NOT_READY", signal=signal,
+                market_state=market_state, details=details,
+            )
+        if (
+            self.params.buy_volume_enabled
+            and float(buy_volume.get("ratio", 0.0) or 0.0)
+            < self.params.buy_volume_min_ratio
+        ):
+            return StrategyDecision(
+                "WAIT", symbol, "BUY_VOLUME_LOW", signal=signal,
+                market_state=market_state, details=details,
+            )
         if bool(portfolio.get("corporate_action_blocked")):
             return StrategyDecision("WAIT", symbol, "CORPORATE_ACTION_BLOCK", signal=signal, market_state=market_state, details=details)
         if market_state not in EXPOSURE_DEFAULTS:
@@ -1025,9 +1098,15 @@ class StaticRule:
             "current_profit_pct": current_profit,
             "peak_profit_pct": peak_profit,
         })
+        sl_enabled = bool(position.get("sl_enabled", True))
         sl_mode = str(position.get("sl_mode", "DEFAULT") or "DEFAULT").upper()
         sl_value = float(position.get("sl_value", 0.0) or 0.0)
-        if sl_mode == "PRICE" and sl_value > 0:
+        stop_hit = False
+        sl_price = 0.0
+        details["sl_enabled"] = sl_enabled
+        if not sl_enabled:
+            details.update(sl_mode="OFF", sl_value=0.0, sl_price=0.0)
+        elif sl_mode == "PRICE" and sl_value > 0:
             stop_hit = current > 0 and current <= sl_value
             sl_price = sl_value
             details.update(sl_mode="PRICE", sl_value=sl_value, sl_price=sl_price)
@@ -1040,7 +1119,7 @@ class StaticRule:
             stop_hit = current_profit <= float(sl_pct)
             sl_price = entry * (1.0 + float(sl_pct) / 100.0) if entry > 0 else 0.0
             details.update(sl_mode="PERCENT", sl_value=float(sl_pct), sl_price=sl_price)
-        if stop_hit:
+        if sl_enabled and stop_hit:
             return StrategyDecision(
                 "SELL", symbol, "STOP_LOSS", event="STOP_LOSS", signal=signal,
                 market_state=market_state, quantity_fraction=1.0, details=details,
@@ -1077,52 +1156,6 @@ class StaticRule:
                 market_state=market_state, quantity_fraction=1.0, details=details,
                 scope="POSITION_MANAGEMENT",
             )
-        if (
-            "IND_EXIT" in em_modes
-            and self.params.sellable_weak_exit_enabled
-            and bool(position.get("sellable"))
-            and current_profit <= self.params.sellable_weak_exit_loss_pct
-        ):
-            indicators = details.get("indicators") or {}
-            def snapshot_number(name: str) -> float | None:
-                try:
-                    value = float(indicators.get(name))
-                except (TypeError, ValueError):
-                    return None
-                return value if isfinite(value) else None
-
-            try:
-                count = int(indicators.get("sample_count") or 0)
-            except (TypeError, ValueError):
-                count = 0
-            ema_fast = snapshot_number("weak_sell_ema_fast")
-            ema_slow = snapshot_number("weak_sell_ema_slow")
-            current_rsi = snapshot_number("rsi")
-            previous_rsi = snapshot_number("rsi_previous")
-            enough_history = count >= max(
-                WEAK_EXIT_EMA_SLOW + 1 if self.params.sell_signal_use_ema else 2,
-                self.params.rsi_period + 2 if self.params.sell_signal_use_rsi else 2,
-            )
-            weak = (
-                enough_history
-                and (not self.params.sell_signal_use_ema or (
-                    ema_fast is not None and ema_slow is not None and ema_fast < ema_slow
-                ))
-                and (not self.params.sell_signal_use_rsi or (
-                    current_rsi is not None and previous_rsi is not None
-                    and current_rsi < previous_rsi
-                ))
-            )
-            if weak:
-                details["sellable_weak_exit"] = True
-                details["sellable_weak_exit_loss_pct"] = self.params.sellable_weak_exit_loss_pct
-                details["sellable_weak_exit_ema"] = f"{WEAK_EXIT_EMA_FAST}/{WEAK_EXIT_EMA_SLOW}"
-                return StrategyDecision(
-                    "SELL", symbol, "SELLABLE_WEAK_EXIT", event="INDICATOR_EXIT",
-                    signal="SELL", market_state=market_state,
-                    quantity_fraction=1.0, details=details,
-                    scope="POSITION_MANAGEMENT",
-                )
         if "IND_EXIT" in em_modes and signal == "SELL":
             return StrategyDecision(
                 "SELL", symbol, "SELL_SIGNAL", event="INDICATOR_EXIT", signal="SELL",
