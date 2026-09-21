@@ -70,6 +70,10 @@ Chi tiết được xuất thành **7 workbook riêng theo từng mã** trong
 `AUTO_DYNAMIC_OFF`, `AUTO_DYNAMIC_ON`, `ALERT_DYNAMIC_OFF`, `ALERT_DYNAMIC_ON`.
 Mỗi dòng là một lệnh; MFE trong T+2, MFE sau T+2 và MFE toàn lệnh được tách thành
 ba cột riêng, tuyệt đối không cộng hai phase MFE với nhau.
+Sáu cột kiểm toán Dynamic đi kèm gồm: `ATR14 1D %`, `START MFE %`,
+`TRAIL ATR %`, `ĐỈNH LÚC TÍNH`, `SÀN GIỮ 90%` và `SÀN PROTECT`.
+Giá trị được lấy từ trạng thái backend tại lúc PROTECT khớp/ra cảnh báo;
+`DYNAMIC OFF` và `CHƯA KÍCH HOẠT` được ghi rõ thay vì điền số suy đoán.
 
 ## Bảng 1 — tổng thể theo mã
 
