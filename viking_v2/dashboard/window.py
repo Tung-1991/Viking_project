@@ -159,7 +159,7 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         # weight used to stretch it on tall screens, leaving a large empty
         # strip below PREVIEW while taking space away from the orders table.
         self.right.grid_rowconfigure(1, weight=1)
-        self.right.grid_rowconfigure(2, weight=0, minsize=380)
+        self.right.grid_rowconfigure(2, weight=0, minsize=360)
         self._left_panel()
         self._right_panel()
         self.after_idle(self._sync_left_scrollbar)
@@ -167,3 +167,4 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
 
     def _on_dashboard_resize(self, _event=None) -> None:
         self.after_idle(self._sync_left_scrollbar)
+        self.after_idle(self._sync_preview_scrollbar)

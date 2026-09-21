@@ -46,6 +46,7 @@ from .windows import (
     FONT_VALUE,
     DataTablePopup,
     HistoryPopup,
+    _HoverHint,
     minimize_popup,
 )
 
@@ -1584,11 +1585,22 @@ class DashboardActionsMixin:
         local_editable = bool(item and item.status.upper() in {"PENDING", "WAITING_TOKEN", "WAITING_SETTLEMENT", "PAUSED"})
         selected = set(item.em_modes if item else [])
         sl_enabled = tk.BooleanVar(master=self, value=bool(item.sl_enabled) if item else True)
+        params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
+        initial_sl = float(params.get("initial_sl_pct", -3.5) or -3.5)
+        reentry_sl = float(params.get("reentry_sl_pct", -2.5) or -2.5)
+        default_tp = float(params.get("take_profit_pct", 7.0) or 7.0)
+        try:
+            current_streak = self.trade_state.loss_streak(
+                str(action.get("symbol", "") or ""), str(action.get("mode", "PAPER") or "PAPER"),
+            )
+        except (AttributeError, TypeError, ValueError):
+            current_streak = 0
+        effective_default_sl = reentry_sl if current_streak > 0 else initial_sl
 
         top = ctk.CTkToplevel(self)
         top.title("Sửa lệnh & quản lý")
-        top.geometry("650x420")
-        top.minsize(620, 400)
+        top.geometry("640x315")
+        top.resizable(False, False)
         top.transient(self)
         top.grab_set()
         top.grid_columnconfigure(0, weight=1)
@@ -1653,10 +1665,16 @@ class DashboardActionsMixin:
             button.grid(row=0, column=column, sticky="ew", padx=5, pady=6)
             mode_buttons[key] = button
             paint_mode(key)
+            mode_hint = {
+                "TP": f"TP ON: chốt tại mức riêng đã nhập; nếu để AUTO dùng mặc định +{default_tp:g}%.",
+                "NORMAL": "PROTECT ON: bảo vệ lợi nhuận theo cấu hình Dynamic hiện tại trong RULE → E/M.",
+                "IND_EXIT": "E ON: theo dõi tín hiệu EMA/RSI; hành động AUTO hay ALERT lấy từ RULE → E/M.",
+            }[key]
+            _HoverHint(button, mode_hint, placement="inside")
 
         target_frame = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
         target_frame.grid(row=4, column=0, sticky="ew", padx=14, pady=3)
-        target_frame.grid_columnconfigure((1, 3), weight=1)
+        target_frame.grid_columnconfigure((1, 4), weight=1)
         sl_button = ctk.CTkButton(
             target_frame, text="", width=88, height=34,
             font=("Segoe UI", 12, "bold"), corner_radius=7,
@@ -1684,33 +1702,48 @@ class DashboardActionsMixin:
         elif item and item.sl_mode == "PERCENT":
             sl_entry.insert(0, f"{-abs(item.sl_value):g}%")
         else:
-            sl_entry.insert(0, "AUTO")
-        sl_entry.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=7)
+            sl_entry.insert(0, f"AUTO · {effective_default_sl:g}%")
+        sl_entry.grid(row=0, column=1, sticky="ew", padx=(0, 4), pady=7)
+        sl_hint = ctk.CTkButton(
+            target_frame, text="ⓘ", width=26, height=26, corner_radius=6,
+            font=("Segoe UI Symbol", 11, "bold"),
+            fg_color="#343A43", hover_color="#4B515B", text_color=COL_TEXT,
+        )
+        sl_hint.grid(row=0, column=2, padx=(0, 9), pady=7)
+        _HoverHint(
+            sl_hint,
+            f"SL AUTO không phải tắt SL. Sau khi BUY khớp, bot dùng cấu hình mặc định: "
+            f"lệnh mua đầu {initial_sl:g}%, lệnh vào lại {reentry_sl:g}%. "
+            "Muốn khóa riêng cho lệnh này thì nhập -3.5% hoặc một mức giá. SL OFF mới là không cắt lỗ.",
+            placement="inside",
+        )
         ctk.CTkLabel(
             target_frame, text="TP", font=("Segoe UI", 12, "bold", "italic"),
             text_color=COL_GREEN,
-        ).grid(row=0, column=2, sticky="w", padx=(8, 6), pady=7)
+        ).grid(row=0, column=3, sticky="w", padx=(2, 6), pady=7)
         tp_entry = ctk.CTkEntry(target_frame, font=("Cascadia Mono", 13), height=34)
         if item and item.tp_mode == "PRICE":
             tp_entry.insert(0, _display_price(item.tp_value))
         elif item and item.tp_mode == "PERCENT":
             tp_entry.insert(0, f"{abs(item.tp_value):g}%")
         else:
-            tp_entry.insert(0, "AUTO")
-        tp_entry.grid(row=0, column=3, sticky="ew", padx=(0, 10), pady=7)
-
-        help_text = (
-            "AUTO dùng SL mặc định; TP AUTO dùng % mặc định khi TP đang ON. "
-            "Có thể nhập -3.5%, 7% hoặc giá cụ thể. PROTECT/E dùng rule hiện tại trong RULE."
-            if local_editable else
-            "Lệnh đã gửi DNSE: chỉ sửa được khối lượng/giá LO. TP, SL và mode quản lý sau khi khớp sửa tại dòng vị thế."
+            tp_entry.insert(0, f"AUTO · +{default_tp:g}%")
+        tp_entry.grid(row=0, column=4, sticky="ew", padx=(0, 4), pady=7)
+        tp_hint = ctk.CTkButton(
+            target_frame, text="ⓘ", width=26, height=26, corner_radius=6,
+            font=("Segoe UI Symbol", 11, "bold"),
+            fg_color="#343A43", hover_color="#4B515B", text_color=COL_TEXT,
         )
-        ctk.CTkLabel(
-            top, text=help_text, font=("Segoe UI", 10), text_color=COL_MUTED,
-            anchor="w", wraplength=610, justify="left",
-        ).grid(row=5, column=0, sticky="ew", padx=16, pady=(2, 0))
+        tp_hint.grid(row=0, column=5, padx=(0, 8), pady=7)
+        _HoverHint(
+            tp_hint,
+            f"TP AUTO không tạo mức TP riêng. Nếu nút TP đang ON, bot dùng mức mặc định +{default_tp:g}%; "
+            "nếu TP OFF thì ô này không phát lệnh. Có thể nhập 7% hoặc một mức giá để ghi đè riêng.",
+            placement="inside",
+        )
+
         status = ctk.CTkLabel(top, text="", height=18, font=("Segoe UI", 11, "bold"), text_color=COL_WARN)
-        status.grid(row=6, column=0, sticky="w", padx=16, pady=(1, 0))
+        status.grid(row=5, column=0, sticky="w", padx=16, pady=(1, 0))
 
         if not local_editable:
             sl_button.configure(state="disabled")
@@ -1718,10 +1751,14 @@ class DashboardActionsMixin:
             tp_entry.configure(state="disabled")
             for button in mode_buttons.values():
                 button.configure(state="disabled")
+            status.configure(
+                text="Lệnh đã gửi DNSE: TP/SL/mode sửa tại dòng vị thế sau khi khớp.",
+                text_color=COL_WARN,
+            )
 
         def parse_target(raw: str, *, stop: bool) -> tuple[str, float]:
             value = str(raw or "").strip().replace(",", "")
-            if not value or value.upper() == "AUTO":
+            if not value or value.upper().startswith("AUTO"):
                 return ("DEFAULT", 0.0) if stop else ("NONE", 0.0)
             if value.endswith("%"):
                 number = float(value[:-1])
@@ -1791,7 +1828,7 @@ class DashboardActionsMixin:
             top.destroy()
 
         controls = ctk.CTkFrame(top, fg_color="transparent")
-        controls.grid(row=7, column=0, sticky="ew", padx=14, pady=(5, 10))
+        controls.grid(row=6, column=0, sticky="ew", padx=14, pady=(3, 9))
         action_column = 0
         if action.get("pausable"):
             ctk.CTkButton(
