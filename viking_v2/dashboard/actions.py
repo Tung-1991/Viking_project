@@ -1599,7 +1599,7 @@ class DashboardActionsMixin:
 
         top = ctk.CTkToplevel(self)
         top.title("Sửa lệnh & quản lý")
-        top.geometry("640x315")
+        top.geometry("560x275")
         top.resizable(False, False)
         top.transient(self)
         top.grab_set()
@@ -1621,26 +1621,29 @@ class DashboardActionsMixin:
 
         order_frame = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
         order_frame.grid(row=2, column=0, sticky="ew", padx=14, pady=3)
-        order_frame.grid_columnconfigure((1, 3), weight=1)
         ctk.CTkLabel(
-            order_frame, text="KHỐI LƯỢNG", font=("Segoe UI", 12, "bold", "italic"),
+            order_frame, text="KL", font=("Segoe UI", 11, "bold", "italic"),
             text_color=COL_TITLE,
-        ).grid(row=0, column=0, sticky="w", padx=(10, 6), pady=8)
-        quantity_entry = ctk.CTkEntry(order_frame, font=("Cascadia Mono", 13), height=34)
+        ).grid(row=0, column=0, sticky="w", padx=(12, 5), pady=7)
+        quantity_entry = ctk.CTkEntry(
+            order_frame, width=130, font=("Cascadia Mono", 13), height=32,
+        )
         quantity_entry.insert(0, str(quantity_value))
-        quantity_entry.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=6)
+        quantity_entry.grid(row=0, column=1, padx=(0, 14), pady=6)
         ctk.CTkLabel(
-            order_frame, text="GIÁ LO", font=("Segoe UI", 12, "bold", "italic"),
+            order_frame, text="GIÁ", font=("Segoe UI", 11, "bold", "italic"),
             text_color=COL_TITLE,
-        ).grid(row=0, column=2, sticky="w", padx=(10, 6), pady=8)
-        price_entry = ctk.CTkEntry(order_frame, font=("Cascadia Mono", 13), height=34)
+        ).grid(row=0, column=2, sticky="w", padx=(2, 5), pady=7)
+        price_entry = ctk.CTkEntry(
+            order_frame, width=180, font=("Cascadia Mono", 13), height=32,
+        )
         price_entry.insert(0, _display_price(price_value) if price_value > 0 else "")
-        price_entry.grid(row=0, column=3, sticky="ew", padx=(0, 10), pady=6)
+        price_entry.grid(row=0, column=3, padx=(0, 12), pady=6)
         if order_type != "LO":
             price_entry.configure(state="disabled")
 
-        mode_frame = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
-        mode_frame.grid(row=3, column=0, sticky="ew", padx=14, pady=3)
+        mode_frame = ctk.CTkFrame(order_frame, fg_color="transparent")
+        mode_frame.grid(row=1, column=0, columnspan=4, pady=(0, 4))
         mode_buttons: dict[str, ctk.CTkButton] = {}
 
         def paint_mode(name: str) -> None:
@@ -1657,12 +1660,12 @@ class DashboardActionsMixin:
             paint_mode(name)
 
         for column, (key, label) in enumerate(EM_TACTICS):
-            mode_frame.grid_columnconfigure(column, weight=1, uniform="cached_modes")
             button = ctk.CTkButton(
-                mode_frame, text="", height=36, font=("Segoe UI", 12, "bold"),
+                mode_frame, text="", width=132, height=32,
+                font=("Segoe UI", 11, "bold"),
                 corner_radius=7, command=lambda name=key: toggle_mode(name),
             )
-            button.grid(row=0, column=column, sticky="ew", padx=5, pady=6)
+            button.grid(row=0, column=column, padx=4, pady=2)
             mode_buttons[key] = button
             paint_mode(key)
             mode_hint = {
@@ -1672,12 +1675,11 @@ class DashboardActionsMixin:
             }[key]
             _HoverHint(button, mode_hint, placement="inside")
 
-        target_frame = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
-        target_frame.grid(row=4, column=0, sticky="ew", padx=14, pady=3)
-        target_frame.grid_columnconfigure((1, 4), weight=1)
+        target_frame = ctk.CTkFrame(order_frame, fg_color="transparent")
+        target_frame.grid(row=2, column=0, columnspan=4, pady=(0, 7))
         sl_button = ctk.CTkButton(
-            target_frame, text="", width=88, height=34,
-            font=("Segoe UI", 12, "bold"), corner_radius=7,
+            target_frame, text="", width=78, height=32,
+            font=("Segoe UI", 11, "bold"), corner_radius=7,
         )
 
         def paint_sl() -> None:
@@ -1694,22 +1696,24 @@ class DashboardActionsMixin:
             paint_sl()
 
         sl_button.configure(command=toggle_sl)
-        sl_button.grid(row=0, column=0, sticky="w", padx=(8, 6), pady=7)
+        sl_button.grid(row=0, column=0, padx=(4, 5), pady=2)
         paint_sl()
-        sl_entry = ctk.CTkEntry(target_frame, font=("Cascadia Mono", 13), height=34)
+        sl_entry = ctk.CTkEntry(
+            target_frame, width=132, font=("Cascadia Mono", 12), height=32,
+        )
         if item and item.sl_mode == "PRICE":
             sl_entry.insert(0, _display_price(item.sl_value))
         elif item and item.sl_mode == "PERCENT":
             sl_entry.insert(0, f"{-abs(item.sl_value):g}%")
         else:
             sl_entry.insert(0, f"AUTO · {effective_default_sl:g}%")
-        sl_entry.grid(row=0, column=1, sticky="ew", padx=(0, 4), pady=7)
+        sl_entry.grid(row=0, column=1, padx=(0, 3), pady=2)
         sl_hint = ctk.CTkButton(
             target_frame, text="ⓘ", width=26, height=26, corner_radius=6,
             font=("Segoe UI Symbol", 11, "bold"),
             fg_color="#343A43", hover_color="#4B515B", text_color=COL_TEXT,
         )
-        sl_hint.grid(row=0, column=2, padx=(0, 9), pady=7)
+        sl_hint.grid(row=0, column=2, padx=(0, 8), pady=2)
         _HoverHint(
             sl_hint,
             f"SL AUTO không phải tắt SL. Sau khi BUY khớp, bot dùng cấu hình mặc định: "
@@ -1718,23 +1722,25 @@ class DashboardActionsMixin:
             placement="inside",
         )
         ctk.CTkLabel(
-            target_frame, text="TP", font=("Segoe UI", 12, "bold", "italic"),
+            target_frame, text="TP", font=("Segoe UI", 11, "bold", "italic"),
             text_color=COL_GREEN,
-        ).grid(row=0, column=3, sticky="w", padx=(2, 6), pady=7)
-        tp_entry = ctk.CTkEntry(target_frame, font=("Cascadia Mono", 13), height=34)
+        ).grid(row=0, column=3, padx=(0, 5), pady=2)
+        tp_entry = ctk.CTkEntry(
+            target_frame, width=105, font=("Cascadia Mono", 12), height=32,
+        )
         if item and item.tp_mode == "PRICE":
             tp_entry.insert(0, _display_price(item.tp_value))
         elif item and item.tp_mode == "PERCENT":
             tp_entry.insert(0, f"{abs(item.tp_value):g}%")
         else:
             tp_entry.insert(0, f"AUTO · +{default_tp:g}%")
-        tp_entry.grid(row=0, column=4, sticky="ew", padx=(0, 4), pady=7)
+        tp_entry.grid(row=0, column=4, padx=(0, 3), pady=2)
         tp_hint = ctk.CTkButton(
             target_frame, text="ⓘ", width=26, height=26, corner_radius=6,
             font=("Segoe UI Symbol", 11, "bold"),
             fg_color="#343A43", hover_color="#4B515B", text_color=COL_TEXT,
         )
-        tp_hint.grid(row=0, column=5, padx=(0, 8), pady=7)
+        tp_hint.grid(row=0, column=5, padx=(0, 4), pady=2)
         _HoverHint(
             tp_hint,
             f"TP AUTO không tạo mức TP riêng. Nếu nút TP đang ON, bot dùng mức mặc định +{default_tp:g}%; "
@@ -1743,7 +1749,7 @@ class DashboardActionsMixin:
         )
 
         status = ctk.CTkLabel(top, text="", height=18, font=("Segoe UI", 11, "bold"), text_color=COL_WARN)
-        status.grid(row=5, column=0, sticky="w", padx=16, pady=(1, 0))
+        status.grid(row=3, column=0, sticky="w", padx=16, pady=(1, 0))
 
         if not local_editable:
             sl_button.configure(state="disabled")
@@ -1828,36 +1834,37 @@ class DashboardActionsMixin:
             top.destroy()
 
         controls = ctk.CTkFrame(top, fg_color="transparent")
-        controls.grid(row=6, column=0, sticky="ew", padx=14, pady=(3, 9))
+        controls.grid(row=4, column=0, sticky="e", padx=14, pady=(3, 9))
         action_column = 0
         if action.get("pausable"):
             ctk.CTkButton(
-                controls, text="TẠM DỪNG", height=36, font=("Segoe UI", 11, "bold"),
+                controls, text="TẠM DỪNG", width=112, height=34,
+                font=("Segoe UI", 11, "bold"),
                 fg_color=COL_WARN, hover_color="#D97706",
                 command=lambda: (self._pause_running_order(action), top.destroy()),
             ).grid(row=0, column=action_column, sticky="ew", padx=(0, 6))
             action_column += 1
         if action.get("resumable"):
             ctk.CTkButton(
-                controls, text="TIẾP TỤC", height=36, font=("Segoe UI", 11, "bold"),
+                controls, text="TIẾP TỤC", width=112, height=34,
+                font=("Segoe UI", 11, "bold"),
                 fg_color=COL_GREEN, hover_color="#16A34A",
                 command=lambda: (self._resume_running_order(action), top.destroy()),
             ).grid(row=0, column=action_column, sticky="ew", padx=(0, 6))
             action_column += 1
         if action.get("cancellable"):
             ctk.CTkButton(
-                controls, text="HỦY LỆNH", height=36, font=("Segoe UI", 11, "bold"),
+                controls, text="HỦY LỆNH", width=112, height=34,
+                font=("Segoe UI", 11, "bold"),
                 fg_color=COL_RED, hover_color="#DC2626",
                 command=lambda: (top.destroy(), self._cancel_selected()),
             ).grid(row=0, column=action_column, sticky="ew", padx=(0, 6))
             action_column += 1
         ctk.CTkButton(
-            controls, text="LƯU", height=36, font=("Segoe UI", 12, "bold"),
+            controls, text="LƯU", width=112, height=34,
+            font=("Segoe UI", 11, "bold"),
             fg_color=COL_GREEN, hover_color="#16A34A", command=save,
         ).grid(row=0, column=action_column, sticky="ew")
-        controls.grid_columnconfigure(
-            tuple(range(action_column + 1)), weight=1, uniform="cache_actions",
-        )
 
     def _show_position_management(self, action: dict[str, Any]) -> None:
         symbol = str(action.get("symbol", "") or "").upper()
