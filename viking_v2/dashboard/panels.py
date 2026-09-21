@@ -1921,13 +1921,23 @@ class DashboardPanelsMixin:
             return
 
     def _sync_preview_scrollbar(self) -> None:
-        """Hide the PREVIEW scrollbar when the complete panel already fits."""
+        """Fit PREVIEW to its viewport and scroll only when 300px cannot fit."""
         preview = getattr(self, "preview_scroll", None)
         if not self.running or preview is None or not preview.winfo_exists():
             return
         try:
             canvas = preview._parent_canvas
             scrollbar = preview._scrollbar
+            panel = self.preview_focus_panel
+            viewport_height = int(canvas.winfo_height())
+            if viewport_height > 50:
+                target_height = max(300, viewport_height - 2)
+                current_height = int(float(panel.cget("height")))
+                if abs(current_height - target_height) > 1:
+                    panel.configure(height=target_height)
+                    # Recheck after Tk has recalculated the canvas scrollregion.
+                    self.after_idle(self._sync_preview_scrollbar)
+                    return
             bounds = canvas.bbox("all")
             content_height = int(bounds[3] - bounds[1]) if bounds else 0
             needs_scroll = content_height > canvas.winfo_height() + 2
