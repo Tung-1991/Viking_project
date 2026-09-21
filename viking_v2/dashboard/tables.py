@@ -193,10 +193,10 @@ class DashboardTablesMixin:
                     sl_price = avg_price * (1.0 + sl_pct / 100.0) if avg_price > 0 else 0.0
                 else:
                     sl_pct = float(
-                        params.get("reentry_sl_pct", -2.1)
+                        params.get("reentry_sl_pct", -2.5)
                         if cycle and cycle.is_reentry
-                        else params.get("initial_sl_pct", -3.0)
-                        or -3.0
+                        else params.get("initial_sl_pct", -3.5)
+                        or -3.5
                     )
                     sl_price = avg_price * (1.0 + sl_pct / 100.0) if avg_price > 0 else 0.0
                 if cycle and cycle.tp_mode == "PRICE" and cycle.tp_value > 0:
@@ -475,7 +475,7 @@ class DashboardTablesMixin:
                 elif item.sl_mode == "PERCENT" and item.sl_value:
                     item_sl_label = f"{-abs(item.sl_value):+g}%"
                 else:
-                    item_sl_label = f"{float(params.get('initial_sl_pct', -3.0) or -3.0):+g}%"
+                    item_sl_label = f"{float(params.get('initial_sl_pct', -3.5) or -3.5):+g}%"
                 if item.tp_mode == "PRICE" and item.tp_value > 0:
                     item_tp_label = _display_price(item.tp_value)
                 elif item.tp_mode == "PERCENT" and item.tp_value > 0:

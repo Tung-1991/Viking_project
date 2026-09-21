@@ -589,11 +589,11 @@ class RuleSettingsPopup:
         )
         self.initial_sl = self._field(
             take, "Cắt lỗ lệnh đầu (%)", self.params.initial_sl_pct,
-            "Mặc định -3% tính từ giá vốn, kiểm tra realtime khi SL của trade đang ON.",
+            "Mặc định -3.5% tính từ giá vốn, kiểm tra realtime khi SL của trade đang ON.",
         )
         self.reentry_sl = self._field(
             take, "Cắt lỗ vào lại (%)", self.params.reentry_sl_pct,
-            "Mặc định -2.1%, áp dụng cho lần vào lại sau một lệnh LOSS của cùng chu kỳ.",
+            "Mặc định -2.5%, áp dụng cho lần vào lại sau một lệnh LOSS của cùng chu kỳ.",
         )
         self.take_profit = self._field(
             take, "Chốt lời (%)", self.params.take_profit_pct,

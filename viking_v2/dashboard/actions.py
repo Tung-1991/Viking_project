@@ -201,9 +201,9 @@ class DashboardActionsMixin:
         params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
         streak = self.trade_state.loss_streak(self.symbol.get(), self.mode.get())
         value = (
-            float(params.get("reentry_sl_pct", -2.1) or -2.1)
+            float(params.get("reentry_sl_pct", -2.5) or -2.5)
             if streak > 0
-            else float(params.get("initial_sl_pct", -3.0) or -3.0)
+            else float(params.get("initial_sl_pct", -3.5) or -3.5)
         )
         return f"{value:g}%"
 
@@ -623,7 +623,7 @@ class DashboardActionsMixin:
             elif cycle and cycle.sl_mode == "PERCENT" and cycle.sl_value:
                 sl_text = f"{-abs(cycle.sl_value):g}%"
             elif cycle:
-                sl_text = f"{float(params.get('reentry_sl_pct', -2.1) if cycle.is_reentry else params.get('initial_sl_pct', -3.0) or -3.0):g}%"
+                sl_text = f"{float(params.get('reentry_sl_pct', -2.5) if cycle.is_reentry else params.get('initial_sl_pct', -3.5) or -3.5):g}%"
             else:
                 sl_text = "--"
             if cycle and cycle.tp_mode == "PRICE" and cycle.tp_value > 0:
@@ -1804,7 +1804,7 @@ class DashboardActionsMixin:
                 # No target of its own: the TP tactic and its global % take over.
                 return "NONE", 0.0, 0.0
             if stop and (not value or value.upper() == "AUTO"):
-                pct = float(params.get("reentry_sl_pct", -2.1) if cycle and cycle.is_reentry else params.get("initial_sl_pct", -3.0) or -3.0)
+                pct = float(params.get("reentry_sl_pct", -2.5) if cycle and cycle.is_reentry else params.get("initial_sl_pct", -3.5) or -3.5)
                 return "DEFAULT", 0.0, avg_price * (1.0 + pct / 100.0)
             if not stop and not value:
                 return "NONE", 0.0, 0.0

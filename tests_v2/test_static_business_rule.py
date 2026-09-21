@@ -225,7 +225,7 @@ def test_stop_loss_is_realtime_and_has_priority_over_indicator_and_protection():
             "position": {
                 "quantity": 1000,
                 "avg_price": 100,
-                "current_price": 96.9,
+                "current_price": 96.4,
                 "peak_profit_pct": 25,
                 "highest_close": 110,
             }
@@ -236,10 +236,10 @@ def test_stop_loss_is_realtime_and_has_priority_over_indicator_and_protection():
     assert decision.quantity_fraction == 1.0
 
 
-def test_reentry_uses_minus_2_1_percent_stop():
+def test_reentry_uses_minus_2_5_percent_stop():
     decision = StaticRule().evaluate(
         {"symbol": "FPT", "bars": _bars([100] * 20), "previous_market_state": "UPTREND"},
-        {"position": {"quantity": 100, "avg_price": 100, "current_price": 97.8, "is_reentry": True}},
+        {"position": {"quantity": 100, "avg_price": 100, "current_price": 97.4, "is_reentry": True}},
     )
     assert decision.event == "STOP_LOSS"
 

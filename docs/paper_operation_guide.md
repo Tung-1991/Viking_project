@@ -36,7 +36,7 @@ Dashboard chỉ hiện một dòng ngắn: `ATR14 · START · LÙI`. Di chuột 
 
 Cấu hình PAPER mặc định đã chốt: Dynamic ON; START ×0,55; TRAIL ×0,8;
 giữ 90% lãi đỉnh tới MFE 5%; ARM 7%; trail sau ARM 2,5%; bán 100%;
-REPEAT OFF. SL lệnh đầu −3,5%, lệnh vào lại −3,0%; E 3/6 + RSI14 ở ALERT.
+REPEAT OFF. SL lệnh đầu −3,5%, lệnh vào lại −2,5%; E 3/6 + RSI14 ở ALERT.
 
 - `ATR14` dùng dữ liệu các phiên ngày đã đóng, không dùng nến tương lai.
 - `START ×`: ngưỡng MFE bắt đầu Dynamic = ATR% × hệ số START.

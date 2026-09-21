@@ -313,8 +313,8 @@ class StaticRuleParameters:
     # AUTO preserves the historical 100% exit behaviour.
     indicator_exit_policy: str = "ALERT"
     max_positions: int = 5
-    initial_sl_pct: float = -3.0
-    reentry_sl_pct: float = -2.1
+    initial_sl_pct: float = -3.5
+    reentry_sl_pct: float = -2.5
     loss_lock_count: int = 3
     loss_lock_hours: int = 24
     no_compound_enabled: bool = True
