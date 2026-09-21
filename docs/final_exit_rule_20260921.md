@@ -65,8 +65,11 @@ vì mẫu số MFE tăng nhanh hơn PnL, không phải vì PnL giảm.
 Hai mode ALERT giống nhau về tiền vì PROTECT chỉ báo, E cũng chỉ báo và Dynamic không được phép đặt lệnh.
 MFE cao của AUTO OFF/ALERT không đồng nghĩa chiến lược tốt hơn: vị thế được giữ lâu hơn nhưng phần lớn lợi nhuận không được hiện thực hoá.
 
-Workbook chi tiết có đúng bốn sheet tại
-`viking_v2/runtime/backtest/runs/exports/Viking_MODE2_4_modes_7_ma_SL_reentry_2.5_20260921.xlsx`.
+Chi tiết được xuất thành **7 workbook riêng theo từng mã** trong
+`viking_v2/runtime/backtest/runs/exports/`. Mỗi workbook có đúng bốn sheet:
+`AUTO_DYNAMIC_OFF`, `AUTO_DYNAMIC_ON`, `ALERT_DYNAMIC_OFF`, `ALERT_DYNAMIC_ON`.
+Mỗi dòng là một lệnh; MFE trong T+2, MFE sau T+2 và MFE toàn lệnh được tách thành
+ba cột riêng, tuyệt đối không cộng hai phase MFE với nhau.
 
 ## Bảng 1 — tổng thể theo mã
 
