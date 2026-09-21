@@ -1,74 +1,76 @@
-# Viking — rule EXIT chốt cho PAPER (21/09/2026)
+# Viking — cấu hình chốt cho PAPER (21/09/2026)
 
-## Rule vận hành đề xuất
+## Cấu hình mặc định trong code
 
-| Nhánh | Cấu hình chốt | Hành động |
-|---|---|---|
-| SL | ON; lệnh đầu −3,5%, vào lại −2,1% | Bán 100% khi chạm SL |
-| TP | OFF | Không tham gia |
-| PROTECT | AUTO; Dynamic ON; START ATR ×0,45; TRAIL ATR ×0,8; giữ 90% lãi đỉnh tới MFE 5%; ARM 7%; trail sau ARM 2,5%; SELL 100%; REPEAT OFF | Nhánh thoát chính |
-| E gốc | ON; EMA SELL 3/6 + RSI14 giảm; MODE ALERT | Chỉ log/UI/Telegram, không đặt lệnh |
-| E sớm | Đã xoá | Không còn UI/backend |
-| T+2 | RECHECK; reset sàn T+2 OFF | Tín hiệu trong thời gian chưa bán được chỉ được ghi nhận; lúc cổ về phải kiểm tra lại điều kiện bán |
+Nguồn mặc định của ứng dụng là `DEFAULT_RULE_PARAMETERS` trong `viking_v2/config.py`.
+File settings cũ thiếu trường sẽ được ghép với bộ mặc định này; giá trị người dùng đã lưu vẫn được ưu tiên.
 
-`OFF / ALERT / AUTO` của E được hiểu như sau: OFF là bỏ E khỏi trade; ALERT giữ E làm chỉ báo quan sát; AUTO mới bán 100%. E ALERT không được chặn SL, TP hoặc PROTECT AUTO nếu cùng xuất hiện.
+Thứ tự ưu tiên cấu hình:
 
-## Backtest bốn mode PROTECT trên backend hiện hành
+1. `config.py` chỉ cấp mặc định cho tài khoản mới hoặc trường còn thiếu.
+2. Khi bấm **LƯU THAY ĐỔI** trên UI, ứng dụng ghi toàn bộ cấu hình hiện hành vào `viking_v2/runtime/accounts/<ACCOUNT_ID>/settings.json`.
+3. Lần mở sau, giá trị trong JSON phủ lên mặc định trong `config.py`; vì vậy sửa default trong code không tự thay đổi lựa chọn đã lưu trên UI.
+4. Backtest có file riêng `viking_v2/runtime/backtest/settings.json`; thay đổi trên màn hình backtest không tự sửa PAPER/REAL.
 
-Phạm vi: bảy cohort CTS, FTS, SHS, SSI, VIX, VND, DPM chạy độc lập, mỗi cohort 1 tỷ đồng, exposure 60%, tối đa một vị thế, Entry EMA 3/6 + RSI sau 14:00, SL −3,5%/−2,1%, E 3/6 + RSI luôn ở ALERT. Chạy REPLAY `save=False`, không tạo Excel và không đổi settings tài khoản. Đây là dữ liệu trong mẫu; tổng không phải PnL của một danh mục chung.
+| Nhóm | Cấu hình chốt |
+|---|---|
+| Phase 1 | MA200; Pivot 3/3; sai số Pivot 1%; vùng MA 1%; xác nhận 3 phiên; Volume phase 1 OFF |
+| Tỷ trọng | UPTREND 90%; DOWNTREND 10%; ACCUMULATION 60%; DISTRIBUTION 50% |
+| Entry | EMA 3/6 + RSI14; chỉ mua từ 14:00; đọc REALTIME/TICK; Volume BUY OFF; xác nhận BUY phút OFF |
+| Vốn | Tối đa 5 position; không compound; tối thiểu 100 cổ; khóa sau 3 LOSS trong 24 giờ; Whipsaw ON 3 lần/7 phiên |
+| Phí | Mua 0,045%; bán 0,045%; thuế bán 0,1% |
+| SL | ON; lệnh đầu −3,5%; lệnh vào lại −2,1%; bán 100% |
+| TP | Giá trị 7% nhưng mode TP mặc định OFF |
+| PROTECT | AUTO; Dynamic ON; START ATR14(T−1) ×0,55; TRAIL ATR ×0,8; giữ 90% lãi đỉnh tới MFE 5%; ARM 7%; trail sau ARM 2,5%; bán 100%; REPEAT OFF; reset sàn T+2 OFF |
+| E | EMA SELL 3/6 + RSI14 giảm; ALERT; chỉ log/UI/Telegram, không đặt lệnh |
+| T+2 | RECHECK; tín hiệu lúc chưa bán được phải được kiểm tra lại khi cổ về |
 
-Đơn vị tiền: triệu VND. `MFE trong T+2` và `MFE sau T+2` là hai phase của cùng lệnh, tuyệt đối không cộng hai cột; tỷ lệ thu dùng MFE sau T+2.
+Mode mặc định của BOT là `PROTECT + E`; TP không được gắn vào trade. SL có công tắc riêng và mặc định ON.
+Không có E sớm, E LOSS hay FAILED RECOVERY trong backend vận hành.
 
-| PROTECT | PnL tổng | MFE trong T+2 | MFE sau T+2 | PnL/MFE sau T+2 | Mua / đóng / mở | Max DD |
-|---|---:|---:|---:|---:|---:|---:|
-| AUTO · Dynamic OFF | 208,23 | 897,63 | 1.230,68 | 16,92% | 50 / 47 / 3 | 9,78% |
-| **AUTO · Dynamic ON** | **598,92** | **1.086,09** | **871,67** | **68,71%** | **55 / 54 / 1** | **6,52%** |
-| ALERT · Dynamic OFF | −340,12 | 565,60 | 1.134,79 | −29,97% | 31 / 27 / 4 | 23,57% |
-| ALERT · Dynamic ON | −340,12 | 565,60 | 1.134,79 | −29,97% | 31 / 27 / 4 | 23,57% |
+## Phạm vi backtest dùng cho hai bảng
 
-Hai dòng PROTECT ALERT có PnL/MFE giống nhau vì PROTECT chỉ cảnh báo, E cũng chỉ cảnh báo; vị thế chỉ còn SL để tự thoát. Dynamic ON/OFF chỉ làm số cảnh báo PROTECT khác nhau, không tạo fill.
+- Bảy cohort CTS, FTS, SHS, SSI, VIX, VND và DPM chạy độc lập; mỗi cohort vốn 1 tỷ đồng, tỷ trọng 60%, tối đa một position.
+- Entry EMA 3/6 + RSI14 sau 14:00; SL −3,5%/−2,1%; PROTECT đúng cấu hình chốt; E ở ALERT.
+- Whipsaw và khóa LOSS tắt trong phép so sánh để giữ cùng phương pháp với các lượt nghiên cứu trước.
+- REPLAY `save=False`; không tạo Excel, không đổi settings trong lúc chạy.
+- PnL đã gồm phí và thuế mô phỏng. Tổng bảy mã là tổng các lượt độc lập, không phải một danh mục chung.
+- `MFE trong T+2` và `MFE sau T+2` là hai phase của cùng lệnh, không cộng hai cột. Tỷ lệ thu chỉ dùng MFE sau T+2.
 
-## Chi tiết mode được chọn: PROTECT AUTO · Dynamic ON
+## Bảng 1 — tổng thể theo mã
 
-| Mã | PnL | MFE trong T+2 | MFE sau T+2 | Lệnh | E ALERT |
-|---|---:|---:|---:|---:|---:|
-| CTS | 264,23 | 216,20 | 327,91 | 8 | 0 |
-| FTS | 67,85 | 129,48 | 128,71 | 8 | 7 |
-| SHS | 76,68 | 156,97 | 132,03 | 8 | 3 |
-| SSI | 11,04 | 132,37 | 67,68 | 9 | 4 |
-| VIX | 75,59 | 184,26 | 75,59 | 7 | 1 |
-| VND | 88,92 | 182,45 | 125,14 | 10 | 3 |
-| DPM | 14,62 | 84,37 | 14,62 | 5 | 0 |
-| **Tổng** | **598,92** | **1.086,09** | **871,67** | **55** | **18** |
+Đơn vị tiền: triệu VND.
 
-| Trạng thái cuối | Lệnh | PnL | MFE trong T+2 | MFE sau T+2 |
-|---|---:|---:|---:|---:|
-| PROTECT | 46 | 784,71 | 1.060,66 | 912,65 |
-| SL | 8 | −166,71 | 15,30 | −51,11 |
-| Còn mở | 1 | −19,07 | 10,13 | 10,13 |
-| **Tổng** | **55** | **598,92** | **1.086,09** | **871,67** |
+| Mã | PnL | MFE trong T+2 | MFE sau T+2 | PnL/MFE sau T+2 | Lệnh | Đóng / mở | WIN / LOSS | Max DD | Phí | Thuế |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| CTS | 256,79 | 216,02 | 338,47 | 75,87% | 8 | 8 / 0 | 7 / 1 | 2,68% | 4,42 | 5,05 |
+| FTS | 50,56 | 127,47 | 129,31 | 39,10% | 8 | 8 / 0 | 3 / 5 | 5,47% | 4,21 | 4,71 |
+| SHS | 106,60 | 156,97 | 180,34 | 59,11% | 8 | 7 / 1 | 6 / 1 | 3,24% | 4,07 | 4,29 |
+| SSI | 11,04 | 132,37 | 67,68 | 16,31% | 9 | 9 / 0 | 4 / 5 | 6,52% | 4,65 | 5,17 |
+| VIX | 73,86 | 182,51 | 73,86 | 100,00% | 7 | 7 / 0 | 6 / 1 | 3,14% | 3,77 | 4,23 |
+| VND | 88,80 | 182,32 | 144,01 | 61,66% | 10 | 10 / 0 | 7 / 3 | 3,77% | 5,40 | 6,05 |
+| DPM | 14,62 | 84,37 | 14,62 | 100,00% | 5 | 5 / 0 | 3 / 2 | 1,57% | 2,69 | 2,99 |
+| **Tổng** | **602,26** | **1.082,03** | **948,28** | **63,51%** | **55** | **54 / 1** | **36 / 18** | **6,52%** | **29,20** | **32,49** |
 
-PROTECT thu 784,71/912,65 = **85,99% MFE bán được** trong riêng nhóm nó đóng. Tổng hệ thống chỉ còn 68,71% vì 8 lệnh SL và một vị thế mở kéo kết quả xuống; không nên sửa PROTECT để chữa phần thua vốn thuộc SL.
+## Bảng 2 — chi tiết theo nhánh thoát
 
-## Vì sao chốt E ALERT
+Đơn vị tiền: triệu VND.
 
-| E với cùng PROTECT Dynamic | PnL | MFE sau T+2 | PnL/MFE | Lệnh | Max DD |
-|---|---:|---:|---:|---:|---:|
-| OFF | 598,92 | 871,67 | 68,71% | 55 | 6,52% |
-| **ALERT · EMA3/6 + RSI14** | **598,92** | **871,67** | **68,71%** | **55** | **6,52%** |
-| AUTO · EMA3/6 + RSI14 | 542,47 | 819,37 | 66,21% | 57 | 7,43% |
-| AUTO · EMA4/6 + RSI14 | 590,67 | 842,85 | 70,08% | 57 | 7,61% |
+| Nhánh | Lệnh | PnL | MFE trong T+2 | MFE sau T+2 | Thu/MFE sau T+2 | WIN / LOSS | Phí | Thuế |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| PROTECT | 45 | 792,43 | 1.053,12 | 981,98 | **80,70%** | 36 / 9 | 24,27 | 27,39 |
+| SL | 9 | −171,11 | 18,79 | −43,83 | Không có ý nghĩa | 0 / 9 | 4,66 | 5,10 |
+| Còn mở | 1 | −19,07 | 10,13 | 10,13 | Không dùng | 0 / 0 | 0,27 | 0,00 |
+| **Tổng** | **55** | **602,26** | **1.082,03** | **948,28** | **63,51%** | **36 / 18** | **29,20** | **32,49** |
 
-ALERT giữ nguyên đường tiền như E OFF nhưng vẫn thu được 18 quan sát để đánh giá PAPER. AUTO 3/6 làm mất 56,45 triệu PnL so với ALERT; EMA4/6 dù có tỷ lệ thu 70,08% vẫn thấp hơn ALERT 8,25 triệu PnL, thấp hơn 28,81 triệu MFE bán được và drawdown xấu hơn. Vì vậy chưa có lý do dữ liệu đủ mạnh để cho E tự bán.
+Riêng PROTECT thu được 792,43/981,98 = **80,70% MFE bán được** của nhóm nó đóng.
+PnL toàn hệ thống thấp hơn vì chín lệnh SL và một vị thế còn mở kéo giảm khoảng 190,17 triệu.
+MFE sau T+2 của nhóm SL có thể âm vì ngay cả mức giá tốt nhất trong phase bán được vẫn không bù đủ phí và thuế.
 
-## Nội dung ngắn gửi nhóm
+## Quyết định
 
-> Entry giữ nguyên EMA 3/6 + RSI sau 14h. Exit chốt theo ba lớp: SL bắt buộc −3,5%; PROTECT AUTO Dynamic là nhánh chốt lời chính; E gốc EMA3/6 + RSI14 chuyển sang ALERT để theo dõi nhưng không tự bán. Trên 7 cohort chạy độc lập, mode được chọn đạt PnL 598,92 triệu trên MFE bán được sau T+2 là 871,67 triệu, tương đương 68,71%; riêng 46 lệnh do PROTECT đóng thu được khoảng 85,99% MFE của nhóm. E ALERT phát hiện 18 tín hiệu nhưng không đổi PnL, còn cho E AUTO bán làm PnL và MFE thấp hơn. Đây là kết quả trong mẫu; bước tiếp theo là PAPER và đánh giá log E ALERT trước khi cân nhắc AUTO.
-
-## Điểm đưa sang VA để phản biện
-
-1. Không đề nghị VA tối ưu lại Entry; chỉ phản biện EXIT trên cùng 55 lệnh và cùng quy tắc T+2.
-2. Yêu cầu VA tách ba nhóm PROTECT, SL và còn mở; không lấy lỗi của SL để làm chặt thêm PROTECT vốn đang thu gần 86% MFE của nhóm.
-3. Đề nghị VA đánh giá 18 E ALERT theo câu hỏi phản thực tế: nếu AUTO tại tín hiệu E thì tránh được bao nhiêu lỗ, đồng thời mất bao nhiêu nhịp hồi và MFE về sau.
-4. Không nhận đề xuất chỉ làm đẹp tỷ lệ PnL/MFE bằng cách bán sớm khiến cả PnL lẫn MFE co xuống.
-5. Mọi phương án mới phải báo cáo PnL, MFE sau T+2, max drawdown, số lệnh và độ trùng Entry; sau đó mới PAPER, chưa đổi REAL.
+- Chốt START 0,55 để ưu tiên không gian chạy và MFE bán được gần 950 triệu.
+- Giữ SL −3,5%; SL −3% đã làm PnL và MFE giảm mạnh, đồng thời tăng số lệnh SL.
+- Giữ E ở ALERT. E AUTO/E LOSS không làm tổng nhóm `E + SL` tốt hơn một cách đáng tin cậy.
+- Không đưa FAILED RECOVERY vào hệ thống: backtest cho thấy nó cắt nhầm các lệnh đang âm nhưng sau đó hồi thành lệnh thắng.
+- Bước tiếp theo là PAPER và thu dữ liệu ngoài mẫu; không tiếp tục tối ưu trên cùng 55 lệnh.

@@ -138,7 +138,7 @@ class BacktestSettings:
     buy_fee_pct: float = config.DEFAULT_BUY_FEE_PCT
     sell_fee_pct: float = config.DEFAULT_SELL_FEE_PCT
     sell_tax_pct: float = config.DEFAULT_SELL_TAX_PCT
-    rule_parameters: dict[str, Any] = field(default_factory=dict)
+    rule_parameters: dict[str, Any] = field(default_factory=config.default_rule_parameters)
     # New Mode 2 windows prefer imported intraday data. BacktestConfig itself
     # still defaults to DAILY so old serialized runs remain reproducible.
     simulation_mode: str = "AUTO_HYBRID"
@@ -164,7 +164,7 @@ class BacktestSettings:
         from ..rules.business import StaticRuleParameters
 
         self.rule_parameters = StaticRuleParameters.from_dict(
-            self.rule_parameters
+            config.merge_rule_parameters(self.rule_parameters)
         ).to_dict()
 
     def to_dict(self) -> dict[str, Any]:

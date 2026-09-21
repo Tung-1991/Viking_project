@@ -9,6 +9,13 @@ Tài liệu này mô tả code hiện hành. Báo cáo `backtest_4_modes_2026091
 3. **P3 · Vốn:** giới hạn số vị thế, vốn cho mỗi mã, chống whipsaw và khóa mua sau chuỗi lỗ.
 4. **E/M · Thoát:** SL, TP, PROTECT và E là các nhánh độc lập. E chính chỉ còn EMA SELL + RSI; nhánh E sớm thử nghiệm đã bị xoá hoàn toàn. E có ba trạng thái vận hành: `OFF` bằng công tắc E/M của trade, `ALERT` chỉ báo và `AUTO` bán 100% phần còn lại.
 
+## Mặc định và cấu hình đã lưu
+
+- `viking_v2/config.py` là nguồn mặc định cho tài khoản mới và các trường còn thiếu.
+- Nút **LƯU THAY ĐỔI** ghi cấu hình UI vào `viking_v2/runtime/accounts/<ACCOUNT_ID>/settings.json`.
+- Khi nạp lại, JSON được ưu tiên hơn mặc định; thay đổi default trong code không ghi đè lựa chọn đã lưu trên UI.
+- Backtest lưu riêng tại `viking_v2/runtime/backtest/settings.json`, không tự thay đổi PAPER/REAL.
+
 ## E · EXIT SELL
 
 - Rule E gốc: EMA SELL nhanh cắt xuống EMA SELL chậm và RSI14 giảm. EMA SELL mặc định 3/6, tách khỏi EMA BUY dù hiện cùng giá trị.
@@ -26,6 +33,10 @@ Tài liệu này mô tả code hiện hành. Báo cáo `backtest_4_modes_2026091
 ## Dynamic dưới ARM
 
 Dashboard chỉ hiện một dòng ngắn: `ATR14 · START · LÙI`. Di chuột vào dòng này để xem giải thích.
+
+Cấu hình PAPER mặc định đã chốt: Dynamic ON; START ×0,55; TRAIL ×0,8;
+giữ 90% lãi đỉnh tới MFE 5%; ARM 7%; trail sau ARM 2,5%; bán 100%;
+REPEAT OFF. SL lệnh đầu −3,5%, lệnh vào lại −2,1%; E 3/6 + RSI14 ở ALERT.
 
 - `ATR14` dùng dữ liệu các phiên ngày đã đóng, không dùng nến tương lai.
 - `START ×`: ngưỡng MFE bắt đầu Dynamic = ATR% × hệ số START.

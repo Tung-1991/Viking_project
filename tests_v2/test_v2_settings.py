@@ -27,6 +27,16 @@ def test_execution_defaults_are_explicit_and_minimal():
     assert StaticRuleParameters().whipsaw_n == 3
     assert StaticRuleParameters().whipsaw_x == 7
     assert StaticRuleParameters().loss_lock_hours == 24
+    assert settings.rule_parameters == config.DEFAULT_RULE_PARAMETERS
+    assert settings.rule_parameters is not config.DEFAULT_RULE_PARAMETERS
+
+
+def test_sparse_account_rules_merge_over_complete_operating_defaults():
+    settings = AppSettings(rule_parameters={"loss_lock_hours": 12}).normalize()
+    assert settings.rule_parameters["loss_lock_hours"] == 12
+    assert settings.rule_parameters["initial_sl_pct"] == -3.5
+    assert settings.rule_parameters["normal_atr_activation_multiplier"] == 0.55
+    assert settings.rule_parameters["normal_dynamic_enabled"] is True
 
 
 def test_phase1_override_settings_are_normalized():
@@ -118,6 +128,26 @@ def test_missing_account_settings_are_materialized_as_json(tmp_path, monkeypatch
 
     assert saved.is_file()
     assert json.loads(saved.read_text(encoding="utf-8"))["watchlist"] == settings.watchlist
+
+
+def test_saved_json_rule_overrides_win_over_config_defaults(tmp_path, monkeypatch):
+    accounts = tmp_path / "runtime" / "accounts"
+    monkeypatch.setattr(config, "ACCOUNTS_ROOT", accounts)
+
+    settings = AppSettings().normalize()
+    settings.rule_parameters["initial_sl_pct"] = -4.25
+    settings.rule_parameters["normal_atr_activation_multiplier"] = 0.72
+    saved = config.save_settings(settings, "ACC01")
+
+    raw = json.loads(saved.read_text(encoding="utf-8"))
+    loaded = config.load_settings("ACC01")
+
+    assert raw["rule_parameters"]["initial_sl_pct"] == -4.25
+    assert raw["rule_parameters"]["normal_atr_activation_multiplier"] == 0.72
+    assert loaded.rule_parameters["initial_sl_pct"] == -4.25
+    assert loaded.rule_parameters["normal_atr_activation_multiplier"] == 0.72
+    assert loaded.rule_parameters["normal_atr_multiplier"] == 0.8
+    assert config.DEFAULT_RULE_PARAMETERS["initial_sl_pct"] == -3.5
 
 
 def test_connection_popup_normalizes_watchlist_and_dnse_account_payload():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -78,6 +79,106 @@ DEFAULT_CKCS_WATCHLIST = (
     "ITC", "JVC", "KDH", "LDG", "MBS", "NHA", "NLG", "NVL", "PDR", "PLX",
     "PNJ", "POW", "QCG", "SCR", "SCS", "TDM", "TLG", "TV2", "VIX", "VPG",
 )
+
+# Canonical operating defaults shared by LIVE, PAPER and backtest.  Keep the
+# complete rule here so a new account and an older sparse settings file start
+# from the same reviewed strategy instead of inheriting dataclass fallbacks.
+DEFAULT_RULE_PARAMETERS: dict[str, Any] = {
+    "ma_period": 200,
+    "pivot_left": 3,
+    "pivot_right": 3,
+    "pivot_horizontal_pct": 1.0,
+    "ma_zone_pct": 1.0,
+    "confirm_sessions": 3,
+    "volume_confirmation": False,
+    "volume_average_sessions": 20,
+    "high_volume_ratio": 1.5,
+    "low_volume_ratio": 0.8,
+    "buy_ema_fast": 3,
+    "buy_ema_slow": 6,
+    "sell_ema_fast": 3,
+    "sell_ema_slow": 6,
+    "rsi_period": 14,
+    "buy_signal_use_ema": True,
+    "buy_signal_use_rsi": True,
+    "buy_volume_enabled": False,
+    "buy_volume_average_sessions": 20,
+    "buy_volume_min_ratio": 1.0,
+    "sell_signal_use_ema": True,
+    "sell_signal_use_rsi": True,
+    "indicator_exit_policy": "ALERT",
+    "max_positions": 5,
+    "initial_sl_pct": -3.5,
+    "reentry_sl_pct": -2.1,
+    "loss_lock_count": 3,
+    "loss_lock_hours": 24,
+    "no_compound_enabled": True,
+    "force_min_lot_enabled": True,
+    "take_profit_pct": 7.0,
+    "normal_arm_pct": 7.0,
+    "normal_sell_pct": 100.0,
+    "normal_giveback_pct": 2.5,
+    "normal_atr_activation_multiplier": 0.55,
+    "normal_atr_multiplier": 0.8,
+    "normal_atr_activation_enabled": True,
+    "normal_atr_trail_enabled": True,
+    "normal_retention_pct": 90.0,
+    "normal_retention_until_pct": 5.0,
+    "normal_retention_enabled": True,
+    "normal_retention_until_enabled": True,
+    "normal_policy": "AUTO",
+    "normal_dynamic_enabled": True,
+    "normal_t2_reset_enabled": False,
+    "normal_repeat_enabled": False,
+    "whipsaw_enabled": True,
+    "whipsaw_n": 3,
+    "whipsaw_x": 7,
+    "buy_confirmation_enabled": False,
+    "buy_confirmation_minutes": 5,
+    "buy_confirmation_require_ema": True,
+    "buy_confirmation_require_rsi": True,
+    "buy_window_enabled": True,
+    "buy_window_start": "14:00",
+    "exposure": {
+        "ACCUMULATION": 0.60,
+        "DISTRIBUTION": 0.50,
+        "UPTREND": 0.90,
+        "DOWNTREND": 0.10,
+    },
+}
+
+
+def default_rule_parameters() -> dict[str, Any]:
+    """Return an isolated copy so settings normalization cannot mutate defaults."""
+
+    return deepcopy(DEFAULT_RULE_PARAMETERS)
+
+
+def merge_rule_parameters(values: dict[str, Any] | None) -> dict[str, Any]:
+    """Overlay saved values on operating defaults while preserving migrations."""
+
+    configured = dict(values) if isinstance(values, dict) else {}
+    legacy_fast = configured.get("ema_fast")
+    legacy_slow = configured.get("ema_slow")
+    if legacy_fast is not None:
+        configured.setdefault("buy_ema_fast", legacy_fast)
+        configured.setdefault("sell_ema_fast", legacy_fast)
+    if legacy_slow is not None:
+        configured.setdefault("buy_ema_slow", legacy_slow)
+        configured.setdefault("sell_ema_slow", legacy_slow)
+    if (
+        "normal_atr_multiplier" in configured
+        and "normal_atr_activation_multiplier" not in configured
+    ):
+        configured["normal_atr_activation_multiplier"] = configured["normal_atr_multiplier"]
+    configured_exposure = configured.get("exposure")
+    merged = {**default_rule_parameters(), **configured}
+    if isinstance(configured_exposure, dict):
+        merged["exposure"] = {
+            **default_rule_parameters()["exposure"],
+            **configured_exposure,
+        }
+    return merged
 
 
 def _watchlist_from_env() -> list[str]:
@@ -187,7 +288,7 @@ class AppSettings:
     # REALTIME still calculates indicators on the unfinished 1D candle.  This
     # setting only controls how often a new provisional close is accepted.
     realtime_indicator_interval: str = "TICK"
-    rule_parameters: dict[str, Any] = field(default_factory=dict)
+    rule_parameters: dict[str, Any] = field(default_factory=default_rule_parameters)
     corporate_actions: list[dict[str, Any]] = field(default_factory=list)
     custom_holidays: list[str] = field(default_factory=list)
 
@@ -254,7 +355,7 @@ class AppSettings:
         ).strip().upper()
         if self.realtime_indicator_interval not in {"TICK", "1M", "2M", "5M"}:
             self.realtime_indicator_interval = "TICK"
-        self.rule_parameters = dict(self.rule_parameters) if isinstance(self.rule_parameters, dict) else {}
+        self.rule_parameters = merge_rule_parameters(self.rule_parameters)
         self.corporate_actions = [
             dict(item) for item in self.corporate_actions if isinstance(item, dict) and str(item.get("symbol", "")).strip()
         ]
