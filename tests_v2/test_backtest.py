@@ -36,6 +36,12 @@ def _payload(values: list[float], start: datetime) -> dict[str, list[float]]:
     }
 
 
+def _rules_without_buy_window(**overrides) -> dict:
+    """Keep tests unrelated to the 14:00 gate independent of that live default."""
+
+    return {"buy_window_enabled": False, **overrides}
+
+
 def test_historical_store_caches_dnse_daily_data(tmp_path):
     calls: list[str] = []
     start = datetime(2022, 1, 1, tzinfo=VN_TZ)
@@ -105,6 +111,7 @@ def test_backtest_reuses_static_rule_and_fills_next_session(tmp_path):
         em_modes=["IND_EXIT"],
         loss_lock_enabled=True,
         loss_lock_hours=48,
+        rule_parameters=_rules_without_buy_window(),
     ), save=False)
     sides = [event.side for event in result.events]
     assert sides == ["BUY", "SELL"]
@@ -135,7 +142,7 @@ def test_capital_is_split_by_the_slot_count_exactly_as_entered(tmp_path, slots, 
         end_date=(start + timedelta(days=len(values) - 1)).date().isoformat(),
         initial_capital=1_000_000_000,
         fixed_market_phase="UPTREND", fixed_exposure_pct=90,
-        rule_parameters={"max_positions": slots},
+        rule_parameters=_rules_without_buy_window(max_positions=slots),
     ), save=False)
     buys = [event for event in result.events if event.side == "BUY"]
     assert buys, "kịch bản một mã phải vào được lệnh"
@@ -223,6 +230,7 @@ def test_mode2_carry_keeps_pending_order_and_does_not_replay_boundary_day(tmp_pa
         initial_capital=100_000_000,
         fixed_market_phase="UPTREND", fixed_exposure_pct=100,
         em_modes=["IND_EXIT"],
+        rule_parameters=_rules_without_buy_window(),
     ), carry=carry, save=False)
     assert first.events == []
     assert "FPT" in carry["pending"]
@@ -235,6 +243,7 @@ def test_mode2_carry_keeps_pending_order_and_does_not_replay_boundary_day(tmp_pa
         initial_capital=100_000_000,
         fixed_market_phase="UPTREND", fixed_exposure_pct=100,
         em_modes=["IND_EXIT"],
+        rule_parameters=_rules_without_buy_window(),
     ), carry=carry, save=False)
     buys = [event for event in second.events if event.side == "BUY"]
     assert len(buys) == 1
@@ -283,8 +292,10 @@ def test_scenario_takes_indicators_and_exposure_from_shared_settings(tmp_path):
     assert not hasattr(scenario, "buy_ema_fast")
     result = BacktestEngine(store).run_scenario(
         scenario, initial_capital=1_000_000_000,
-        rule_parameters={"sell_ema_fast": 5, "sell_ema_slow": 10,
-                         "exposure": {"UPTREND": 0.9}},
+        rule_parameters=_rules_without_buy_window(
+            sell_ema_fast=5, sell_ema_slow=10,
+            exposure={"UPTREND": 0.9},
+        ),
         save=False,
     )
     assert result.config.rule_parameters["sell_ema_fast"] == 5
@@ -300,6 +311,7 @@ def test_excel_export_gives_each_run_its_own_sheet(tmp_path):
         start_date=(start + timedelta(days=255)).date().isoformat(),
         end_date=(start + timedelta(days=len(values) - 1)).date().isoformat(),
         fixed_market_phase="ACCUMULATION", em_modes=["IND_EXIT"], run_name="MODE 1",
+        rule_parameters=_rules_without_buy_window(),
     ), save=False)
     path = export_run_excel(result, tmp_path / "exports", mode="MODE 1", stamp="0819")
     # The name has to say what is inside instead of a random run id.
@@ -394,6 +406,7 @@ def test_scenario_accepts_runtime_callbacks_without_putting_them_in_config(tmp_p
     result = BacktestEngine(store).run_scenario(
         scenario,
         initial_capital=1_000_000_000,
+        rule_parameters=_rules_without_buy_window(),
         progress=lambda value, _text: progress.append(value),
         cancelled=lambda: False,
         save=False,
@@ -426,8 +439,10 @@ def test_mode2_replay_catches_intraday_daily_ema_cross_and_fills_next_bar(tmp_pa
         ["FPT"], test_day, test_day, initial_capital=100_000_000,
         fixed_market_phase="UPTREND", fixed_exposure_pct=100,
         fill_session="CONTINUOUS", simulation_mode="REPLAY",
-        rule_parameters={"buy_ema_fast": 2, "buy_ema_slow": 3, "rsi_period": 2,
-                         "max_positions": 1, "no_compound_enabled": False},
+        rule_parameters=_rules_without_buy_window(
+            buy_ema_fast=2, buy_ema_slow=3, rsi_period=2,
+            max_positions=1, no_compound_enabled=False,
+        ),
     )
     result = BacktestEngine(store, replay).run(config, save=False)
     buys = [event for event in result.events if event.side == "BUY"]
@@ -449,8 +464,10 @@ def test_mode2_replay_catches_intraday_daily_ema_cross_and_fills_next_bar(tmp_pa
         ["FPT"], test_day, test_day, initial_capital=100_000_000,
         fixed_market_phase="UPTREND", fixed_exposure_pct=100,
         simulation_mode="DAILY",
-        rule_parameters={"buy_ema_fast": 2, "buy_ema_slow": 3, "rsi_period": 2,
-                         "max_positions": 1, "no_compound_enabled": False},
+        rule_parameters=_rules_without_buy_window(
+            buy_ema_fast=2, buy_ema_slow=3, rsi_period=2,
+            max_positions=1, no_compound_enabled=False,
+        ),
     ), save=False)
     assert [event for event in daily.events if event.side == "BUY"] == []
 
@@ -482,12 +499,12 @@ def test_replay_confirms_buy_for_five_exchange_minutes_then_fills_next_bar(tmp_p
         ["FPT"], test_day, test_day, initial_capital=100_000_000,
         fixed_market_phase="UPTREND", fixed_exposure_pct=100,
         fill_session="CONTINUOUS", simulation_mode="REPLAY",
-        rule_parameters={
-            "buy_ema_fast": 2, "buy_ema_slow": 3, "rsi_period": 2,
-            "max_positions": 1, "no_compound_enabled": False,
-            "buy_confirmation_enabled": True, "buy_confirmation_minutes": 5,
-            "buy_confirmation_require_ema": True, "buy_confirmation_require_rsi": True,
-        },
+        rule_parameters=_rules_without_buy_window(
+            buy_ema_fast=2, buy_ema_slow=3, rsi_period=2,
+            max_positions=1, no_compound_enabled=False,
+            buy_confirmation_enabled=True, buy_confirmation_minutes=5,
+            buy_confirmation_require_ema=True, buy_confirmation_require_rsi=True,
+        ),
     ), save=False)
     buy = next(event for event in result.events if event.side == "BUY")
     assert datetime.fromisoformat(buy.signal_time).strftime("%H:%M") == "09:15"
@@ -559,8 +576,10 @@ def test_replay_uses_previous_source_bar_not_previous_daily_close_for_ema(tmp_pa
         initial_capital=100_000_000, fixed_market_phase="UPTREND",
         fixed_exposure_pct=100, fill_session="CONTINUOUS",
         simulation_mode="REPLAY", whipsaw_enabled=False,
-        rule_parameters={"buy_ema_fast": 3, "buy_ema_slow": 6, "rsi_period": 14,
-                         "max_positions": 1, "no_compound_enabled": False},
+        rule_parameters=_rules_without_buy_window(
+            buy_ema_fast=3, buy_ema_slow=6, rsi_period=14,
+            max_positions=1, no_compound_enabled=False,
+        ),
     ), save=False)
     buy = next(event for event in result.events if event.side == "BUY")
     assert datetime.fromisoformat(buy.signal_time).strftime("%H:%M") == "09:16"
@@ -579,6 +598,7 @@ def test_replay_strict_rejects_missing_day_but_hybrid_records_fallback(tmp_path)
     common = dict(
         symbols=["FPT"], start_date=test_day, end_date=test_day,
         fixed_market_phase="UPTREND", initial_capital=100_000_000,
+        rule_parameters=_rules_without_buy_window(),
     )
     with pytest.raises(RuntimeError, match="thiếu dữ liệu FULL"):
         BacktestEngine(store).run(BacktestConfig(**common, simulation_mode="REPLAY"), save=False)
@@ -617,8 +637,10 @@ def test_replay_atc_signal_carries_to_next_eligible_session(tmp_path, fill_sessi
         ["FPT"], signal_day.isoformat(), fill_day.isoformat(),
         initial_capital=100_000_000, fixed_market_phase="UPTREND",
         fixed_exposure_pct=100, fill_session=fill_session, simulation_mode="REPLAY",
-        rule_parameters={"buy_ema_fast": 2, "buy_ema_slow": 3, "rsi_period": 2,
-                         "max_positions": 1, "no_compound_enabled": False},
+        rule_parameters=_rules_without_buy_window(
+            buy_ema_fast=2, buy_ema_slow=3, rsi_period=2,
+            max_positions=1, no_compound_enabled=False,
+        ),
     ), save=False)
     buy = next(event for event in result.events if event.side == "BUY")
     assert datetime.fromisoformat(buy.signal_time).strftime("%Y-%m-%d %H:%M") == f"{signal_day} 14:45"
@@ -665,7 +687,9 @@ def test_replay_rechecks_waiting_t2_sell_before_fill(tmp_path, monkeypatch):
         initial_capital=100_000_000, fixed_market_phase="UPTREND",
         fixed_exposure_pct=100, fill_session="CONTINUOUS",
         simulation_mode="REPLAY", sell_wait_policy="RECHECK", em_modes=[],
-        rule_parameters={"max_positions": 1, "no_compound_enabled": False},
+        rule_parameters=_rules_without_buy_window(
+            max_positions=1, no_compound_enabled=False,
+        ),
     ), save=False)
     assert [event.side for event in result.events] == ["BUY"]
     assert result.trades[0].outcome == "OPEN"
@@ -714,7 +738,9 @@ def test_replay_waiting_t2_sell_fills_no_earlier_than_1300(tmp_path, monkeypatch
         initial_capital=100_000_000, fixed_market_phase="UPTREND",
         fixed_exposure_pct=100, fill_session="CONTINUOUS",
         simulation_mode="REPLAY", sell_wait_policy="KEEP", em_modes=[],
-        rule_parameters={"max_positions": 1, "no_compound_enabled": False},
+        rule_parameters=_rules_without_buy_window(
+            max_positions=1, no_compound_enabled=False,
+        ),
     ), save=False)
     sell = next(event for event in result.events if event.side == "SELL")
     assert datetime.fromisoformat(sell.fill_time).strftime("%Y-%m-%d %H:%M") == f"{days[2]} 13:00"
@@ -749,7 +775,9 @@ def test_daily_never_uses_morning_open_on_t2_for_waiting_sell(tmp_path, monkeypa
         ["FPT"], days[0].isoformat(), days[-1].isoformat(),
         initial_capital=100_000_000, fixed_market_phase="UPTREND",
         fixed_exposure_pct=100, simulation_mode="DAILY", em_modes=[],
-        rule_parameters={"max_positions": 1, "no_compound_enabled": False},
+        rule_parameters=_rules_without_buy_window(
+            max_positions=1, no_compound_enabled=False,
+        ),
     ), save=False)
     sell = next(event for event in result.events if event.side == "SELL")
     # BUY fills on days[1], so days[3] is T+2. DAILY has no afternoon price

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Iterable
 
+from ..config import DEFAULT_RULE_PARAMETERS, merge_rule_parameters
 from ..models import StrategyDecision
 from ..exit_modes import normalize_indicator_exit_policy, normalize_normal_policy
 from ..trading.market import active_trading_minutes, normalize_exchange, validate_buy_window
@@ -277,82 +278,86 @@ def pivot_points(rows: list[dict[str, Any]], left: int = 3, right: int = 3) -> t
             lows.append((index, low))
     return highs, lows
 
-EXPOSURE_DEFAULTS = {
-    "ACCUMULATION": 0.60,
-    "DISTRIBUTION": 0.50,
-    "UPTREND": 0.90,
-    "DOWNTREND": 0.10,
-}
+EXPOSURE_DEFAULTS = dict(DEFAULT_RULE_PARAMETERS["exposure"])
 
 @dataclass
 class StaticRuleParameters:
-    ma_period: int = 200
-    pivot_left: int = 3
-    pivot_right: int = 3
-    pivot_horizontal_pct: float = 1.0
-    ma_zone_pct: float = 1.0
-    confirm_sessions: int = 3
-    volume_confirmation: bool = False
-    volume_average_sessions: int = 20
-    high_volume_ratio: float = 1.5
-    low_volume_ratio: float = 0.8
-    buy_ema_fast: int = 3
-    buy_ema_slow: int = 6
-    sell_ema_fast: int = 3
-    sell_ema_slow: int = 6
-    rsi_period: int = 14
-    buy_signal_use_ema: bool = True
-    buy_signal_use_rsi: bool = True
-    buy_volume_enabled: bool = False
-    buy_volume_average_sessions: int = 20
-    buy_volume_min_ratio: float = 1.0
-    sell_signal_use_ema: bool = True
-    sell_signal_use_rsi: bool = True
+    ma_period: int = int(DEFAULT_RULE_PARAMETERS["ma_period"])
+    pivot_left: int = int(DEFAULT_RULE_PARAMETERS["pivot_left"])
+    pivot_right: int = int(DEFAULT_RULE_PARAMETERS["pivot_right"])
+    pivot_horizontal_pct: float = float(DEFAULT_RULE_PARAMETERS["pivot_horizontal_pct"])
+    ma_zone_pct: float = float(DEFAULT_RULE_PARAMETERS["ma_zone_pct"])
+    confirm_sessions: int = int(DEFAULT_RULE_PARAMETERS["confirm_sessions"])
+    volume_confirmation: bool = bool(DEFAULT_RULE_PARAMETERS["volume_confirmation"])
+    volume_average_sessions: int = int(DEFAULT_RULE_PARAMETERS["volume_average_sessions"])
+    high_volume_ratio: float = float(DEFAULT_RULE_PARAMETERS["high_volume_ratio"])
+    low_volume_ratio: float = float(DEFAULT_RULE_PARAMETERS["low_volume_ratio"])
+    buy_ema_fast: int = int(DEFAULT_RULE_PARAMETERS["buy_ema_fast"])
+    buy_ema_slow: int = int(DEFAULT_RULE_PARAMETERS["buy_ema_slow"])
+    sell_ema_fast: int = int(DEFAULT_RULE_PARAMETERS["sell_ema_fast"])
+    sell_ema_slow: int = int(DEFAULT_RULE_PARAMETERS["sell_ema_slow"])
+    rsi_period: int = int(DEFAULT_RULE_PARAMETERS["rsi_period"])
+    buy_signal_use_ema: bool = bool(DEFAULT_RULE_PARAMETERS["buy_signal_use_ema"])
+    buy_signal_use_rsi: bool = bool(DEFAULT_RULE_PARAMETERS["buy_signal_use_rsi"])
+    buy_volume_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["buy_volume_enabled"])
+    buy_volume_average_sessions: int = int(DEFAULT_RULE_PARAMETERS["buy_volume_average_sessions"])
+    buy_volume_min_ratio: float = float(DEFAULT_RULE_PARAMETERS["buy_volume_min_ratio"])
+    sell_signal_use_ema: bool = bool(DEFAULT_RULE_PARAMETERS["sell_signal_use_ema"])
+    sell_signal_use_rsi: bool = bool(DEFAULT_RULE_PARAMETERS["sell_signal_use_rsi"])
     # OFF is controlled per trade by the IND_EXIT E/M switch. When E is ON,
     # ALERT reports the original VA EMA/RSI exit without placing an order;
     # AUTO preserves the historical 100% exit behaviour.
-    indicator_exit_policy: str = "ALERT"
-    max_positions: int = 5
-    initial_sl_pct: float = -3.5
-    reentry_sl_pct: float = -2.5
-    loss_lock_count: int = 3
-    loss_lock_hours: int = 24
-    no_compound_enabled: bool = True
-    force_min_lot_enabled: bool = True
-    take_profit_pct: float = 7.0
-    normal_arm_pct: float = 7.0
-    normal_sell_pct: float = 100.0
-    normal_giveback_pct: float = 2.0
+    indicator_exit_policy: str = str(DEFAULT_RULE_PARAMETERS["indicator_exit_policy"])
+    max_positions: int = int(DEFAULT_RULE_PARAMETERS["max_positions"])
+    initial_sl_pct: float = float(DEFAULT_RULE_PARAMETERS["initial_sl_pct"])
+    reentry_sl_pct: float = float(DEFAULT_RULE_PARAMETERS["reentry_sl_pct"])
+    loss_lock_count: int = int(DEFAULT_RULE_PARAMETERS["loss_lock_count"])
+    loss_lock_hours: int = int(DEFAULT_RULE_PARAMETERS["loss_lock_hours"])
+    no_compound_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["no_compound_enabled"])
+    force_min_lot_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["force_min_lot_enabled"])
+    take_profit_pct: float = float(DEFAULT_RULE_PARAMETERS["take_profit_pct"])
+    normal_arm_pct: float = float(DEFAULT_RULE_PARAMETERS["normal_arm_pct"])
+    normal_sell_pct: float = float(DEFAULT_RULE_PARAMETERS["normal_sell_pct"])
+    normal_giveback_pct: float = float(DEFAULT_RULE_PARAMETERS["normal_giveback_pct"])
     # DYNAMIC uses Wilder ATR(14) from completed daily candles.  START and
     # TRAIL intentionally have separate multipliers: delaying activation must
     # not also widen the floor once protection is active.
-    normal_atr_activation_multiplier: float = 0.6
-    normal_atr_multiplier: float = 0.6
-    # Explicit switches preserve the historical behaviour for saved accounts.
-    normal_atr_activation_enabled: bool = True
-    normal_atr_trail_enabled: bool = True
-    # Percentage of running MFE retained by the pre-ARM floor.  Zero keeps
-    # the ATR-only V2 formula; positive values enable the V3 profit floor.
-    normal_retention_pct: float = 0.0
-    normal_retention_until_pct: float = 7.0
-    normal_retention_enabled: bool = True
-    normal_retention_until_enabled: bool = True
+    normal_atr_activation_multiplier: float = float(
+        DEFAULT_RULE_PARAMETERS["normal_atr_activation_multiplier"]
+    )
+    normal_atr_multiplier: float = float(DEFAULT_RULE_PARAMETERS["normal_atr_multiplier"])
+    normal_atr_activation_enabled: bool = bool(
+        DEFAULT_RULE_PARAMETERS["normal_atr_activation_enabled"]
+    )
+    normal_atr_trail_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["normal_atr_trail_enabled"])
+    normal_retention_pct: float = float(DEFAULT_RULE_PARAMETERS["normal_retention_pct"])
+    normal_retention_until_pct: float = float(
+        DEFAULT_RULE_PARAMETERS["normal_retention_until_pct"]
+    )
+    normal_retention_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["normal_retention_enabled"])
+    normal_retention_until_enabled: bool = bool(
+        DEFAULT_RULE_PARAMETERS["normal_retention_until_enabled"]
+    )
     # NORMAL remains the compatibility key; operators only see PROTECT.
-    normal_policy: str = "AUTO"
-    normal_dynamic_enabled: bool = False
+    normal_policy: str = str(DEFAULT_RULE_PARAMETERS["normal_policy"])
+    normal_dynamic_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["normal_dynamic_enabled"])
     # Research switch: start pre-ARM DYNAMIC from the first sellable quote.
     # Existing accounts keep their pre-settlement floor unless enabled.
-    normal_t2_reset_enabled: bool = False
-    normal_repeat_enabled: bool = False
-    whipsaw_enabled: bool = True
-    whipsaw_n: int = 3
-    whipsaw_x: int = 7
-    buy_confirmation_enabled: bool = False
-    buy_confirmation_minutes: int = 5
-    buy_confirmation_require_ema: bool = True
-    buy_confirmation_require_rsi: bool = True
-    buy_window_enabled: bool = False
-    buy_window_start: str = "14:00"
+    normal_t2_reset_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["normal_t2_reset_enabled"])
+    normal_repeat_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["normal_repeat_enabled"])
+    whipsaw_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["whipsaw_enabled"])
+    whipsaw_n: int = int(DEFAULT_RULE_PARAMETERS["whipsaw_n"])
+    whipsaw_x: int = int(DEFAULT_RULE_PARAMETERS["whipsaw_x"])
+    buy_confirmation_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["buy_confirmation_enabled"])
+    buy_confirmation_minutes: int = int(DEFAULT_RULE_PARAMETERS["buy_confirmation_minutes"])
+    buy_confirmation_require_ema: bool = bool(
+        DEFAULT_RULE_PARAMETERS["buy_confirmation_require_ema"]
+    )
+    buy_confirmation_require_rsi: bool = bool(
+        DEFAULT_RULE_PARAMETERS["buy_confirmation_require_rsi"]
+    )
+    buy_window_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["buy_window_enabled"])
+    buy_window_start: str = str(DEFAULT_RULE_PARAMETERS["buy_window_start"])
     exposure: dict[str, float] = field(default_factory=lambda: dict(EXPOSURE_DEFAULTS))
 
     def __post_init__(self) -> None:
@@ -381,29 +386,15 @@ class StaticRuleParameters:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> "StaticRuleParameters":
-        raw = dict(raw) if isinstance(raw, dict) else {}
-        legacy_protect_policy = str(raw.get("normal_policy", "") or "").upper() in {
+        configured = dict(raw) if isinstance(raw, dict) else {}
+        legacy_protect_policy = str(configured.get("normal_policy", "") or "").upper() in {
             "CLASSIC", "TSL",
         }
-        # Older account settings used one EMA pair for both directions.  Map
-        # that pair to BUY and SELL so upgrading never changes live behavior.
-        legacy_fast = raw.get("ema_fast", 3)
-        legacy_slow = raw.get("ema_slow", 6)
-        raw = {
-            **raw,
-            "buy_ema_fast": raw.get("buy_ema_fast", legacy_fast),
-            "buy_ema_slow": raw.get("buy_ema_slow", legacy_slow),
-            "sell_ema_fast": raw.get("sell_ema_fast", legacy_fast),
-            "sell_ema_slow": raw.get("sell_ema_slow", legacy_slow),
-            # Before START and TRAIL were split, the one ATR multiplier drove
-            # both.  Preserve that behaviour when loading an older account.
-            "normal_atr_activation_multiplier": raw.get(
-                "normal_atr_activation_multiplier",
-                raw.get("normal_atr_multiplier", 0.6),
-            ),
-        }
+        # One normalization path supplies canonical defaults and preserves
+        # legacy EMA/ATR migrations for sparse account JSON.
+        merged = merge_rule_parameters(configured)
         allowed = {name for name in cls.__dataclass_fields__}
-        values = {key: value for key, value in raw.items() if key in allowed}
+        values = {key: value for key, value in merged.items() if key in allowed}
         if legacy_protect_policy:
             values["normal_policy"] = "AUTO"
             values["normal_dynamic_enabled"] = False

@@ -34,6 +34,11 @@ def test_execution_defaults_are_explicit_and_minimal():
     assert settings.rule_parameters is not config.DEFAULT_RULE_PARAMETERS
 
 
+def test_static_rule_fallback_matches_the_single_canonical_default_source():
+    assert StaticRuleParameters().to_dict() == config.DEFAULT_RULE_PARAMETERS
+    assert StaticRuleParameters.from_dict({}).to_dict() == config.DEFAULT_RULE_PARAMETERS
+
+
 def test_sparse_account_rules_merge_over_complete_operating_defaults():
     settings = AppSettings(rule_parameters={"loss_lock_hours": 12}).normalize()
     assert settings.rule_parameters["loss_lock_hours"] == 12
@@ -490,6 +495,22 @@ def test_signal_history_groups_detailed_rows_by_day_and_hides_restart_duplicates
     assert vix["repeat_count"] == 2
     assert qcg["suggestion"] == "KHÔNG MUA"
     assert qcg["reason"] == "EMA nhiễu, khóa mua"
+
+
+def test_signal_history_does_not_count_observed_sell_as_blocked_buy():
+    from viking_v2.dashboard.windows import signal_rows_by_day
+
+    days = signal_rows_by_day([{
+        "timestamp": "2026-09-22 14:20:00",
+        "symbol": "ANV",
+        "signal": "SELL",
+        "acted": "WAIT",
+        "blocked_by": "NO_NEW_BUY_SIGNAL",
+    }])
+
+    assert days[0]["sell_count"] == 1
+    assert days[0]["allowed_count"] == 0
+    assert days[0]["blocked_count"] == 0
 
 
 def test_signal_log_keeps_candle_dedupe_across_daemon_restart(tmp_path):

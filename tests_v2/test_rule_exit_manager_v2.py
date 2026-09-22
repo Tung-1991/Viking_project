@@ -131,11 +131,15 @@ def test_global_exit_parameters_apply_immediately_without_trade_snapshot():
             "peak_profit_pct": 7.2, "normal_armed": True, "em_modes": ["NORMAL"],
         }}
 
-    rule = StaticRule(StaticRuleParameters(normal_arm_pct=7))
+    rule = StaticRule(StaticRuleParameters(
+        normal_arm_pct=7, normal_giveback_pct=2, normal_dynamic_enabled=False,
+    ))
     assert rule.evaluate(context, at(105.1)).action == "WAIT"
     assert rule.evaluate(context, at(105.0)).action == "SELL"
     # Raising the arm threshold above the peak disarms NORMAL entirely.
-    assert StaticRule(StaticRuleParameters(normal_arm_pct=9)).evaluate(context, at(103.5)).action == "WAIT"
+    assert StaticRule(StaticRuleParameters(
+        normal_arm_pct=9, normal_giveback_pct=2, normal_dynamic_enabled=False,
+    )).evaluate(context, at(103.5)).action == "WAIT"
 
 
 def test_custom_percent_and_price_stop_loss_have_priority():

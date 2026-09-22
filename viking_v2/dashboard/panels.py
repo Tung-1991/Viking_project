@@ -41,6 +41,14 @@ def _dynamic_atr_preview_text(
     return f"DYN · ATR {atr:.2f}% · BÁN {sell:g}%"
 
 
+def _preview_panel_height(viewport_pixels: int, widget_scaling: float) -> int:
+    """Convert Tk's scaled viewport pixels back to CustomTkinter logical units."""
+
+    scaling = max(0.1, float(widget_scaling or 1.0))
+    logical_height = int(round(max(0, viewport_pixels) / scaling))
+    return max(300, logical_height - 4)
+
+
 class DashboardPanelsMixin:
     def _left_panel(self) -> None:
         # GROUP 1 — account snapshot and session state.
@@ -1697,6 +1705,7 @@ class DashboardPanelsMixin:
             self._set_log_unread(target, False)
         if active == "PREVIEW":
             self._refresh_full_order_preview()
+            self.after_idle(self._sync_preview_scrollbar)
         if hasattr(self, "info_tab_selector"):
             self.info_tab_selector.set(active)
 
@@ -1939,10 +1948,14 @@ class DashboardPanelsMixin:
             panel = self.preview_focus_panel
             viewport_height = int(canvas.winfo_height())
             if viewport_height > 50:
-                target_height = max(300, viewport_height - 2)
+                target_height = _preview_panel_height(
+                    viewport_height,
+                    float(panel._get_widget_scaling()),
+                )
                 current_height = int(float(panel.cget("height")))
                 if abs(current_height - target_height) > 1:
                     panel.configure(height=target_height)
+                    canvas.yview_moveto(0)
                     # Recheck after Tk has recalculated the canvas scrollregion.
                     self.after_idle(self._sync_preview_scrollbar)
                     return

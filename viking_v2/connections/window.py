@@ -536,30 +536,11 @@ class ConnectionPopup:
         self.tele_chat = self._field(
             card, 3, "CHAT ID", self.settings.telegram_chat_id,
         )
-        alert_row = ctk.CTkFrame(card, fg_color="transparent")
-        alert_row.grid(row=4, column=0, columnspan=3, sticky="w", padx=12, pady=(6, 3))
-        ctk.CTkLabel(
-            alert_row, text="GOM BUY TRONG", font=("Segoe UI", 11, "bold"), text_color=self.GREEN,
-        ).grid(row=0, column=0, sticky="w", padx=(0, 8))
-        self.tele_batch = ctk.CTkEntry(
-            alert_row, width=58, height=30, justify="center", font=("Segoe UI", 11, "bold")
-        )
-        self.tele_batch.insert(0, str(self.settings.telegram_buy_batch_minutes))
-        self.tele_batch.grid(row=0, column=1, sticky="w")
-        ctk.CTkLabel(
-            alert_row, text="PHÚT", font=("Segoe UI", 11, "bold"), text_color=self.TEXT,
-        ).grid(row=0, column=2, sticky="w", padx=(7, 8))
-        self._hint_icon(
-            alert_row,
-            "Chỉ áp dụng cho BUY đã được BOT xếp lệnh. Tín hiệu cũ đã hết hiệu lực "
-            "trong lúc app tắt sẽ không được gửi lại khi mở app.",
-        ).grid(row=0, column=3, sticky="w")
-
         event_box = ctk.CTkFrame(
             card, fg_color=self.SURFACE_2, corner_radius=8,
             border_width=1, border_color=self.BORDER,
         )
-        event_box.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(5, 3))
+        event_box.grid(row=4, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 3))
         event_box.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             event_box, text="LOẠI THÔNG BÁO", font=("Segoe UI", 10, "bold"),
@@ -570,23 +551,29 @@ class ConnectionPopup:
             text_color=self.MUTED,
         ).grid(row=0, column=1, padx=4, pady=(5, 2))
         ctk.CTkLabel(
-            event_box, text="COOLDOWN", font=("Segoe UI", 10, "bold"),
+            event_box, text="THỜI GIAN", font=("Segoe UI", 10, "bold"),
             text_color=self.MUTED,
         ).grid(row=0, column=2, padx=4, pady=(5, 2))
         self.tele_event_switches: dict[str, tk.BooleanVar] = {}
         self.tele_cooldown_entries: dict[str, ctk.CTkEntry] = {}
+        self.tele_event_time_controls: dict[str, Any] = {}
         rows = (
-            ("buy_queued", "BOT BUY ĐÃ XẾP LỆNH", "Gom theo số phút phía trên; MANUAL không gửi loại tin này.", False),
-            ("closed", "VỊ THẾ BOT ĐÃ ĐÓNG", "Chỉ gửi sau khi bán hết vị thế, tối đa một lần mỗi trade.", False),
-            ("protect", "PROTECT CHẠM MỨC", "AUTO vẫn bán dù OFF. ON = AUTO vừa bán vừa báo; ALERT chỉ báo và không bán.", True),
-            ("indicator_exit", "E · EXIT ALERT", "Báo khi E phát tín hiệu; E ở ALERT không đặt lệnh.", True),
-            ("blocked_buy", "BOT BUY BỊ CHẶN", "Báo lý do như đủ slot, BOT OFF, thiếu vốn; mặc định OFF để tránh nhiễu.", True),
-            ("corporate_action", "CẢNH BÁO CHỐT QUYỀN", "Tối đa một lần cho mỗi mã và ngày giao dịch không hưởng quyền.", True),
-            ("external_sell", "SELL TRÊN DNSE APP", "Báo khi Viking phát hiện và đồng bộ một lệnh bán ngoài app Viking.", True),
+            ("buy_queued", "BOT BUY ĐÃ XẾP LỆNH", "Gom nhiều BUY BOT trong cửa sổ phút này thành một tin; MANUAL không gửi loại tin này.", "batch"),
+            ("closed", "VỊ THẾ BOT ĐÃ ĐÓNG", "Chỉ gửi sau khi bán hết vị thế và chống trùng đúng một lần cho mỗi trade; không dùng cooldown thời gian.", "once"),
+            ("protect", "PROTECT CHẠM MỨC", "AUTO vẫn bán dù OFF. ON = AUTO vừa bán vừa báo; ALERT chỉ báo và không bán.", "cooldown"),
+            ("indicator_exit", "E · EXIT ALERT", "Báo khi E phát tín hiệu; E ở ALERT không đặt lệnh.", "cooldown"),
+            (
+                "blocked_buy", "TÍN HIỆU",
+                "Gửi BUY đã xuất hiện trong bảng TÍN HIỆU nhưng không thành lệnh, "
+                "ví dụ BOT OFF, đủ slot, khóa mua, thiếu vốn hoặc broker từ chối.",
+                "cooldown",
+            ),
+            ("corporate_action", "CẢNH BÁO CHỐT QUYỀN", "Tối đa một lần cho mỗi mã và ngày giao dịch không hưởng quyền.", "cooldown"),
+            ("external_sell", "SELL TRÊN DNSE APP", "Báo khi Viking phát hiện và đồng bộ một lệnh bán ngoài app Viking.", "cooldown"),
         )
         notifications = self.settings.telegram_notifications
         cooldowns = self.settings.telegram_cooldown_minutes
-        for row_index, (key, label, hint, has_cooldown) in enumerate(rows, start=1):
+        for row_index, (key, label, hint, timing_mode) in enumerate(rows, start=1):
             label_box = ctk.CTkFrame(event_box, fg_color="transparent")
             label_box.grid(row=row_index, column=0, sticky="ew", padx=(8, 2), pady=1)
             ctk.CTkLabel(
@@ -600,23 +587,40 @@ class ConnectionPopup:
                 event_box, text="", variable=variable, width=38,
                 progress_color=self.GREEN, button_color=self.TEXT,
             ).grid(row=row_index, column=1, padx=6, pady=1)
-            if has_cooldown:
+            if timing_mode in {"batch", "cooldown"}:
                 entry = ctk.CTkEntry(
                     event_box, width=58, height=26, justify="center",
                     font=("Segoe UI", 11, "bold"),
                 )
-                entry.insert(0, str(cooldowns.get(key, 0)))
+                entry.insert(
+                    0,
+                    str(
+                        self.settings.telegram_buy_batch_minutes
+                        if timing_mode == "batch"
+                        else cooldowns.get(key, 0)
+                    ),
+                )
                 entry.grid(row=row_index, column=2, padx=(4, 2), pady=1)
-                self.tele_cooldown_entries[key] = entry
-                ctk.CTkLabel(
-                    event_box, text="ph", font=("Segoe UI", 9), text_color=self.MUTED,
-                ).grid(row=row_index, column=3, sticky="w", padx=(0, 8))
+                self.tele_event_time_controls[key] = entry
+                if timing_mode == "batch":
+                    self.tele_batch = entry
+                else:
+                    self.tele_cooldown_entries[key] = entry
+                suffix = ctk.CTkLabel(
+                    event_box,
+                    text="ph · gom" if timing_mode == "batch" else "ph",
+                    font=("Segoe UI", 9), text_color=self.MUTED,
+                )
+                suffix.grid(row=row_index, column=3, sticky="w", padx=(0, 8))
             else:
-                ctk.CTkLabel(
-                    event_box, text="—", font=("Segoe UI", 10), text_color=self.MUTED,
-                ).grid(row=row_index, column=2, columnspan=2, padx=6)
+                timing = ctk.CTkLabel(
+                    event_box, text="1 LẦN/TRADE", font=("Segoe UI", 9, "bold"),
+                    text_color=self.MUTED,
+                )
+                timing.grid(row=row_index, column=2, columnspan=2, padx=6)
+                self.tele_event_time_controls[key] = timing
         tele_actions = ctk.CTkFrame(card, fg_color="transparent")
-        tele_actions.grid(row=6, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 3))
+        tele_actions.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 3))
         tele_actions.grid_columnconfigure(0, weight=1)
         self.btn_tele_test = ctk.CTkButton(
             tele_actions, text="GỬI THỬ", width=100, height=32, fg_color="#3A3F47",
@@ -631,7 +635,7 @@ class ConnectionPopup:
             card, text="",
             font=("Segoe UI", 11), text_color=self.MUTED, anchor="w",
         )
-        self.tele_status.grid(row=7, column=0, columnspan=3, sticky="ew", padx=12, pady=(1, 10))
+        self.tele_status.grid(row=6, column=0, columnspan=3, sticky="ew", padx=12, pady=(1, 10))
 
     @staticmethod
     def _account_payload(data: Any) -> tuple[list[dict[str, Any]], str, str]:

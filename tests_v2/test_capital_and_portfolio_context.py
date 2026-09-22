@@ -175,7 +175,7 @@ def test_real_positions_use_board_price_and_aggregate_same_symbol_rows(tmp_path)
     assert context["position"]["current_price"] == 101.5
 
 
-def test_live_weak_exit_only_sees_fully_sellable_position(tmp_path):
+def test_live_position_is_fully_sellable_only_after_all_quantity_settles(tmp_path):
     builder = PortfolioContextBuilder(
         OrderQueue(tmp_path / "orders-sellable.json"),
         TradeStateStore(tmp_path / "trades-sellable.json"),

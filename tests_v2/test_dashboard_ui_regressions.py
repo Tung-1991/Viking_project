@@ -3,7 +3,11 @@ from __future__ import annotations
 import time
 
 from viking_v2.dashboard.actions import DashboardActionsMixin
-from viking_v2.dashboard.panels import DashboardPanelsMixin, _dynamic_atr_preview_text
+from viking_v2.dashboard.panels import (
+    DashboardPanelsMixin,
+    _dynamic_atr_preview_text,
+    _preview_panel_height,
+)
 from viking_v2.dashboard.view import COL_GRAY, COL_GREEN, COL_TEXT, COL_TITLE, COL_WARN
 from viking_v2.dashboard.tables import (
     DashboardTablesMixin,
@@ -42,10 +46,15 @@ def test_dynamic_atr_preview_uses_the_selected_symbols_completed_daily_atr() -> 
     }
     text = _dynamic_atr_preview_text({"normal_atr_pct": 4.118}, params)
     assert text == "DYN · ATR 4.12% · BÁN 100%"
-
     params["normal_atr_activation_enabled"] = False
     params["normal_atr_trail_enabled"] = False
     assert _dynamic_atr_preview_text({"normal_atr_pct": 4.118}, params) == text
+
+
+def test_preview_height_reverses_customtkinter_dpi_scaling() -> None:
+    assert _preview_panel_height(600, 2.0) == 300
+    assert _preview_panel_height(720, 2.0) == 356
+    assert _preview_panel_height(290, 1.0) == 300
 
 
 def test_operator_typography_separates_keys_from_values() -> None:
@@ -340,6 +349,12 @@ def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> 
         assert int(rule_popup.phase2_right_column.grid_info()["column"]) == 1
         assert int(rule_popup.phase2_mode_card.grid_info()["row"]) == 0
         assert int(rule_popup.phase2_confirmation_card.grid_info()["row"]) == 1
+        connection_popup = popups[1][1]
+        assert connection_popup.tele_event_time_controls["buy_queued"] is connection_popup.tele_batch
+        assert connection_popup.tele_event_time_controls["closed"].cget("text") == "1 LẦN/TRADE"
+        assert set(connection_popup.tele_cooldown_entries) == {
+            "protect", "indicator_exit", "blocked_buy", "corporate_action", "external_sell",
+        }
     finally:
         for _label, popup in popups:
             closer = getattr(popup, "close", None) or getattr(popup, "_close", None)

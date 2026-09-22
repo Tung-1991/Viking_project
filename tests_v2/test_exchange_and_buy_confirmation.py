@@ -229,7 +229,10 @@ def test_order_queue_uses_each_symbols_phase(tmp_path):
 def test_minute_confirmation_rejects_non_replay_modes(tmp_path, mode):
     settings = BacktestConfig(
         ["FPT"], "2026-09-03", "2026-09-04", simulation_mode=mode,
-        rule_parameters={"buy_confirmation_enabled": True},
+        rule_parameters={
+            "buy_confirmation_enabled": True,
+            "buy_window_enabled": False,
+        },
     )
     with pytest.raises(RuntimeError, match="chỉ chạy với MODE 2"):
         data = HistoricalDataStore(root=tmp_path / "data", fetcher=lambda *_args: None)

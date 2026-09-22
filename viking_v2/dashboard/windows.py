@@ -179,13 +179,18 @@ def signal_rows_by_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "buy_count": sum(str(row.get("signal", "")).upper() == "BUY" for row in details),
             "sell_count": sum(str(row.get("signal", "")).upper() == "SELL" for row in details),
             "allowed_count": sum(
+                str(row.get("signal", "") or "").upper() == "BUY"
+                and
                 str(row.get("acted", "") or "").upper() != "WAIT"
                 and not str(row.get("blocked_by", "") or "")
                 for row in details
             ),
             "blocked_count": sum(
-                str(row.get("acted", "") or "").upper() == "WAIT"
-                or bool(str(row.get("blocked_by", "") or ""))
+                str(row.get("signal", "") or "").upper() == "BUY"
+                and (
+                    str(row.get("acted", "") or "").upper() == "WAIT"
+                    or bool(str(row.get("blocked_by", "") or ""))
+                )
                 for row in details
             ),
         })
@@ -869,8 +874,11 @@ class HistoryPopup:
             group_values = (
                 "",
                 "", "", "",
-                f"{int(group.get('allowed_count', 0))} CÓ THỂ VÀO",
-                f"{int(group.get('blocked_count', 0))} BỊ CHẶN",
+                f"{int(group.get('allowed_count', 0))} BUY ĐÃ XẾP",
+                (
+                    f"{int(group.get('blocked_count', 0))} BUY BỊ CHẶN"
+                    f" · {int(group.get('sell_count', 0))} SELL"
+                ),
                 "", "", "", "", "", "",
             )
             parent = tree.insert(
