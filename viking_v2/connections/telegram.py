@@ -36,6 +36,11 @@ class TelegramClient:
     def send_message(self, chat_id: str, text: str) -> Any:
         return self._call("sendMessage", {"chat_id": str(chat_id), "text": str(text)[:4096]})
 
+    def safe_error(self, error: object) -> str:
+        """Never expose the bot token through requests' URL-rich errors."""
+        message = str(error or "TELEGRAM_ERROR")
+        return message.replace(self.token, "<REDACTED>") if self.token else message
+
 
 class SignalTelegramService:
     """Outbound-only notifications for BUY and its matching fully closed trade."""
@@ -81,7 +86,9 @@ class SignalTelegramService:
             self.client.send_message(self.chat_id, text)
             return True
         except Exception as exc:
-            logger.warning("Telegram trade notification failed: %s", exc)
+            safe_error = getattr(self.client, "safe_error", None)
+            message = safe_error(exc) if callable(safe_error) else "TELEGRAM_SEND_FAILED"
+            logger.warning("Telegram trade notification failed: %s", message)
             return False
 
     def notify_buy(
@@ -91,6 +98,7 @@ class SignalTelegramService:
         signal_id: str,
         price: float,
         market_state: str,
+        execution_mode: str = "",
     ) -> bool:
         symbol = str(symbol or "").strip().upper()
         signal_id = str(signal_id or "").strip().upper()
@@ -101,6 +109,7 @@ class SignalTelegramService:
             "signal_id": signal_id,
             "price": float(price),
             "market_state": str(market_state or "UNKNOWN").upper(),
+            "execution_mode": str(execution_mode or "").upper(),
         }
         if self.buy_batch_seconds <= 0:
             return self._send(self._format_buys([item]))
@@ -123,7 +132,8 @@ class SignalTelegramService:
             item = items[0]
             return "\n".join(
                 (
-                    f"🟢 BUY · {item['symbol']}",
+                    f"🟢 BUY · {item['symbol']}"
+                    + (f" · {item['execution_mode']}" if item.get("execution_mode") else ""),
                     f"ID: {item['signal_id']}",
                     f"Giá tín hiệu: {self._price(item['price'])}",
                     f"VNINDEX: {item['market_state']}",
@@ -136,7 +146,9 @@ class SignalTelegramService:
             "",
         ]
         lines.extend(
-            f"{item['symbol']} · {self._price(item['price'])} · {item['market_state']} · {item['signal_id']}"
+            f"{item['symbol']} · "
+            + (f"{item.get('execution_mode')} · " if item.get("execution_mode") else "")
+            + f"{self._price(item['price'])} · {item['market_state']} · {item['signal_id']}"
             for item in sorted(items, key=lambda value: str(value.get("symbol", "")))
         )
         return "\n".join(lines)
@@ -166,6 +178,18 @@ class SignalTelegramService:
                     self._buy_timer.start()
         return sent
 
+    def cancel_pending_buys(self) -> int:
+        """Drop an unsent BUY digest when the operator turns that category OFF."""
+        with self._buy_lock:
+            timer = self._buy_timer
+            self._buy_timer = None
+            if timer is not None:
+                timer.cancel()
+            count = len(self._pending_buys)
+            self._pending_buys.clear()
+            self._buy_window_started = None
+            return count
+
     def notify_signal_only(
         self,
         *,
@@ -174,6 +198,7 @@ class SignalTelegramService:
         price: float,
         market_state: str,
         blocked_by: str = "",
+        execution_mode: str = "",
     ) -> bool:
         """A signal the rule produced but the bot could not act on.
 
@@ -186,7 +211,8 @@ class SignalTelegramService:
             return False
         why = str(blocked_by or "").strip()
         lines = [
-            f"⚪ TÍN HIỆU {signal} · {symbol}",
+            f"⚪ TÍN HIỆU {signal} · {symbol}"
+            + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
             f"Giá {self._price(price)} · {str(market_state or 'UNKNOWN').upper()}",
         ]
         if why:
@@ -212,11 +238,14 @@ class SignalTelegramService:
         retention_until_pct: float = 0.0,
         retention_enabled: bool = True,
         retention_until_enabled: bool = True,
+        policy: str = "ALERT",
+        execution_mode: str = "",
     ) -> bool:
-        """Dry-run notification emitted exactly where AUTO would sell."""
+        """Report a PROTECT hit; RULE policy remains the source of action."""
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return False
+        policy = "AUTO" if str(policy or "").upper() == "AUTO" else "ALERT"
         start_label = (
             f"×{float(atr_activation_multiplier):g}"
             if dynamic and atr_activation_enabled else "OFF"
@@ -231,15 +260,45 @@ class SignalTelegramService:
         )
         return self._send(
             "\n".join((
-                f"🟠 PROTECT ALERT · {symbol}",
+                f"🟠 PROTECT HIT · {symbol}"
+                + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
                 f"Giá: {self._price(price)} · MFE {float(mfe_pct):+.2f}%",
                 f"Peak: {self._price(peak_price)} · PROTECT: {self._price(protect_price)}",
                 f"ATR14 (nến ngày đã đóng tới phiên trước): {float(atr_pct):.2f}%",
                 f"START ATR: {start_label} · TRAIL ATR: {trail_label}",
                 keep_label,
-                f"Giả định bán {float(sell_pct):g}% · DYNAMIC {'ON' if dynamic else 'OFF'}",
-                "ALERT chỉ ghi nhận, không đặt lệnh.",
+                f"Khối lượng {float(sell_pct):g}% · DYNAMIC {'ON' if dynamic else 'OFF'}",
+                (
+                    "AUTO · ĐÃ TẠO YÊU CẦU BÁN."
+                    if policy == "AUTO"
+                    else "ALERT chỉ ghi nhận, không đặt lệnh."
+                ),
             ))
+        )
+
+    def notify_external_sell(
+        self,
+        *,
+        symbol: str,
+        quantity: int,
+        price: float,
+        remaining_quantity: int,
+    ) -> bool:
+        symbol = str(symbol or "").strip().upper()
+        if not symbol or int(quantity or 0) <= 0:
+            return False
+        return self._send(
+            "\n".join(
+                (
+                    f"🟠 EXTERNAL SELL · {symbol}",
+                    f"Đã đồng bộ: {int(quantity):,} CP @ {self._price(price)}",
+                    (
+                        f"Vị thế Viking còn: {int(remaining_quantity):,} CP"
+                        if int(remaining_quantity or 0) > 0
+                        else "Vị thế Viking đã đóng hoàn toàn."
+                    ),
+                )
+            )
         )
 
     def notify_indicator_exit_alert(
@@ -256,12 +315,17 @@ class SignalTelegramService:
         rsi_previous: float,
         ema_enabled: bool = True,
         rsi_enabled: bool = True,
+        execution_mode: str = "",
     ) -> bool:
         """Report the original VA indicator exit without placing an order."""
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return False
-        lines = [f"🔴 E ALERT · {symbol}", f"Giá: {self._price(price)}"]
+        lines = [
+            f"🔴 E ALERT · {symbol}"
+            + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
+            f"Giá: {self._price(price)}",
+        ]
         if ema_enabled:
             lines.append(
                 (
@@ -279,7 +343,9 @@ class SignalTelegramService:
         lines.append("ALERT chỉ ghi nhận, không đặt lệnh.")
         return self._send("\n".join(lines))
 
-    def notify_corporate_action(self, *, symbol: str, ex_date: str) -> bool:
+    def notify_corporate_action(
+        self, *, symbol: str, ex_date: str, execution_mode: str = "",
+    ) -> bool:
         symbol = str(symbol or "").strip().upper()
         ex_date = str(ex_date or "").strip()
         if not symbol or not ex_date:
@@ -287,7 +353,8 @@ class SignalTelegramService:
         return self._send(
             "\n".join(
                 (
-                    f"⚠️ CHỐT QUYỀN · {symbol}",
+                    f"⚠️ CHỐT QUYỀN · {symbol}"
+                    + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
                     f"Ngày GDKHQ: {ex_date}",
                     "Đang có vị thế · Viking không tự bán · operator kiểm tra thủ công.",
                 )

@@ -69,7 +69,20 @@ def test_telegram_settings_only_keep_connection_values():
     assert settings.telegram_chat_id == "123"
     assert settings.telegram_token_env == "TELE_BOT_KEY"
     assert settings.telegram_buy_batch_minutes == 30
+    assert settings.telegram_notifications["protect"] is False
+    assert settings.telegram_notifications["indicator_exit"] is True
+    assert settings.telegram_notifications["blocked_buy"] is False
+    assert settings.telegram_cooldown_minutes["indicator_exit"] == 30
     assert not hasattr(settings, "telegram_system_alerts")
+
+
+def test_legacy_telegram_alert_switch_migrates_to_explicit_categories():
+    settings = AppSettings.from_dict({"telegram_signal_alerts": True})
+
+    assert settings.telegram_notifications["protect"] is True
+    assert settings.telegram_notifications["indicator_exit"] is True
+    assert settings.telegram_notifications["blocked_buy"] is True
+    assert not hasattr(settings, "telegram_signal_alerts")
 
 
 def test_official_2026_exchange_holidays_are_always_applied():

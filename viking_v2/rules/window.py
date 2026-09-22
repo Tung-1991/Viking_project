@@ -609,7 +609,7 @@ class RuleSettingsPopup:
 
         normal = self._card(
             body, "PROTECT",
-            "AUTO tự bán; ALERT chỉ log và gửi Telegram nếu công tắc thông báo đang bật.",
+            "AUTO tự bán; ALERT chỉ ghi nhận, không bán. Việc gửi Telegram cấu hình tập trung trong tab KẾT NỐI → TELEGRAM.",
             1, 1,
         )
         self.protect_card = normal
@@ -628,7 +628,8 @@ class RuleSettingsPopup:
         ).pack(side="right")
         self._hint_icon(
             policy_row,
-            "AUTO đặt lệnh khi chạm PROTECT. ALERT dùng cùng rule nhưng không đặt lệnh.",
+            "AUTO đặt lệnh khi chạm PROTECT. ALERT dùng cùng rule nhưng không đặt lệnh. "
+            "Bật PROTECT CHẠM MỨC trong TELEGRAM nếu muốn nhận tin ở một trong hai mode.",
         ).pack(side="right", padx=(0, 6))
         self.normal_arm = self._field(normal, "ARM %", self.params.normal_arm_pct, "MFE đạt mức này thì dùng đầy đủ TRAIL đã đặt.")
         self.normal_giveback = self._field(normal, "TRAIL %", self.params.normal_giveback_pct, "Sau ARM, giá kích hoạt khi giảm X% từ peak.")
@@ -728,7 +729,7 @@ class RuleSettingsPopup:
 
         indicator = self._card(
             left_column, "E · EXIT SELL",
-            "OFF nằm ở công tắc E/M của từng trade. Khi E được bật: ALERT chỉ báo; AUTO bán toàn bộ phần còn lại. "
+            "OFF nằm ở công tắc E/M của từng trade. Khi E được bật: ALERT chỉ ghi nhận; AUTO bán toàn bộ phần còn lại. "
             "EMA SELL chỉnh riêng tại đây; chu kỳ RSI hiện dùng chung với BUY. "
             "Lưu áp dụng cho tài khoản đang chọn, kể cả vị thế đang mở.",
             1, 0,
@@ -750,7 +751,7 @@ class RuleSettingsPopup:
         ).pack(side="right")
         self._hint_icon(
             indicator_policy_row,
-            "ALERT: E vẫn đọc EMA SELL + RSI và gửi Telegram nhưng không đặt lệnh. "
+            "ALERT: E vẫn đọc EMA SELL + RSI nhưng không đặt lệnh. Muốn gửi tin, bật E · EXIT ALERT trong TELEGRAM. "
             "AUTO: E bán 100% phần còn lại. OFF: tắt công tắc E · EXIT SELL trong tab THỰC THI.",
         ).pack(side="right", padx=(0, 6))
         self.sell_ema_fast = self._field(

@@ -714,6 +714,38 @@ class RuleStateStore:
             self.store.write(raw)
             return True
 
+    def claim_alert_with_cooldown(
+        self,
+        key: str,
+        occurrence: str,
+        cooldown_seconds: float = 0.0,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        """Claim one occurrence and suppress new ones during a delivery cooldown."""
+        key, occurrence = str(key or ""), str(occurrence or "")
+        if not key or not occurrence:
+            return False
+        claimed_at = time.time() if now is None else float(now)
+        cooldown_seconds = max(0.0, float(cooldown_seconds or 0.0))
+        with self._lock:
+            raw = self._read()
+            previous = raw["processed_alerts"].get(key)
+            if isinstance(previous, dict):
+                if str(previous.get("occurrence", "")) == occurrence:
+                    return False
+                previous_at = float(previous.get("claimed_at", 0.0) or 0.0)
+                if cooldown_seconds > 0 and claimed_at < previous_at + cooldown_seconds:
+                    return False
+            elif str(previous or "") == occurrence:
+                return False
+            raw["processed_alerts"][key] = {
+                "occurrence": occurrence,
+                "claimed_at": claimed_at,
+            }
+            self.store.write(raw)
+            return True
+
     def open_telegram_signal(
         self,
         symbol: str,

@@ -178,3 +178,47 @@ def test_trade_events_emit_once_on_first_bot_fill_and_final_close(tmp_path):
     assert events[-1] == ("CLOSED", 0)
     assert [event for event, _quantity in events] == ["OPEN", "CLOSED"]
     assert trades.get("BOT-1").avg_exit_price == 74.0
+
+
+def test_external_dnse_sell_is_reconciled_without_stopping_remaining_trade(tmp_path):
+    queue = OrderQueue(tmp_path / "orders-external.json")
+    trades = TradeStateStore(tmp_path / "trades-external.json")
+    rules = RuleStateStore(tmp_path / "rules-external.json")
+    cycle = trades.create("FPT", "REAL", source="BOT", trade_id="BOT-EXT")
+    cycle.opened_at = 1
+    trades.save(cycle)
+    trades.record_buy_fill(cycle.id, 1_000, 100.0)
+    pending_buy = queue.add(OrderIntent.create(
+        "MBB", "BUY", 100, "MARKET", execution_mode="REAL", source="BOT",
+    ))
+    events = []
+    service = ExecutionService(
+        Real([]), object(), queue, JSONLineJournal(tmp_path / "journal-external.jsonl"),
+        trade_state=trades, rule_state=rules,
+        trade_event_callback=lambda event, current, intent: events.append(
+            (event, current.open_quantity, intent.source)
+        ),
+        manual_sell_pause_seconds_provider=lambda: 900,
+    )
+    broker_order = {
+        "orderId": "APP-SELL-1", "symbol": "FPT", "side": "NS",
+        "orderStatus": "Filled", "fillQuantity": 400,
+        "averagePrice": 105_000, "fee": 10_000, "tax": 5_000,
+        "remark": "",
+    }
+
+    reconciled = service.reconcile_external_sells(
+        [{"symbol": "FPT", "openQuantity": 600}], [broker_order],
+    )
+
+    assert reconciled[0]["status"] == "RECONCILED"
+    assert reconciled[0]["remaining_quantity"] == 600
+    current = trades.get("BOT-EXT")
+    assert current.open_quantity == 600
+    assert "EXTERNAL_SELL" in current.exit_events
+    assert events == [("EXTERNAL_SELL", 600, "EXTERNAL_DNSE")]
+    assert queue.get(pending_buy.id).status == "CANCELLED"
+    assert rules.entry_pause("REAL")["active"] is True
+    assert service.reconcile_external_sells(
+        [{"symbol": "FPT", "openQuantity": 600}], [broker_order],
+    ) == []

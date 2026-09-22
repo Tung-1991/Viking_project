@@ -518,7 +518,7 @@ class ConnectionPopup:
         body = self._body(frame)
         card = self._card(
             body, "THÔNG BÁO TELEGRAM",
-            "BUY đã xếp slot và vị thế CLOSED luôn theo luồng chính; tín hiệu bị chặn có công tắc riêng.",
+            "Chỉ điều khiển gửi tin; không thay đổi AUTO/ALERT hay hành vi đặt lệnh.",
         )
         card.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
         card.grid_columnconfigure(1, weight=1)
@@ -536,17 +536,6 @@ class ConnectionPopup:
         self.tele_chat = self._field(
             card, 3, "CHAT ID", self.settings.telegram_chat_id,
         )
-        self.tele_signal_alerts = tk.BooleanVar(value=self.settings.telegram_signal_alerts)
-        ctk.CTkSwitch(
-            card, text="BÁO TÍN HIỆU KHÔNG THÀNH LỆNH", variable=self.tele_signal_alerts,
-            font=("Segoe UI", 12, "bold"), text_color=self.TEXT, progress_color=self.GREEN,
-        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=12, pady=(8, 4))
-        self._hint_icon(
-            card,
-            "Bật để Telegram báo một lần, kèm lý do, khi tín hiệu BUY hợp lệ "
-            "nhưng hệ thống không thể tạo lệnh.",
-        ).grid(row=5, column=2, sticky="e", padx=12, pady=(8, 4))
-
         alert_row = ctk.CTkFrame(card, fg_color="transparent")
         alert_row.grid(row=4, column=0, columnspan=3, sticky="w", padx=12, pady=(6, 3))
         ctk.CTkLabel(
@@ -562,9 +551,70 @@ class ConnectionPopup:
         ).grid(row=0, column=2, sticky="w", padx=(7, 8))
         self._hint_icon(
             alert_row,
-            "Các BUY trùng mã trong khoảng này được gom. CLOSED chỉ gửi một lần mỗi trade; "
-            "thông báo chốt quyền chỉ gửi một lần cho mỗi mã và ngày GDKHQ.",
+            "Chỉ áp dụng cho BUY đã được BOT xếp lệnh. Tín hiệu cũ đã hết hiệu lực "
+            "trong lúc app tắt sẽ không được gửi lại khi mở app.",
         ).grid(row=0, column=3, sticky="w")
+
+        event_box = ctk.CTkFrame(
+            card, fg_color=self.SURFACE_2, corner_radius=8,
+            border_width=1, border_color=self.BORDER,
+        )
+        event_box.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(5, 3))
+        event_box.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            event_box, text="LOẠI THÔNG BÁO", font=("Segoe UI", 10, "bold"),
+            text_color=self.MUTED, anchor="w",
+        ).grid(row=0, column=0, sticky="ew", padx=(10, 4), pady=(5, 2))
+        ctk.CTkLabel(
+            event_box, text="GỬI", font=("Segoe UI", 10, "bold"),
+            text_color=self.MUTED,
+        ).grid(row=0, column=1, padx=4, pady=(5, 2))
+        ctk.CTkLabel(
+            event_box, text="COOLDOWN", font=("Segoe UI", 10, "bold"),
+            text_color=self.MUTED,
+        ).grid(row=0, column=2, padx=4, pady=(5, 2))
+        self.tele_event_switches: dict[str, tk.BooleanVar] = {}
+        self.tele_cooldown_entries: dict[str, ctk.CTkEntry] = {}
+        rows = (
+            ("buy_queued", "BOT BUY ĐÃ XẾP LỆNH", "Gom theo số phút phía trên; MANUAL không gửi loại tin này.", False),
+            ("closed", "VỊ THẾ BOT ĐÃ ĐÓNG", "Chỉ gửi sau khi bán hết vị thế, tối đa một lần mỗi trade.", False),
+            ("protect", "PROTECT CHẠM MỨC", "AUTO vẫn bán dù OFF. ON = AUTO vừa bán vừa báo; ALERT chỉ báo và không bán.", True),
+            ("indicator_exit", "E · EXIT ALERT", "Báo khi E phát tín hiệu; E ở ALERT không đặt lệnh.", True),
+            ("blocked_buy", "BOT BUY BỊ CHẶN", "Báo lý do như đủ slot, BOT OFF, thiếu vốn; mặc định OFF để tránh nhiễu.", True),
+            ("corporate_action", "CẢNH BÁO CHỐT QUYỀN", "Tối đa một lần cho mỗi mã và ngày giao dịch không hưởng quyền.", True),
+            ("external_sell", "SELL TRÊN DNSE APP", "Báo khi Viking phát hiện và đồng bộ một lệnh bán ngoài app Viking.", True),
+        )
+        notifications = self.settings.telegram_notifications
+        cooldowns = self.settings.telegram_cooldown_minutes
+        for row_index, (key, label, hint, has_cooldown) in enumerate(rows, start=1):
+            label_box = ctk.CTkFrame(event_box, fg_color="transparent")
+            label_box.grid(row=row_index, column=0, sticky="ew", padx=(8, 2), pady=1)
+            ctk.CTkLabel(
+                label_box, text=label, font=("Segoe UI", 11, "bold"),
+                text_color=self.TEXT, anchor="w",
+            ).pack(side="left")
+            self._hint_icon(label_box, hint).pack(side="left", padx=(5, 0))
+            variable = tk.BooleanVar(value=bool(notifications.get(key, False)))
+            self.tele_event_switches[key] = variable
+            ctk.CTkSwitch(
+                event_box, text="", variable=variable, width=38,
+                progress_color=self.GREEN, button_color=self.TEXT,
+            ).grid(row=row_index, column=1, padx=6, pady=1)
+            if has_cooldown:
+                entry = ctk.CTkEntry(
+                    event_box, width=58, height=26, justify="center",
+                    font=("Segoe UI", 11, "bold"),
+                )
+                entry.insert(0, str(cooldowns.get(key, 0)))
+                entry.grid(row=row_index, column=2, padx=(4, 2), pady=1)
+                self.tele_cooldown_entries[key] = entry
+                ctk.CTkLabel(
+                    event_box, text="ph", font=("Segoe UI", 9), text_color=self.MUTED,
+                ).grid(row=row_index, column=3, sticky="w", padx=(0, 8))
+            else:
+                ctk.CTkLabel(
+                    event_box, text="—", font=("Segoe UI", 10), text_color=self.MUTED,
+                ).grid(row=row_index, column=2, columnspan=2, padx=6)
         tele_actions = ctk.CTkFrame(card, fg_color="transparent")
         tele_actions.grid(row=6, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 3))
         tele_actions.grid_columnconfigure(0, weight=1)
@@ -937,8 +987,27 @@ class ConnectionPopup:
         if not 1 <= batch_minutes <= 120:
             self.tele_status.configure(text="GOM BUY TỪ 1 ĐẾN 120 PHÚT", text_color=self.RED)
             return
+        cooldowns: dict[str, int] = {}
+        for key, entry in self.tele_cooldown_entries.items():
+            try:
+                value = int(float(entry.get().strip()))
+            except (TypeError, ValueError):
+                self.tele_status.configure(
+                    text="COOLDOWN PHẢI LÀ SỐ PHÚT", text_color=self.RED,
+                )
+                return
+            if not 0 <= value <= 10080:
+                self.tele_status.configure(
+                    text="COOLDOWN TỪ 0 ĐẾN 10080 PHÚT", text_color=self.RED,
+                )
+                return
+            cooldowns[key] = value
         self.settings.telegram_buy_batch_minutes = batch_minutes
-        self.settings.telegram_signal_alerts = bool(self.tele_signal_alerts.get())
+        self.settings.telegram_notifications = {
+            key: bool(variable.get())
+            for key, variable in self.tele_event_switches.items()
+        }
+        self.settings.telegram_cooldown_minutes = cooldowns
         update_env({self.settings.telegram_token_env: token})
         save_settings(self.settings, self.account_id)
         self.on_saved()
@@ -953,10 +1022,11 @@ class ConnectionPopup:
 
         def worker() -> None:
             error = ""
+            client = TelegramClient(token)
             try:
-                TelegramClient(token).send_message(chat_id, "Viking V2 · Telegram BUY/CLOSED hoạt động.")
+                client.send_message(chat_id, "Viking V2 · Telegram BUY/CLOSED hoạt động.")
             except Exception as exc:  # network/API detail is useful to the operator
-                error = str(exc)
+                error = client.safe_error(exc)
             self._post_ui(lambda: self._finish_telegram_test(error))
 
         threading.Thread(target=worker, name="viking-telegram-test", daemon=True).start()

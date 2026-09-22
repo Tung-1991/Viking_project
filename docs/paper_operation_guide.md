@@ -19,10 +19,10 @@ Tài liệu này mô tả code hiện hành. Báo cáo `backtest_4_modes_2026091
 ## E · EXIT SELL
 
 - Rule E gốc: EMA SELL nhanh cắt xuống EMA SELL chậm và RSI14 giảm. EMA SELL mặc định 3/6, tách khỏi EMA BUY dù hiện cùng giá trị.
-- `ALERT` là mặc định mới: vẫn tính E, ghi signal log, hiện trên dashboard và gửi Telegram khi thông báo tín hiệu đang bật; không tạo pending sell và không đặt lệnh.
+- `ALERT` là mặc định mới: vẫn tính E, ghi signal log và hiện trên dashboard; chỉ gửi Telegram khi `E · EXIT ALERT` được bật trong bảng Telegram; không tạo pending sell và không đặt lệnh.
 - `AUTO`: cùng tín hiệu E nhưng bán 100% phần còn lại. `OFF`: trade không có `IND_EXIT`, backend bỏ hẳn E cho trade đó.
 - Cùng lúc E ALERT và PROTECT AUTO chạm ngưỡng, PROTECT vẫn được quyền bán; cảnh báo E không được chặn SL, TP hoặc PROTECT.
-- Telegram chống trùng theo `PAPER/REAL + mã + cây nến tín hiệu`. Nội dung ghi EMA SELL, RSI trước/sau và câu xác nhận không đặt lệnh.
+- Telegram chống trùng theo `PAPER/REAL + mã + lần tín hiệu`; cooldown E mặc định 30 phút. Nội dung ghi EMA SELL, RSI trước/sau và câu xác nhận không đặt lệnh.
 - Không còn E sớm sau T+2 trong UI hoặc backend.
 
 ## Hai tùy chọn vận hành mới
@@ -58,4 +58,18 @@ Khi cổ về, bot kiểm tra lại điều kiện thoát theo giá và tín hi�
 
 ## Telegram
 
-Màn hình chính chỉ giữ các control vận hành. Cơ chế gom BUY, chống trùng CLOSED và chốt quyền được giải thích trong nút `?`; không hiển thị các câu mô tả dài trực tiếp trên UI.
+Mọi cấu hình gửi tin nằm tại `KẾT NỐI → TELEGRAM`, dùng chung cho PAPER và REAL:
+
+- `BOT BUY ĐÃ XẾP LỆNH`: gom theo số phút cấu hình; không gửi MANUAL.
+- `VỊ THẾ BOT ĐÃ ĐÓNG`: gửi một lần sau khi đã bán hết.
+- `PROTECT CHẠM MỨC`: chỉ điều khiển tin. AUTO vẫn bán khi OFF; ON tạo “vừa bán vừa báo”. ALERT không bán.
+- `E · EXIT ALERT`, `BOT BUY BỊ CHẶN`, `CẢNH BÁO CHỐT QUYỀN` và `SELL TRÊN DNSE APP`: bật/tắt và đặt cooldown riêng.
+
+Mở lại app không phát lại tín hiệu đã hết hiệu lực. BUY đang còn hợp lệ được quan sát như tín hiệu hiện tại và chống trùng bằng state lưu trên ổ đĩa.
+
+## Slot BOT và lệnh ngoài Viking
+
+- `max_positions=5` chỉ là quota của BOT. MANUAL/EXTERNAL không chiếm slot BOT nhưng vẫn trừ tiền và room danh mục.
+- Dashboard hiển thị riêng `BOT x/5`, `MANUAL y` và tổng số mã thực tế.
+- Ưu tiên BUY qua Viking. Lượng mua thêm trực tiếp trên DNSE được gắn `EXTERNAL_DNSE`; trade Viking cùng mã vẫn tiếp tục và chỉ quản lý khối lượng của chính nó.
+- SELL khẩn cấp qua DNSE app được Viking đối soát từ position và lệnh khớp ngoài remark `V2:`. Khớp rõ ràng thì cập nhật trade, khóa BUY 15 phút và báo Telegram theo setting; dữ liệu mơ hồ chỉ cảnh báo, không tự đoán.

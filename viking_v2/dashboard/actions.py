@@ -1092,7 +1092,14 @@ class DashboardActionsMixin:
             int(self.settings.telegram_buy_batch_minutes),
         )
         if not force and signature == self._telegram_signature:
+            if self.telegram and not DashboardActionsMixin._telegram_notification_enabled(
+                self, "buy_queued",
+            ):
+                self.telegram.cancel_pending_buys()
             return
+        previous = self.telegram
+        if previous:
+            previous.cancel_pending_buys()
         self.telegram = None
         self._telegram_signature = signature
         enabled, chat_id, token, batch_minutes = signature
@@ -1103,6 +1110,27 @@ class DashboardActionsMixin:
                 buy_batch_minutes=batch_minutes,
             )
             self._log(f"Telegram gom BUY {batch_minutes} phút; CLOSED gửi ngay đã áp dụng.")
+
+    def _telegram_notification_enabled(self, key: str) -> bool:
+        values = getattr(self.settings, "telegram_notifications", {})
+        return bool(values.get(str(key or ""), False)) if isinstance(values, dict) else False
+
+    def _telegram_cooldown_seconds(self, key: str) -> float:
+        values = getattr(self.settings, "telegram_cooldown_minutes", {})
+        if not isinstance(values, dict):
+            return 0.0
+        try:
+            return max(0.0, float(values.get(str(key or ""), 0.0) or 0.0) * 60.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _claim_telegram_event(self, key: str, symbol: str, occurrence: str) -> bool:
+        category = str(key or "").split("|", 1)[0]
+        return self.rule_state.claim_alert_with_cooldown(
+            f"TELEGRAM|{str(key or '').upper()}|{str(symbol or '').upper()}",
+            str(occurrence or ""),
+            DashboardActionsMixin._telegram_cooldown_seconds(self, category),
+        )
 
     def _notify_rule_signal(
         self,
@@ -1131,14 +1159,29 @@ class DashboardActionsMixin:
         price = _price_unit(raw_price)
         signal = str(decision.signal or "").upper()
 
-        if str(decision.event or "").upper() == "PROTECT_ALERT":
-            if not service or not self.settings.telegram_signal_alerts:
+        event = str(decision.event or "").upper()
+        triggered_events = {
+            str(value or "").upper()
+            for value in (details.get("triggered_events") or [])
+        }
+        protect_hit = event == "PROTECT_ALERT" or (
+            decision.action == "SELL"
+            and (
+                "NORMAL_PROTECTION" in triggered_events
+                or "NORMAL_PROTECTION" in str(decision.reason or "").upper().split("+")
+            )
+        )
+        if protect_hit:
+            if not service or not DashboardActionsMixin._telegram_notification_enabled(self, "protect"):
                 return None
-            occurrence = str(details.get("protect_occurrence", "") or "")
-            if not self.rule_state.claim_alert(
-                f"PROTECT_ALERT|{str(execution_mode or '').upper()}|{symbol}",
-                occurrence,
-            ):
+            occurrence = str(
+                details.get("protect_occurrence")
+                or details.get("signal_cycle")
+                or details.get("candle_key")
+                or f"{decision.timestamp:.6f}"
+            )
+            event_key = f"protect|{str(execution_mode or '').upper()}"
+            if not DashboardActionsMixin._claim_telegram_event(self, event_key, symbol, occurrence):
                 return None
             threading.Thread(
                 target=service.notify_protect_alert,
@@ -1167,21 +1210,21 @@ class DashboardActionsMixin:
                     ),
                     "retention_enabled": bool(details.get("normal_retention_enabled", True)),
                     "retention_until_enabled": bool(details.get("normal_retention_until_enabled", True)),
+                    "policy": "AUTO" if decision.action == "SELL" else "ALERT",
+                    "execution_mode": execution_mode,
                 },
                 daemon=True,
             ).start()
             return None
 
-        if str(decision.event or "").upper() == "INDICATOR_EXIT_ALERT":
-            if not service or not self.settings.telegram_signal_alerts:
+        if event == "INDICATOR_EXIT_ALERT":
+            if not service or not DashboardActionsMixin._telegram_notification_enabled(self, "indicator_exit"):
                 return None
             occurrence = str(
                 details.get("signal_cycle") or details.get("candle_key", "") or ""
             )
-            if not self.rule_state.claim_alert(
-                f"INDICATOR_EXIT_ALERT|{str(execution_mode or '').upper()}|{symbol}",
-                occurrence,
-            ):
+            event_key = f"indicator_exit|{str(execution_mode or '').upper()}"
+            if not DashboardActionsMixin._claim_telegram_event(self, event_key, symbol, occurrence):
                 return None
             indicators = (
                 details.get("indicators")
@@ -1207,6 +1250,7 @@ class DashboardActionsMixin:
                     ),
                     "ema_enabled": bool(details.get("indicator_exit_use_ema", True)),
                     "rsi_enabled": bool(details.get("indicator_exit_use_rsi", True)),
+                    "execution_mode": execution_mode,
                 },
                 daemon=True,
             ).start()
@@ -1228,6 +1272,11 @@ class DashboardActionsMixin:
                 service, symbol, signal, decision, price, execution_mode,
             )
             return None
+        if not (
+            DashboardActionsMixin._telegram_notification_enabled(self, "buy_queued")
+            or DashboardActionsMixin._telegram_notification_enabled(self, "closed")
+        ):
+            return None
         record = self.rule_state.open_telegram_signal(
             symbol,
             candle_key,
@@ -1237,16 +1286,18 @@ class DashboardActionsMixin:
         )
         if not record:
             return self.rule_state.active_telegram_signal(symbol)
-        threading.Thread(
-            target=service.notify_buy,
-            kwargs={
-                "symbol": symbol,
-                "signal_id": str(record.get("id", "")),
-                "price": price,
-                "market_state": decision.market_state,
-            },
-            daemon=True,
-        ).start()
+        if DashboardActionsMixin._telegram_notification_enabled(self, "buy_queued"):
+            threading.Thread(
+                target=service.notify_buy,
+                kwargs={
+                    "symbol": symbol,
+                    "signal_id": str(record.get("id", "")),
+                    "price": price,
+                    "market_state": decision.market_state,
+                    "execution_mode": execution_mode,
+                },
+                daemon=True,
+            ).start()
         return record
 
     def _notify_signal_only(
@@ -1254,7 +1305,7 @@ class DashboardActionsMixin:
         execution_mode: str,
     ) -> None:
         """Tell Telegram about signals the bot could not act on, once each."""
-        if not self.settings.telegram_signal_alerts or signal not in {"BUY", "SELL"}:
+        if not DashboardActionsMixin._telegram_notification_enabled(self, "blocked_buy") or signal != "BUY":
             return
         details = decision.details if isinstance(decision.details, dict) else {}
         occurrence = "|".join(
@@ -1264,10 +1315,10 @@ class DashboardActionsMixin:
                 str(decision.reason or ""),
             )
         )
-        alert_key = (
-            f"TELEGRAM_SIGNAL|{str(execution_mode or '').upper()}|{symbol}"
-        )
-        if not self.rule_state.claim_alert(alert_key, occurrence):
+        if not DashboardActionsMixin._claim_telegram_event(
+            self,
+            f"blocked_buy|{str(execution_mode or '').upper()}", symbol, occurrence,
+        ):
             return
         threading.Thread(
             target=service.notify_signal_only,
@@ -1277,6 +1328,7 @@ class DashboardActionsMixin:
                 "price": price,
                 "market_state": decision.market_state,
                 "blocked_by": decision.reason,
+                "execution_mode": execution_mode,
             },
             daemon=True,
         ).start()
@@ -1288,10 +1340,37 @@ class DashboardActionsMixin:
         intent: OrderIntent,
     ) -> None:
         """Send the second Telegram message only after the position is closed."""
-        if str(event or "").upper() != "CLOSED" or cycle.source != "BOT":
+        event = str(event or "").upper()
+        if event == "EXTERNAL_SELL":
+            occurrence = str(intent.broker_order_id or intent.id)
+            if (
+                self.telegram
+                and DashboardActionsMixin._telegram_notification_enabled(self, "external_sell")
+                and DashboardActionsMixin._claim_telegram_event(
+                    self,
+                    "external_sell|REAL", cycle.symbol, occurrence,
+                )
+            ):
+                threading.Thread(
+                    target=self.telegram.notify_external_sell,
+                    kwargs={
+                        "symbol": cycle.symbol,
+                        "quantity": intent.filled_quantity or intent.quantity,
+                        "price": float(intent.details.get("fill_price", cycle.avg_exit_price) or 0.0),
+                        "remaining_quantity": cycle.open_quantity,
+                    },
+                    daemon=True,
+                ).start()
+            if cycle.status != "CLOSED" or cycle.source != "BOT":
+                return
+        elif event != "CLOSED" or cycle.source != "BOT":
             return
         record = self.rule_state.claim_closed_telegram_signal(cycle.symbol, cycle.id)
-        if not record or not self.telegram:
+        if (
+            not record
+            or not self.telegram
+            or not DashboardActionsMixin._telegram_notification_enabled(self, "closed")
+        ):
             return
         threading.Thread(
             target=self.telegram.notify_closed,
@@ -1383,8 +1462,12 @@ class DashboardActionsMixin:
         # cycle.  Leaving trade_id blank made the broker position disappear
         # while the backend cycle stayed OPEN, which could corrupt re-entry,
         # loss-streak and position-management state.
-        active_cycle = self.trade_state.active_for(symbol, mode) if side == "SELL" else None
-        trade_id = uuid.uuid4().hex if side == "BUY" else (active_cycle.id if active_cycle else "")
+        active_cycle = self.trade_state.active_for(symbol, mode)
+        trade_id = (
+            active_cycle.id
+            if active_cycle
+            else uuid.uuid4().hex if side == "BUY" else ""
+        )
         exchange = self._symbol_exchange(symbol)
         if not exchange:
             messagebox.showerror("Order", f"Chưa xác định sàn của {symbol}.", parent=self)
@@ -2127,7 +2210,7 @@ class DashboardActionsMixin:
                 ):
                     return
                 cycle = self.trade_state.create(
-                    symbol, mode, source="EXTERNAL", trade_id=uuid.uuid4().hex,
+                    symbol, mode, source="EXTERNAL_DNSE", trade_id=uuid.uuid4().hex,
                     em_modes=sorted(selected), sl_mode=sl_mode, sl_value=sl_value,
                     tp_mode=tp_mode, tp_value=tp_value,
                 )
@@ -2448,6 +2531,43 @@ class DashboardActionsMixin:
             stream=mode,
         )
 
+    def _slot_sources(self, mode: str, positions: list[dict[str, Any]]) -> tuple[set[str], set[str]]:
+        """Return BOT slot symbols and separately visible operator symbols."""
+        normalized_mode = str(mode or "PAPER").upper()
+        trade_state = getattr(self, "trade_state", None)
+        open_cycles = [
+            cycle for cycle in (trade_state.list_cycles() if trade_state else [])
+            if cycle.status == "OPEN" and cycle.execution_mode == normalized_mode
+            and cycle.open_quantity > 0
+        ]
+        bot_symbols = {
+            cycle.symbol for cycle in open_cycles if cycle.source == "BOT"
+        }
+        operator_symbols = {
+            cycle.symbol for cycle in open_cycles if cycle.source != "BOT"
+        }
+        cycles_by_symbol = {cycle.symbol: cycle for cycle in open_cycles}
+        for row in positions:
+            symbol = str(row.get("symbol", "") or "").strip().upper()
+            try:
+                broker_quantity = int(float(
+                    row.get("openQuantity", row.get("quantity", 0)) or 0
+                ))
+            except (TypeError, ValueError):
+                broker_quantity = 0
+            if not symbol or broker_quantity <= 0:
+                continue
+            source = str(row.get("source", "") or "").strip().upper()
+            cycle = cycles_by_symbol.get(symbol)
+            if cycle is None:
+                (bot_symbols if source == "BOT" else operator_symbols).add(symbol)
+                continue
+            if source and source != "BOT":
+                operator_symbols.add(symbol)
+            if cycle.source == "BOT" and broker_quantity > cycle.open_quantity:
+                operator_symbols.add(symbol)
+        return bot_symbols, operator_symbols
+
     def _consume_bot_decisions(self, status: dict[str, Any], daemon_status: str) -> None:
         if daemon_status != "RUNNING":
             return
@@ -2508,14 +2628,22 @@ class DashboardActionsMixin:
         positions = self.snapshots.get(mode, ({}, [], []))[1]
         max_positions = int((self.settings.rule_parameters or {}).get("max_positions", 5) or 5)
         current_intents = self.queue.list_all()
-        allocator = BuySlotAllocator.from_runtime(max_positions, positions, current_intents, mode)
+        bot_symbols, operator_symbols = self._slot_sources(mode, positions)
+        allocator = BuySlotAllocator.from_runtime(
+            max_positions, positions, current_intents, mode,
+            bot_symbols=bot_symbols,
+        )
         self._slot_summary = {
             "used": allocator.used, "max": allocator.max_positions,
+            "bot_open": len(bot_symbols),
             "pending": sum(
                 1 for item in current_intents
-                if item.side == "BUY" and item.execution_mode == mode
+                if item.side == "BUY" and item.source == "BOT"
+                and item.execution_mode == mode
                 and str(item.status).upper() not in {"FILLED", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"}
             ),
+            "manual": len(operator_symbols),
+            "total": len(bot_symbols | operator_symbols),
         }
         ticks = status.get("ticks") if isinstance(status.get("ticks"), dict) else {}
 
@@ -2611,7 +2739,8 @@ class DashboardActionsMixin:
             used=allocator.used,
             pending=sum(
                 1 for item in final_intents
-                if item.side == "BUY" and item.execution_mode == mode
+                if item.side == "BUY" and item.source == "BOT"
+                and item.execution_mode == mode
                 and str(item.status).upper()
                 not in {"FILLED", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"}
             ),
@@ -2649,10 +2778,19 @@ class DashboardActionsMixin:
             f"Ngày GDKHQ {occurrence}; operator kiểm tra và xử lý thủ công."
         )
         self._log(message, "bot")
-        if self.telegram:
+        if self.telegram and DashboardActionsMixin._telegram_notification_enabled(self, "corporate_action"):
+            if not DashboardActionsMixin._claim_telegram_event(
+                self,
+                f"corporate_action|{execution_mode}", symbol, occurrence,
+            ):
+                return
             threading.Thread(
                 target=self.telegram.notify_corporate_action,
-                kwargs={"symbol": str(symbol or "").upper(), "ex_date": occurrence},
+                kwargs={
+                    "symbol": str(symbol or "").upper(),
+                    "ex_date": occurrence,
+                    "execution_mode": execution_mode,
+                },
                 daemon=True,
             ).start()
 
@@ -2688,6 +2826,7 @@ class DashboardActionsMixin:
             positions,
             self.queue.list_all(),
             mode,
+            bot_symbols=self._slot_sources(mode, positions)[0],
         )
         tick = self._shared_tick(intent.symbol) or {}
         self._record_signal_decision(decision, tick, mode, allocator)
@@ -2766,20 +2905,28 @@ class DashboardActionsMixin:
             return
         self._snapshot_busy = True
 
-        def work() -> dict[str, tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]]:
+        def work() -> tuple[
+            dict[str, tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]],
+            list[dict[str, Any]],
+        ]:
             values = {"PAPER": self.execution.account_snapshot("PAPER")}
+            external_sells: list[dict[str, Any]] = []
             if self.real.configured():
                 values["REAL"] = self.execution.account_snapshot("REAL")
-            return values
+                external_sells = self.execution.reconcile_external_sells(
+                    values["REAL"][1], values["REAL"][2],
+                )
+            return values, external_sells
 
         future = self._io_executor.submit(work)
 
         def completed(result: Any) -> None:
             try:
-                values = result.result()
+                values, external_sells = result.result()
                 error = ""
             except Exception as exc:
                 values = {}
+                external_sells = []
                 error = str(exc)
 
             def apply() -> None:
@@ -2791,6 +2938,26 @@ class DashboardActionsMixin:
                 self.snapshots.update(values)
                 if "PAPER" in values:
                     self.histories["PAPER"] = list(values["PAPER"][2])
+                warning_keys = getattr(self, "_external_reconcile_warning_keys", set())
+                active_warning_keys: set[str] = set()
+                for item in external_sells:
+                    key = f"{item.get('symbol', '')}|{item.get('trade_id', '')}|{item.get('quantity', 0)}"
+                    if item.get("status") == "RECONCILE_REQUIRED":
+                        active_warning_keys.add(key)
+                        if key not in warning_keys:
+                            self._log(
+                                f"[DNSE] {item.get('symbol', '')} cần đối soát SELL ngoài app: "
+                                f"{item.get('reason', '')}",
+                                "bot",
+                            )
+                    elif item.get("status") == "RECONCILED":
+                        self._log(
+                            f"[DNSE] Đã đồng bộ SELL ngoài app {item.get('symbol', '')} "
+                            f"{int(item.get('quantity', 0) or 0)} CP; còn "
+                            f"{int(item.get('remaining_quantity', 0) or 0)} CP.",
+                            "bot",
+                        )
+                self._external_reconcile_warning_keys = active_warning_keys
                 self._refresh_local()
 
             self._post_ui(apply)

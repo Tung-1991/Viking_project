@@ -186,3 +186,10 @@ def test_manual_sell_entry_pause_is_mode_specific_persistent_and_expires(tmp_pat
     assert active["active"] is True
     assert active["remaining_seconds"] == 600.0
     assert restarted.entry_pause("PAPER", now=1_900.0)["active"] is False
+def test_alert_cooldown_suppresses_new_occurrences_until_deadline(tmp_path):
+    state = RuleStateStore(tmp_path / "rule-state.json")
+
+    assert state.claim_alert_with_cooldown("TELEGRAM|E|FPT", "A", 1800, now=1000)
+    assert not state.claim_alert_with_cooldown("TELEGRAM|E|FPT", "A", 1800, now=1001)
+    assert not state.claim_alert_with_cooldown("TELEGRAM|E|FPT", "B", 1800, now=2000)
+    assert state.claim_alert_with_cooldown("TELEGRAM|E|FPT", "B", 1800, now=2800)

@@ -57,7 +57,9 @@ def test_minimum_lot_never_breaks_exposure_room_or_ignores_fee():
 
 def test_pending_buy_reserves_exposure_and_duplicate_symbol(tmp_path):
     queue = OrderQueue(tmp_path / "orders.json")
-    queue.add(OrderIntent.create("FPT", "BUY", 1000, "LO", limit_price=100))
+    queue.add(OrderIntent.create(
+        "FPT", "BUY", 1000, "LO", limit_price=100, source="BOT",
+    ))
     builder = PortfolioContextBuilder(
         queue,
         TradeStateStore(tmp_path / "trades.json"),
@@ -117,6 +119,33 @@ def test_external_position_blocks_bot_management_but_is_visible(tmp_path):
     )
     assert context["position"]["managed_by_bot"] is False
     assert context["position"]["quantity"] == 100
+
+
+def test_external_top_up_does_not_expand_or_stop_existing_viking_trade(tmp_path):
+    queue = OrderQueue(tmp_path / "orders-top-up.json")
+    trades = TradeStateStore(tmp_path / "trades-top-up.json")
+    cycle = trades.create("FPT", "REAL", source="BOT", trade_id="BOT-FPT")
+    trades.record_buy_fill(cycle.id, 100, 100.0)
+    builder = PortfolioContextBuilder(
+        queue, trades, RuleStateStore(tmp_path / "rules-top-up.json"),
+    )
+
+    context = builder.build(
+        "FPT",
+        execution_mode="REAL",
+        balance={"equity": 100_000_000, "stock": {"availableCash": 0}},
+        positions=[{
+            "symbol": "FPT", "openQuantity": 150, "tradeQuantity": 150,
+            "costPrice": 101, "marketPrice": 102,
+        }],
+        tick={"price": 102}, exposure=0.9, max_positions=5,
+    )
+
+    assert context["position"]["managed_by_bot"] is True
+    assert context["position"]["quantity"] == 100
+    assert context["position"]["external_quantity"] == 50
+    assert context["position"]["avg_price"] == 100.0
+    assert context["open_positions"] == 1
 
 
 def test_real_positions_use_board_price_and_aggregate_same_symbol_rows(tmp_path):

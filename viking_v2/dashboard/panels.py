@@ -1515,10 +1515,18 @@ class DashboardPanelsMixin:
         loss_locked = bool(loss_limit and losses >= loss_limit)
         guard_warn = whipsaw_locked or loss_locked
         slot_summary = getattr(self, "_slot_summary", {})
-        slot_used = max(open_positions, int(slot_summary.get("used", 0) or 0))
+        slot_used = int(slot_summary.get("used", open_positions) or 0)
         slot_max = int(slot_summary.get("max", max_positions) or max_positions)
         pending_buys = int(slot_summary.get("pending", 0) or 0)
-        phase3_parts = [f"VỊ THẾ {slot_used}/{slot_max or '--'}"]
+        manual_positions = int(slot_summary.get("manual", 0) or 0)
+        bot_open_positions = int(slot_summary.get("bot_open", open_positions) or 0)
+        total_positions = int(
+            slot_summary.get("total", bot_open_positions + manual_positions) or 0
+        )
+        phase3_parts = [f"BOT {slot_used}/{slot_max or '--'}"]
+        if manual_positions:
+            phase3_parts.append(f"MANUAL {manual_positions}")
+            phase3_parts.append(f"TỔNG {total_positions}")
         if pending_buys:
             phase3_parts.append(f"BUY CHỜ {pending_buys}")
         if capital > 0:

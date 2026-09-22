@@ -17,12 +17,12 @@ Thứ tự ưu tiên cấu hình:
 | Phase 1 | MA200; Pivot 3/3; sai số Pivot 1%; vùng MA 1%; xác nhận 3 phiên; Volume phase 1 OFF |
 | Tỷ trọng | UPTREND 90%; DOWNTREND 10%; ACCUMULATION 60%; DISTRIBUTION 50% |
 | Entry | EMA 3/6 + RSI14; chỉ mua từ 14:00; đọc REALTIME/TICK; Volume BUY OFF; xác nhận BUY phút OFF |
-| Vốn | Tối đa 5 position; không compound; tối thiểu 100 cổ; khóa sau 3 LOSS trong 24 giờ; Whipsaw ON 3 lần/7 phiên; dừng BUY BOT 15 phút sau SELL MANUAL khớp |
+| Vốn | Tối đa 5 position BOT; MANUAL/EXTERNAL không chiếm slot BOT nhưng vẫn dùng tiền và room thực; không compound; tối thiểu 100 cổ; khóa sau 3 LOSS trong 24 giờ; Whipsaw ON 3 lần/7 phiên; dừng BUY BOT 15 phút sau SELL MANUAL/EXTERNAL khớp |
 | Phí | Mua 0,045%; bán 0,045%; thuế bán 0,1% |
 | SL | ON; lệnh đầu −3,5%; lệnh vào lại −2,5%; bán 100% |
 | TP | Giá trị 7% nhưng mode TP mặc định OFF |
 | PROTECT | AUTO; Dynamic ON; START ATR14(T−1) ×0,55; TRAIL ATR ×0,8; giữ 90% lãi đỉnh tới MFE 5%; ARM 7%; trail sau ARM 2,5%; bán 100%; REPEAT OFF; reset sàn T+2 OFF |
-| E | EMA SELL 3/6 + RSI14 giảm; ALERT; chỉ log/UI/Telegram, không đặt lệnh |
+| E | EMA SELL 3/6 + RSI14 giảm; ALERT; chỉ log/UI, không đặt lệnh; Telegram bật/tắt riêng trong KẾT NỐI |
 | T+2 | RECHECK: khi cổ về, điều kiện thoát còn đúng mới bán; điều kiện đã mất thì huỷ yêu cầu bán cũ |
 
 Mode mặc định của BOT là `PROTECT + E`; TP không được gắn vào trade. SL có công tắc riêng và mặc định ON.
@@ -34,8 +34,17 @@ Không có E sớm, E LOSS hay FAILED RECOVERY trong backend vận hành.
 - `BOT OFF` chặn cả tạo BUY BOT mới lẫn gửi BUY BOT cũ còn trong cache. BUY BOT chưa gửi được hủy; lệnh đã có khả năng lên broker chỉ được cảnh báo để operator kiểm tra. SELL quản lý vị thế và lệnh MANUAL vẫn chạy.
 - Khi SELL nguồn `MANUAL` đặt trong Viking khớp lần đầu, PAPER hoặc REAL tương ứng khóa BUY BOT mặc định 15 phút. Thời gian chỉnh tại `RULE → Phase 3 → VỐN → Dừng BUY sau bán tay`; `0` là tắt. Hết hạn tự mở, không cần bật lại nút bot.
 - Mỗi lệnh cache có `Sửa lệnh & quản lý` và `Hủy`; bên trong cửa sổ sửa có `Tạm dừng/Tiếp tục`. Lệnh `PAUSED` vẫn giữ slot để không có mã khác lấp chỗ ngoài ý muốn.
-- Bán trực tiếp ngoài Viking trên một ứng dụng broker không có nhãn `MANUAL` của Viking. Khi vận hành theo luồng này, operator phải tắt `BOT` trước; không suy đoán một thay đổi position là bán tay vì nó cũng có thể là SL/PROTECT.
+- Quota hiển thị tách `BOT x/5 · MANUAL y · TỔNG z`. Lệnh MANUAL/EXTERNAL không chiếm quota BOT nhưng luôn được tính vào tiền mặt và room danh mục; vì vậy BOT không thể vượt sức mua thật.
+- Mua nên thực hiện qua Viking. Nếu có lượng mua thêm trực tiếp trên DNSE cùng mã, Viking gắn `EXTERNAL_DNSE`; phần này không làm dừng trade Viking và không bị PROTECT/SL của trade Viking bán nhầm.
+- SELL khẩn cấp trực tiếp trên DNSE được nhận diện bằng position giảm và lệnh khớp không có remark `V2:`. Viking đồng bộ khối lượng/PnL/phí, đóng một phần hoặc toàn bộ trade, huỷ SELL cache cũ, khóa BUY BOT 15 phút và có thể gửi Telegram. Không tìm thấy lệnh khớp/giá khớp thì chỉ ghi `RECONCILE_REQUIRED`, tuyệt đối không đoán.
 - Cửa sổ `Sửa lệnh & quản lý` quản lý chung khối lượng, giá LO, TP, SL và các mode TP/PROTECT/E.
+
+## Telegram
+
+- PAPER và REAL dùng chung một bảng cấu hình; backend không tạo hai bộ quy tắc thông báo riêng.
+- Mỗi loại tin có công tắc riêng: BOT BUY đã xếp lệnh, CLOSED, PROTECT chạm mức, E ALERT, BUY bị chặn, chốt quyền và SELL trên DNSE app. Các loại có thể lặp có cooldown riêng; BUY dùng cửa sổ gom riêng.
+- RULE và Telegram độc lập: `PROTECT AUTO` luôn bán khi chạm mức; công tắc Telegram OFF chỉ tắt tin. Bật `PROTECT CHẠM MỨC` tạo hành vi “AUTO vừa bán vừa báo”. `PROTECT ALERT` chỉ ghi nhận, không đặt lệnh, bất kể Telegram ON/OFF.
+- Tín hiệu đã hết hiệu lực trong lúc app tắt không được gửi lại. Nếu mở app khi tín hiệu vẫn còn hợp lệ, nó được coi là lần quan sát hiện tại và chỉ gửi một lần.
 
 ## Đối chứng SL vào lại
 

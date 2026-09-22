@@ -165,14 +165,29 @@ class BuySlotAllocator:
         positions: Iterable[Mapping[str, Any]],
         intents: Iterable[OrderIntent],
         execution_mode: str,
+        *,
+        bot_symbols: Iterable[str] | None = None,
     ) -> "BuySlotAllocator":
         mode = str(execution_mode or "PAPER").strip().upper()
-        occupied = {_position_symbol(row) for row in positions}
+        occupied = (
+            {
+                str(symbol or "").strip().upper()
+                for symbol in bot_symbols
+                if str(symbol or "").strip()
+            }
+            if bot_symbols is not None
+            else {
+                _position_symbol(row)
+                for row in positions
+                if str(row.get("source", "") or "").strip().upper() == "BOT"
+            }
+        )
         occupied.discard("")
         occupied.update(
             intent.symbol
             for intent in intents
             if intent.side == "BUY"
+            and intent.source == "BOT"
             and intent.execution_mode == mode
             and str(intent.status or "").upper() not in FINAL_STATUSES
         )

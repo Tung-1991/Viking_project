@@ -233,7 +233,22 @@ class DashboardTablesMixin:
                 mfe_pct = mfe / gross * 100.0 if gross > 0 else 0.0
                 pending = max(0, quantity - sellable)
                 settle = str(row.get("settleDate", "") or "")[:10]
-                source = str(row.get("source", "DNSE" if mode == "REAL" else "PAPER") or "")
+                row_source = str(row.get("source", "") or "").upper()
+                if cycle:
+                    source = {
+                        "BOT": "BOT",
+                        "MANUAL": "MANUAL_VIKING",
+                        "EXTERNAL": "EXTERNAL_DNSE",
+                        "EXTERNAL_DNSE": "EXTERNAL_DNSE",
+                    }.get(str(cycle.source).upper(), str(cycle.source).upper())
+                    if quantity > cycle.open_quantity:
+                        source += "+EXTERNAL_DNSE"
+                elif row_source == "BOT":
+                    source = "BOT"
+                elif row_source == "MANUAL":
+                    source = "MANUAL_VIKING"
+                else:
+                    source = "EXTERNAL_DNSE" if mode == "REAL" else (row_source or "PAPER")
                 opened = row.get("openedAt", row.get("createdAt", row.get("time", "")))
                 if not opened and cycle:
                     opened = cycle.opened_at
@@ -460,6 +475,11 @@ class DashboardTablesMixin:
                 price_text = _display_price(item.limit_price) if item.limit_price > 0 else item.order_type
                 gross = item.limit_price * item.quantity * 1000.0 if item.limit_price > 0 else 0.0
                 cycle = self.trade_state.get(item.trade_id) if item.trade_id else None
+                display_source = {
+                    "MANUAL": "MANUAL_VIKING",
+                    "EXTERNAL": "EXTERNAL_DNSE",
+                    "EXTERNAL_DNSE": "EXTERNAL_DNSE",
+                }.get(str(item.source).upper(), str(item.source).upper())
                 item_modes = set(cycle.em_modes if cycle else item.em_modes)
                 item_take_profit = "TP" in item_modes
                 item_normal = "NORMAL" in item_modes
@@ -529,7 +549,7 @@ class DashboardTablesMixin:
                     values=(
                         f"[CACHE] {item.id[:8]}",
                         self._row_time(item.created_at),
-                        f"{mode} · {item.source} · {item.side} {item.symbol} @ {price_text} · KL {item.quantity}",
+                        f"{mode} · {display_source} · {item.side} {item.symbol} @ {price_text} · KL {item.quantity}",
                         target_text,
                         f"FEE {fee_text}" if gross > 0 else f"HẾT HẠN {self._row_time(item.expires_at)}",
                         f"R {risk_text} · E {reward_text}" if item.action == "OPEN" else "--",
@@ -579,7 +599,7 @@ class DashboardTablesMixin:
                     values=(
                         f"[DNSE] {(order_id or str(index))[:10]}",
                         self._row_time(row.get('createdAt', row.get('createdDate', ''))),
-                        f"{mode} · DNSE · {side} {symbol} @ {_display_price(price) if price else kind} · KL {quantity}",
+                        f"{mode} · EXTERNAL_DNSE · {side} {symbol} @ {_display_price(price) if price else kind} · KL {quantity}",
                         "SL/TP SAU KHI KHỚP" if side == "BUY" else "ĐÓNG VỊ THẾ",
                         f"FEE {_compact_vnd(fee)}",
                         "--",
@@ -616,6 +636,8 @@ class DashboardTablesMixin:
 
     def close(self) -> None:
         self.running = False
+        if getattr(self, "telegram", None):
+            self.telegram.cancel_pending_buys()
         for popup in (
             getattr(self, "_backtest_popup", None),
             getattr(self, "_history_popup", None),

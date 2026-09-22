@@ -628,3 +628,218 @@ class ExecutionService:
             if reconciled:
                 updated.append(reconciled)
         return updated
+
+    @staticmethod
+    def _external_sell_order(
+        orders: list[dict[str, Any]], symbol: str,
+    ) -> dict[str, Any] | None:
+        """Find the latest filled SELL not created by Viking's V2 remark."""
+        matches: list[dict[str, Any]] = []
+        for row in orders:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("symbol", row.get("instrumentId", "")) or "").upper() != symbol:
+                continue
+            side = str(row.get("side", row.get("orderSide", "")) or "").upper()
+            if side not in {"NS", "SELL"}:
+                continue
+            if "V2:" in str(row.get("remark", "") or "").upper():
+                continue
+            status = str(row.get("orderStatus", row.get("status", "")) or "").upper()
+            compact = status.replace("_", "").replace(" ", "")
+            try:
+                filled = int(float(row.get("fillQuantity", row.get("filledQuantity", 0)) or 0))
+            except (TypeError, ValueError):
+                filled = 0
+            if filled <= 0 or not any(
+                token in compact for token in ("FILLED", "MATCHED", "DONE", "COMPLETED", "PART")
+            ):
+                continue
+            matches.append(row)
+        if not matches:
+            return None
+        return max(
+            matches,
+            key=lambda row: str(
+                row.get("updatedAt", row.get("createdAt", row.get("createdDate", ""))) or ""
+            ),
+        )
+
+    def reconcile_external_sells(
+        self,
+        positions: list[dict[str, Any]],
+        broker_orders: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Synchronize emergency SELLs placed directly in the DNSE app.
+
+        Quantity is derived from the broker position delta.  Price and fees
+        must come from a matching filled external order; otherwise Viking
+        reports RECONCILE_REQUIRED and never guesses accounting values.
+        """
+        actual_by_symbol: dict[str, int] = {}
+        for row in positions or []:
+            if not isinstance(row, dict):
+                continue
+            symbol = str(row.get("symbol", row.get("instrumentId", "")) or "").upper()
+            try:
+                quantity = int(float(
+                    row.get("openQuantity", row.get("quantity", row.get("volume", 0))) or 0
+                ))
+            except (TypeError, ValueError):
+                quantity = 0
+            if symbol and quantity > 0:
+                actual_by_symbol[symbol] = actual_by_symbol.get(symbol, 0) + quantity
+
+        results: list[dict[str, Any]] = []
+        if not self.trade_state:
+            return results
+        all_orders = list(broker_orders or [])
+        # Filled emergency orders may move from /orders to /orders/history.
+        # Query history only when a quantity mismatch exists, and cache the
+        # response briefly so the five-second snapshot loop cannot spam DNSE.
+        has_mismatch = any(
+            cycle.execution_mode == "REAL"
+            and cycle.status == "OPEN"
+            and time.time() - cycle.opened_at >= 15.0
+            and actual_by_symbol.get(cycle.symbol, 0) < cycle.open_quantity
+            for cycle in self.trade_state.list_cycles()
+        )
+        if has_mismatch and hasattr(self.real, "get_order_history"):
+            cached_at, cached_rows = getattr(
+                self, "_external_order_history_cache", (0.0, []),
+            )
+            if time.time() - float(cached_at or 0.0) >= 15.0:
+                day = time.strftime("%Y-%m-%d")
+                try:
+                    cached_rows = list(self.real.get_order_history(day, day) or [])
+                except Exception:
+                    cached_rows = []
+                self._external_order_history_cache = (time.time(), cached_rows)
+            all_orders.extend(row for row in cached_rows if isinstance(row, dict))
+        for cycle in self.trade_state.list_cycles():
+            if cycle.execution_mode != "REAL" or cycle.status != "OPEN" or cycle.open_quantity <= 0:
+                continue
+            if time.time() - cycle.opened_at < 15.0:
+                continue
+            actual = max(0, int(actual_by_symbol.get(cycle.symbol, 0)))
+            if actual >= cycle.open_quantity:
+                continue
+            # A Viking SELL may have changed the broker position a moment
+            # before reconcile_working records its fill. Let that explicit
+            # V2 order settle first instead of misclassifying the delta.
+            if any(
+                intent.execution_mode == "REAL"
+                and intent.side == "SELL"
+                and intent.trade_id == cycle.id
+                and (
+                    bool(intent.broker_order_id)
+                    or intent.status.upper() in {"SENDING", "WORKING", "PARTIAL", "UNKNOWN"}
+                )
+                for intent in self.queue.list_all()
+            ):
+                continue
+            missing = cycle.open_quantity - actual
+            broker_order = self._external_sell_order(all_orders, cycle.symbol)
+            if not broker_order:
+                results.append({
+                    "status": "RECONCILE_REQUIRED", "symbol": cycle.symbol,
+                    "quantity": missing, "trade_id": cycle.id,
+                    "reason": "Không tìm thấy lệnh SELL ngoài Viking đã khớp.",
+                })
+                continue
+            price = board_price(
+                broker_order.get(
+                    "averagePrice",
+                    broker_order.get("matchPrice", broker_order.get("price", 0.0)),
+                )
+            )
+            if price <= 0:
+                results.append({
+                    "status": "RECONCILE_REQUIRED", "symbol": cycle.symbol,
+                    "quantity": missing, "trade_id": cycle.id,
+                    "reason": "Lệnh SELL ngoài Viking chưa có giá khớp.",
+                })
+                continue
+            try:
+                order_filled = max(1, int(float(
+                    broker_order.get("fillQuantity", broker_order.get("filledQuantity", missing))
+                    or missing
+                )))
+            except (TypeError, ValueError):
+                order_filled = max(1, missing)
+            if order_filled < missing:
+                results.append({
+                    "status": "RECONCILE_REQUIRED", "symbol": cycle.symbol,
+                    "quantity": missing, "trade_id": cycle.id,
+                    "reason": "Khối lượng position giảm lớn hơn lệnh SELL ngoài Viking gần nhất.",
+                })
+                continue
+            broker_fee, broker_tax = self.queue._broker_costs(broker_order)
+            allocated_cost = (broker_fee + broker_tax) * min(1.0, missing / order_filled)
+            before = cycle.open_quantity
+            updated = self.trade_state.record_sell_fill(
+                cycle.id, missing, price, allocated_cost,
+            )
+            if not updated or updated.open_quantity >= before:
+                continue
+            self.trade_state.mark_exit_once(cycle.id, "EXTERNAL_SELL")
+            updated = self.trade_state.get(cycle.id) or updated
+            for intent in self.queue.list_all():
+                if (
+                    intent.execution_mode == "REAL"
+                    and intent.side == "SELL"
+                    and intent.trade_id == cycle.id
+                    and intent.status.upper() in {"PENDING", "WAITING_TOKEN", "WAITING_SETTLEMENT", "PAUSED"}
+                ):
+                    self.queue.cancel_local(intent.id)
+            if self.rule_state:
+                try:
+                    pause_seconds = max(
+                        0.0,
+                        float(
+                            self.manual_sell_pause_seconds_provider()
+                            if self.manual_sell_pause_seconds_provider else 0.0
+                        ),
+                    )
+                except (TypeError, ValueError):
+                    pause_seconds = 0.0
+                if pause_seconds > 0:
+                    self.rule_state.start_entry_pause(
+                        "REAL", pause_seconds, reason="EXTERNAL_SELL", symbol=cycle.symbol,
+                    )
+                    self.cancel_unsubmitted_bot_buys(
+                        "REAL", reason=f"Khóa BUY sau SELL ngoài DNSE {cycle.symbol}",
+                    )
+            broker_order_id = str(
+                broker_order.get("orderId", broker_order.get("id", "")) or ""
+            )
+            synthetic = OrderIntent.create(
+                cycle.symbol, "SELL", missing, "MARKET", execution_mode="REAL",
+                source="EXTERNAL_DNSE", trade_id=cycle.id, action="CLOSE",
+                reason="EXTERNAL_SELL",
+                details={"broker_order_id": broker_order_id, "fill_price": price},
+            )
+            synthetic.status = "FILLED"
+            synthetic.filled_quantity = missing
+            synthetic.remaining_quantity = 0
+            synthetic.broker_order_id = broker_order_id
+            self._emit_trade_event("EXTERNAL_SELL", updated, synthetic)
+            event = {
+                "ts": time.time(),
+                "intent": synthetic.to_dict(),
+                "queue_status": "FILLED",
+                "result": {
+                    "ok": True, "status": "FILLED", "order_id": broker_order_id,
+                    "message": "EXTERNAL_SELL_RECONCILED", "error": "",
+                    "status_code": 200, "raw": broker_order,
+                },
+            }
+            self.journal.append(event)
+            self.csv_journal.append_event(event)
+            results.append({
+                "status": "RECONCILED", "symbol": cycle.symbol,
+                "quantity": missing, "price": price, "trade_id": cycle.id,
+                "remaining_quantity": updated.open_quantity,
+                "broker_order_id": broker_order_id,
+            })
+        return results

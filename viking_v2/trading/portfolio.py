@@ -290,6 +290,15 @@ class PortfolioContextBuilder:
             if str(row.get("symbol", "") or "").upper() == symbol
             and position_quantity(row) > 0
         ]
+        bot_pending_buys = [item for item in pending_buys if item.source == "BOT"]
+        bot_open_symbols = {
+            cycle.symbol
+            for cycle in self.trades.list_cycles()
+            if cycle.status == "OPEN"
+            and cycle.execution_mode == mode
+            and cycle.source == "BOT"
+            and cycle.open_quantity > 0
+        }
         active_trade = self.trades.active_for(symbol, mode)
         active_loss_streak = self.trades.active_loss_streak(
             symbol,
@@ -307,9 +316,11 @@ class PortfolioContextBuilder:
             "order_budget": budget,
             "minimum_order_room": minimum_order_room,
             "buy_fee_rate": max(0.0, float(self.buy_fee_rate() or 0.0)),
+            # max_positions is a BOT quota. MANUAL/EXTERNAL holdings still
+            # consume cash/exposure above, but never consume a BOT slot.
             "open_positions": len(
-                {str(row.get("symbol", "") or "").upper() for row in rows if position_quantity(row) > 0}
-                | {str(item.symbol or "").upper() for item in pending_buys}
+                bot_open_symbols
+                | {str(item.symbol or "").upper() for item in bot_pending_buys}
             ),
             "pending_buy": bool(self.queue.find_active(symbol, side="BUY", execution_mode=mode)),
             "loss_streak": active_loss_streak,
@@ -325,11 +336,11 @@ class PortfolioContextBuilder:
             context["corporate_action_blocked"] = bool(action.get("blocks_entry", False))
         if not matching_rows:
             return context
-        quantity = sum(position_quantity(row) for row in matching_rows)
+        broker_quantity = sum(position_quantity(row) for row in matching_rows)
         weighted_cost = sum(
             position_quantity(row) * position_cost(row) for row in matching_rows
         )
-        avg_price = weighted_cost / quantity if quantity > 0 else 0.0
+        broker_avg_price = weighted_cost / broker_quantity if broker_quantity > 0 else 0.0
         fallback_price = next(
             (position_price(row) for row in matching_rows if position_price(row) > 0),
             0.0,
@@ -345,6 +356,16 @@ class PortfolioContextBuilder:
         )
         managed = bool(active_trade) or any(
             str(row.get("source", "") or "").upper() == "BOT" for row in matching_rows
+        )
+        quantity = (
+            min(broker_quantity, active_trade.open_quantity)
+            if active_trade and active_trade.open_quantity > 0
+            else broker_quantity
+        )
+        avg_price = (
+            active_trade.avg_entry_price
+            if active_trade and active_trade.avg_entry_price > 0
+            else broker_avg_price
         )
         profit_pct = ((current_price / avg_price) - 1.0) * 100.0 if avg_price > 0 and current_price > 0 else 0.0
         realized_net = (
@@ -377,11 +398,16 @@ class PortfolioContextBuilder:
             "current_price": current_price,
             "trade_quantity": sum(
                 max(0, int(_number(row, "tradeQuantity"))) for row in matching_rows
+            ) if not active_trade else min(
+                quantity,
+                sum(max(0, int(_number(row, "tradeQuantity"))) for row in matching_rows),
             ),
             "sellable": fully_sellable,
             "trade_id": trade_id,
             "managed_by_bot": managed,
             "managed_by_app": managed,
+            "broker_quantity": broker_quantity,
+            "external_quantity": max(0, broker_quantity - quantity) if active_trade else broker_quantity,
             "is_reentry": bool(active_trade.is_reentry) if active_trade else False,
             "sl_enabled": bool(active_trade.sl_enabled) if active_trade else True,
             "sl_mode": str(active_trade.sl_mode) if active_trade else "DEFAULT",

@@ -82,14 +82,17 @@ def test_only_deliberate_buy_waits_can_mature_without_a_new_signal() -> None:
 
 
 def test_open_positions_pending_and_unknown_buys_all_own_slots() -> None:
-    pending = OrderIntent.create("MBB", "BUY", 100, "MARKET", execution_mode="PAPER")
-    unknown = OrderIntent.create("TCB", "BUY", 100, "MARKET", execution_mode="PAPER")
+    pending = OrderIntent.create("MBB", "BUY", 100, "MARKET", execution_mode="PAPER", source="BOT")
+    unknown = OrderIntent.create("TCB", "BUY", 100, "MARKET", execution_mode="PAPER", source="BOT")
     unknown.status = "UNKNOWN"
     rejected = OrderIntent.create("ACB", "BUY", 100, "MARKET", execution_mode="PAPER")
     rejected.status = "REJECTED"
     allocator = BuySlotAllocator.from_runtime(
         5,
-        [{"symbol": "VCB", "openQuantity": 100}, {"symbol": "FPT", "quantity": 200}],
+        [
+            {"symbol": "VCB", "openQuantity": 100, "source": "BOT"},
+            {"symbol": "FPT", "quantity": 200, "source": "BOT"},
+        ],
         [pending, unknown, rejected],
         "PAPER",
     )
@@ -101,10 +104,25 @@ def test_open_positions_pending_and_unknown_buys_all_own_slots() -> None:
 
 
 def test_real_and_paper_pending_orders_do_not_share_slots() -> None:
-    paper = OrderIntent.create("MBB", "BUY", 100, "MARKET", execution_mode="PAPER")
-    real = OrderIntent.create("TCB", "BUY", 100, "MARKET", execution_mode="REAL")
+    paper = OrderIntent.create("MBB", "BUY", 100, "MARKET", execution_mode="PAPER", source="BOT")
+    real = OrderIntent.create("TCB", "BUY", 100, "MARKET", execution_mode="REAL", source="BOT")
     allocator = BuySlotAllocator.from_runtime(5, [], [paper, real], "PAPER")
     assert allocator.occupied_symbols == {"MBB"}
+
+
+def test_manual_and_external_positions_do_not_consume_bot_slots() -> None:
+    manual = OrderIntent.create(
+        "MBB", "BUY", 100, "MARKET", execution_mode="PAPER", source="MANUAL",
+    )
+    allocator = BuySlotAllocator.from_runtime(
+        1,
+        [{"symbol": "VCB", "openQuantity": 100, "source": "MANUAL"}],
+        [manual],
+        "PAPER",
+    )
+
+    assert allocator.used == 0
+    assert allocator.reserve("FPT") is True
 
 
 def test_coordinator_reports_operator_pause_instead_of_generic_bot_off() -> None:

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import msgpack
 
 from viking_v2.connections.dnse.websocket import DNSEMarketWS
-from viking_v2.connections.telegram import SignalTelegramService
+from viking_v2.connections.telegram import SignalTelegramService, TelegramClient
 from viking_v2.dashboard.actions import DashboardActionsMixin
 from viking_v2.models import BrokerOrderResult, OrderIntent, StrategyDecision, TradeCycle
 from viking_v2.rules.state import RuleStateStore
@@ -19,6 +19,16 @@ class Telegram:
 
     def send_message(self, chat_id, text):
         self.sent.append((str(chat_id), text))
+
+
+def test_telegram_client_redacts_token_from_transport_errors():
+    client = TelegramClient("secret-token")
+    message = client.safe_error(
+        "500 https://api.telegram.org/botsecret-token/sendMessage"
+    )
+
+    assert "secret-token" not in message
+    assert "<REDACTED>" in message
 
 
 def test_protect_alert_names_the_enabled_dynamic_layers_without_sending_orders():
@@ -52,6 +62,21 @@ def test_protect_alert_hides_dormant_layers_when_dynamic_is_off():
     message = tele.sent[0][1]
     assert "START ATR: OFF · TRAIL ATR: OFF" in message
     assert "Giữ lãi: OFF" in message
+
+
+def test_protect_auto_notification_states_that_sell_was_requested():
+    tele = Telegram()
+    service = SignalTelegramService(tele, chat_id="7")
+
+    assert service.notify_protect_alert(
+        symbol="VIX", price=14.0, mfe_pct=7.0, peak_price=14.25,
+        protect_price=13.9, sell_pct=100, dynamic=False, policy="AUTO",
+    )
+
+    message = tele.sent[0][1]
+    assert "PROTECT HIT · VIX" in message
+    assert "AUTO · ĐÃ TẠO YÊU CẦU BÁN" in message
+    assert "ALERT chỉ ghi nhận" not in message
 
 
 def test_indicator_exit_alert_explains_signal_and_never_claims_an_order():
@@ -253,7 +278,10 @@ def test_dashboard_sends_each_indicator_exit_alert_once(monkeypatch, tmp_path):
     class Subject:
         telegram = Service()
         rule_state = RuleStateStore(tmp_path / "rule_state.json")
-        settings = SimpleNamespace(telegram_signal_alerts=True)
+        settings = SimpleNamespace(
+            telegram_notifications={"indicator_exit": True},
+            telegram_cooldown_minutes={"indicator_exit": 0},
+        )
 
     monkeypatch.setattr(
         "viking_v2.dashboard.actions.threading.Thread", ImmediateThread,

@@ -80,6 +80,25 @@ DEFAULT_CKCS_WATCHLIST = (
     "PNJ", "POW", "QCG", "SCR", "SCS", "TDM", "TLG", "TV2", "VIX", "VPG",
 )
 
+# RULE decides whether an event acts (AUTO) or only observes (ALERT).
+# Telegram delivery is configured separately and only in the Telegram panel.
+TELEGRAM_NOTIFICATION_DEFAULTS: dict[str, bool] = {
+    "buy_queued": True,
+    "closed": True,
+    "protect": False,
+    "indicator_exit": True,
+    "blocked_buy": False,
+    "corporate_action": True,
+    "external_sell": True,
+}
+TELEGRAM_COOLDOWN_DEFAULTS: dict[str, int] = {
+    "protect": 0,
+    "indicator_exit": 30,
+    "blocked_buy": 30,
+    "corporate_action": 1440,
+    "external_sell": 0,
+}
+
 # Canonical operating defaults shared by LIVE, PAPER and backtest.  Keep the
 # complete rule here so a new account and an older sparse settings file start
 # from the same reviewed strategy instead of inheriting dataclass fallbacks.
@@ -260,9 +279,13 @@ class AppSettings:
     telegram_chat_id: str = ""
     telegram_token_env: str = "TELE_BOT_KEY"
     telegram_buy_batch_minutes: int = 30
-    # Báo cả tín hiệu bot không vào được, kèm lý do. Tắt mặc định vì nó ồn
-    # hơn hẳn: mỗi phiên có thể vài chục mã báo mua mà chỉ năm chỗ để vào.
-    telegram_signal_alerts: bool = False
+    # Per-event delivery controls shared by PAPER and REAL.
+    telegram_notifications: dict[str, bool] = field(
+        default_factory=lambda: dict(TELEGRAM_NOTIFICATION_DEFAULTS)
+    )
+    telegram_cooldown_minutes: dict[str, int] = field(
+        default_factory=lambda: dict(TELEGRAM_COOLDOWN_DEFAULTS)
+    )
     bot_order_mode: str = "MARKET"
     # Operational guard: after a MANUAL SELL fill, pause only new BOT BUYs.
     manual_sell_pause_minutes: int = 15
@@ -313,7 +336,6 @@ class AppSettings:
             if str(symbol).strip() and str(exchange).strip().upper() in aliases
         }
         self.paper_initial_balance = max(0.0, float(self.paper_initial_balance or 0.0))
-        self.telegram_signal_alerts = bool(self.telegram_signal_alerts)
         self.telegram_chat_id = str(self.telegram_chat_id or "").strip()
         self.telegram_token_env = str(self.telegram_token_env or "TELE_BOT_KEY").strip()
         try:
@@ -322,6 +344,27 @@ class AppSettings:
             )
         except (TypeError, ValueError):
             self.telegram_buy_batch_minutes = 30
+        raw_notifications = (
+            self.telegram_notifications
+            if isinstance(self.telegram_notifications, dict) else {}
+        )
+        self.telegram_notifications = {
+            key: bool(raw_notifications.get(key, default))
+            for key, default in TELEGRAM_NOTIFICATION_DEFAULTS.items()
+        }
+        raw_cooldowns = (
+            self.telegram_cooldown_minutes
+            if isinstance(self.telegram_cooldown_minutes, dict) else {}
+        )
+        normalized_cooldowns: dict[str, int] = {}
+        for key, default in TELEGRAM_COOLDOWN_DEFAULTS.items():
+            try:
+                normalized_cooldowns[key] = max(
+                    0, min(10080, int(float(raw_cooldowns.get(key, default))))
+                )
+            except (TypeError, ValueError):
+                normalized_cooldowns[key] = default
+        self.telegram_cooldown_minutes = normalized_cooldowns
         self.bot_order_mode = str(self.bot_order_mode or "MARKET").strip().upper()
         if self.bot_order_mode not in {"MARKET", "LO_LOCAL"}:
             self.bot_order_mode = "MARKET"
@@ -385,6 +428,17 @@ class AppSettings:
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> "AppSettings":
         raw = raw if isinstance(raw, dict) else {}
+        # Migrate the former all-in-one alert switch once, without retaining
+        # it in the current settings model.
+        if "telegram_notifications" not in raw and "telegram_signal_alerts" in raw:
+            legacy = bool(raw.get("telegram_signal_alerts"))
+            raw = dict(raw)
+            raw["telegram_notifications"] = {
+                **TELEGRAM_NOTIFICATION_DEFAULTS,
+                "protect": legacy,
+                "indicator_exit": legacy,
+                "blocked_buy": legacy,
+            }
         allowed = {name for name in cls.__dataclass_fields__}
         return cls(**{key: value for key, value in raw.items() if key in allowed}).normalize()
 

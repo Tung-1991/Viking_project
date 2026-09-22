@@ -75,6 +75,7 @@ class OrderIntent:
         if self.order_type not in {"MARKET", "LO", "ATO", "ATC"}:
             raise ValueError(f"Unsupported order type: {self.order_type}")
         self.execution_mode = "REAL" if str(self.execution_mode).upper() == "REAL" else "PAPER"
+        self.source = str(self.source or "MANUAL").strip().upper()
         self.quantity = int(self.quantity or 0)
         self.filled_quantity = max(0, int(self.filled_quantity or 0))
         self.remaining_quantity = (
