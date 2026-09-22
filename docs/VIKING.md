@@ -86,8 +86,9 @@ PAPER và REAL dùng chung bảng Telegram. Các nhóm tin có công tắc riên
 - E EXIT ALERT.
 - TÍN HIỆU: BUY đã được ghi log nhưng không thành lệnh, ví dụ BOT OFF, đủ slot,
   khóa mua, thiếu vốn hoặc broker từ chối.
-- Chốt quyền.
+- Lịch nghỉ và chốt quyền.
 - SELL trên DNSE app.
+- Lỗi hệ thống: daemon, lịch giao dịch, DNSE API/WS, làm mới tài khoản hoặc xử lý lệnh.
 
 Các nhóm có thể lặp có cooldown riêng. `PROTECT AUTO` vẫn bán khi Telegram OFF;
 bật tin PROTECT chỉ thêm thông báo. App không phát lại tín hiệu đã hết hiệu lực;

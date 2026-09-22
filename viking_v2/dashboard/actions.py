@@ -2387,6 +2387,11 @@ class DashboardActionsMixin:
         if time.time() - self._last_running_render >= 2.0:
             self._render_tables(status)
         self._refresh_api_health_panel(status)
+        mode = str(self.mode.get() or "").upper()
+        DashboardActionsMixin._notify_market_holiday(self, market, mode)
+        DashboardActionsMixin._notify_system_health(
+            self, status, daemon, market, mode,
+        )
         self._consume_bot_decisions(status, daemon)
         self.after(1000, self._poll_runtime)
 
@@ -2794,6 +2799,121 @@ class DashboardActionsMixin:
                 daemon=True,
             ).start()
 
+    def _notify_market_holiday(
+        self, market_status: str, execution_mode: str,
+    ) -> None:
+        if str(market_status or "").upper() != "HOLIDAY":
+            return
+        service = self.telegram
+        if not service or not DashboardActionsMixin._telegram_notification_enabled(
+            self, "corporate_action",
+        ):
+            return
+        occurrence = datetime.now(VN_TZ).date().isoformat()
+        if not DashboardActionsMixin._claim_telegram_event(
+            self,
+            f"corporate_action|HOLIDAY|{str(execution_mode or '').upper()}",
+            "MARKET",
+            occurrence,
+        ):
+            return
+        threading.Thread(
+            target=service.notify_market_holiday,
+            kwargs={
+                "holiday_date": occurrence,
+                "execution_mode": execution_mode,
+            },
+            daemon=True,
+        ).start()
+
+    def _notify_system_event(
+        self,
+        code: str,
+        summary: str,
+        execution_mode: str,
+        *,
+        occurrence: str = "",
+    ) -> bool:
+        service = self.telegram
+        if (
+            not service
+            or not DashboardActionsMixin._telegram_notification_enabled(self, "system")
+        ):
+            return False
+        code = str(code or "SYSTEM").strip().upper()
+        summary = str(summary or "").strip()
+        if not summary:
+            return False
+        occurrence = str(occurrence or f"{code}|{int(time.time())}")
+        if not DashboardActionsMixin._claim_telegram_event(
+            self,
+            f"system|{code}|{str(execution_mode or '').upper()}",
+            "SYSTEM",
+            occurrence,
+        ):
+            return False
+        threading.Thread(
+            target=service.notify_system_alert,
+            kwargs={
+                "summary": summary,
+                "execution_mode": execution_mode,
+            },
+            daemon=True,
+        ).start()
+        return True
+
+    def _notify_system_health(
+        self,
+        status: dict[str, Any],
+        daemon_status: str,
+        market_status: str,
+        execution_mode: str,
+    ) -> None:
+        issues: list[str] = []
+        daemon_status = str(daemon_status or "").upper()
+        market_status = str(market_status or "").upper()
+        if daemon_status in {"STOPPED", "STALE"}:
+            issues.append(f"DAEMON {daemon_status}")
+        if market_status == "CALENDAR_UNKNOWN":
+            issues.append("KHÔNG ĐỌC ĐƯỢC LỊCH GIAO DỊCH")
+        if str(status.get("error") or "").strip():
+            issues.append("DAEMON LỖI CHU KỲ")
+
+        health = status.get("api_health") if isinstance(status.get("api_health"), dict) else {}
+        rest = health.get("rest") if isinstance(health.get("rest"), dict) else {}
+        total_requests = int(rest.get("total_requests", 0) or 0)
+        last_status = rest.get("last_status")
+        if total_requests > 0 and (
+            not isinstance(last_status, (int, float))
+            or not 200 <= int(last_status) < 300
+        ):
+            issues.append(
+                f"DNSE API HTTP {int(last_status)}"
+                if isinstance(last_status, (int, float)) else "DNSE API LỖI"
+            )
+
+        ws = health.get("websocket") if isinstance(health.get("websocket"), dict) else {}
+        market_active = market_status in {"ATO", "OPEN", "CONTINUOUS", "ATC"}
+        configured = bool(getattr(getattr(self, "real", None), "configured", lambda: False)())
+        if market_active and configured and not bool(
+            ws.get("connected") and ws.get("authenticated")
+        ) and not bool(ws.get("running")):
+            issues.append("DNSE WS MẤT KẾT NỐI")
+
+        signature = "|".join(issues)
+        if signature == str(getattr(self, "_telegram_system_health_signature", "") or ""):
+            return
+        self._telegram_system_health_signature = signature
+        if not signature:
+            return
+        DashboardActionsMixin._notify_system_event(
+            self,
+            "HEALTH",
+            " · ".join(issues),
+            execution_mode,
+            occurrence=f"{signature}|{int(time.time())}",
+        )
+
     def _record_failed_buy_execution(
         self,
         execution_mode: str,
@@ -2882,6 +3002,12 @@ class DashboardActionsMixin:
                     return
                 if error:
                     self.logger.error("Execution worker failed: %s", error)
+                    DashboardActionsMixin._notify_system_event(
+                        self,
+                        "EXECUTION_WORKER",
+                        "Luồng xử lý lệnh bị lỗi.",
+                        str(self.mode.get() or "").upper(),
+                    )
                 for selected_mode, intent, broker_result in rows:
                     self._log(
                         f"{selected_mode} {intent.side} {intent.symbol}: "
@@ -2890,6 +3016,20 @@ class DashboardActionsMixin:
                     self._record_failed_buy_execution(
                         selected_mode, intent, broker_result,
                     )
+                    broker_status = str(getattr(broker_result, "status", "") or "").upper()
+                    broker_ok = bool(getattr(broker_result, "ok", False))
+                    if intent.side != "BUY" and (
+                        not broker_ok
+                        or broker_status in {"REJECTED", "FAILED", "EXPIRED"}
+                    ):
+                        DashboardActionsMixin._notify_system_event(
+                            self,
+                            "ORDER_FAILURE",
+                            f"{selected_mode} {intent.side} {intent.symbol}: "
+                            f"{broker_status or 'FAILED'}.",
+                            selected_mode,
+                            occurrence=f"{intent.id}|{broker_status or 'FAILED'}",
+                        )
                 self._refresh_local()
                 self.after(1000, self._process_orders)
 
@@ -2935,6 +3075,12 @@ class DashboardActionsMixin:
                     return
                 if error:
                     self.logger.warning("Account refresh failed: %s", error)
+                    DashboardActionsMixin._notify_system_event(
+                        self,
+                        "ACCOUNT_REFRESH",
+                        "Không làm mới được tài khoản/vị thế DNSE.",
+                        str(self.mode.get() or "").upper(),
+                    )
                 self.snapshots.update(values)
                 if "PAPER" in values:
                     self.histories["PAPER"] = list(values["PAPER"][2])

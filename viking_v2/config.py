@@ -90,6 +90,7 @@ TELEGRAM_NOTIFICATION_DEFAULTS: dict[str, bool] = {
     "blocked_buy": False,
     "corporate_action": True,
     "external_sell": True,
+    "system": True,
 }
 TELEGRAM_COOLDOWN_DEFAULTS: dict[str, int] = {
     "protect": 0,
@@ -97,6 +98,7 @@ TELEGRAM_COOLDOWN_DEFAULTS: dict[str, int] = {
     "blocked_buy": 30,
     "corporate_action": 1440,
     "external_sell": 0,
+    "system": 15,
 }
 
 # Canonical operating defaults shared by LIVE, PAPER and backtest.  Keep the

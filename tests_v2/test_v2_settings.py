@@ -77,7 +77,9 @@ def test_telegram_settings_only_keep_connection_values():
     assert settings.telegram_notifications["protect"] is False
     assert settings.telegram_notifications["indicator_exit"] is True
     assert settings.telegram_notifications["blocked_buy"] is False
+    assert settings.telegram_notifications["system"] is True
     assert settings.telegram_cooldown_minutes["indicator_exit"] == 30
+    assert settings.telegram_cooldown_minutes["system"] == 15
     assert not hasattr(settings, "telegram_system_alerts")
 
 
@@ -87,6 +89,7 @@ def test_legacy_telegram_alert_switch_migrates_to_explicit_categories():
     assert settings.telegram_notifications["protect"] is True
     assert settings.telegram_notifications["indicator_exit"] is True
     assert settings.telegram_notifications["blocked_buy"] is True
+    assert settings.telegram_notifications["system"] is True
     assert not hasattr(settings, "telegram_signal_alerts")
 
 

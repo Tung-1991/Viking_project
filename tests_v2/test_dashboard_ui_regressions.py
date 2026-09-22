@@ -354,6 +354,7 @@ def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> 
         assert connection_popup.tele_event_time_controls["closed"].cget("text") == "1 LẦN/TRADE"
         assert set(connection_popup.tele_cooldown_entries) == {
             "protect", "indicator_exit", "blocked_buy", "corporate_action", "external_sell",
+            "system",
         }
     finally:
         for _label, popup in popups:

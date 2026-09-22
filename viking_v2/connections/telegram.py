@@ -361,6 +361,40 @@ class SignalTelegramService:
             )
         )
 
+    def notify_market_holiday(
+        self, *, holiday_date: str, execution_mode: str = "",
+    ) -> bool:
+        holiday_date = str(holiday_date or "").strip()
+        if not holiday_date:
+            return False
+        return self._send(
+            "\n".join(
+                (
+                    "📅 NGHỈ GIAO DỊCH"
+                    + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
+                    f"Ngày: {holiday_date}",
+                    "BOT không tạo BUY mới; vị thế và lệnh đang chờ vẫn được giữ an toàn.",
+                )
+            )
+        )
+
+    def notify_system_alert(
+        self, *, summary: str, execution_mode: str = "",
+    ) -> bool:
+        summary = str(summary or "").strip()
+        if not summary:
+            return False
+        return self._send(
+            "\n".join(
+                (
+                    "🔴 HỆ THỐNG CẦN KIỂM TRA"
+                    + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
+                    summary,
+                    "Xem HEALTH và log Viking để kiểm tra chi tiết.",
+                )
+            )
+        )
+
     def notify_closed(self, *, cycle: TradeCycle, reason: str = "") -> bool:
         """Notify only after every share in the matching trade has been sold."""
         if cycle.status != "CLOSED" or cycle.open_quantity != 0:

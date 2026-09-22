@@ -193,6 +193,95 @@ def test_telegram_signal_can_use_the_trade_id_and_corporate_action_is_outbound(t
     assert "không tự bán" in tele.sent[0][1]
 
 
+def test_telegram_reports_market_holiday_and_system_error_separately():
+    tele = Telegram()
+    service = SignalTelegramService(tele, chat_id="7")
+
+    assert service.notify_market_holiday(
+        holiday_date="2026-09-02", execution_mode="PAPER",
+    )
+    assert service.notify_system_alert(
+        summary="DNSE WS MẤT KẾT NỐI", execution_mode="REAL",
+    )
+
+    assert "NGHỈ GIAO DỊCH · PAPER" in tele.sent[0][1]
+    assert "2026-09-02" in tele.sent[0][1]
+    assert "HỆ THỐNG CẦN KIỂM TRA · REAL" in tele.sent[1][1]
+    assert "DNSE WS MẤT KẾT NỐI" in tele.sent[1][1]
+
+
+def test_dashboard_calendar_and_health_notifications_are_filtered_and_deduplicated(
+    monkeypatch, tmp_path,
+):
+    calls = []
+
+    class ImmediateThread:
+        def __init__(self, *, target, kwargs, daemon):
+            self.target, self.kwargs = target, kwargs
+
+        def start(self):
+            self.target(**self.kwargs)
+
+    class Service:
+        @staticmethod
+        def notify_market_holiday(**kwargs):
+            calls.append(("holiday", kwargs))
+            return True
+
+        @staticmethod
+        def notify_system_alert(**kwargs):
+            calls.append(("system", kwargs))
+            return True
+
+    class Subject:
+        telegram = Service()
+        rule_state = RuleStateStore(tmp_path / "rule_state.json")
+        settings = SimpleNamespace(
+            telegram_notifications={"corporate_action": True, "system": True},
+            telegram_cooldown_minutes={"corporate_action": 1440, "system": 15},
+        )
+        real = SimpleNamespace(configured=lambda: True)
+
+    monkeypatch.setattr(
+        "viking_v2.dashboard.actions.threading.Thread", ImmediateThread,
+    )
+    subject = Subject()
+    DashboardActionsMixin._notify_market_holiday(subject, "HOLIDAY", "PAPER")
+    DashboardActionsMixin._notify_market_holiday(subject, "HOLIDAY", "PAPER")
+    DashboardActionsMixin._notify_system_health(
+        subject,
+        {
+            "error": "cycle failed",
+            "api_health": {
+                "rest": {"total_requests": 3, "last_status": 500},
+                "websocket": {"running": False, "connected": False, "authenticated": False},
+            },
+        },
+        "STALE",
+        "OPEN",
+        "REAL",
+    )
+    DashboardActionsMixin._notify_system_health(
+        subject,
+        {
+            "error": "cycle failed",
+            "api_health": {
+                "rest": {"total_requests": 3, "last_status": 500},
+                "websocket": {"running": False, "connected": False, "authenticated": False},
+            },
+        },
+        "STALE",
+        "OPEN",
+        "REAL",
+    )
+
+    assert [kind for kind, _kwargs in calls] == ["holiday", "system"]
+    system_summary = calls[1][1]["summary"]
+    assert "DAEMON STALE" in system_summary
+    assert "DNSE API HTTP 500" in system_summary
+    assert "DNSE WS MẤT KẾT NỐI" in system_summary
+
+
 def test_rejected_bot_buy_is_written_back_to_signal_history(tmp_path):
     class Subject(DashboardActionsMixin):
         pass

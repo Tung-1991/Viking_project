@@ -568,8 +568,18 @@ class ConnectionPopup:
                 "ví dụ BOT OFF, đủ slot, khóa mua, thiếu vốn hoặc broker từ chối.",
                 "cooldown",
             ),
-            ("corporate_action", "CẢNH BÁO CHỐT QUYỀN", "Tối đa một lần cho mỗi mã và ngày giao dịch không hưởng quyền.", "cooldown"),
+            (
+                "corporate_action", "LỊCH NGHỈ & CHỐT QUYỀN",
+                "Báo ngày thị trường nghỉ và cảnh báo mã đang giữ tới ngày giao dịch không hưởng quyền.",
+                "cooldown",
+            ),
             ("external_sell", "SELL TRÊN DNSE APP", "Báo khi Viking phát hiện và đồng bộ một lệnh bán ngoài app Viking.", "cooldown"),
+            (
+                "system", "HỆ THỐNG",
+                "Báo lỗi thật của daemon, lịch giao dịch, DNSE API/WS hoặc xử lý lệnh; "
+                "không báo trạng thái chờ bình thường khi app vừa khởi động.",
+                "cooldown",
+            ),
         )
         notifications = self.settings.telegram_notifications
         cooldowns = self.settings.telegram_cooldown_minutes
