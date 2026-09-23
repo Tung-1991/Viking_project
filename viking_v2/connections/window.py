@@ -5,7 +5,7 @@ import re
 import threading
 import tkinter as tk
 from datetime import datetime
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 from typing import Any, Callable
 
 import customtkinter as ctk
@@ -14,8 +14,375 @@ from .. import config
 from ..config import AppSettings, load_settings, save_settings
 from ..dashboard.windows import FONT_KEY, FONT_VALUE, PALETTE, SymbolPicker, _HoverHint, _window
 from ..config import update_env
+from ..services.volume_scanner import (
+    VN100_AS_OF,
+    VolumeScanOptions,
+    VolumeScanResult,
+    VolumeScanRow,
+    VolumeScanner,
+    export_volume_scan,
+)
+from ..trading.market import MarketDataService
 from .dnse.client import DNSEClient
+from .dnse.websocket import DNSEMarketWS
 from .telegram import TelegramClient
+
+
+class VolumeScannerPopup:
+    """Read-only VN100 volume scanner; it never touches the watchlist."""
+
+    BG = "#111318"
+    SURFACE = "#22262D"
+    SURFACE_2 = "#1B1F25"
+    BORDER = "#343A43"
+    TEXT = "#E8EBEF"
+    TITLE = PALETTE["TITLE"]
+    MUTED = "#C5CBD4"
+    GREEN = "#22C55E"
+    BLUE = "#2B6CB0"
+    WARN = "#F59E0B"
+    RED = "#EF4444"
+
+    def __init__(
+        self,
+        parent: ctk.CTk,
+        client: DNSEClient,
+        post_ui: Callable[[Callable[[], None]], None],
+    ):
+        self.parent = parent
+        self.client = client
+        self.post_ui = post_ui
+        self.market = MarketDataService(client, DNSEMarketWS(client.api_key, client.api_secret))
+        self.scanner = VolumeScanner(
+            self.market.get_daily_bars,
+            api_health=self.client.api_health,
+        )
+        self.rows: tuple[VolumeScanRow, ...] = ()
+        self.busy = False
+
+        parent.update_idletasks()
+        screen_w = max(1100, int(parent.winfo_screenwidth() or 1100))
+        screen_h = max(700, int(parent.winfo_screenheight() or 700))
+        width, height = min(1050, screen_w - 50), min(700, screen_h - 70)
+        x, y = max(0, (screen_w - width) // 2), max(0, (screen_h - height) // 3)
+        self.top = _window(parent, "VIKING · LỌC VOLUME VN100", f"{width}x{height}+{x}+{y}")
+        self.top.configure(fg_color=self.BG)
+        self.top.minsize(900, 560)
+        self.top.resizable(True, True)
+        self.top.grid_rowconfigure(2, weight=1)
+        self.top.protocol("WM_DELETE_WINDOW", self.hide)
+        self.top.bind("<Escape>", lambda _event: self.hide(), add="+")
+
+        header = ctk.CTkFrame(self.top, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=18, pady=(14, 7))
+        header.grid_columnconfigure(0, weight=1)
+        self.title_label = ctk.CTkLabel(
+            header, text="LỌC VOLUME VN100", font=("Segoe UI", 22, "bold"),
+            text_color=self.TITLE, anchor="w",
+        )
+        self.title_label.grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(
+            header,
+            text="So sánh volume trung bình của hai kỳ liền nhau · chỉ dùng các phiên đã đóng",
+            font=("Segoe UI", 12), text_color=self.MUTED, anchor="w",
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+        ctk.CTkLabel(
+            header,
+            text=f"Rổ VN100 theo vốn hóa · cập nhật {VN100_AS_OF}",
+            font=("Segoe UI", 12), text_color=self.MUTED, anchor="e",
+        ).grid(row=0, column=1, rowspan=2, sticky="e")
+
+        controls = ctk.CTkFrame(
+            self.top, fg_color=self.SURFACE, corner_radius=10,
+            border_width=1, border_color=self.BORDER,
+        )
+        controls.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 8))
+        controls.grid_columnconfigure(0, weight=2, uniform="scanner_group")
+        controls.grid_columnconfigure(1, weight=3, uniform="scanner_group")
+
+        self.scope_group = self._parameter_group(
+            controls,
+            "1 · PHẠM VI KẾT QUẢ",
+            "Chọn số mã đầu rổ VN100 sẽ quét và số dòng tối đa muốn nhận.",
+        )
+        self.scope_group.grid(row=0, column=0, sticky="nsew", padx=(10, 5), pady=10)
+        scope_fields = ctk.CTkFrame(self.scope_group, fg_color="transparent")
+        scope_fields.grid(row=2, column=0, sticky="ew", padx=4, pady=(2, 4))
+        scope_fields.grid_columnconfigure((0, 1), weight=1, uniform="scope")
+        self.scan_count_entry = self._entry_control(
+            scope_fields, 0, "SỐ MÃ QUÉT", "100", "Từ 1 đến 100 mã đầu rổ.",
+        )
+        self.result_count_entry = self._entry_control(
+            scope_fields, 1, "SỐ MÃ LẤY", "20", "Không vượt quá số mã quét.",
+        )
+
+        self.filter_group = self._parameter_group(
+            controls,
+            "2 · ĐIỀU KIỆN LỌC",
+            "So sánh trung bình kỳ gần nhất với kỳ ngay trước đó.",
+        )
+        self.filter_group.grid(row=0, column=1, sticky="nsew", padx=(5, 10), pady=10)
+        filter_fields = ctk.CTkFrame(self.filter_group, fg_color="transparent")
+        filter_fields.grid(row=2, column=0, sticky="ew", padx=4, pady=(2, 4))
+        filter_fields.grid_columnconfigure((0, 1, 2), weight=1, uniform="filter")
+        self.sessions_choice = self._menu_control(
+            filter_fields, 0, "CHU KỲ", ["5", "10"], "5", "Số phiên trong mỗi kỳ.",
+        )
+        self.threshold_entry = self._entry_control(
+            filter_fields, 1, "NGƯỠNG (%)", "20", "Mức thay đổi tối thiểu.",
+        )
+        self.direction_choice = self._menu_control(
+            filter_fields, 2, "HƯỚNG", ["TĂNG", "GIẢM", "CẢ HAI"], "CẢ HAI",
+            "Chọn tăng, giảm hoặc cả hai.",
+        )
+
+        action_row = ctk.CTkFrame(controls, fg_color="transparent")
+        action_row.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 11))
+        action_row.grid_columnconfigure(0, weight=1)
+        self.status = ctk.CTkLabel(
+            action_row, text="Sẵn sàng · chỉ dùng dữ liệu DNSE, không sửa watchlist",
+            font=("Segoe UI", 12), text_color=self.MUTED, anchor="w",
+        )
+        self.status.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        self.scan_button = ctk.CTkButton(
+            action_row, text="BẮT ĐẦU LỌC", width=150, height=40,
+            font=("Segoe UI", 13, "bold"), fg_color=self.BLUE,
+            hover_color=PALETTE["BLUE_HOVER"], command=self._start_scan,
+        )
+        self.scan_button.grid(row=0, column=1, padx=(0, 8))
+        self.export_button = ctk.CTkButton(
+            action_row, text="XUẤT EXCEL", width=150, height=40,
+            font=("Segoe UI", 13, "bold"), fg_color="#2A2E34",
+            hover_color=PALETTE["GREEN_HOVER"], state="disabled",
+            command=self._export,
+        )
+        self.export_button.grid(row=0, column=2)
+
+        table_frame = ctk.CTkFrame(
+            self.top, fg_color=self.SURFACE, corner_radius=10,
+            border_width=1, border_color=self.BORDER,
+        )
+        table_frame.grid(row=2, column=0, sticky="nsew", padx=14, pady=(0, 14))
+        table_frame.grid_columnconfigure(0, weight=1)
+        table_frame.grid_rowconfigure(0, weight=1)
+
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure(
+            "V2Volume.Treeview", background=self.SURFACE, foreground=self.TEXT,
+            fieldbackground=self.SURFACE, rowheight=42,
+            font=("Cascadia Mono", 13), borderwidth=0,
+        )
+        style.layout("V2Volume.Treeview", [("V2Volume.Treeview.treearea", {"sticky": "nswe"})])
+        style.configure(
+            "V2Volume.Treeview.Heading", background=self.SURFACE_2,
+            foreground=self.TITLE, font=("Segoe UI", 13, "bold"),
+            relief="flat", padding=(9, 9),
+        )
+        style.map(
+            "V2Volume.Treeview",
+            background=[("selected", self.BLUE)], foreground=[("selected", "#FFFFFF")],
+        )
+        columns = ("symbol", "previous", "recent", "change", "status")
+        self.tree = ttk.Treeview(
+            table_frame, columns=columns, show="headings", selectmode="none",
+            style="V2Volume.Treeview",
+        )
+        for key, title, width_px, anchor in (
+            ("symbol", "MÃ CK", 110, "center"),
+            ("previous", "TB KỲ TRƯỚC", 190, "e"),
+            ("recent", "TB KỲ GẦN NHẤT", 210, "e"),
+            ("change", "% THAY ĐỔI", 170, "e"),
+            ("status", "TRẠNG THÁI", 150, "center"),
+        ):
+            self.tree.heading(key, text=title)
+            self.tree.column(key, width=width_px, minwidth=90, anchor=anchor, stretch=True)
+        self.tree.tag_configure("increase", background="#172D20", foreground="#ECFDF3")
+        self.tree.tag_configure("decrease", background="#321F23", foreground="#FFF1F2")
+        self.tree.grid(row=0, column=0, sticky="nsew", padx=(5, 0), pady=5)
+        yscroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
+        yscroll.grid(row=0, column=1, sticky="ns", pady=5, padx=(0, 5))
+        self.tree.configure(yscrollcommand=yscroll.set)
+        self.show()
+
+    def _parameter_group(
+        self, parent: ctk.CTkFrame, title: str, description: str,
+    ) -> ctk.CTkFrame:
+        group = ctk.CTkFrame(
+            parent, fg_color=self.SURFACE_2, corner_radius=8,
+            border_width=1, border_color=self.BORDER,
+        )
+        group.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            group, text=title, font=("Segoe UI", 14, "bold"),
+            text_color=self.TITLE, anchor="w",
+        ).grid(row=0, column=0, sticky="ew", padx=12, pady=(9, 0))
+        ctk.CTkLabel(
+            group, text=description, font=("Segoe UI", 11),
+            text_color=self.MUTED, anchor="w", justify="left",
+        ).grid(row=1, column=0, sticky="ew", padx=12, pady=(2, 1))
+        return group
+
+    def _entry_control(
+        self, parent: ctk.CTkFrame, column: int, label: str, value: str, hint: str,
+    ) -> ctk.CTkEntry:
+        cell = ctk.CTkFrame(parent, fg_color="transparent")
+        cell.grid(row=0, column=column, sticky="nsew", padx=8, pady=(5, 4))
+        cell.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            cell, text=label, font=("Segoe UI", 13, "bold"),
+            text_color=self.TITLE, anchor="w",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 4))
+        entry = ctk.CTkEntry(
+            cell, height=40, fg_color=self.BG, border_color="#46505D",
+            font=("Cascadia Mono", 14), text_color=self.TEXT,
+        )
+        entry.grid(row=1, column=0, sticky="ew")
+        entry.insert(0, value)
+        ctk.CTkLabel(
+            cell, text=hint, font=("Segoe UI", 11), text_color=self.MUTED,
+            anchor="w", justify="left", wraplength=210,
+        ).grid(row=2, column=0, sticky="ew", pady=(4, 0))
+        return entry
+
+    def _menu_control(
+        self, parent: ctk.CTkFrame, column: int, label: str,
+        values: list[str], value: str, hint: str,
+    ) -> ctk.CTkOptionMenu:
+        cell = ctk.CTkFrame(parent, fg_color="transparent")
+        cell.grid(row=0, column=column, sticky="nsew", padx=8, pady=(5, 4))
+        cell.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            cell, text=label, font=("Segoe UI", 13, "bold"),
+            text_color=self.TITLE, anchor="w",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 4))
+        menu = ctk.CTkOptionMenu(
+            cell, values=values, width=120, height=40,
+            fg_color=self.BLUE, button_color=self.BLUE,
+            button_hover_color=PALETTE["BLUE_HOVER"],
+            font=("Segoe UI", 13, "bold"), dynamic_resizing=False,
+        )
+        menu.grid(row=1, column=0, sticky="ew")
+        menu.set(value)
+        ctk.CTkLabel(
+            cell, text=hint, font=("Segoe UI", 11), text_color=self.MUTED,
+            anchor="w", justify="left", wraplength=210,
+        ).grid(row=2, column=0, sticky="ew", pady=(4, 0))
+        return menu
+
+    def show(self) -> None:
+        self.top.deiconify()
+        self.top.lift()
+        self.top.focus_force()
+
+    def hide(self) -> None:
+        if self.top.winfo_exists():
+            self.top.withdraw()
+
+    def close(self) -> None:
+        if self.top.winfo_exists():
+            self.top.destroy()
+
+    def _options(self) -> VolumeScanOptions:
+        try:
+            scan_count = int(self.scan_count_entry.get().strip())
+            result_count = int(self.result_count_entry.get().strip())
+            sessions = int(self.sessions_choice.get())
+            threshold = float(self.threshold_entry.get().strip().replace(",", "."))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Số mã quét/lấy, chu kỳ và ngưỡng phải là số hợp lệ.") from exc
+        return VolumeScanOptions(
+            scan_count=scan_count,
+            result_count=result_count,
+            sessions=sessions,
+            threshold_pct=threshold,
+            direction=self.direction_choice.get(),
+        ).validate()
+
+    def _set_progress(self, completed: int, total: int, symbol: str) -> None:
+        if self.busy and self.top.winfo_exists():
+            self.status.configure(
+                text=f"Đang quét {completed}/{total} · {symbol}", text_color=self.WARN,
+            )
+
+    def _start_scan(self) -> None:
+        if self.busy:
+            return
+        try:
+            options = self._options()
+        except ValueError as exc:
+            self.status.configure(text=str(exc), text_color=self.RED)
+            return
+        if not self.client.configured():
+            self.status.configure(text="CHƯA CẤU HÌNH DNSE", text_color=self.RED)
+            return
+
+        self.busy = True
+        self.rows = ()
+        self.tree.delete(*self.tree.get_children())
+        self.scan_button.configure(state="disabled", text="ĐANG LỌC...")
+        self.export_button.configure(state="disabled", fg_color="#2A2E34")
+        self.status.configure(text="Đang chuẩn bị dữ liệu DNSE...", text_color=self.WARN)
+
+        def progress(completed: int, total: int, symbol: str) -> None:
+            self.post_ui(lambda: self._set_progress(completed, total, symbol))
+
+        def worker() -> None:
+            try:
+                result = self.scanner.scan(options, progress=progress)
+                error = ""
+            except Exception as exc:
+                result = None
+                error = str(exc)
+            self.post_ui(lambda: self._finish_scan(result, error))
+
+        threading.Thread(target=worker, name="viking-volume-scan", daemon=True).start()
+
+    def _finish_scan(self, result: VolumeScanResult | None, error: str) -> None:
+        if not self.top.winfo_exists():
+            return
+        self.busy = False
+        self.scan_button.configure(state="normal", text="BẮT ĐẦU LỌC")
+        if result is None:
+            self.status.configure(text=f"LỌC THẤT BẠI · {error or 'Lỗi không xác định'}", text_color=self.RED)
+            return
+
+        self.rows = result.rows
+        for row in self.rows:
+            self.tree.insert(
+                "", "end",
+                values=(
+                    row.symbol,
+                    f"{row.previous_average:,.0f}",
+                    f"{row.recent_average:,.0f}",
+                    f"{row.change_pct:+.2f}%",
+                    row.status,
+                ),
+                tags=("increase" if row.status == "TĂNG" else "decrease",),
+            )
+        summary = result.summary
+        detail = (
+            f"Đã quét {summary.scanned} · đạt {summary.matched} · hiển thị {summary.returned}"
+            f" · thiếu dữ liệu {summary.insufficient} · TB trước = 0: {summary.zero_base}"
+            f" · lỗi API: {summary.api_errors}"
+        )
+        if self.rows:
+            self.status.configure(text=detail, text_color=self.GREEN)
+            self.export_button.configure(state="normal", fg_color=self.GREEN)
+        else:
+            self.status.configure(text=f"KHÔNG CÓ KẾT QUẢ · {detail}", text_color=self.WARN)
+
+    def _export(self) -> None:
+        if not self.rows:
+            self.status.configure(text="Không có kết quả để xuất Excel.", text_color=self.WARN)
+            return
+        try:
+            path = export_volume_scan(self.rows)
+        except Exception as exc:
+            self.status.configure(text=f"XUẤT EXCEL THẤT BẠI · {exc}", text_color=self.RED)
+            return
+        self.status.configure(text=f"ĐÃ XUẤT · {path}", text_color=self.GREEN)
+        messagebox.showinfo("Lọc volume VN100", f"Đã xuất Excel:\n{path}", parent=self.top)
 
 
 class ConnectionPopup:
@@ -52,6 +419,7 @@ class ConnectionPopup:
         self._holiday_draft = sorted(
             set(settings.custom_holidays).difference(config.DEFAULT_VN_TRADING_HOLIDAYS)
         )
+        self._volume_popup: VolumeScannerPopup | None = None
 
         parent.update_idletasks()
         screen_w = max(1100, int(parent.winfo_screenwidth() or 1100))
@@ -96,6 +464,8 @@ class ConnectionPopup:
             self.on_visibility_changed(True)
 
     def hide(self) -> None:
+        if self._volume_popup and self._volume_popup.top.winfo_exists():
+            self._volume_popup.hide()
         if self.top.winfo_exists():
             self.top.withdraw()
         if self.on_visibility_changed:
@@ -121,6 +491,8 @@ class ConnectionPopup:
     def _close(self) -> None:
         if self.on_visibility_changed:
             self.on_visibility_changed(False)
+        if self._volume_popup and self._volume_popup.top.winfo_exists():
+            self._volume_popup.close()
         if self.top.winfo_exists():
             self.top.destroy()
 
@@ -425,7 +797,7 @@ class ConnectionPopup:
             "Nhập một hoặc nhiều mã, cách nhau bằng dấu phẩy hoặc khoảng trắng. "
             "Bot chỉ lấy dữ liệu và kiểm tra rule với danh sách đã lưu.",
         )
-        card.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
+        card.grid(row=1, column=0, sticky="nsew", padx=6, pady=6)
         card.grid_columnconfigure(0, weight=1)
         self.watchlist_picker = SymbolPicker(
             card, self._watchlist_draft,
@@ -470,11 +842,44 @@ class ConnectionPopup:
         save_row = ctk.CTkFrame(card, fg_color="transparent")
         save_row.grid(row=5, column=0, sticky="ew", padx=12, pady=(5, 10))
         save_row.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            save_row, text="Chỉ thay đổi khi bấm lưu", font=("Segoe UI", 11),
+            text_color=self.MUTED, anchor="w",
+        ).grid(row=0, column=0, sticky="w", padx=(0, 10))
         ctk.CTkButton(
-            save_row, text="LƯU DANH SÁCH", width=140, height=32,
-            font=("Segoe UI", 12, "bold"), fg_color=self.GREEN,
+            save_row, text="LƯU DANH SÁCH", width=150, height=38,
+            font=("Segoe UI", 13, "bold"), fg_color=self.GREEN,
             hover_color="#16A34A", command=self._save_watchlist,
         ).grid(row=0, column=1)
+
+        self.volume_scanner_card = self._card(
+            body,
+            "TIỆN ÍCH PHÂN TÍCH",
+            "Bộ lọc chỉ đọc volume lịch sử từ DNSE và xuất Excel. Không tự thêm, xóa hoặc thay đổi danh sách mã bot đang theo dõi.",
+        )
+        self.volume_scanner_card.configure(fg_color="#1C2733", border_color="#315A85")
+        self.volume_scanner_card.grid(row=0, column=0, sticky="ew", padx=6, pady=6)
+        self.volume_scanner_card.grid_columnconfigure(0, weight=1)
+        self.volume_scanner_hint = ctk.CTkLabel(
+            self.volume_scanner_card,
+            text="So sánh volume trung bình 5/10 phiên của VN100 · xem kết quả trước, sau đó xuất Excel.",
+            font=("Segoe UI", 12), text_color=self.MUTED, anchor="w", justify="left",
+            wraplength=560,
+        )
+        self.volume_scanner_hint.grid(
+            row=1, column=0, columnspan=2, sticky="ew", padx=(12, 14), pady=(2, 11),
+        )
+        self.btn_volume_scanner = ctk.CTkButton(
+            self.volume_scanner_card, text="LỌC VOLUME VN100", width=190, height=40,
+            font=("Segoe UI", 13, "bold"), fg_color=self.BLUE,
+            hover_color="#245C92", command=self._open_volume_scanner,
+        )
+        self.btn_volume_scanner.grid(row=1, column=2, sticky="e", padx=12, pady=(2, 11))
+        _HoverHint(
+            self.btn_volume_scanner,
+            "Mở popup lọc độc lập. Tiện ích không đọc hoặc sửa watchlist hiện tại.",
+            placement="below",
+        )
 
         holiday = self._card(
             body,
@@ -482,7 +887,7 @@ class ConnectionPopup:
             "Viking dùng lịch DNSE, tự chặn T7/CN và có sẵn lịch nghỉ giao dịch Việt Nam 2026. "
             "Chỉ thêm tại đây khi Sở công bố ngày nghỉ bổ sung.",
         )
-        holiday.grid(row=1, column=0, sticky="ew", padx=6, pady=6)
+        holiday.grid(row=2, column=0, sticky="ew", padx=6, pady=6)
         holiday.grid_columnconfigure(0, weight=1)
         holiday_row = ctk.CTkFrame(holiday, fg_color="transparent")
         holiday_row.grid(row=1, column=0, columnspan=3, sticky="ew", padx=12, pady=(2, 5))
@@ -513,6 +918,13 @@ class ConnectionPopup:
             hover_color="#16A34A", command=self._save_holidays,
         ).grid(row=3, column=2, sticky="e", padx=12, pady=(3, 8))
         self._render_holiday_chips()
+
+    def _open_volume_scanner(self) -> None:
+        popup = self._volume_popup
+        if popup and popup.top.winfo_exists():
+            popup.show()
+            return
+        self._volume_popup = VolumeScannerPopup(self.top, self.client, self._post_ui)
 
     def _telegram_tab(self, frame: ctk.CTkFrame) -> None:
         body = self._body(frame)

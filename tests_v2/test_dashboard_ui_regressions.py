@@ -364,6 +364,41 @@ def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> 
         client.close()
 
 
+def test_volume_scanner_popup_has_safe_defaults_and_does_not_touch_watchlist(ui_root) -> None:
+    from viking_v2.config import load_settings
+    from viking_v2.connections.dnse.client import DNSEClient
+    from viking_v2.connections.window import ConnectionPopup
+
+    settings = load_settings("PAPER")
+    original_watchlist = list(settings.watchlist)
+    client = DNSEClient(account_no="PAPER")
+    popup = ConnectionPopup(ui_root, settings, "PAPER", client, lambda: None)
+    try:
+        assert popup.btn_volume_scanner.cget("text") == "LỌC VOLUME VN100"
+        assert popup.btn_volume_scanner.master is popup.volume_scanner_card
+        assert int(popup.volume_scanner_card.grid_info()["row"]) == 0
+        assert "xuất Excel" in popup.volume_scanner_hint.cget("text")
+        popup._open_volume_scanner()
+        ui_root.update_idletasks()
+        scanner = popup._volume_popup
+        assert scanner is not None
+        assert scanner.scan_count_entry.get() == "100"
+        assert scanner.result_count_entry.get() == "20"
+        assert scanner.sessions_choice.get() == "5"
+        assert scanner.threshold_entry.get() == "20"
+        assert scanner.direction_choice.get() == "CẢ HAI"
+        assert scanner.scan_button.cget("text") == "BẮT ĐẦU LỌC"
+        assert int(scanner.scope_group.grid_info()["column"]) == 0
+        assert int(scanner.filter_group.grid_info()["column"]) == 1
+        assert int(scanner.title_label.cget("font")[1]) >= 22
+        assert scanner.export_button.cget("state") == "disabled"
+        assert scanner.tree["columns"] == ("symbol", "previous", "recent", "change", "status")
+        assert settings.watchlist == original_watchlist
+    finally:
+        popup._close()
+        client.close()
+
+
 def test_phase2_preview_uses_readable_stacked_rows(ui_root) -> None:
     import customtkinter as ctk
 

@@ -20,6 +20,19 @@ Nguồn cấu hình theo thứ tự ưu tiên:
 4. `StaticRuleParameters` cũng lấy trực tiếp từ default trên; parity test sẽ lỗi
    nếu hai đường nạp cấu hình lệch nhau.
 
+### Bộ lọc volume VN100
+
+Tab `MÃ CK` có tiện ích `LỌC VOLUME VN100` độc lập với watchlist và daemon.
+Người dùng tự nhập số mã cần quét (1–100), số kết quả cần lấy, chu kỳ 5/10
+phiên, ngưỡng và hướng tăng/giảm. Tập quét lấy từ đầu rổ VN100 đã sắp theo vốn
+hóa giảm dần; ngày cập nhật rổ được hiển thị ngay trên popup.
+
+Scanner dùng nến ngày DNSE đã đóng, so sánh volume trung bình N phiên gần nhất
+với N phiên liền trước và không dùng phiên hiện tại khi chưa đóng. Kết quả chỉ
+được hiển thị trong popup; không đọc, ghi hoặc merge watchlist. Nút `XUẤT EXCEL`
+ghi các dòng đang hiển thị vào
+`viking_v2/runtime/exports/vn100_volume_YYYYMMDD_HHMMSS.xlsx`.
+
 ## 2. Rule hiện hành
 
 | Nhóm | Cấu hình chốt |
@@ -186,7 +199,7 @@ trong lịch sử Git; không duy trì một tài liệu vận hành riêng đ�
 | `models.py` | Model lệnh, trade, decision và runtime |
 | `connections/` | Adapter DNSE, WebSocket, Telegram và UI kết nối |
 | `rules/` | Chỉ báo, BUY, SL, TP, PROTECT, E và state rule |
-| `services/` | Daemon, runtime bridge và điều phối BUY/slot |
+| `services/` | Daemon, runtime bridge, điều phối BUY/slot và scanner volume độc lập |
 | `trading/` | Vốn, settlement, queue, execution và trade state |
 | `dashboard/` | UI, preview, bảng, popup và thao tác operator |
 | `backtest/` | Dữ liệu lịch sử, replay, mô phỏng, báo cáo và UI |
@@ -213,8 +226,8 @@ Nguyên tắc:
 - Trước commit: chạy toàn bộ `pytest`, `compileall` và `git diff --check`.
 - Không refactor lớn `dashboard/actions.py` ngay trước phiên PAPER; về sau nên
   tách dần quản lý lệnh, thông báo và polling/runtime.
-- Scanner VN100 nếu triển khai phải là service độc lập; không nhét vào rule BUY
-  khi chưa được phê duyệt thành điều kiện giao dịch.
+- Scanner VN100 là tiện ích đọc DNSE và xuất Excel; không tham gia rule BUY,
+  không sửa watchlist và không chạy trong daemon giao dịch.
 
 Thư mục ngoài source: `ckvnvenv/` là môi trường Python;
 `viking_v2/dnse_api/` là tài liệu DNSE cục bộ; `.pytest_cache/`, `__pycache__/`
