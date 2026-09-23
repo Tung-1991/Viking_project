@@ -12,6 +12,8 @@ from viking_v2.services.volume_scanner import (
     VolumeScanner,
     evaluate_volume_change,
     export_volume_scan,
+    export_watchlist,
+    import_watchlist,
 )
 
 
@@ -172,3 +174,34 @@ def test_export_rejects_empty_results_without_creating_directory(tmp_path) -> No
     with pytest.raises(ValueError, match="Không có kết quả"):
         export_volume_scan([], output_dir=output)
     assert not output.exists()
+
+
+def test_watchlist_excel_round_trip_preserves_order_exchange_and_priority(tmp_path) -> None:
+    path = export_watchlist(
+        ["FPT", "MBB", "SSI"],
+        priority_symbols=["MBB"],
+        symbol_exchanges={"FPT": "HOSE", "MBB": "HSX"},
+        output_dir=tmp_path,
+        now=datetime(2026, 9, 23, 10, 11, 12, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh")),
+    )
+
+    assert path.name == "watchlist_20260923_101112.xlsx"
+    imported = import_watchlist(path)
+    assert imported.symbols == ("FPT", "MBB", "SSI")
+    assert imported.priority_symbols == ("MBB",)
+    assert imported.symbol_exchanges == {"FPT": "HOSE", "MBB": "HOSE"}
+
+
+def test_watchlist_import_rejects_invalid_symbol_without_partial_result(tmp_path) -> None:
+    from openpyxl import Workbook
+
+    path = tmp_path / "invalid.xlsx"
+    book = Workbook()
+    sheet = book.active
+    sheet.append(("MÃ CK",))
+    sheet.append(("FPT!",))
+    book.save(path)
+    book.close()
+
+    with pytest.raises(ValueError, match="không hợp lệ"):
+        import_watchlist(path)

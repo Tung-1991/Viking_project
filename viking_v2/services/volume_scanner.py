@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import re
 from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo
 
@@ -79,6 +80,13 @@ class VolumeScanSummary:
 class VolumeScanResult:
     rows: tuple[VolumeScanRow, ...]
     summary: VolumeScanSummary
+
+
+@dataclass(frozen=True, slots=True)
+class WatchlistSheet:
+    symbols: tuple[str, ...]
+    priority_symbols: tuple[str, ...]
+    symbol_exchanges: dict[str, str]
 
 
 def evaluate_volume_change(
@@ -269,3 +277,112 @@ def export_volume_scan(
     book.save(path)
     book.close()
     return path
+
+
+def export_watchlist(
+    symbols: Iterable[str],
+    *,
+    priority_symbols: Iterable[str] = (),
+    symbol_exchanges: dict[str, str] | None = None,
+    output_dir: str | Path | None = None,
+    now: datetime | None = None,
+) -> Path:
+    values = list(dict.fromkeys(
+        str(symbol or "").strip().upper()
+        for symbol in symbols
+        if str(symbol or "").strip()
+    ))
+    if not values:
+        raise ValueError("Watchlist không có mã để xuất Excel.")
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+    except ImportError as exc:  # pragma: no cover - dependency ships with Viking
+        raise RuntimeError("Thiếu thư viện openpyxl để xuất Excel.") from exc
+
+    priority = {
+        str(symbol or "").strip().upper()
+        for symbol in priority_symbols
+        if str(symbol or "").strip()
+    }
+    exchanges = {
+        str(symbol or "").strip().upper(): str(exchange or "").strip().upper()
+        for symbol, exchange in (symbol_exchanges or {}).items()
+    }
+    root = Path(output_dir or (config.RUNTIME_ROOT / "exports"))
+    root.mkdir(parents=True, exist_ok=True)
+    timestamp = now or datetime.now(VN_TZ)
+    stem = f"watchlist_{timestamp:%Y%m%d_%H%M%S}"
+    path = root / f"{stem}.xlsx"
+    suffix = 2
+    while path.exists():
+        path = root / f"{stem}_{suffix}.xlsx"
+        suffix += 1
+
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "WATCHLIST"
+    sheet.append(("THỨ TỰ", "MÃ CK", "SÀN", "PRIORITY"))
+    for index, symbol in enumerate(values, start=1):
+        sheet.append((index, symbol, exchanges.get(symbol, ""), "CÓ" if symbol in priority else ""))
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    for cell in sheet[1]:
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+    for column, width in zip("ABCD", (12, 16, 14, 14)):
+        sheet.column_dimensions[column].width = width
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:D{sheet.max_row}"
+    book.save(path)
+    book.close()
+    return path
+
+
+def import_watchlist(path: str | Path) -> WatchlistSheet:
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:  # pragma: no cover - dependency ships with Viking
+        raise RuntimeError("Thiếu thư viện openpyxl để nhập Excel.") from exc
+
+    source = Path(path)
+    if not source.is_file():
+        raise ValueError("Không tìm thấy file watchlist.")
+    book = load_workbook(source, read_only=True, data_only=True)
+    try:
+        sheet = book["WATCHLIST"] if "WATCHLIST" in book.sheetnames else book.active
+        headers = {
+            str(cell.value or "").strip().upper(): index
+            for index, cell in enumerate(sheet[1], start=1)
+        }
+        symbol_column = headers.get("MÃ CK") or headers.get("SYMBOL")
+        if symbol_column is None:
+            raise ValueError("File Excel thiếu cột MÃ CK.")
+        exchange_column = headers.get("SÀN") or headers.get("EXCHANGE")
+        priority_column = headers.get("PRIORITY")
+        symbols: list[str] = []
+        priority: list[str] = []
+        exchanges: dict[str, str] = {}
+        for row_index in range(2, sheet.max_row + 1):
+            symbol = str(sheet.cell(row_index, symbol_column).value or "").strip().upper()
+            if not symbol:
+                continue
+            if not re.fullmatch(r"[A-Z][A-Z0-9]{2,11}", symbol):
+                raise ValueError(f"Mã CK không hợp lệ ở dòng {row_index}: {symbol}")
+            if symbol not in symbols:
+                symbols.append(symbol)
+            if exchange_column is not None:
+                exchange = str(sheet.cell(row_index, exchange_column).value or "").strip().upper()
+                aliases = {"HSX": "HOSE", "STO": "HOSE", "STX": "HNX", "UPX": "UPCOM"}
+                exchange = aliases.get(exchange, exchange)
+                if exchange in {"HOSE", "HNX", "UPCOM"}:
+                    exchanges[symbol] = exchange
+            if priority_column is not None:
+                flag = str(sheet.cell(row_index, priority_column).value or "").strip().upper()
+                if flag in {"CÓ", "CO", "YES", "TRUE", "1", "X", "PRIORITY"} and symbol not in priority:
+                    priority.append(symbol)
+        if not symbols:
+            raise ValueError("File Excel không có mã CK.")
+        return WatchlistSheet(tuple(symbols), tuple(priority), exchanges)
+    finally:
+        book.close()

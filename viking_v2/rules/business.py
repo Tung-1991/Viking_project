@@ -1020,6 +1020,7 @@ class StaticRule:
                 "whipsaw_window": self.params.whipsaw_x,
                 "corporate_action_blocked": bool(portfolio.get("corporate_action_blocked", False)),
                 "pending_buy": bool(portfolio.get("pending_buy", False)),
+                "priority_entry": bool(context.get("priority_entry", False)),
                 "buy_volume": buy_volume,
             },
         }
@@ -1038,6 +1039,8 @@ class StaticRule:
 
         if signal != "BUY":
             return StrategyDecision("WAIT", symbol, "NO_NEW_BUY_SIGNAL", signal=signal, market_state=market_state, details=details)
+        if not bool(context.get("entry_allowed", True)):
+            return StrategyDecision("WAIT", symbol, "NOT_IN_WATCHLIST", signal=signal, market_state=market_state, details=details)
         if self.params.buy_volume_enabled and not bool(buy_volume.get("ready")):
             return StrategyDecision(
                 "WAIT", symbol, "BUY_VOLUME_NOT_READY", signal=signal,
@@ -1063,7 +1066,10 @@ class StaticRule:
         details["whipsaw_crossovers"] = crosses
         if self.params.whipsaw_enabled and crosses >= self.params.whipsaw_n:
             return StrategyDecision("WAIT", symbol, "WHIPSAW_LOCK", signal=signal, market_state=market_state, details=details)
-        if int(portfolio.get("open_positions", 0) or 0) >= self.params.max_positions:
+        if (
+            int(portfolio.get("open_positions", 0) or 0) >= self.params.max_positions
+            and not bool(context.get("priority_entry", False))
+        ):
             return StrategyDecision("WAIT", symbol, "MAX_POSITIONS", signal=signal, market_state=market_state, details=details)
         if float(portfolio.get("available_capital", 0.0) or 0.0) <= 0:
             return StrategyDecision("WAIT", symbol, "NO_AVAILABLE_CAPITAL", signal=signal, market_state=market_state, details=details)

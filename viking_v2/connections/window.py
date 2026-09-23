@@ -5,7 +5,7 @@ import re
 import threading
 import tkinter as tk
 from datetime import datetime
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable
 
 import customtkinter as ctk
@@ -21,6 +21,8 @@ from ..services.volume_scanner import (
     VolumeScanRow,
     VolumeScanner,
     export_volume_scan,
+    export_watchlist,
+    import_watchlist,
 )
 from ..trading.market import MarketDataService
 from .dnse.client import DNSEClient
@@ -29,7 +31,7 @@ from .telegram import TelegramClient
 
 
 class VolumeScannerPopup:
-    """Read-only VN100 volume scanner; it never touches the watchlist."""
+    """VN100 volume scanner with explicit Excel export/watchlist replacement."""
 
     BG = "#111318"
     SURFACE = "#22262D"
@@ -48,10 +50,12 @@ class VolumeScannerPopup:
         parent: ctk.CTk,
         client: DNSEClient,
         post_ui: Callable[[Callable[[], None]], None],
+        on_replace_watchlist: Callable[[list[str]], Any] | None = None,
     ):
         self.parent = parent
         self.client = client
         self.post_ui = post_ui
+        self.on_replace_watchlist = on_replace_watchlist
         self.market = MarketDataService(client, DNSEMarketWS(client.api_key, client.api_secret))
         self.scanner = VolumeScanner(
             self.market.get_daily_bars,
@@ -140,7 +144,7 @@ class VolumeScannerPopup:
         action_row.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 11))
         action_row.grid_columnconfigure(0, weight=1)
         self.status = ctk.CTkLabel(
-            action_row, text="Sẵn sàng · chỉ dùng dữ liệu DNSE, không sửa watchlist",
+            action_row, text="Sẵn sàng · không tự sửa watchlist nếu chưa xác nhận",
             font=("Segoe UI", 12), text_color=self.MUTED, anchor="w",
         )
         self.status.grid(row=0, column=0, sticky="ew", padx=(0, 10))
@@ -157,6 +161,13 @@ class VolumeScannerPopup:
             command=self._export,
         )
         self.export_button.grid(row=0, column=2)
+        self.replace_button = ctk.CTkButton(
+            action_row, text="THAY WATCHLIST", width=165, height=40,
+            font=("Segoe UI", 13, "bold"), fg_color="#2A2E34",
+            hover_color=PALETTE["BLUE_HOVER"], state="disabled",
+            command=self._replace_watchlist,
+        )
+        self.replace_button.grid(row=0, column=3, padx=(8, 0))
 
         table_frame = ctk.CTkFrame(
             self.top, fg_color=self.SURFACE, corner_radius=10,
@@ -322,6 +333,7 @@ class VolumeScannerPopup:
         self.tree.delete(*self.tree.get_children())
         self.scan_button.configure(state="disabled", text="ĐANG LỌC...")
         self.export_button.configure(state="disabled", fg_color="#2A2E34")
+        self.replace_button.configure(state="disabled", fg_color="#2A2E34")
         self.status.configure(text="Đang chuẩn bị dữ liệu DNSE...", text_color=self.WARN)
 
         def progress(completed: int, total: int, symbol: str) -> None:
@@ -369,6 +381,7 @@ class VolumeScannerPopup:
         if self.rows:
             self.status.configure(text=detail, text_color=self.GREEN)
             self.export_button.configure(state="normal", fg_color=self.GREEN)
+            self.replace_button.configure(state="normal", fg_color=self.BLUE)
         else:
             self.status.configure(text=f"KHÔNG CÓ KẾT QUẢ · {detail}", text_color=self.WARN)
 
@@ -383,6 +396,26 @@ class VolumeScannerPopup:
             return
         self.status.configure(text=f"ĐÃ XUẤT · {path}", text_color=self.GREEN)
         messagebox.showinfo("Lọc volume VN100", f"Đã xuất Excel:\n{path}", parent=self.top)
+
+    def _replace_watchlist(self) -> None:
+        symbols = [row.symbol for row in self.rows]
+        if not symbols or self.on_replace_watchlist is None:
+            self.status.configure(text="Không có kết quả để thay watchlist.", text_color=self.WARN)
+            return
+        if not messagebox.askyesno(
+            "Thay watchlist",
+            f"Xuất bản sao danh sách hiện tại rồi thay bằng {len(symbols)} mã đang hiển thị?",
+            parent=self.top,
+        ):
+            return
+        try:
+            backup = self.on_replace_watchlist(symbols)
+        except Exception as exc:
+            self.status.configure(text=f"THAY WATCHLIST THẤT BẠI · {exc}", text_color=self.RED)
+            return
+        self.status.configure(
+            text=f"ĐÃ THAY WATCHLIST · backup {backup}", text_color=self.GREEN,
+        )
 
 
 class ConnectionPopup:
@@ -416,6 +449,7 @@ class ConnectionPopup:
         self.on_reset_paper = on_reset_paper
         self._tested_account: dict[str, str] | None = None
         self._watchlist_draft = list(settings.watchlist)
+        self._priority_draft = list(settings.priority_symbols)
         self._holiday_draft = sorted(
             set(settings.custom_holidays).difference(config.DEFAULT_VN_TRADING_HOLIDAYS)
         )
@@ -756,6 +790,63 @@ class ConnectionPopup:
         )
         self.paper_status.grid(row=3, column=0, columnspan=3, sticky="ew", padx=12, pady=(1, 10))
 
+        stats_card = self._card(
+            body,
+            "THỐNG KÊ PANEL",
+            "PNL và phí dùng chung một mốc. THEO NGÀY chốt, lưu và mở kỳ mới đúng giờ đã đặt; "
+            "TỪ LẦN RESET cộng dồn đến khi bấm ↻. Restart app không làm mất bộ đếm.",
+        )
+        stats_card.grid(row=3, column=0, sticky="ew", padx=6, pady=3)
+        stats_card.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(
+            stats_card, text="CHẾ ĐỘ", anchor="w",
+            font=FONT_KEY, text_color=self.TITLE,
+        ).grid(row=1, column=0, sticky="w", padx=(12, 8), pady=5)
+        stats_value = (
+            "TỪ LẦN RESET"
+            if self.settings.daily_stats_mode == "SINCE_RESET"
+            else "THEO NGÀY"
+        )
+        self.daily_stats_choice = tk.StringVar(value=stats_value)
+        self.daily_stats_segment = ctk.CTkSegmentedButton(
+            stats_card,
+            values=["THEO NGÀY", "TỪ LẦN RESET"],
+            variable=self.daily_stats_choice,
+            height=32,
+            selected_color=self.BLUE,
+            selected_hover_color="#245C92",
+            unselected_color="#3A3F47",
+            unselected_hover_color="#4B515B",
+            font=("Segoe UI", 11, "bold"),
+        )
+        self.daily_stats_segment.grid(
+            row=1, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=5,
+        )
+        ctk.CTkLabel(
+            stats_card, text="GIỜ CHỐT NGÀY", anchor="w",
+            font=FONT_KEY, text_color=self.TITLE,
+        ).grid(row=2, column=0, sticky="w", padx=(12, 8), pady=5)
+        self.daily_stats_time = ctk.CTkEntry(
+            stats_card, height=32, placeholder_text="00:00",
+            fg_color=self.SURFACE_2, border_color=self.BORDER,
+            font=FONT_VALUE, text_color=self.TEXT,
+        )
+        self.daily_stats_time.insert(0, self.settings.daily_stats_reset_time)
+        self.daily_stats_time.grid(row=2, column=1, sticky="ew", padx=(0, 8), pady=5)
+        self.btn_save_daily_stats = ctk.CTkButton(
+            stats_card, text="LƯU", width=90, height=32,
+            font=("Segoe UI", 11, "bold"), fg_color=self.GREEN,
+            hover_color="#16A34A", command=self._save_daily_stats_settings,
+        )
+        self.btn_save_daily_stats.grid(row=2, column=2, sticky="e", padx=(0, 12), pady=5)
+        self.daily_stats_status = ctk.CTkLabel(
+            stats_card, text="", font=("Segoe UI", 11),
+            text_color=self.MUTED, anchor="w",
+        )
+        self.daily_stats_status.grid(
+            row=3, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 9),
+        )
+
     @staticmethod
     def _parse_paper_balance(raw: str) -> float:
         text = str(raw or "").strip().replace(" ", "").replace("₫", "").replace("đ", "")
@@ -790,6 +881,28 @@ class ConnectionPopup:
             text=f"{action} · {balance:,.0f} VND", text_color=self.GREEN,
         )
 
+    def _save_daily_stats_settings(self) -> None:
+        reset_time = str(self.daily_stats_time.get() or "").strip()
+        if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", reset_time):
+            self.daily_stats_status.configure(
+                text="GIỜ CHỐT KHÔNG HỢP LỆ · DÙNG HH:MM (00:00–23:59)",
+                text_color=self.RED,
+            )
+            return
+        value = self.daily_stats_choice.get()
+        self.settings.daily_stats_mode = (
+            "SINCE_RESET" if str(value or "").upper() == "TỪ LẦN RESET" else "DAILY"
+        )
+        self.settings.daily_stats_reset_time = reset_time
+        save_settings(self.settings, self.account_id)
+        self.on_saved()
+        detail = (
+            "CỘNG DỒN TỪ LẦN RESET"
+            if self.settings.daily_stats_mode == "SINCE_RESET"
+            else f"TỰ CHỐT MỖI NGÀY LÚC {reset_time}"
+        )
+        self.daily_stats_status.configure(text=f"ĐÃ LƯU · {detail}", text_color=self.GREEN)
+
     def _watchlist_tab(self, frame: ctk.CTkFrame) -> None:
         body = self._body(frame)
         card = self._card(
@@ -797,7 +910,7 @@ class ConnectionPopup:
             "Nhập một hoặc nhiều mã, cách nhau bằng dấu phẩy hoặc khoảng trắng. "
             "Bot chỉ lấy dữ liệu và kiểm tra rule với danh sách đã lưu.",
         )
-        card.grid(row=1, column=0, sticky="nsew", padx=6, pady=6)
+        card.grid(row=2, column=0, sticky="nsew", padx=6, pady=6)
         card.grid_columnconfigure(0, weight=1)
         self.watchlist_picker = SymbolPicker(
             card, self._watchlist_draft,
@@ -846,16 +959,28 @@ class ConnectionPopup:
             save_row, text="Chỉ thay đổi khi bấm lưu", font=("Segoe UI", 11),
             text_color=self.MUTED, anchor="w",
         ).grid(row=0, column=0, sticky="w", padx=(0, 10))
+        self.btn_import_watchlist = ctk.CTkButton(
+            save_row, text="NHẬP EXCEL", width=115, height=38,
+            font=("Segoe UI", 12, "bold"), fg_color="#3A3F47",
+            hover_color="#4B515B", command=self._import_watchlist,
+        )
+        self.btn_import_watchlist.grid(row=0, column=1, padx=(0, 7))
+        self.btn_export_watchlist = ctk.CTkButton(
+            save_row, text="XUẤT EXCEL", width=115, height=38,
+            font=("Segoe UI", 12, "bold"), fg_color=self.BLUE,
+            hover_color="#245C92", command=self._export_watchlist,
+        )
+        self.btn_export_watchlist.grid(row=0, column=2, padx=(0, 7))
         ctk.CTkButton(
             save_row, text="LƯU DANH SÁCH", width=150, height=38,
             font=("Segoe UI", 13, "bold"), fg_color=self.GREEN,
             hover_color="#16A34A", command=self._save_watchlist,
-        ).grid(row=0, column=1)
+        ).grid(row=0, column=3)
 
         self.volume_scanner_card = self._card(
             body,
             "TIỆN ÍCH PHÂN TÍCH",
-            "Bộ lọc chỉ đọc volume lịch sử từ DNSE và xuất Excel. Không tự thêm, xóa hoặc thay đổi danh sách mã bot đang theo dõi.",
+            "Bộ lọc đọc volume lịch sử từ DNSE. Kết quả chỉ thay watchlist khi operator chủ động xác nhận.",
         )
         self.volume_scanner_card.configure(fg_color="#1C2733", border_color="#315A85")
         self.volume_scanner_card.grid(row=0, column=0, sticky="ew", padx=6, pady=6)
@@ -881,13 +1006,39 @@ class ConnectionPopup:
             placement="below",
         )
 
+        self.priority_card = self._card(
+            body,
+            "MÃ PRIORITY",
+            "Các mã này được xét BUY trước và chỉ bỏ qua MAX_POSITIONS. Mọi rule, khóa và giới hạn vốn khác giữ nguyên.",
+        )
+        self.priority_card.configure(fg_color="#27231A", border_color="#7A5A18")
+        self.priority_card.grid(row=1, column=0, sticky="ew", padx=6, pady=6)
+        self.priority_card.grid_columnconfigure(0, weight=1)
+        self.priority_picker = SymbolPicker(
+            self.priority_card, self._priority_draft,
+            columns=6, compact=True, placeholder="FPT, SSI",
+            on_change=lambda values: setattr(self, "_priority_draft", list(values)),
+        )
+        self.priority_picker.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(2, 9))
+        self.btn_save_priority = ctk.CTkButton(
+            self.priority_card, text="LƯU PRIORITY", width=145, height=38,
+            font=("Segoe UI", 12, "bold"), fg_color=self.WARN,
+            hover_color="#D97706", text_color="#111318", command=self._save_priority,
+        )
+        self.btn_save_priority.grid(row=2, column=1, sticky="e", padx=12, pady=(0, 10))
+        self.priority_status = ctk.CTkLabel(
+            self.priority_card, text="", font=("Segoe UI", 11),
+            text_color=self.MUTED, anchor="w",
+        )
+        self.priority_status.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 10))
+
         holiday = self._card(
             body,
             "NGÀY NGHỈ GIAO DỊCH",
             "Viking dùng lịch DNSE, tự chặn T7/CN và có sẵn lịch nghỉ giao dịch Việt Nam 2026. "
             "Chỉ thêm tại đây khi Sở công bố ngày nghỉ bổ sung.",
         )
-        holiday.grid(row=2, column=0, sticky="ew", padx=6, pady=6)
+        holiday.grid(row=3, column=0, sticky="ew", padx=6, pady=6)
         holiday.grid_columnconfigure(0, weight=1)
         holiday_row = ctk.CTkFrame(holiday, fg_color="transparent")
         holiday_row.grid(row=1, column=0, columnspan=3, sticky="ew", padx=12, pady=(2, 5))
@@ -924,7 +1075,9 @@ class ConnectionPopup:
         if popup and popup.top.winfo_exists():
             popup.show()
             return
-        self._volume_popup = VolumeScannerPopup(self.top, self.client, self._post_ui)
+        self._volume_popup = VolumeScannerPopup(
+            self.top, self.client, self._post_ui, self._replace_watchlist_from_volume,
+        )
 
     def _telegram_tab(self, frame: ctk.CTkFrame) -> None:
         body = self._body(frame)
@@ -1366,21 +1519,140 @@ class ConnectionPopup:
             text_color=self.GREEN,
         )
 
+    def _backup_watchlist(self) -> Any:
+        return export_watchlist(
+            self.settings.watchlist,
+            priority_symbols=self.settings.priority_symbols,
+            symbol_exchanges=self.settings.symbol_exchanges,
+        )
+
+    def _apply_watchlist(
+        self,
+        symbols: list[str],
+        *,
+        priority_symbols: list[str] | None = None,
+        symbol_exchanges: dict[str, str] | None = None,
+        backup: bool = False,
+    ) -> Any:
+        values = list(dict.fromkeys(
+            str(symbol or "").strip().upper()
+            for symbol in symbols
+            if str(symbol or "").strip()
+        ))
+        if not values:
+            raise ValueError("Watchlist cần ít nhất một mã CK.")
+        backup_path = self._backup_watchlist() if backup else None
+        allowed = set(values)
+        priority_source = (
+            self.settings.priority_symbols if priority_symbols is None else priority_symbols
+        )
+        priority = [
+            symbol for symbol in dict.fromkeys(
+                str(value or "").strip().upper()
+                for value in priority_source
+                if str(value or "").strip()
+            )
+            if symbol in allowed
+        ]
+        exchange_source = self.settings.symbol_exchanges if symbol_exchanges is None else symbol_exchanges
+        exchanges = {
+            str(symbol).upper(): str(exchange).upper()
+            for symbol, exchange in (exchange_source or {}).items()
+            if str(symbol).upper() in allowed
+        }
+        self.settings.watchlist = values
+        self.settings.priority_symbols = priority
+        self.settings.symbol_exchanges = exchanges
+        self._watchlist_draft = list(values)
+        self._priority_draft = list(priority)
+        self.watchlist_picker.set(values)
+        self.priority_picker.set(priority)
+        self.exchange_symbol.configure(values=values)
+        if self.exchange_symbol.get() not in values:
+            self.exchange_symbol.set(values[0])
+        selected = self.exchange_symbol.get()
+        self.exchange_choice.set(self.settings.symbol_exchanges.get(selected, "TỰ ĐỘNG"))
+        save_settings(self.settings, self.account_id)
+        self.on_saved()
+        return backup_path
+
     def _save_watchlist(self) -> None:
         symbols = self.watchlist_picker.get()
         if not symbols:
             self.watchlist_picker.status.configure(text="CẦN ÍT NHẤT 1 MÃ CKCS", text_color=self.RED)
             return
-        self.settings.watchlist = symbols
-        self.exchange_symbol.configure(values=symbols)
-        if self.exchange_symbol.get() not in symbols:
-            self.exchange_symbol.set(symbols[0])
-            self.exchange_choice.set(self.settings.symbol_exchanges.get(symbols[0], "TỰ ĐỘNG"))
-        save_settings(self.settings, self.account_id)
-        self.on_saved()
+        try:
+            self._apply_watchlist(symbols, priority_symbols=self.priority_picker.get())
+        except Exception as exc:
+            self.watchlist_picker.status.configure(text=f"LƯU THẤT BẠI · {exc}", text_color=self.RED)
+            return
         self.watchlist_picker.status.configure(
             text=f"ĐÃ ÁP DỤNG {len(symbols)} MÃ · DAEMON TỰ NHẬN", text_color=self.GREEN,
         )
+
+    def _save_priority(self) -> None:
+        priority = self.priority_picker.get()
+        symbols = list(dict.fromkeys(self.watchlist_picker.get() + priority))
+        try:
+            self._apply_watchlist(symbols, priority_symbols=priority)
+        except Exception as exc:
+            self.priority_status.configure(text=f"LƯU THẤT BẠI · {exc}", text_color=self.RED)
+            return
+        self.priority_status.configure(
+            text=f"ĐÃ LƯU {len(priority)} MÃ · ƯU TIÊN BUY, BYPASS MAX_POSITIONS",
+            text_color=self.GREEN,
+        )
+
+    def _export_watchlist(self) -> None:
+        try:
+            path = self._backup_watchlist()
+        except Exception as exc:
+            self.watchlist_picker.status.configure(text=f"XUẤT THẤT BẠI · {exc}", text_color=self.RED)
+            return
+        self.watchlist_picker.status.configure(text=f"ĐÃ XUẤT · {path.name}", text_color=self.GREEN)
+        messagebox.showinfo("Xuất watchlist", f"Đã xuất Excel:\n{path}", parent=self.top)
+
+    def _import_watchlist(self) -> None:
+        path = filedialog.askopenfilename(
+            parent=self.top,
+            title="Nhập watchlist",
+            filetypes=[("Excel", "*.xlsx")],
+        )
+        if not path:
+            return
+        try:
+            imported = import_watchlist(path)
+        except Exception as exc:
+            self.watchlist_picker.status.configure(text=f"NHẬP THẤT BẠI · {exc}", text_color=self.RED)
+            return
+        if not messagebox.askyesno(
+            "Replace watchlist",
+            f"Xuất bản sao danh sách hiện tại rồi thay bằng {len(imported.symbols)} mã từ Excel?",
+            parent=self.top,
+        ):
+            return
+        try:
+            backup = self._apply_watchlist(
+                list(imported.symbols),
+                priority_symbols=list(imported.priority_symbols),
+                symbol_exchanges=imported.symbol_exchanges,
+                backup=True,
+            )
+        except Exception as exc:
+            self.watchlist_picker.status.configure(text=f"NHẬP THẤT BẠI · {exc}", text_color=self.RED)
+            return
+        self.watchlist_picker.status.configure(
+            text=f"ĐÃ REPLACE {len(imported.symbols)} MÃ · backup {backup.name}",
+            text_color=self.GREEN,
+        )
+
+    def _replace_watchlist_from_volume(self, symbols: list[str]) -> Any:
+        backup = self._apply_watchlist(symbols, backup=True)
+        self.watchlist_picker.status.configure(
+            text=f"ĐÃ REPLACE {len(symbols)} MÃ TỪ VOLUME · backup {backup.name}",
+            text_color=self.GREEN,
+        )
+        return backup
 
     def _save_exchange_override(self) -> None:
         symbol = str(self.exchange_symbol.get() or "").strip().upper()

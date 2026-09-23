@@ -20,18 +20,34 @@ Nguồn cấu hình theo thứ tự ưu tiên:
 4. `StaticRuleParameters` cũng lấy trực tiếp từ default trên; parity test sẽ lỗi
    nếu hai đường nạp cấu hình lệch nhau.
 
+### PNL và phí trên panel
+
+Trong `KẾT NỐI → DNSE → THỐNG KÊ PANEL`, chế độ mặc định `THEO NGÀY` chỉ cộng
+PNL của các trade đóng và phí phát sinh trong kỳ hiện tại. `GIỜ CHỐT NGÀY`
+(mặc định `00:00`, giờ Việt Nam) quyết định lúc tổng hợp kỳ cũ vào
+`daily_stats.json` rồi mở kỳ mới; restart app trước giờ chốt không reset số.
+Nếu app tắt qua giờ chốt, lần mở sau sẽ thực hiện rollover còn thiếu. Chế độ
+`TỪ LẦN RESET` cộng dồn từ mốc operator bấm `↻`. Nút này reset chung PNL/phí,
+BUY pause và loss cooldown của mode đang xem nhưng không sửa tiền, vị thế,
+trade cycle hoặc lịch sử.
+
 ### Bộ lọc volume VN100
 
-Tab `MÃ CK` có tiện ích `LỌC VOLUME VN100` độc lập với watchlist và daemon.
+Tab `MÃ CK` có tiện ích `LỌC VOLUME VN100` độc lập với rule và daemon.
 Người dùng tự nhập số mã cần quét (1–100), số kết quả cần lấy, chu kỳ 5/10
 phiên, ngưỡng và hướng tăng/giảm. Tập quét lấy từ đầu rổ VN100 đã sắp theo vốn
 hóa giảm dần; ngày cập nhật rổ được hiển thị ngay trên popup.
 
 Scanner dùng nến ngày DNSE đã đóng, so sánh volume trung bình N phiên gần nhất
 với N phiên liền trước và không dùng phiên hiện tại khi chưa đóng. Kết quả chỉ
-được hiển thị trong popup; không đọc, ghi hoặc merge watchlist. Nút `XUẤT EXCEL`
-ghi các dòng đang hiển thị vào
-`viking_v2/runtime/exports/vn100_volume_YYYYMMDD_HHMMSS.xlsx`.
+được hiển thị trong popup. Nút `XUẤT EXCEL` ghi các dòng đang hiển thị vào
+`viking_v2/runtime/exports/vn100_volume_YYYYMMDD_HHMMSS.xlsx`; nút
+`THAY WATCHLIST` tự xuất bản sao danh sách cũ rồi replace watchlist bằng đúng
+các dòng đang hiển thị.
+
+Watchlist có thể xuất/nhập sheet `WATCHLIST`; import replace toàn bộ danh sách.
+Mã đã có vị thế hoặc lệnh chưa hoàn tất vẫn được daemon quản lý đến khi kết
+thúc nhưng không được BUY lại nếu không còn trong watchlist.
 
 ## 2. Rule hiện hành
 
@@ -82,6 +98,9 @@ là 100,8, còn sàn giữ 90% là 103,6; backend chọn mức cao hơn là 103,
 - Lệnh `PAUSED` vẫn giữ slot, tránh mã khác lấp chỗ ngoài ý muốn.
 - Quota tách `BOT x/5 · MANUAL y · TỔNG z`. MANUAL/EXTERNAL không chiếm slot
   BOT nhưng vẫn dùng tiền thật và room danh mục.
+- `MÃ PRIORITY` là tập con của watchlist: được xếp BUY trước và chỉ bypass
+  `MAX_POSITIONS`; cash, exposure và mọi entry guard khác vẫn áp dụng. Vị thế
+  Priority không chiếm quota BOT thường.
 - Nên BUY qua Viking. Lượng mua trực tiếp trên DNSE được gắn
   `EXTERNAL_DNSE`; trade Viking cùng mã vẫn chỉ quản lý khối lượng của nó.
 - SELL khẩn cấp trên DNSE được đối soát từ position và fill không có remark
@@ -226,8 +245,8 @@ Nguyên tắc:
 - Trước commit: chạy toàn bộ `pytest`, `compileall` và `git diff --check`.
 - Không refactor lớn `dashboard/actions.py` ngay trước phiên PAPER; về sau nên
   tách dần quản lý lệnh, thông báo và polling/runtime.
-- Scanner VN100 là tiện ích đọc DNSE và xuất Excel; không tham gia rule BUY,
-  không sửa watchlist và không chạy trong daemon giao dịch.
+- Scanner VN100 là tiện ích đọc DNSE và xuất Excel; chỉ replace watchlist khi
+  operator xác nhận, không tham gia rule BUY và không chạy trong daemon.
 
 Thư mục ngoài source: `ckvnvenv/` là môi trường Python;
 `viking_v2/dnse_api/` là tài liệu DNSE cục bộ; `.pytest_cache/`, `__pycache__/`

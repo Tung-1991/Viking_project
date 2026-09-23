@@ -96,22 +96,29 @@ class DashboardPanelsMixin:
         account_footer.grid_columnconfigure(1, minsize=120)
         account_footer.grid_columnconfigure(2, weight=1)
         self.lbl_pnl = ctk.CTkLabel(
-            account_footer, text="PNL: 0", font=("Segoe UI", 12, "bold"), anchor="w"
+            account_footer, text="PNL NGÀY: 0", font=("Segoe UI", 12, "bold"), anchor="w"
         )
         self.lbl_pnl.grid(row=0, column=0, sticky="w")
         self.lbl_cash = ctk.CTkLabel(
-            account_footer, text="FEE: 0", font=("Segoe UI", 12, "bold"),
+            account_footer, text="FEE NGÀY: 0", font=("Segoe UI", 12, "bold"),
             text_color=COL_WARN, anchor="w",
         )
         self.lbl_cash.grid(row=0, column=1, sticky="w", padx=(24, 0))
-        self.btn_reset_daily_fee = ctk.CTkButton(
+        self.btn_reset_daily_stats = ctk.CTkButton(
             account_footer, text="↻", width=25, height=22,
             font=("Segoe UI Symbol", 12, "bold"),
             fg_color="#282D34", hover_color="#3A414B",
             text_color=COL_TEXT, corner_radius=6,
-            command=self._reset_daily_fee,
+            command=self._reset_daily_stats,
         )
-        self.btn_reset_daily_fee.grid(row=0, column=3, sticky="e", padx=(14, 0))
+        self.btn_reset_daily_stats.grid(row=0, column=3, sticky="e", padx=(14, 0))
+        # Compatibility name for lightweight UI integrations which still
+        # address the former fee-only control.
+        self.btn_reset_daily_fee = self.btn_reset_daily_stats
+        _HoverHint(
+            self.btn_reset_daily_stats,
+            "Reset PNL/phí và clear rule cooldown; tiền, vị thế, lịch sử vẫn giữ nguyên.",
+        )
 
         # GROUP 2 — exactly four compact control rows.
         control = ctk.CTkFrame(
@@ -1526,12 +1533,15 @@ class DashboardPanelsMixin:
         slot_used = int(slot_summary.get("used", open_positions) or 0)
         slot_max = int(slot_summary.get("max", max_positions) or max_positions)
         pending_buys = int(slot_summary.get("pending", 0) or 0)
+        priority_positions = int(slot_summary.get("priority", 0) or 0)
         manual_positions = int(slot_summary.get("manual", 0) or 0)
         bot_open_positions = int(slot_summary.get("bot_open", open_positions) or 0)
         total_positions = int(
             slot_summary.get("total", bot_open_positions + manual_positions) or 0
         )
         phase3_parts = [f"BOT {slot_used}/{slot_max or '--'}"]
+        if priority_positions:
+            phase3_parts.append(f"PRIORITY {priority_positions}")
         if manual_positions:
             phase3_parts.append(f"MANUAL {manual_positions}")
             phase3_parts.append(f"TỔNG {total_positions}")

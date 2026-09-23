@@ -2,19 +2,21 @@ from __future__ import annotations
 
 import csv
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
 import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, Iterable
+from zoneinfo import ZoneInfo
 
 
 _STORE_LOCKS_GUARD = threading.Lock()
 _STORE_LOCKS: dict[str, threading.RLock] = {}
 _REPLACE_RETRY_DELAYS = (0.005, 0.01, 0.02, 0.04, 0.08, 0.16, 0.25)
+VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 
 def _store_lock(path: Path) -> threading.RLock:
@@ -462,10 +464,11 @@ class CSVOrderJournal:
 
 
 class DailyFeeTracker:
-    """Daily fee counter backed by the append-only order CSV.
+    """Shared dashboard PNL/fee counter backed by immutable audit data.
 
-    Automatic rollover comes from filtering by the local calendar date. A manual
-    reset only stores a per-mode cutoff; it never deletes audit history.
+    DAILY mode rolls over at the configured Vietnam time. SINCE_RESET mode
+    keeps accumulating. Scheduled/manual rollovers archive one summary and
+    store a shared per-mode cutoff; audit journals and trade cycles stay intact.
     """
 
     def __init__(self, history_path: str | Path, state_path: str | Path):
@@ -483,49 +486,222 @@ class DailyFeeTracker:
             except (TypeError, ValueError):
                 return 0.0
 
-    def _cutoff(self, mode: str, now: float) -> float:
-        mode = "REAL" if str(mode).upper() == "REAL" else "PAPER"
-        today = datetime.fromtimestamp(now).date().isoformat()
-        state = self.state.read()
-        state = state if isinstance(state, dict) else {}
-        row = state.get(mode) if isinstance(state.get(mode), dict) else {}
-        if str(row.get("date") or "") != today:
-            state[mode] = {"date": today, "reset_at": 0.0}
-            self.state.write(state)
-            return 0.0
-        return max(0.0, float(row.get("reset_at", 0.0) or 0.0))
+    @staticmethod
+    def normalize_reset_time(value: Any) -> str:
+        text = str(value or "00:00").strip()
+        try:
+            parsed = datetime.strptime(text, "%H:%M")
+        except ValueError:
+            return "00:00"
+        return parsed.strftime("%H:%M")
 
-    def total(self, mode: str, now: float | None = None) -> float:
-        current = float(now or datetime.now().timestamp())
-        selected_mode = "REAL" if str(mode).upper() == "REAL" else "PAPER"
-        today = datetime.fromtimestamp(current).date()
-        with self._lock:
-            cutoff = self._cutoff(selected_mode, current)
-            total = 0.0
-            for row in self.history.read_all():
-                if str(row.get("execution_mode") or "").upper() != selected_mode:
-                    continue
-                timestamp = self._timestamp(row.get("timestamp"))
-                if timestamp <= cutoff or timestamp <= 0:
-                    continue
-                if datetime.fromtimestamp(timestamp).date() != today:
-                    continue
-                try:
-                    fee = abs(float(row.get("fee", 0.0) or 0.0))
-                    tax = abs(float(row.get("tax", 0.0) or 0.0))
-                except (TypeError, ValueError):
-                    continue
-                total += fee + tax
-            return total
+    @classmethod
+    def _period_start(cls, now: float, reset_time: str) -> float:
+        current = datetime.fromtimestamp(now, VN_TZ)
+        parsed = datetime.strptime(cls.normalize_reset_time(reset_time), "%H:%M")
+        boundary = current.replace(
+            hour=parsed.hour, minute=parsed.minute, second=0, microsecond=0,
+        )
+        if current < boundary:
+            boundary -= timedelta(days=1)
+        return boundary.timestamp()
 
-    def reset(self, mode: str, now: float | None = None) -> None:
-        current = float(now or datetime.now().timestamp())
+    @classmethod
+    def _legacy_period_start(
+        cls,
+        row: dict[str, Any],
+        reset_time: str,
+        fallback: float,
+    ) -> float:
+        try:
+            saved = datetime.strptime(str(row.get("date") or "")[:10], "%Y-%m-%d")
+        except ValueError:
+            return fallback
+        parsed = datetime.strptime(cls.normalize_reset_time(reset_time), "%H:%M")
+        return saved.replace(
+            hour=parsed.hour, minute=parsed.minute,
+            tzinfo=VN_TZ,
+        ).timestamp()
+
+    @staticmethod
+    def _cycle_value(cycle: Any, name: str, default: Any = None) -> Any:
+        if isinstance(cycle, dict):
+            return cycle.get(name, default)
+        return getattr(cycle, name, default)
+
+    def _totals_between(
+        self,
+        mode: str,
+        cycles: Iterable[Any],
+        start: float,
+        end: float,
+    ) -> dict[str, float | int]:
+        fees = 0.0
+        for row in self.history.read_all():
+            if str(row.get("execution_mode") or "").upper() != mode:
+                continue
+            timestamp = self._timestamp(row.get("timestamp"))
+            if timestamp <= start or timestamp > end:
+                continue
+            try:
+                fee = abs(float(row.get("fee", 0.0) or 0.0))
+                tax = abs(float(row.get("tax", 0.0) or 0.0))
+            except (TypeError, ValueError):
+                continue
+            fees += fee + tax
+
+        pnl = 0.0
+        closed_trades = 0
+        for cycle in cycles:
+            if str(self._cycle_value(cycle, "execution_mode", "")).upper() != mode:
+                continue
+            if str(self._cycle_value(cycle, "status", "")).upper() != "CLOSED":
+                continue
+            try:
+                closed_at = float(self._cycle_value(cycle, "closed_at", 0.0) or 0.0)
+                value = float(self._cycle_value(cycle, "net_pnl", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if closed_at <= start or closed_at > end:
+                continue
+            pnl += value
+            closed_trades += 1
+        return {"pnl": pnl, "fees": fees, "closed_trades": closed_trades}
+
+    @staticmethod
+    def _archive(
+        state: dict[str, Any],
+        mode: str,
+        start: float,
+        end: float,
+        values: dict[str, float | int],
+        trigger: str,
+    ) -> None:
+        history = state.get("history") if isinstance(state.get("history"), list) else []
+        key = f"{mode}|{start:.6f}|{end:.6f}|{trigger}"
+        if any(str(item.get("key") or "") == key for item in history if isinstance(item, dict)):
+            return
+        history.append({
+            "key": key,
+            "mode": mode,
+            "period_start": datetime.fromtimestamp(start, VN_TZ).isoformat(),
+            "period_end": datetime.fromtimestamp(end, VN_TZ).isoformat(),
+            "pnl": float(values.get("pnl", 0.0) or 0.0),
+            "fees": float(values.get("fees", 0.0) or 0.0),
+            "closed_trades": int(values.get("closed_trades", 0) or 0),
+            "trigger": str(trigger or "SCHEDULED").upper(),
+        })
+        state["history"] = history[-730:]
+
+    def summary(
+        self,
+        mode: str,
+        cycles: Iterable[Any] = (),
+        *,
+        daily: bool = True,
+        reset_time: str = "00:00",
+        now: float | None = None,
+    ) -> dict[str, float | int | bool]:
+        current = float(now or datetime.now(VN_TZ).timestamp())
         selected_mode = "REAL" if str(mode).upper() == "REAL" else "PAPER"
+        values = list(cycles)
         with self._lock:
             state = self.state.read()
             state = state if isinstance(state, dict) else {}
-            state[selected_mode] = {
-                "date": datetime.fromtimestamp(current).date().isoformat(),
+            row = state.get(selected_mode) if isinstance(state.get(selected_mode), dict) else {}
+            row = dict(row)
+            original_row = dict(row)
+            normalized_time = self.normalize_reset_time(reset_time)
+            current_period = self._period_start(current, normalized_time)
+            stored_period = max(0.0, float(row.get("period_start", 0.0) or 0.0))
+            if stored_period <= 0:
+                stored_period = self._legacy_period_start(
+                    row, normalized_time, current_period,
+                )
+            reset_at = max(0.0, float(row.get("reset_at", 0.0) or 0.0))
+            rolled_over = False
+
+            previous_reset_time = str(row.get("reset_time") or "")
+            if previous_reset_time and previous_reset_time != normalized_time:
+                # Editing the schedule rebases the current display period; it
+                # must not masquerade as a naturally completed daily period.
+                stored_period = current_period
+                reset_at = 0.0
+
+            if daily and stored_period < current_period:
+                period_start = stored_period
+                first_cutoff = max(period_start, reset_at)
+                while period_start < current_period:
+                    period_end = datetime.fromtimestamp(period_start, VN_TZ) + timedelta(days=1)
+                    period_end_ts = min(period_end.timestamp(), current_period)
+                    cutoff = max(period_start, first_cutoff)
+                    archived = self._totals_between(
+                        selected_mode, values, cutoff, period_end_ts,
+                    )
+                    self._archive(
+                        state, selected_mode, cutoff, period_end_ts,
+                        archived, "SCHEDULED",
+                    )
+                    period_start = period_end_ts
+                    first_cutoff = period_start
+                stored_period = current_period
+                reset_at = 0.0
+                rolled_over = True
+            elif stored_period > current_period:
+                stored_period = current_period
+                reset_at = 0.0
+
+            row.update({
+                "date": datetime.fromtimestamp(current_period, VN_TZ).date().isoformat(),
+                "period_start": stored_period,
+                "reset_at": reset_at,
+                "reset_time": normalized_time,
+            })
+            state[selected_mode] = row
+            if row != original_row or rolled_over:
+                self.state.write(state)
+            cutoff = max(stored_period, reset_at) if daily else reset_at
+            result = self._totals_between(selected_mode, values, cutoff, current)
+            result["rolled_over"] = rolled_over
+            return result
+
+    def total(self, mode: str, now: float | None = None) -> float:
+        return float(self.summary(mode, now=now)["fees"])
+
+    def reset(
+        self,
+        mode: str,
+        now: float | None = None,
+        *,
+        cycles: Iterable[Any] = (),
+        daily: bool = True,
+        reset_time: str = "00:00",
+    ) -> dict[str, float | int | bool]:
+        current = float(now or datetime.now(VN_TZ).timestamp())
+        selected_mode = "REAL" if str(mode).upper() == "REAL" else "PAPER"
+        snapshot = self.summary(
+            selected_mode, cycles, daily=daily,
+            reset_time=reset_time, now=current,
+        )
+        with self._lock:
+            state = self.state.read()
+            state = state if isinstance(state, dict) else {}
+            row = state.get(selected_mode) if isinstance(state.get(selected_mode), dict) else {}
+            row = dict(row)
+            start = (
+                max(
+                    float(row.get("period_start", 0.0) or 0.0),
+                    float(row.get("reset_at", 0.0) or 0.0),
+                )
+                if daily else float(row.get("reset_at", 0.0) or 0.0)
+            )
+            self._archive(state, selected_mode, start, current, snapshot, "MANUAL")
+            row.update({
+                "date": datetime.fromtimestamp(current, VN_TZ).date().isoformat(),
+                "period_start": self._period_start(current, reset_time),
                 "reset_at": current,
-            }
+                "reset_time": self.normalize_reset_time(reset_time),
+            })
+            state[selected_mode] = row
             self.state.write(state)
+        return snapshot

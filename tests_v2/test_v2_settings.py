@@ -18,6 +18,8 @@ def test_v2_settings_only_keep_two_bot_execution_modes():
 
 def test_execution_defaults_are_explicit_and_minimal():
     settings = AppSettings().normalize()
+    assert settings.daily_stats_mode == "DAILY"
+    assert settings.daily_stats_reset_time == "00:00"
     assert settings.bot_sl_enabled is True
     assert settings.bot_em_modes == ["NORMAL", "IND_EXIT"]
     assert settings.sell_wait_policy == "RECHECK"
@@ -32,6 +34,13 @@ def test_execution_defaults_are_explicit_and_minimal():
     assert StaticRuleParameters().reentry_sl_pct == -2.5
     assert settings.rule_parameters == config.DEFAULT_RULE_PARAMETERS
     assert settings.rule_parameters is not config.DEFAULT_RULE_PARAMETERS
+
+
+def test_dashboard_stats_mode_is_normalized():
+    assert AppSettings(daily_stats_mode="since_reset").normalize().daily_stats_mode == "SINCE_RESET"
+    assert AppSettings(daily_stats_mode="bad").normalize().daily_stats_mode == "DAILY"
+    assert AppSettings(daily_stats_reset_time="15:30").normalize().daily_stats_reset_time == "15:30"
+    assert AppSettings(daily_stats_reset_time="25:00").normalize().daily_stats_reset_time == "00:00"
 
 
 def test_static_rule_fallback_matches_the_single_canonical_default_source():
@@ -66,6 +75,16 @@ def test_default_watchlist_keeps_the_40_legacy_ckcs_symbols(monkeypatch):
     assert len(symbols) == 40
     assert symbols == list(config.DEFAULT_CKCS_WATCHLIST)
     assert "FPT" not in symbols
+
+
+def test_priority_symbols_are_normalized_as_watchlist_subset():
+    settings = AppSettings(
+        watchlist=["fpt", "mbb"],
+        priority_symbols=["MBB", "vcb", "mbb"],
+    ).normalize()
+
+    assert settings.watchlist == ["FPT", "MBB"]
+    assert settings.priority_symbols == ["MBB"]
 
 
 def test_telegram_settings_only_keep_connection_values():

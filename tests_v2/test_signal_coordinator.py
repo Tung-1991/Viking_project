@@ -73,6 +73,31 @@ def test_equal_signal_times_use_fa_watchlist_priority() -> None:
     assert [row.symbol for row in rank_buy_decisions(decisions, watchlist)] == watchlist
 
 
+def test_priority_buy_ranks_first_and_does_not_consume_regular_slot() -> None:
+    decisions = {
+        "FPT": _buy("FPT", "2026-09-09T10:00:00+07:00"),
+        "MBB": _buy("MBB", "2026-09-09T09:00:00+07:00"),
+    }
+    allocator = BuySlotAllocator(1, ["TCB"])
+
+    outcomes = coordinate_buy_decisions(
+        decisions,
+        ["MBB", "FPT"],
+        allocator,
+        bot_enabled=True,
+        plan=lambda row: BuyAttempt(payload=row.symbol),
+        priority_symbols=["FPT"],
+    )
+
+    assert [(row.candidate.symbol, row.payload, row.blocked_by) for row in outcomes] == [
+        ("FPT", "FPT", ""),
+        ("MBB", None, "MAX_POSITIONS"),
+    ]
+    assert allocator.used == 1
+    assert allocator.bypass_symbols == {"FPT"}
+    assert allocator.occupied_symbols == {"TCB", "FPT"}
+
+
 def test_only_deliberate_buy_waits_can_mature_without_a_new_signal() -> None:
     assert not is_terminal_buy_block("BUY_CONFIRMATION_WAIT")
     assert not is_terminal_buy_block("BUY_WINDOW_WAIT")

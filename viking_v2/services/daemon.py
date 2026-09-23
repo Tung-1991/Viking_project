@@ -5,6 +5,7 @@ import signal
 import threading
 import time
 from datetime import datetime
+from typing import Any, Iterable
 
 from .. import config
 from ..config import load_settings
@@ -15,7 +16,7 @@ from .runtime import setup_logging
 from ..trading.market import MarketDataService
 from ..trading.market import VN_TZ, market_phase, merge_tick_into_daily_bars, normalize_exchange
 from ..models import RuntimeStatus, StrategyDecision
-from ..trading.orders import OrderQueue
+from ..trading.orders import FINAL_STATUSES, OrderQueue
 from ..trading.portfolio import PortfolioContextBuilder, sell_quantity_for_fraction
 from .runtime import RuntimeBridge
 from ..storage import AtomicJSONStore
@@ -91,6 +92,42 @@ def indicator_snapshot_at_close(
     )
 
 
+def active_runtime_symbols(
+    watchlist: Iterable[str],
+    priority_symbols: Iterable[str],
+    cycles: Iterable[Any],
+    intents: Iterable[Any],
+    execution_mode: str,
+) -> list[str]:
+    """Keep removed-but-active trades managed without allowing new re-entry."""
+    mode = str(execution_mode or "PAPER").strip().upper()
+    values: list[str] = []
+
+    def add(raw: Any) -> None:
+        symbol = str(raw or "").strip().upper()
+        if symbol and symbol not in values:
+            values.append(symbol)
+
+    for symbol in watchlist:
+        add(symbol)
+    for symbol in priority_symbols:
+        add(symbol)
+    for cycle in cycles:
+        if (
+            str(getattr(cycle, "execution_mode", "") or "").upper() == mode
+            and str(getattr(cycle, "status", "") or "").upper() == "OPEN"
+            and int(getattr(cycle, "open_quantity", 0) or 0) > 0
+        ):
+            add(getattr(cycle, "symbol", ""))
+    for intent in intents:
+        if (
+            str(getattr(intent, "execution_mode", "") or "").upper() == mode
+            and str(getattr(intent, "status", "") or "").upper() not in FINAL_STATUSES
+        ):
+            add(getattr(intent, "symbol", ""))
+    return values
+
+
 def run(account_id: str | None = None) -> int:
     bridge = RuntimeBridge(account_id)
     logger = setup_logging(bridge.log_dir, "daemon")
@@ -163,7 +200,11 @@ def run(account_id: str | None = None) -> int:
         signal.signal(signal.SIGTERM, stop)
 
     connected = client.connect()
-    symbols = list(runtime.watchlist)
+    execution_mode = "PAPER" if runtime.paper_mode else "REAL"
+    symbols = active_runtime_symbols(
+        runtime.watchlist, settings.priority_symbols,
+        trades.list_cycles(), queue.list_all(), execution_mode,
+    )
     if connected and symbols:
         market.start(symbols)
     logger.info("Viking V2 daemon started; BOT is OFF.")
@@ -226,7 +267,18 @@ def run(account_id: str | None = None) -> int:
             if next_fingerprint != settings_fingerprint:
                 rule = StaticRule(StaticRuleParameters.from_dict(settings.rule_parameters))
                 settings_fingerprint = next_fingerprint
-            symbols = list(runtime.watchlist)
+            execution_mode = "PAPER" if runtime.paper_mode else "REAL"
+            priority_symbol_set = set(settings.priority_symbols)
+            entry_symbols = set(runtime.watchlist) | priority_symbol_set
+            symbols = active_runtime_symbols(
+                runtime.watchlist, settings.priority_symbols,
+                trades.list_cycles(), queue.list_all(), execution_mode,
+            )
+            active_symbol_set = set(symbols)
+            decisions = {
+                symbol: value for symbol, value in decisions.items()
+                if symbol in active_symbol_set
+            }
             if symbols != last_symbols:
                 market.set_symbols(symbols)
                 if connected:
@@ -412,6 +464,8 @@ def run(account_id: str | None = None) -> int:
                             context["confirmed_market_state"] = effective_market_state
                             context["market_confirmation"] = market_confirmation
                             context["effective_exposure"] = effective_exposure
+                            context["entry_allowed"] = symbol in entry_symbols
+                            context["priority_entry"] = symbol in priority_symbol_set
                             context["market_override"] = {
                                 "enabled": override_enabled,
                                 "state": settings.market_phase_override,
@@ -470,6 +524,7 @@ def run(account_id: str | None = None) -> int:
                                 tick=portfolio_tick,
                                 exposure=exposure,
                                 max_positions=rule.params.max_positions,
+                                priority_symbols=settings.priority_symbols,
                                 no_compound_enabled=rule.params.no_compound_enabled,
                                 loss_lock_count=rule.params.loss_lock_count,
                                 loss_lock_hours=rule.params.loss_lock_hours,

@@ -1029,6 +1029,7 @@ class DashboardActionsMixin:
         )
         self.symbol_entry.configure(values=self.settings.watchlist or ["FPT"])
         self._reload_telegram()
+        self._refresh_local()
 
     def _apply_dnse_account(self, account_id: str) -> None:
         selected = config.normalize_account_id(account_id)
@@ -2637,9 +2638,11 @@ class DashboardActionsMixin:
         allocator = BuySlotAllocator.from_runtime(
             max_positions, positions, current_intents, mode,
             bot_symbols=bot_symbols,
+            priority_symbols=getattr(self.settings, "priority_symbols", ()),
         )
         self._slot_summary = {
             "used": allocator.used, "max": allocator.max_positions,
+            "priority": len(allocator.bypass_symbols),
             "bot_open": len(bot_symbols),
             "pending": sum(
                 1 for item in current_intents
@@ -2713,6 +2716,7 @@ class DashboardActionsMixin:
             decisions, self.settings.watchlist, allocator,
             bot_enabled=buy_enabled, plan=plan_buy,
             disabled_reason=buy_block_reason,
+            priority_symbols=getattr(self.settings, "priority_symbols", ()),
         )
         for outcome in coordinated:
             symbol, decision = outcome.candidate.symbol, outcome.candidate.decision
@@ -2947,6 +2951,7 @@ class DashboardActionsMixin:
             self.queue.list_all(),
             mode,
             bot_symbols=self._slot_sources(mode, positions)[0],
+            priority_symbols=getattr(self.settings, "priority_symbols", ()),
         )
         tick = self._shared_tick(intent.symbol) or {}
         self._record_signal_decision(decision, tick, mode, allocator)
@@ -3121,23 +3126,60 @@ class DashboardActionsMixin:
         mode = self.mode.get()
         balance = self.snapshots.get(mode, ({}, [], []))[0]
         self.lbl_equity.configure(text=f"{_equity(balance):,.0f} ₫")
-        pnl = _number(balance.get("realizedPnl", balance.get("pnl", 0.0)))
-        self.lbl_pnl.configure(text=f"PNL: {pnl:,.0f}", text_color=COL_GREEN if pnl >= 0 else COL_RED)
-        fee_today = self.daily_fees.total(mode)
+        stats_mode = str(getattr(self.settings, "daily_stats_mode", "DAILY") or "DAILY").upper()
+        summary = self.daily_fees.summary(
+            mode,
+            self.trade_state.list_cycles(),
+            daily=stats_mode == "DAILY",
+            reset_time=getattr(self.settings, "daily_stats_reset_time", "00:00"),
+        )
+        if bool(summary.get("rolled_over", False)):
+            cleared = self._clear_rule_cooldowns(mode)
+            self._log(
+                f"[{mode}] Đã chốt thống kê ngày và mở kỳ mới; "
+                f"đã clear {cleared} rule cooldown.",
+            )
+        pnl = float(summary.get("pnl", 0.0) or 0.0)
+        fees = float(summary.get("fees", 0.0) or 0.0)
+        period = "NGÀY" if stats_mode == "DAILY" else "KỲ"
+        self.lbl_pnl.configure(
+            text=f"PNL {period}: {pnl:,.0f}",
+            text_color=COL_GREEN if pnl >= 0 else COL_RED,
+        )
         self.lbl_cash.configure(
-            text=f"FEE: -{fee_today:,.0f}" if fee_today > 0 else "FEE: 0",
+            text=f"FEE {period}: -{fees:,.0f}" if fees > 0 else f"FEE {period}: 0",
             text_color=COL_WARN,
         )
         self.lbl_account.configure(text=f"ID: {self.account_id}  ·  {mode}  ·  CASH {_cash(balance):,.0f}")
 
-    def _reset_daily_fee(self) -> None:
+    def _reset_daily_stats(self) -> None:
         mode = self.mode.get()
         if not messagebox.askyesno(
-            "Reset fee",
-            f"Reset tổng phí hôm nay của {mode}?\nLịch sử CSV vẫn được giữ nguyên.",
+            "Reset thống kê",
+            f"Reset chung PNL/phí và clear rule cooldown của {mode}?\n"
+            "Tiền, vị thế và lịch sử giao dịch vẫn được giữ nguyên.",
             parent=self,
         ):
             return
-        self.daily_fees.reset(mode)
+        stats_mode = str(getattr(self.settings, "daily_stats_mode", "DAILY") or "DAILY").upper()
+        self.daily_fees.reset(
+            mode,
+            cycles=self.trade_state.list_cycles(),
+            daily=stats_mode == "DAILY",
+            reset_time=getattr(self.settings, "daily_stats_reset_time", "00:00"),
+        )
+        cleared = self._clear_rule_cooldowns(mode)
         self._paint_account()
-        self._log(f"[{mode}] Đã reset bộ đếm fee hôm nay; lịch sử CSV không bị xóa.")
+        self._log(
+            f"[{mode}] Đã reset PNL/phí và clear {cleared} rule cooldown; "
+            "lịch sử giao dịch không bị xóa.",
+        )
+
+    def _clear_rule_cooldowns(self, mode: str) -> int:
+        entry_pause = int(bool(self.rule_state.clear_operating_cooldowns(mode)))
+        loss_locks = int(self.trade_state.clear_loss_cooldowns(mode))
+        return entry_pause + loss_locks
+
+    def _reset_daily_fee(self) -> None:
+        """Backward-compatible route for the former fee-only action."""
+        self._reset_daily_stats()

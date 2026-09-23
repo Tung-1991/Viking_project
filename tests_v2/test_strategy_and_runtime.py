@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import pytest
 
-from viking_v2.models import RuntimeConfig
+from viking_v2.models import OrderIntent, RuntimeConfig
+from viking_v2.services.daemon import active_runtime_symbols
 from viking_v2.services.runtime import RuntimeBridge
 from viking_v2.rules.business import StaticRule
 
@@ -23,6 +25,23 @@ def test_runtime_bridge_disarms_stale_bot(tmp_path):
     assert result.bot_enabled is False
     assert bridge.read_config().bot_enabled is False
     assert bridge.read_config().watchlist == ["FPT"]
+
+
+def test_active_runtime_symbols_keep_removed_open_trades_and_pending_orders():
+    open_cycle = SimpleNamespace(
+        symbol="MBB", execution_mode="PAPER", status="OPEN", open_quantity=100,
+    )
+    closed_cycle = SimpleNamespace(
+        symbol="VCB", execution_mode="PAPER", status="CLOSED", open_quantity=0,
+    )
+    pending = OrderIntent.create("SSI", "SELL", 100, "MARKET", execution_mode="PAPER")
+    real = OrderIntent.create("VNM", "BUY", 100, "MARKET", execution_mode="REAL")
+
+    symbols = active_runtime_symbols(
+        ["FPT"], ["HPG"], [open_cycle, closed_cycle], [pending, real], "PAPER",
+    )
+
+    assert symbols == ["FPT", "HPG", "MBB", "SSI"]
 
 
 def test_daemon_writes_heartbeat_and_starts_off(monkeypatch):

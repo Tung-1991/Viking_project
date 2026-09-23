@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from viking_v2.rules.state import RuleStateStore
+from viking_v2.trading.state import TradeStateStore
 
 
 def test_market_state_requires_three_distinct_sessions(tmp_path):
@@ -11,6 +12,26 @@ def test_market_state_requires_three_distinct_sessions(tmp_path):
     assert store.observe_market_candidate("UPTREND", "2026-08-10", 3) == "UNKNOWN"
     assert store.observe_market_candidate("UPTREND", "2026-08-11", 3) == "UNKNOWN"
     assert store.observe_market_candidate("UPTREND", "2026-08-12", 3) == "UPTREND"
+
+
+def test_operator_stats_reset_clears_mode_rule_cooldowns_only(tmp_path):
+    rules = RuleStateStore(tmp_path / "rule.json")
+    trades = TradeStateStore(tmp_path / "trades.json")
+    rules.start_entry_pause("PAPER", 900, now=100)
+    rules.start_entry_pause("REAL", 900, now=100)
+    trades.store.write({
+        "cycles": [],
+        "loss_streaks": {"PAPER|FPT": 3, "REAL|MBB": 3},
+        "loss_streak_updated_at": {"PAPER|FPT": 100, "REAL|MBB": 100},
+        "capital": {},
+    })
+
+    assert rules.clear_operating_cooldowns("PAPER") is True
+    assert trades.clear_loss_cooldowns("PAPER") == 1
+    assert rules.entry_pause("PAPER", now=101)["active"] is False
+    assert rules.entry_pause("REAL", now=101)["active"] is True
+    assert trades.loss_streak("FPT", "PAPER") == 0
+    assert trades.loss_streak("MBB", "REAL") == 3
 
 
 def test_unconfirmed_market_exposes_candidate_instead_of_claiming_missing_data(tmp_path):

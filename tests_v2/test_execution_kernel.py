@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from viking_v2.connections.dnse.paper import PaperBroker
 from viking_v2.trading.execution import ExecutionService
-from viking_v2.models import OrderIntent, StrategyDecision
+from viking_v2.models import OrderIntent, StrategyDecision, TradeCycle
 from viking_v2.trading.orders import OrderQueue
 from viking_v2.storage import CSVOrderJournal, DailyFeeTracker, JSONLineJournal
 from viking_v2.rules.state import RuleStateStore
@@ -34,15 +37,89 @@ def test_daily_fee_tracker_rolls_by_date_and_manual_reset_keeps_csv(tmp_path):
     record(yesterday, "PAPER", 999)
     record(today, "PAPER", 100, 10)
     record(today, "REAL", 50)
+    cycles = [
+        TradeCycle(
+            "OLD", "AAA", execution_mode="PAPER", status="CLOSED",
+            net_pnl=-999, closed_at=yesterday,
+        ),
+        TradeCycle(
+            "TODAY", "FPT", execution_mode="PAPER", status="CLOSED",
+            net_pnl=250, closed_at=today,
+        ),
+        TradeCycle(
+            "REAL", "MBB", execution_mode="REAL", status="CLOSED",
+            net_pnl=75, closed_at=today,
+        ),
+    ]
     assert tracker.total("PAPER", today + 1) == 110
     assert tracker.total("REAL", today + 1) == 50
+    assert tracker.summary("PAPER", cycles, now=today + 1) == {
+        "pnl": 250, "fees": 110, "closed_trades": 1, "rolled_over": False,
+    }
+    assert tracker.summary("REAL", cycles, now=today + 1) == {
+        "pnl": 75, "fees": 50, "closed_trades": 1, "rolled_over": False,
+    }
+    assert tracker.summary("PAPER", cycles, daily=False, now=today + 1)["pnl"] == -749
 
     tracker.reset("PAPER", today + 2)
     assert tracker.total("PAPER", today + 3) == 0
     record(today + 4, "PAPER", 20, 2)
+    cycles.append(TradeCycle(
+        "AFTER", "SSI", execution_mode="PAPER", status="CLOSED",
+        net_pnl=-30, closed_at=today + 4,
+    ))
     assert tracker.total("PAPER", today + 5) == 22
+    assert tracker.summary("PAPER", cycles, now=today + 5) == {
+        "pnl": -30, "fees": 22, "closed_trades": 1, "rolled_over": False,
+    }
+    assert tracker.summary("PAPER", cycles, daily=False, now=today + 5) == {
+        "pnl": -30, "fees": 22, "closed_trades": 1, "rolled_over": False,
+    }
     assert len(history.read_all()) == 4
     assert tracker.total("PAPER", today + 86_400) == 0
+
+
+def test_daily_stats_survive_restart_then_archive_at_configured_time(tmp_path):
+    vn_tz = ZoneInfo("Asia/Ho_Chi_Minh")
+    before_cutoff = datetime(2026, 9, 23, 14, 30, tzinfo=vn_tz).timestamp()
+    history = CSVOrderJournal(tmp_path / "order_history.csv")
+    history.append_event({
+        "ts": before_cutoff,
+        "intent": {"execution_mode": "PAPER", "symbol": "FPT"},
+        "result": {"raw": {"fee": 100, "tax": 10}},
+    })
+    cycles = [TradeCycle(
+        "DAY", "FPT", execution_mode="PAPER", status="CLOSED",
+        net_pnl=500, closed_at=before_cutoff,
+    )]
+    state_path = tmp_path / "daily_stats.json"
+    first = DailyFeeTracker(history.path, state_path)
+    initial = first.summary(
+        "PAPER", cycles, reset_time="15:00", now=before_cutoff + 60,
+    )
+    assert initial["pnl"] == 500
+    assert initial["fees"] == 110
+    assert initial["rolled_over"] is False
+
+    reopened = DailyFeeTracker(history.path, state_path)
+    persisted = reopened.summary(
+        "PAPER", cycles, reset_time="15:00", now=before_cutoff + 120,
+    )
+    assert persisted["pnl"] == 500
+    assert persisted["fees"] == 110
+    assert persisted["rolled_over"] is False
+
+    after_cutoff = datetime(2026, 9, 23, 15, 1, tzinfo=vn_tz).timestamp()
+    rolled = reopened.summary(
+        "PAPER", cycles, reset_time="15:00", now=after_cutoff,
+    )
+    assert rolled == {
+        "pnl": 0, "fees": 0, "closed_trades": 0, "rolled_over": True,
+    }
+    state = reopened.state.read()
+    assert state["history"][-1]["trigger"] == "SCHEDULED"
+    assert state["history"][-1]["pnl"] == 500
+    assert state["history"][-1]["fees"] == 110
 
 
 def test_local_lo_only_releases_when_realtime_quote_reaches_limit(tmp_path):

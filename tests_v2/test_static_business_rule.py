@@ -218,6 +218,24 @@ def test_entry_respects_pending_loss_lock_capacity_and_capital():
     assert rule.evaluate(context, {"open_positions": 0, "available_capital": 0}).reason == "NO_AVAILABLE_CAPITAL"
 
 
+def test_priority_entry_bypasses_only_max_positions():
+    rule = StaticRule()
+    context = {
+        "symbol": "FPT", "bars": _bars(M_VALUES),
+        "previous_market_state": "UPTREND", "priority_entry": True,
+    }
+    allowed = rule.evaluate(context, {"open_positions": 5, "available_capital": 1})
+    no_capital = rule.evaluate(context, {"open_positions": 5, "available_capital": 0})
+    removed = rule.evaluate(
+        {**context, "entry_allowed": False},
+        {"open_positions": 5, "available_capital": 1},
+    )
+
+    assert allowed.action == "BUY"
+    assert no_capital.reason == "NO_AVAILABLE_CAPITAL"
+    assert removed.reason == "NOT_IN_WATCHLIST"
+
+
 def test_stop_loss_is_realtime_and_has_priority_over_indicator_and_protection():
     decision = StaticRule().evaluate(
         {"symbol": "FPT", "bars": _bars(B_VALUES), "previous_market_state": "UPTREND"},

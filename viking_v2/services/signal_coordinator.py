@@ -53,6 +53,7 @@ class RankedDecision:
     decision: StrategyDecision
     watchlist_priority: int
     signal_time: str
+    is_priority: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,11 +74,17 @@ class CoordinatedBuy:
 def rank_buy_decisions(
     decisions: Mapping[str, StrategyDecision],
     watchlist: Iterable[str],
+    priority_symbols: Iterable[str] = (),
 ) -> list[RankedDecision]:
-    """Rank current BUY candidates by first signal, then FA/watchlist order."""
+    """Rank Priority BUYs first, then by signal time and watchlist order."""
     priority = {
         str(symbol or "").strip().upper(): index
         for index, symbol in enumerate(watchlist)
+    }
+    promoted = {
+        str(symbol or "").strip().upper()
+        for symbol in priority_symbols
+        if str(symbol or "").strip()
     }
     fallback = len(priority)
     rows = [
@@ -86,6 +93,7 @@ def rank_buy_decisions(
             decision=decision,
             watchlist_priority=priority.get(str(symbol or "").strip().upper(), fallback),
             signal_time=decision_signal_time(decision),
+            is_priority=str(symbol or "").strip().upper() in promoted,
         )
         for symbol, decision in decisions.items()
         if decision.action == "BUY" and str(decision.signal or "").upper() == "BUY"
@@ -93,6 +101,7 @@ def rank_buy_decisions(
     return sorted(
         rows,
         key=lambda row: (
+            0 if row.is_priority else 1,
             _parse_signal_time(row.signal_time),
             row.watchlist_priority,
             row.symbol,
@@ -108,6 +117,7 @@ def coordinate_buy_decisions(
     bot_enabled: bool,
     plan: Callable[[RankedDecision], BuyAttempt],
     disabled_reason: str = "BOT_OFF",
+    priority_symbols: Iterable[str] = (),
 ) -> list[CoordinatedBuy]:
     """Arbitrate every current BUY without importing dashboard or broker code.
 
@@ -115,7 +125,7 @@ def coordinate_buy_decisions(
     releases it immediately so the next signal can still be considered.
     """
     output: list[CoordinatedBuy] = []
-    for candidate in rank_buy_decisions(decisions, watchlist):
+    for candidate in rank_buy_decisions(decisions, watchlist, priority_symbols):
         if candidate.symbol in allocator.occupied_symbols:
             continue
         if not bot_enabled:
@@ -124,7 +134,7 @@ def coordinate_buy_decisions(
                 blocked_by=str(disabled_reason or "BOT_OFF").upper(),
             ))
             continue
-        if not allocator.reserve(candidate.symbol):
+        if not allocator.reserve(candidate.symbol, bypass_limit=candidate.is_priority):
             output.append(CoordinatedBuy(candidate, blocked_by="MAX_POSITIONS"))
             continue
         attempt = plan(candidate)
@@ -150,12 +160,22 @@ def _position_symbol(row: Mapping[str, Any]) -> str:
 class BuySlotAllocator:
     """Reserve unique symbol slots before order intents are persisted."""
 
-    def __init__(self, max_positions: int, occupied_symbols: Iterable[str] = ()):
+    def __init__(
+        self,
+        max_positions: int,
+        occupied_symbols: Iterable[str] = (),
+        bypass_symbols: Iterable[str] = (),
+    ):
         self.max_positions = max(1, int(max_positions or 1))
         self.occupied_symbols = {
             str(symbol or "").strip().upper()
             for symbol in occupied_symbols
             if str(symbol or "").strip()
+        }
+        self.bypass_symbols = {
+            str(symbol or "").strip().upper()
+            for symbol in bypass_symbols
+            if str(symbol or "").strip().upper() in self.occupied_symbols
         }
 
     @classmethod
@@ -167,6 +187,7 @@ class BuySlotAllocator:
         execution_mode: str,
         *,
         bot_symbols: Iterable[str] | None = None,
+        priority_symbols: Iterable[str] = (),
     ) -> "BuySlotAllocator":
         mode = str(execution_mode or "PAPER").strip().upper()
         occupied = (
@@ -191,22 +212,35 @@ class BuySlotAllocator:
             and intent.execution_mode == mode
             and str(intent.status or "").upper() not in FINAL_STATUSES
         )
-        return cls(max_positions, occupied)
+        priority = {
+            str(symbol or "").strip().upper()
+            for symbol in priority_symbols
+            if str(symbol or "").strip()
+        }
+        return cls(max_positions, occupied, occupied & priority)
 
     @property
     def used(self) -> int:
-        return len(self.occupied_symbols)
+        return len(self.occupied_symbols - self.bypass_symbols)
 
     @property
     def available(self) -> int:
         return max(0, self.max_positions - self.used)
 
-    def reserve(self, symbol: str) -> bool:
+    def reserve(self, symbol: str, *, bypass_limit: bool = False) -> bool:
         normalized = str(symbol or "").strip().upper()
-        if not normalized or normalized in self.occupied_symbols or self.available <= 0:
+        if (
+            not normalized
+            or normalized in self.occupied_symbols
+            or (self.available <= 0 and not bypass_limit)
+        ):
             return False
         self.occupied_symbols.add(normalized)
+        if bypass_limit:
+            self.bypass_symbols.add(normalized)
         return True
 
     def release(self, symbol: str) -> None:
-        self.occupied_symbols.discard(str(symbol or "").strip().upper())
+        normalized = str(symbol or "").strip().upper()
+        self.occupied_symbols.discard(normalized)
+        self.bypass_symbols.discard(normalized)

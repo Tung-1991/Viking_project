@@ -272,10 +272,17 @@ def update_env(values: dict[str, str | None], path: str | Path = ENV_PATH) -> No
 @dataclass(slots=True)
 class AppSettings:
     watchlist: list[str] = field(default_factory=_watchlist_from_env)
+    # Symbols promoted inside the watchlist. They keep every normal entry
+    # guard, but are ranked first and may bypass only the BOT slot quota.
+    priority_symbols: list[str] = field(default_factory=list)
     # Manual fallback only. LIVE/PAPER normally learns the exchange from DNSE.
     symbol_exchanges: dict[str, str] = field(default_factory=dict)
     paper_mode: bool = True
     paper_initial_balance: float = 100_000_000.0
+    # Dashboard account counters either roll with the Vietnam calendar day or
+    # accumulate until the operator resets their shared display cutoff.
+    daily_stats_mode: str = "DAILY"
+    daily_stats_reset_time: str = "00:00"
     confirm_real_orders: bool = True
     telegram_enabled: bool = False
     telegram_chat_id: str = ""
@@ -330,6 +337,15 @@ class AppSettings:
         )
         if not self.watchlist:
             self.watchlist = list(DEFAULT_CKCS_WATCHLIST)
+        watchlist_set = set(self.watchlist)
+        self.priority_symbols = [
+            symbol for symbol in dict.fromkeys(
+                str(item).strip().upper()
+                for item in self.priority_symbols
+                if str(item).strip()
+            )
+            if symbol in watchlist_set
+        ]
         aliases = {"HOSE": "HOSE", "HSX": "HOSE", "STO": "HOSE",
                    "HNX": "HNX", "STX": "HNX", "UPCOM": "UPCOM", "UPX": "UPCOM"}
         self.symbol_exchanges = {
@@ -338,6 +354,16 @@ class AppSettings:
             if str(symbol).strip() and str(exchange).strip().upper() in aliases
         }
         self.paper_initial_balance = max(0.0, float(self.paper_initial_balance or 0.0))
+        self.daily_stats_mode = str(self.daily_stats_mode or "DAILY").strip().upper()
+        if self.daily_stats_mode not in {"DAILY", "SINCE_RESET"}:
+            self.daily_stats_mode = "DAILY"
+        self.daily_stats_reset_time = str(self.daily_stats_reset_time or "00:00").strip()
+        try:
+            self.daily_stats_reset_time = datetime.strptime(
+                self.daily_stats_reset_time, "%H:%M",
+            ).strftime("%H:%M")
+        except ValueError:
+            self.daily_stats_reset_time = "00:00"
         self.telegram_chat_id = str(self.telegram_chat_id or "").strip()
         self.telegram_token_env = str(self.telegram_token_env or "TELE_BOT_KEY").strip()
         try:

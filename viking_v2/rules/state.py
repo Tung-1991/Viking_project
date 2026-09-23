@@ -122,6 +122,16 @@ class RuleStateStore:
                 "remaining_seconds": max(0.0, until - checked_at),
             }
 
+    def clear_operating_cooldowns(self, execution_mode: str) -> bool:
+        """Clear mode-scoped rule pauses without touching signal/trade history."""
+        mode = "REAL" if str(execution_mode or "").upper() == "REAL" else "PAPER"
+        with self._lock:
+            raw = self._read()
+            removed = raw["entry_pauses"].pop(mode, None) is not None
+            if removed:
+                self.store.write(raw)
+            return removed
+
     @staticmethod
     def _buy_confirmation_key(symbol: str, stream: str) -> str:
         return f"{str(stream or '').strip().upper()}|{str(symbol or '').strip().upper()}"

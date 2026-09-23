@@ -233,6 +233,7 @@ class PortfolioContextBuilder:
         tick: dict[str, Any],
         exposure: float,
         max_positions: int,
+        priority_symbols: Iterable[str] = (),
         no_compound_enabled: bool = True,
         loss_lock_count: int = 3,
         loss_lock_hours: float = 24.0,
@@ -299,6 +300,11 @@ class PortfolioContextBuilder:
             and cycle.source == "BOT"
             and cycle.open_quantity > 0
         }
+        priority_set = {
+            str(value or "").strip().upper()
+            for value in priority_symbols
+            if str(value or "").strip()
+        }
         active_trade = self.trades.active_for(symbol, mode)
         active_loss_streak = self.trades.active_loss_streak(
             symbol,
@@ -319,8 +325,10 @@ class PortfolioContextBuilder:
             # max_positions is a BOT quota. MANUAL/EXTERNAL holdings still
             # consume cash/exposure above, but never consume a BOT slot.
             "open_positions": len(
-                bot_open_symbols
-                | {str(item.symbol or "").upper() for item in bot_pending_buys}
+                (
+                    bot_open_symbols
+                    | {str(item.symbol or "").upper() for item in bot_pending_buys}
+                ) - priority_set
             ),
             "pending_buy": bool(self.queue.find_active(symbol, side="BUY", execution_mode=mode)),
             "loss_streak": active_loss_streak,

@@ -350,6 +350,12 @@ def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> 
         assert int(rule_popup.phase2_mode_card.grid_info()["row"]) == 0
         assert int(rule_popup.phase2_confirmation_card.grid_info()["row"]) == 1
         connection_popup = popups[1][1]
+        assert connection_popup.daily_stats_choice.get() == "THEO NGÀY"
+        assert connection_popup.daily_stats_segment.cget("values") == [
+            "THEO NGÀY", "TỪ LẦN RESET",
+        ]
+        assert connection_popup.daily_stats_time.get() == "00:00"
+        assert connection_popup.btn_save_daily_stats.cget("text") == "LƯU"
         assert connection_popup.tele_event_time_controls["buy_queued"] is connection_popup.tele_batch
         assert connection_popup.tele_event_time_controls["closed"].cget("text") == "1 LẦN/TRADE"
         assert set(connection_popup.tele_cooldown_entries) == {
@@ -378,6 +384,10 @@ def test_volume_scanner_popup_has_safe_defaults_and_does_not_touch_watchlist(ui_
         assert popup.btn_volume_scanner.master is popup.volume_scanner_card
         assert int(popup.volume_scanner_card.grid_info()["row"]) == 0
         assert "xuất Excel" in popup.volume_scanner_hint.cget("text")
+        assert int(popup.priority_card.grid_info()["row"]) == 1
+        assert popup.priority_picker.get() == settings.priority_symbols
+        assert popup.btn_export_watchlist.cget("text") == "XUẤT EXCEL"
+        assert popup.btn_import_watchlist.cget("text") == "NHẬP EXCEL"
         popup._open_volume_scanner()
         ui_root.update_idletasks()
         scanner = popup._volume_popup
@@ -392,6 +402,7 @@ def test_volume_scanner_popup_has_safe_defaults_and_does_not_touch_watchlist(ui_
         assert int(scanner.filter_group.grid_info()["column"]) == 1
         assert int(scanner.title_label.cget("font")[1]) >= 22
         assert scanner.export_button.cget("state") == "disabled"
+        assert scanner.replace_button.cget("state") == "disabled"
         assert scanner.tree["columns"] == ("symbol", "previous", "recent", "change", "status")
         assert settings.watchlist == original_watchlist
     finally:

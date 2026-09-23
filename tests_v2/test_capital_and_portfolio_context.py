@@ -80,6 +80,26 @@ def test_pending_buy_reserves_exposure_and_duplicate_symbol(tmp_path):
     assert context["open_positions"] == 1
 
 
+def test_priority_pending_buy_does_not_consume_regular_slot(tmp_path):
+    queue = OrderQueue(tmp_path / "priority-orders.json")
+    queue.add(OrderIntent.create("FPT", "BUY", 100, "MARKET", source="BOT"))
+    builder = PortfolioContextBuilder(
+        queue,
+        TradeStateStore(tmp_path / "priority-trades.json"),
+        RuleStateStore(tmp_path / "priority-rules.json"),
+    )
+
+    context = builder.build(
+        "MBB",
+        execution_mode="PAPER",
+        balance={"equity": 1_000_000_000, "stock": {"availableCash": 1_000_000_000}},
+        positions=[], tick={"ask": 100}, exposure=0.9, max_positions=5,
+        priority_symbols=["FPT"],
+    )
+
+    assert context["open_positions"] == 0
+
+
 def test_unknown_buy_keeps_capital_reserved_until_reconciliation(tmp_path):
     queue = OrderQueue(tmp_path / "orders.json")
     intent = queue.add(OrderIntent.create("FPT", "BUY", 100, "LO", limit_price=100))

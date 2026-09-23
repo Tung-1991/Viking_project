@@ -182,6 +182,26 @@ class TradeStateStore:
         raw = self._read()
         return max(0, int(raw["loss_streaks"].get(self._key(symbol, execution_mode), 0) or 0))
 
+    def clear_loss_cooldowns(self, execution_mode: str) -> int:
+        """Clear every symbol loss lock for one book, preserving all cycles."""
+        mode = "REAL" if str(execution_mode or "").upper() == "REAL" else "PAPER"
+        prefix = f"{mode}|"
+        with self._lock:
+            raw = self._read()
+            keys = {
+                key for key in (
+                    set(raw["loss_streaks"]) | set(raw["loss_streak_updated_at"])
+                )
+                if str(key).upper().startswith(prefix)
+            }
+            if not keys:
+                return 0
+            for key in keys:
+                raw["loss_streaks"].pop(key, None)
+                raw["loss_streak_updated_at"].pop(key, None)
+            self.store.write(raw)
+            return len(keys)
+
     def active_loss_streak(
         self,
         symbol: str,
