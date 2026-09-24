@@ -1085,7 +1085,11 @@ class DashboardActionsMixin:
             self._log(f"Đã lưu DNSE nhưng không khởi động lại được daemon: {exc}", "bot")
 
     def _reload_telegram(self, *, force: bool = False) -> None:
-        token = os.getenv(self.settings.telegram_token_env, "")
+        if not hasattr(self, "_telegram_session_token"):
+            self._telegram_session_token = os.getenv(
+                self.settings.telegram_token_env, "",
+            )
+        token = str(self._telegram_session_token or "")
         signature = (
             bool(self.settings.telegram_enabled),
             str(self.settings.telegram_chat_id or "").strip(),

@@ -660,51 +660,6 @@ class ConnectionPopup:
         connection_actions = ctk.CTkFrame(credentials, fg_color="transparent")
         connection_actions.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(3, 2))
         connection_actions.grid_columnconfigure(0, weight=1)
-        self.token_bar = ctk.CTkFrame(
-            connection_actions, width=390, height=34,
-            fg_color=self.SURFACE_2, corner_radius=7,
-        )
-        self.token_bar.grid(row=0, column=0, sticky="w")
-        self.token_bar.grid_propagate(False)
-        self.token_bar.grid_columnconfigure(2, minsize=100)
-        token_hint = ctk.CTkButton(
-            self.token_bar, text="!", width=24, height=24, corner_radius=12,
-            font=("Segoe UI", 12, "bold"), fg_color=self.WARN,
-            hover_color="#D97706", text_color="#111318",
-        )
-        token_hint.grid(row=0, column=0, padx=(5, 5), pady=5)
-        _HoverHint(
-            token_hint,
-            "Trading Token DNSE: tắt LƯU để chỉ dùng trong RAM; XÓA bỏ cả .env và RAM.",
-        )
-        ctk.CTkLabel(
-            self.token_bar, text="TOKEN GD", width=82, anchor="w",
-            font=FONT_KEY, text_color=self.TITLE,
-        ).grid(row=0, column=1, sticky="w")
-        token_ready = self.client.has_trading_token()
-        self.token_status = ctk.CTkLabel(
-            self.token_bar,
-            text=(
-                ".ENV" if token_ready and self.save_token_env.get()
-                else "RAM" if token_ready else "CHƯA CÓ"
-            ),
-            width=100, anchor="w", font=FONT_VALUE,
-            text_color=self.GREEN if token_ready else self.WARN,
-        )
-        self.token_status.grid(row=0, column=2, sticky="w")
-        self.save_token_switch = ctk.CTkSwitch(
-            self.token_bar, text="LƯU", variable=self.save_token_env,
-            onvalue=True, offvalue=False, width=82,
-            font=("Segoe UI", 11, "bold"), progress_color=self.GREEN,
-            command=self._token_storage_changed,
-        )
-        self.save_token_switch.grid(row=0, column=3, padx=(3, 6), pady=3)
-        self.btn_clear_token = ctk.CTkButton(
-            self.token_bar, text="XÓA", width=54, height=28,
-            font=("Segoe UI", 11, "bold"), fg_color="#3A3F47",
-            hover_color="#4B515B", command=self._clear_saved_token,
-        )
-        self.btn_clear_token.grid(row=0, column=4, padx=(0, 4), pady=3)
         self.btn_load_accounts = ctk.CTkButton(
             connection_actions, text="TEST", width=90, height=32,
             font=("Segoe UI", 11, "bold"), fg_color=self.BLUE,
@@ -712,7 +667,7 @@ class ConnectionPopup:
         )
         self.btn_load_accounts.grid(row=0, column=1, padx=(0, 6))
         self.btn_save_dnse = ctk.CTkButton(
-            connection_actions, text="LƯU", width=90, height=32,
+            connection_actions, text="LƯU API", width=100, height=32,
             font=("Segoe UI", 11, "bold"), fg_color=self.GREEN,
             hover_color="#16A34A", command=self._save_dnse,
         )
@@ -724,84 +679,149 @@ class ConnectionPopup:
         )
         self.dnse_status.grid(row=6, column=0, columnspan=3, sticky="ew", padx=12, pady=(1, 8))
 
-        otp_card = self._card(
-            body, "XÁC THỰC GIAO DỊCH",
-            "Token mặc định chỉ giữ trong RAM. Bật LƯU TOKEN .ENV nếu muốn dùng lại sau khi mở app; "
-            "tắt lưu sẽ xóa bản đã lưu nhưng vẫn giữ token của phiên hiện tại. XÓA TOKEN xóa cả file và RAM.",
+        self.dnse_compact_row = ctk.CTkFrame(body, fg_color="transparent")
+        self.dnse_compact_row.grid(row=1, column=0, sticky="ew", padx=6, pady=3)
+        self.dnse_compact_row.grid_columnconfigure(
+            (0, 1, 2), weight=1, uniform="dnse_compact",
         )
-        otp_card.grid(row=1, column=0, sticky="ew", padx=6, pady=3)
-        otp_card.grid_columnconfigure(1, weight=1)
+        self.dnse_compact_row.grid_rowconfigure(0, weight=1)
+
+        self.otp_card = self._card(
+            self.dnse_compact_row, "XÁC THỰC DNSE",
+            "OTP chỉ dùng một lần và không lưu. Sau khi OTP hợp lệ, DNSE cấp Trading Token. "
+            "LƯU TOKEN giữ token đó qua lần mở app sau; XÓA bỏ token khỏi cả RAM và .env.",
+        )
+        self.otp_card.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
+        self.otp_card.grid_columnconfigure((0, 1, 2), weight=1, uniform="otp_columns")
         self.otp_type = tk.StringVar(value="SMART OTP" if self.client.otp_type == "smart_otp" else "EMAIL OTP")
         ctk.CTkLabel(
-            otp_card, text="PHƯƠNG THỨC", anchor="w",
+            self.otp_card, text="OTP MỘT LẦN · KHÔNG LƯU", anchor="w",
             font=FONT_KEY, text_color=self.TITLE,
-        ).grid(row=1, column=0, sticky="w", padx=(12, 8), pady=4)
+        ).grid(row=1, column=0, columnspan=3, sticky="w", padx=12, pady=(3, 1))
         ctk.CTkSegmentedButton(
-            otp_card, values=["EMAIL OTP", "SMART OTP"], variable=self.otp_type,
-            width=280, height=32, selected_color=self.BLUE, selected_hover_color="#245C92",
+            self.otp_card, values=["EMAIL OTP", "SMART OTP"], variable=self.otp_type,
+            height=32, selected_color=self.BLUE, selected_hover_color="#245C92",
             unselected_color="#3A3F47", unselected_hover_color="#4B515B",
             font=("Segoe UI", 11, "bold"), command=self._otp_type_changed,
-        ).grid(row=1, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=4)
-        self.otp = self._field(
-            otp_card, 2, "MÃ OTP", "", True,
+        ).grid(row=2, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 5))
+        ctk.CTkLabel(
+            self.otp_card, text="MÃ OTP", anchor="w",
+            font=FONT_KEY, text_color=self.TITLE,
+        ).grid(row=3, column=0, columnspan=3, sticky="w", padx=12, pady=(1, 1))
+        self.otp = ctk.CTkEntry(
+            self.otp_card, show="•", height=32,
+            fg_color=self.SURFACE_2, border_color=self.BORDER,
+            font=FONT_VALUE, text_color=self.TEXT,
         )
-        otp_actions = ctk.CTkFrame(otp_card, fg_color="transparent")
-        otp_actions.grid(row=3, column=0, columnspan=3, sticky="ew", padx=12, pady=(4, 8))
-        otp_actions.grid_columnconfigure(0, weight=1)
+        self.otp.grid(row=4, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 5))
+        otp_actions = ctk.CTkFrame(self.otp_card, fg_color="transparent")
+        otp_actions.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 6))
+        otp_actions.grid_columnconfigure((0, 1), weight=1, uniform="otp_actions")
         self.btn_send_otp = ctk.CTkButton(
-            otp_actions, text="GỬI EMAIL", width=125, height=32, fg_color="#3A3F47",
+            otp_actions, text="GỬI OTP", height=32, fg_color="#3A3F47",
             hover_color="#4B515B", font=("Segoe UI", 11, "bold"), command=self._send_otp,
         )
-        self.btn_send_otp.grid(row=0, column=1, padx=(0, 6))
+        self.btn_send_otp.grid(row=0, column=0, sticky="ew", padx=(0, 3))
         self.btn_verify_otp = ctk.CTkButton(
-            otp_actions, text="XÁC THỰC", width=110, height=32, fg_color=self.BLUE,
+            otp_actions, text="XÁC THỰC", height=32, fg_color=self.BLUE,
             hover_color="#245C92", font=("Segoe UI", 11, "bold"), command=self._verify_otp,
         )
-        self.btn_verify_otp.grid(row=0, column=2)
+        self.btn_verify_otp.grid(row=0, column=1, sticky="ew", padx=(3, 0))
+
+        self.token_bar = ctk.CTkFrame(
+            self.otp_card, height=34, fg_color=self.SURFACE_2, corner_radius=7,
+        )
+        self.token_bar.grid(row=6, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 9))
+        self.token_bar.grid_columnconfigure(2, weight=1)
+        token_hint = ctk.CTkButton(
+            self.token_bar, text="!", width=24, height=24, corner_radius=12,
+            font=("Segoe UI", 12, "bold"), fg_color=self.WARN,
+            hover_color="#D97706", text_color="#111318",
+        )
+        token_hint.grid(row=0, column=0, padx=(5, 4), pady=5)
+        _HoverHint(
+            token_hint,
+            "LƯU TOKEN: giữ DNSE Trading Token qua lần mở app sau trong .env. "
+            "Tắt: chỉ giữ trong RAM. "
+            "XÓA: bỏ token khỏi cả .env và RAM.",
+        )
+        ctk.CTkLabel(
+            self.token_bar, text="TOKEN GD", anchor="w",
+            font=("Segoe UI", 10, "bold"), text_color=self.TITLE,
+        ).grid(row=0, column=1, sticky="w", padx=(0, 5))
+        token_ready = self.client.has_trading_token()
+        self.token_status = ctk.CTkLabel(
+            self.token_bar,
+            text=(
+                ".ENV" if token_ready and self.save_token_env.get()
+                else "RAM" if token_ready else "CHƯA CÓ"
+            ),
+            anchor="w", font=("Segoe UI", 11, "bold"),
+            text_color=self.GREEN if token_ready else self.WARN,
+        )
+        self.token_status.grid(row=0, column=2, sticky="w", padx=(0, 3))
+        self.save_token_switch = ctk.CTkSwitch(
+            self.token_bar, text="LƯU TOKEN", variable=self.save_token_env,
+            onvalue=True, offvalue=False, width=102,
+            font=("Segoe UI", 10, "bold"), progress_color=self.GREEN,
+            command=self._token_storage_changed,
+        )
+        self.save_token_switch.grid(row=0, column=3, padx=3, pady=3)
+        self.btn_clear_token = ctk.CTkButton(
+            self.token_bar, text="XÓA", width=45, height=26,
+            font=("Segoe UI", 10, "bold"), fg_color="#3A3F47",
+            hover_color="#4B515B", command=self._clear_saved_token,
+        )
+        self.btn_clear_token.grid(row=0, column=4, padx=(2, 5), pady=4)
         self._otp_type_changed(self.otp_type.get())
 
-        paper_card = self._card(
-            body, "PAPER",
+        self.paper_card = self._card(
+            self.dnse_compact_row, "PAPER",
             "LƯU đổi vốn mặc định. RESET đưa tài khoản PAPER về số vốn này và xóa trạng thái PAPER hiện tại.",
         )
-        paper_card.grid(row=2, column=0, sticky="ew", padx=6, pady=3)
-        paper_card.grid_columnconfigure(1, weight=1)
-        self.paper_balance = self._field(
-            paper_card,
-            1,
-            "VỐN PAPER",
-            f"{self.settings.paper_initial_balance:,.0f}",
+        self.paper_card.grid(row=0, column=1, sticky="nsew", padx=3)
+        self.paper_card.grid_columnconfigure((0, 1, 2), weight=1, uniform="paper_columns")
+        ctk.CTkLabel(
+            self.paper_card, text="VỐN MẶC ĐỊNH", anchor="w",
+            font=FONT_KEY, text_color=self.TITLE,
+        ).grid(row=1, column=0, columnspan=3, sticky="w", padx=12, pady=(3, 1))
+        self.paper_balance = ctk.CTkEntry(
+            self.paper_card, height=36,
+            fg_color=self.SURFACE_2, border_color=self.BORDER,
+            font=FONT_VALUE, text_color=self.TEXT,
         )
-        paper_actions = ctk.CTkFrame(paper_card, fg_color="transparent")
-        paper_actions.grid(row=2, column=0, columnspan=3, sticky="ew", padx=12, pady=(5, 3))
-        paper_actions.grid_columnconfigure(0, weight=1)
+        self.paper_balance.insert(0, f"{self.settings.paper_initial_balance:,.0f}")
+        self.paper_balance.grid(row=2, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 8))
+        paper_actions = ctk.CTkFrame(self.paper_card, fg_color="transparent")
+        paper_actions.grid(row=3, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 6))
+        paper_actions.grid_columnconfigure((0, 1), weight=1, uniform="paper_actions")
         ctk.CTkButton(
-            paper_actions, text="LƯU", width=90, height=32,
+            paper_actions, text="LƯU VỐN", height=32,
             font=("Segoe UI", 11, "bold"), fg_color=self.GREEN,
             hover_color="#16A34A", command=self._save_paper_balance,
-        ).grid(row=0, column=1, padx=(0, 6))
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 3))
         ctk.CTkButton(
-            paper_actions, text="RESET", width=90, height=32,
+            paper_actions, text="RESET", height=32,
             font=("Segoe UI", 11, "bold"), fg_color="#3A3F47",
             hover_color="#4B515B", command=lambda: self._save_paper_balance(reset=True),
-        ).grid(row=0, column=2)
+        ).grid(row=0, column=1, sticky="ew", padx=(3, 0))
         self.paper_status = ctk.CTkLabel(
-            paper_card, text="", font=("Segoe UI", 11), text_color=self.MUTED, anchor="w",
+            self.paper_card, text="LƯU chỉ đổi vốn mặc định", font=("Segoe UI", 10),
+            text_color=self.MUTED, anchor="w", justify="left", wraplength=240,
         )
-        self.paper_status.grid(row=3, column=0, columnspan=3, sticky="ew", padx=12, pady=(1, 10))
+        self.paper_status.grid(row=4, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 9))
 
-        stats_card = self._card(
-            body,
-            "THỐNG KÊ PANEL",
+        self.stats_card = self._card(
+            self.dnse_compact_row, "THỐNG KÊ",
             "PNL và phí dùng chung một mốc. THEO NGÀY chốt, lưu và mở kỳ mới đúng giờ đã đặt; "
             "TỪ LẦN RESET cộng dồn đến khi bấm ↻. Restart app không làm mất bộ đếm.",
         )
-        stats_card.grid(row=3, column=0, sticky="ew", padx=6, pady=3)
-        stats_card.grid_columnconfigure(1, weight=1)
+        self.stats_card.grid(row=0, column=2, sticky="nsew", padx=(3, 0))
+        self.stats_card.grid_columnconfigure((0, 1, 2), weight=1, uniform="stats_columns")
         ctk.CTkLabel(
-            stats_card, text="CHẾ ĐỘ", anchor="w",
+            self.stats_card, text="CHẾ ĐỘ", anchor="w",
             font=FONT_KEY, text_color=self.TITLE,
-        ).grid(row=1, column=0, sticky="w", padx=(12, 8), pady=5)
+        ).grid(row=1, column=0, columnspan=3, sticky="w", padx=12, pady=(3, 1))
         stats_value = (
             "TỪ LẦN RESET"
             if self.settings.daily_stats_mode == "SINCE_RESET"
@@ -809,8 +829,7 @@ class ConnectionPopup:
         )
         self.daily_stats_choice = tk.StringVar(value=stats_value)
         self.daily_stats_segment = ctk.CTkSegmentedButton(
-            stats_card,
-            values=["THEO NGÀY", "TỪ LẦN RESET"],
+            self.stats_card, values=["THEO NGÀY", "TỪ LẦN RESET"],
             variable=self.daily_stats_choice,
             height=32,
             selected_color=self.BLUE,
@@ -820,31 +839,40 @@ class ConnectionPopup:
             font=("Segoe UI", 11, "bold"),
         )
         self.daily_stats_segment.grid(
-            row=1, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=5,
+            row=2, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 7),
         )
         ctk.CTkLabel(
-            stats_card, text="GIỜ CHỐT NGÀY", anchor="w",
+            self.stats_card, text="GIỜ CHỐT NGÀY", anchor="w",
             font=FONT_KEY, text_color=self.TITLE,
-        ).grid(row=2, column=0, sticky="w", padx=(12, 8), pady=5)
+        ).grid(row=3, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 1))
+        stats_time_row = ctk.CTkFrame(self.stats_card, fg_color="transparent")
+        stats_time_row.grid(row=4, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 6))
+        stats_time_row.grid_columnconfigure(0, weight=1)
         self.daily_stats_time = ctk.CTkEntry(
-            stats_card, height=32, placeholder_text="00:00",
+            stats_time_row, height=32, placeholder_text="00:00",
             fg_color=self.SURFACE_2, border_color=self.BORDER,
             font=FONT_VALUE, text_color=self.TEXT,
         )
         self.daily_stats_time.insert(0, self.settings.daily_stats_reset_time)
-        self.daily_stats_time.grid(row=2, column=1, sticky="ew", padx=(0, 8), pady=5)
+        self.daily_stats_time.grid(row=0, column=0, sticky="ew", padx=(0, 5))
         self.btn_save_daily_stats = ctk.CTkButton(
-            stats_card, text="LƯU", width=90, height=32,
+            stats_time_row, text="LƯU", width=68, height=32,
             font=("Segoe UI", 11, "bold"), fg_color=self.GREEN,
             hover_color="#16A34A", command=self._save_daily_stats_settings,
         )
-        self.btn_save_daily_stats.grid(row=2, column=2, sticky="e", padx=(0, 12), pady=5)
+        self.btn_save_daily_stats.grid(row=0, column=1, sticky="e")
         self.daily_stats_status = ctk.CTkLabel(
-            stats_card, text="", font=("Segoe UI", 11),
-            text_color=self.MUTED, anchor="w",
+            self.stats_card,
+            text=(
+                "Cộng dồn tới khi bấm ↻"
+                if self.settings.daily_stats_mode == "SINCE_RESET"
+                else "Theo ngày · tự chốt đúng giờ"
+            ),
+            font=("Segoe UI", 10), text_color=self.MUTED,
+            anchor="w", justify="left", wraplength=240,
         )
         self.daily_stats_status.grid(
-            row=3, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 9),
+            row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 9),
         )
 
     @staticmethod
@@ -1088,16 +1116,48 @@ class ConnectionPopup:
         card.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
         card.grid_columnconfigure(1, weight=1)
         self.tele_enabled = tk.BooleanVar(value=self.settings.telegram_enabled)
+        self.save_telegram_token_env = tk.BooleanVar(
+            value=bool(os.getenv(self.settings.telegram_token_env, "").strip()),
+        )
+        telegram_header = ctk.CTkFrame(card, fg_color="transparent")
+        telegram_header.grid(
+            row=1, column=0, columnspan=3, sticky="ew", padx=12, pady=(2, 6),
+        )
+        telegram_header.grid_columnconfigure(1, weight=1)
         ctk.CTkSwitch(
-            card, text="BẬT TELEGRAM", variable=self.tele_enabled,
+            telegram_header, text="BẬT TELEGRAM", variable=self.tele_enabled,
             font=("Segoe UI", 12, "bold"), text_color=self.TEXT,
             progress_color=self.GREEN,
-        ).grid(
-            row=1, column=0, columnspan=3, sticky="w", padx=12, pady=(2, 6)
+        ).grid(row=0, column=0, sticky="w")
+        self.save_telegram_token_switch = ctk.CTkSwitch(
+            telegram_header, text="LƯU BOT TOKEN",
+            variable=self.save_telegram_token_env,
+            onvalue=True, offvalue=False,
+            font=("Segoe UI", 11, "bold"), text_color=self.TEXT,
+            progress_color=self.GREEN,
+            command=self._telegram_token_storage_changed,
         )
-        self.tele_token = self._field(
-            card, 2, "BOT TOKEN", os.getenv(self.settings.telegram_token_env, ""), True,
+        self.save_telegram_token_switch.grid(row=0, column=2, sticky="e", padx=(8, 6))
+        self.btn_clear_telegram_token = ctk.CTkButton(
+            telegram_header, text="XÓA", width=54, height=28,
+            font=("Segoe UI", 10, "bold"), fg_color="#3A3F47",
+            hover_color="#4B515B", command=self._clear_telegram_token,
         )
+        self.btn_clear_telegram_token.grid(row=0, column=3, sticky="e")
+        _HoverHint(
+            self.save_telegram_token_switch,
+            "Bật: lưu Bot Token trong .env để dùng lại sau khi mở app. "
+            "Tắt: token chỉ tồn tại trong RAM của phiên hiện tại.",
+        )
+        telegram_token = str(
+            getattr(
+                self.parent,
+                "_telegram_session_token",
+                os.getenv(self.settings.telegram_token_env, ""),
+            )
+            or ""
+        )
+        self.tele_token = self._field(card, 2, "BOT TOKEN", telegram_token, True)
         self.tele_chat = self._field(
             card, 3, "CHAT ID", self.settings.telegram_chat_id,
         )
@@ -1339,7 +1399,7 @@ class ConnectionPopup:
             else:
                 self.token_status.configure(text="CHỜ TOKEN", text_color=self.WARN)
                 self.dnse_status.configure(
-                    text="ĐÃ BẬT LƯU · TOKEN SẼ ĐƯỢC GHI SAU KHI XÁC THỰC OTP",
+                    text="ĐÃ BẬT LƯU TRADING TOKEN · CHỈ GHI SAU KHI OTP HỢP LỆ",
                     text_color=self.WARN,
                 )
             return
@@ -1404,6 +1464,9 @@ class ConnectionPopup:
         self._otp_type_changed(self.otp_type.get())
         self.btn_verify_otp.configure(state="normal", text="XÁC THỰC")
         if result.ok and verify:
+            # OTP is one-time input, never persistent state. Remove it from
+            # the widget as soon as DNSE has exchanged it for a trading token.
+            self.otp.delete(0, "end")
             if self.save_token_env.get():
                 update_env(
                     {
@@ -1669,6 +1732,58 @@ class ConnectionPopup:
             text=f"{symbol} · {exchange} · DAEMON TỰ NHẬN", text_color=self.GREEN,
         )
 
+    def _store_telegram_token(self, token: str) -> str:
+        """Apply Telegram token persistence without ever writing it to settings.json."""
+        value = str(token or "").strip()
+        env_key = self.settings.telegram_token_env
+        if self.save_telegram_token_env.get() and value:
+            update_env({env_key: value})
+            setattr(self.parent, "_telegram_session_token", value)
+            return ".ENV"
+        update_env({env_key: None})
+        if value:
+            # Keep a session-only copy outside os.environ so reopening this
+            # popup still shows LƯU BOT TOKEN as OFF.
+            setattr(self.parent, "_telegram_session_token", value)
+            return "RAM"
+        setattr(self.parent, "_telegram_session_token", "")
+        return "ĐÃ XÓA"
+
+    def _telegram_token_storage_changed(self) -> None:
+        token = self.tele_token.get().strip()
+        if self.save_telegram_token_env.get() and not token:
+            self.tele_status.configure(
+                text="NHẬP BOT TOKEN RỒI BẤM LƯU", text_color=self.WARN,
+            )
+            return
+        location = self._store_telegram_token(token)
+        self.on_saved()
+        self.tele_status.configure(
+            text=(
+                "BOT TOKEN ĐÃ LƯU TRONG .ENV"
+                if location == ".ENV"
+                else "BOT TOKEN CHỈ GIỮ TRONG RAM"
+                if location == "RAM"
+                else "CHƯA CÓ BOT TOKEN"
+            ),
+            text_color=self.GREEN if token else self.WARN,
+        )
+
+    def _clear_telegram_token(self) -> None:
+        env_key = self.settings.telegram_token_env
+        update_env({env_key: None})
+        os.environ.pop(env_key, None)
+        setattr(self.parent, "_telegram_session_token", "")
+        self.tele_token.delete(0, "end")
+        self.save_telegram_token_env.set(False)
+        self.tele_enabled.set(False)
+        self.settings.telegram_enabled = False
+        save_settings(self.settings, self.account_id)
+        self.on_saved()
+        self.tele_status.configure(
+            text="ĐÃ XÓA BOT TOKEN KHỎI .ENV VÀ RAM", text_color=self.WARN,
+        )
+
     def _save_telegram(self) -> None:
         token = self.tele_token.get().strip()
         chat_id = self.tele_chat.get().strip()
@@ -1706,10 +1821,13 @@ class ConnectionPopup:
             for key, variable in self.tele_event_switches.items()
         }
         self.settings.telegram_cooldown_minutes = cooldowns
-        update_env({self.settings.telegram_token_env: token})
+        location = self._store_telegram_token(token)
         save_settings(self.settings, self.account_id)
         self.on_saved()
-        self.tele_status.configure(text="ĐÃ LƯU & ÁP DỤNG TELEGRAM", text_color=self.GREEN)
+        self.tele_status.configure(
+            text=f"ĐÃ LƯU & ÁP DỤNG TELEGRAM · TOKEN {location}",
+            text_color=self.GREEN,
+        )
 
     def _test_telegram(self) -> None:
         token, chat_id = self.tele_token.get().strip(), self.tele_chat.get().strip()

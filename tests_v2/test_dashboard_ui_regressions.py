@@ -350,6 +350,19 @@ def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> 
         assert int(rule_popup.phase2_mode_card.grid_info()["row"]) == 0
         assert int(rule_popup.phase2_confirmation_card.grid_info()["row"]) == 1
         connection_popup = popups[1][1]
+        assert connection_popup.otp_card.master is connection_popup.dnse_compact_row
+        assert connection_popup.paper_card.master is connection_popup.dnse_compact_row
+        assert connection_popup.stats_card.master is connection_popup.dnse_compact_row
+        assert int(connection_popup.otp_card.grid_info()["column"]) == 0
+        assert int(connection_popup.paper_card.grid_info()["column"]) == 1
+        assert int(connection_popup.stats_card.grid_info()["column"]) == 2
+        assert {
+            int(connection_popup.otp_card.grid_info()["row"]),
+            int(connection_popup.paper_card.grid_info()["row"]),
+            int(connection_popup.stats_card.grid_info()["row"]),
+        } == {0}
+        assert connection_popup.btn_save_dnse.cget("text") == "LƯU API"
+        assert connection_popup.save_token_switch.cget("text") == "LƯU TOKEN"
         assert connection_popup.daily_stats_choice.get() == "THEO NGÀY"
         assert connection_popup.daily_stats_segment.cget("values") == [
             "THEO NGÀY", "TỪ LẦN RESET",
@@ -358,6 +371,8 @@ def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> 
         assert connection_popup.btn_save_daily_stats.cget("text") == "LƯU"
         assert connection_popup.tele_event_time_controls["buy_queued"] is connection_popup.tele_batch
         assert connection_popup.tele_event_time_controls["closed"].cget("text") == "1 LẦN/TRADE"
+        assert connection_popup.save_telegram_token_switch.cget("text") == "LƯU BOT TOKEN"
+        assert connection_popup.btn_clear_telegram_token.cget("text") == "XÓA"
         assert set(connection_popup.tele_cooldown_entries) == {
             "protect", "indicator_exit", "blocked_buy", "corporate_action", "external_sell",
             "system",
@@ -408,6 +423,43 @@ def test_volume_scanner_popup_has_safe_defaults_and_does_not_touch_watchlist(ui_
     finally:
         popup._close()
         client.close()
+
+
+def test_telegram_token_storage_can_be_session_only_or_persisted(
+    ui_root, monkeypatch,
+) -> None:
+    from viking_v2.config import load_settings
+    from viking_v2.connections.dnse.client import DNSEClient
+    import viking_v2.connections.window as connection_window
+
+    env_key = "VIKING_TEST_TELEGRAM_TOKEN"
+    settings = load_settings("PAPER")
+    settings.telegram_token_env = env_key
+    monkeypatch.delenv(env_key, raising=False)
+    writes: list[dict[str, str | None]] = []
+    monkeypatch.setattr(
+        connection_window, "update_env",
+        lambda values: writes.append(dict(values)),
+    )
+    client = DNSEClient(account_no="PAPER")
+    popup = connection_window.ConnectionPopup(
+        ui_root, settings, "PAPER", client, lambda: None,
+    )
+    try:
+        popup.save_telegram_token_env.set(False)
+        assert popup._store_telegram_token("ram-secret") == "RAM"
+        assert writes[-1] == {env_key: None}
+        assert ui_root._telegram_session_token == "ram-secret"
+
+        popup.save_telegram_token_env.set(True)
+        assert popup._store_telegram_token("saved-secret") == ".ENV"
+        assert writes[-1] == {env_key: "saved-secret"}
+        assert ui_root._telegram_session_token == "saved-secret"
+    finally:
+        popup._close()
+        client.close()
+        if hasattr(ui_root, "_telegram_session_token"):
+            delattr(ui_root, "_telegram_session_token")
 
 
 def test_phase2_preview_uses_readable_stacked_rows(ui_root) -> None:
