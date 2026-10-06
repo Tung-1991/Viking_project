@@ -1,4 +1,4 @@
-"""Money-path regressions. Run through audits/live_2026_10_03/run_offline.py."""
+"""Money-path regressions. Run through support/tools/run_offline.py."""
 from copy import deepcopy
 from datetime import datetime, timedelta
 import json
@@ -496,11 +496,11 @@ def test_two_processes_update_shared_financial_database_and_os_crash_rolls_back(
     # A clean child environment cannot load account tokens or a trading app.
     child_env = {key: value for key, value in os.environ.items() if not key.startswith(("DNSE_", "TELE_"))}
     script = "import dotenv; dotenv.load_dotenv=lambda *a,**k: False; import sys; from viking_v2.trading.durable import DurableJSONStore; s=DurableJSONStore(sys.argv[1],default={'value':0});\nfor i in range(15):\n with s.transaction:\n  v=s.read(); v['value']+=1; s.write(v)"
-    processes = [subprocess.Popen([sys.executable, "-c", script, str(store.path)], cwd=Path(__file__).parents[1], env=child_env) for _ in range(2)]
+    processes = [subprocess.Popen([sys.executable, "-c", script, str(store.path)], cwd=Path(__file__).resolve().parents[2], env=child_env) for _ in range(2)]
     for process in processes: assert process.wait(timeout=15) == 0
     assert store.read()["value"] == 30
     crash = "import dotenv; dotenv.load_dotenv=lambda *a,**k: False; import sys,os; from viking_v2.trading.durable import DurableJSONStore; s=DurableJSONStore(sys.argv[1],default={'value':0});\nwith s.transaction:\n s.write({'value':999}); os._exit(17)"
-    result = subprocess.run([sys.executable, "-c", crash, str(store.path)], cwd=Path(__file__).parents[1], env=child_env, timeout=15)
+    result = subprocess.run([sys.executable, "-c", crash, str(store.path)], cwd=Path(__file__).resolve().parents[2], env=child_env, timeout=15)
     assert result.returncode == 17
     assert store.read()["value"] == 30
 

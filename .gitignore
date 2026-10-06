@@ -2,13 +2,20 @@
 ckvnvenv/
 venv/
 env/
+.venv/
 
 # Python
 **/__pycache__/
 **/*.py[cod]
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
 
 # Dữ liệu chạy: giá tải về, lệnh, nhật ký và báo cáo
 viking_v2/runtime/
@@ -20,6 +27,10 @@ viking_v2/runtime/
 .env.*
 viking_v2/.env
 !viking_v2/.env.example
+*.pem
+*.key
+*.pfx
+*.p12
 
 # IDE và hệ điều hành
 .vscode/
@@ -29,6 +40,12 @@ Thumbs.db
 *.swp
 *.log
 .artifacts/
+
+# Ban sao va bao cao kiem tra cuc bo; khong dua du lieu tai khoan len Git
+audits/
+support/output/
+*.bak
+*.tmp
 
 # Tài liệu API DNSE chỉ dùng để tra cứu cục bộ
 viking_v2/dnse_api/

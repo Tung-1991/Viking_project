@@ -7,7 +7,8 @@ import socket
 import sys
 import tempfile
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
 
 import dotenv
 
@@ -36,4 +37,4 @@ with tempfile.TemporaryDirectory(prefix="viking-audit-tests-") as directory:
 
     import pytest
 
-    raise SystemExit(pytest.main(sys.argv[1:] or ["tests_v2", "-q", "--disable-warnings", "--tb=short"]))
+    raise SystemExit(pytest.main(sys.argv[1:] or [str(PROJECT_ROOT / "support" / "tests"), "-q", "--disable-warnings", "--tb=short"]))

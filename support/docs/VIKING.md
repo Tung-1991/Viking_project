@@ -4,8 +4,8 @@ Tài liệu này là nguồn tham chiếu duy nhất cho kiến trúc, cấu hì
 vận hành và kết quả backtest đã chốt. Phần **Hiện hành** mô tả code đang chạy;
 phần **Lịch sử** chỉ lưu bằng chứng nghiên cứu và không được dùng làm setting.
 
-Hướng dẫn cập nhật bản vá giao dịch ngày 05/10/2026 và bằng chứng kiểm chứng:
-[GO_LIVE](../audits/live_2026_10_03/GO_LIVE.md).
+Hướng dẫn triển khai và bằng chứng kiểm chứng nằm ngay trong tài liệu này.
+Không duy trì báo cáo audit theo ngày hoặc một hướng dẫn go-live riêng.
 
 ## 1. Phạm vi và nguồn cấu hình
 
@@ -18,9 +18,12 @@ mục khởi động chạy `python -m viking_v2.main`.
 
 Mở `START_SYSTEM.bat` tại root repo:
 
-1. **Rà soát/cài package:** tạo `ckvnvenv` nếu chưa có, cài đúng bản trong
-   `requirements.txt`, chạy `pip check` và kiểm tra cú pháp source. Cần Python
-   3.12 hoặc 3.13 đã cài; không tự cài Python hệ thống hoặc ghi đè venv hỏng.
+1. **Rà soát/cài package:** kiểm tra/đặt múi giờ Windows UTC+7
+   (`SE Asia Standard Time`), tạo `ckvnvenv` nếu chưa có, cài đúng bản trong
+   `requirements.txt`, chạy `pip check`, thử import Tk/thư viện/DLL và kiểm tra
+   cú pháp source. Cần Python 3.12 hoặc 3.13 **x64 có Tcl/Tk** đã cài; không tự
+   cài Python hệ thống hoặc ghi đè venv hỏng. Nếu Windows từ chối đổi múi giờ,
+   chạy BAT bằng **Run as administrator** hoặc tự đặt UTC+7 trong Settings.
 2. **Khởi động:** làm sạch màn hình rồi mở app. Đóng app bình thường quay lại
    menu; thoát lỗi thử mở lại sau 10 giây, chọn `M` để về menu thay vì thử lại.
 3. **Kiểm tra/cập nhật code Git:** fetch upstream của branch hiện tại. Có bản
@@ -36,7 +39,10 @@ reset/clean Git, không xóa dữ liệu, không tự rollback hoặc bật app 
 khỏi Git; cập nhật code không đồng bộ settings UI giữa hai máy. Cần Git đã
 cài, branch có upstream và máy truy cập được remote. Commit/push code tại máy
 phát triển trước để VPS nhận được bản mới. VPS đang dùng launcher cũ cần lấy
-bản menu này một lần trước khi dùng mục cập nhật.
+bản menu này một lần trước khi dùng mục cập nhật. Script chỉ đổi múi giờ khi
+chưa đúng; không sửa giờ UTC, dịch vụ NTP hoặc tự cài VC++ Redistributable.
+Thử import giúp phát hiện lỗi nạp DLL mà `pip check` không kiểm tra được;
+nếu Windows báo thiếu runtime, cài VC++ v14 x64 từ Microsoft rồi chạy lại mục 1.
 
 Nguồn cấu hình theo thứ tự ưu tiên:
 
@@ -255,6 +261,27 @@ trong lịch sử Git; không duy trì một tài liệu vận hành riêng đ�
 
 ## 8. Kiến trúc source
 
+Cấu trúc repository:
+
+```text
+Viking_project/
+├── START_SYSTEM.bat
+├── requirements.txt
+├── .gitignore
+├── viking_v2/              # Package ứng dụng; giữ nguyên đường dẫn runtime
+└── support/
+    ├── launcher.ps1       # Helper được BAT gọi
+    ├── docs/VIKING.md     # Tài liệu hợp nhất
+    ├── tests/             # Bộ kiểm thử theo miền nghiệp vụ
+    └── tools/             # Runner offline, kiểm tra và đối soát
+```
+
+Git theo dõi source, bộ kiểm thử, công cụ vận hành, tài liệu và `.env.example`.
+Không đưa `.env` thật, token, settings tài khoản, runtime/database, dữ liệu giá,
+log, workbook, backup, virtualenv hoặc kết quả kiểm tra cục bộ lên Git.
+Kết quả xuất phục vụ kiểm tra đặt trong `support/output/` hoặc `.artifacts/`.
+Đổi bố cục repository không đổi settings hay nghiệp vụ giao dịch.
+
 | Thành phần | Trách nhiệm |
 |---|---|
 | `config.py` | Default, nạp và chuẩn hóa settings |
@@ -282,10 +309,11 @@ Nguyên tắc:
 
 ## 9. Test và bảo trì
 
-- `tests_v2/` chia theo miền nghiệp vụ, không tạo một file mới cho mỗi bug.
+- `support/tests/` chia theo miền nghiệp vụ, không tạo một file mới cho mỗi bug.
 - Test migration cũ được giữ khi nó bảo vệ khả năng đọc settings/state cũ.
 - Chỉ xóa test khi code tương ứng đã bị xóa hoặc yêu cầu nghiệp vụ bị hủy.
-- Trước commit: chạy toàn bộ `pytest`, `compileall` và `git diff --check`.
+- Trước commit: chạy toàn bộ suite qua runner offline, `compileall` và
+  `git diff --check`. Không chạy pytest money-path trực tiếp với credentials thật.
 - Không refactor lớn `dashboard/actions.py` ngay trước phiên PAPER; về sau nên
   tách dần quản lý lệnh, thông báo và polling/runtime.
 - Scanner VN100 là tiện ích đọc DNSE và xuất Excel; chỉ replace watchlist khi
@@ -294,3 +322,78 @@ Nguyên tắc:
 Thư mục ngoài source: `ckvnvenv/` là môi trường Python;
 `viking_v2/dnse_api/` là tài liệu DNSE cục bộ; `.pytest_cache/`, `__pycache__/`
 và workbook sinh ra có thể xóa, không được coi là source.
+
+Chạy từ root repo:
+
+```powershell
+.\ckvnvenv\Scripts\python.exe support\tools\run_offline.py
+.\ckvnvenv\Scripts\python.exe -m compileall -q viking_v2 support
+.\ckvnvenv\Scripts\python.exe -m pip check
+git diff --check
+```
+
+Runner không load `.env`, bỏ DNSE/Telegram environment, chặn kết nối socket và
+đặt runtime trong thư mục tạm. Mặc định chạy toàn bộ `support/tests/`, gồm cả
+các regression trước đây nằm trong thư mục audit. Không gửi lệnh hoặc Telegram.
+
+## 10. Triển khai và cập nhật VPS Windows
+
+Máy phát triển và VPS dùng tài khoản DNSE riêng. Git chỉ cập nhật source;
+settings thực tế, `.env` và runtime giữ tại đúng máy, không chép giữa tài khoản.
+
+### Cài lần đầu
+
+1. Cài Git và Python 3.13 x64 có pip, Launcher và Tcl/Tk. Phiên bản đã chọn
+   cho VPS ngày 06/10/2026: Python 3.13.16; không nâng cả bộ thư viện lên latest.
+2. Clone repo, mở `START_SYSTEM.bat`, chọn **1** rồi **2**.
+3. Nhập API KEY/SECRET của tài khoản VPS, chọn đúng account và xác thực OTP.
+4. Kiểm tra giá mới, tiền, danh mục và lệnh chờ so với DNSE. App bắt đầu với
+   BUY BOT OFF. OFF không dừng SELL đang quản lý hoặc MANUAL đã yêu cầu.
+5. Lệnh REAL đầu tiên do operator chủ động đặt với vốn chấp nhận rủi ro;
+   đối chiếu ID, số khớp/còn lại, giá vốn và phí trước khi bật BUY BOT.
+
+Launcher không tự khởi động app sau reboot Windows; operator cần mở BAT và
+chọn 2. Ngắt kết nối RDP không phải đăng xuất; đăng xuất/reboot đóng ứng dụng.
+
+### Cập nhật những lần sau
+
+Đóng app, chọn **3**, chờ backup/cập nhật/kiểm tra package xong rồi chọn **2**.
+Backup nằm trong `.artifacts/update-backups/`, gồm runtime, `.env` và revision.
+Không ghi đè dữ liệu VPS bằng runtime hoặc settings của máy phát triển.
+
+SQLite phải nằm trên ổ local. Backup khi app/daemon đã dừng, sao lưu cả thư mục
+account; backup khi chạy phải dùng SQLite backup API, không copy riêng DB bỏ WAL.
+Sau khi có fills mới, không rollback về code JSON/runtime backup cũ rồi giao
+dịch tiếp; giữ DB hiện hành và đối soát DNSE trước phục hồi. Không xóa lock file
+để vượt instance đang chạy: khóa do OS giữ, tự nhả khi process chết.
+
+### Công cụ kiểm tra/đối soát khi cần
+
+```powershell
+.\ckvnvenv\Scripts\python.exe support\tools\preflight.py --state-only --migration-preview
+.\ckvnvenv\Scripts\python.exe support\tools\preflight.py
+.\ckvnvenv\Scripts\python.exe support\tools\recover_order.py --intent <UUID> --broker-order <DNSE_ID> --account <ACCOUNT_ID>
+```
+
+Preflight kiểm tra cấu trúc local hoặc GET DNSE; migration preview chỉ chạy trên
+bản sao tạm. Không POST/PUT/DELETE. Token chưa sẵn sàng nghĩa là cần nhập OTP.
+Recover mặc định chỉ preview: dùng ID lệnh đã xác minh trên DNSE để đối chiếu
+account/mã/chiều/gói/khối lượng/thời điểm với intent UNKNOWN. Chỉ khi đúng và app
+đã đóng mới thêm `--apply` để gắn ID/đối soát fill vào DB local. Không tự đặt lại,
+không đoán UNKNOWN là chưa gửi. Công cụ không chạy tự động cùng app.
+
+### Bằng chứng kiểm chứng
+
+Trước khi gom cấu trúc ngày 06/10/2026, suite offline đạt **518/518 passed**,
+gồm 23 test launcher, 75 money-path safety và 15 regression audit. `pip check`,
+`compileall`, `git diff --check` và khởi tạo/đóng GUI offline thành công.
+Đã có 7 GET DNSE production read-only trong đợt kiểm tra trước; không đặt lệnh
+REAL/sandbox hoặc kiểm thử end-to-end trên VPS. Các báo cáo rời đã bỏ khỏi cây
+hiện tại; bản gốc vẫn có trong lịch sử Git. Đây là bằng chứng kiểm chứng code,
+không phải đảm bảo chiến lược có lãi hoặc không có rủi ro vận hành.
+
+Sau khi gom cấu trúc và cập nhật launcher ngày 06/10/2026: **527/527 test
+passed trong 37,84 giây** trên máy phát triển Windows/Python 3.13.14. Đã thử
+import thư viện thật qua PowerShell 5.1; các test đổi múi giờ dùng mock,
+không đổi timezone máy phát triển. Package vẫn giữ phiên bản đã chốt,
+code trong `viking_v2/` và runtime tài khoản không thay đổi trong lượt này.

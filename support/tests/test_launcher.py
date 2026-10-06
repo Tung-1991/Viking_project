@@ -11,8 +11,8 @@ import subprocess
 import pytest
 
 
-ROOT = Path(__file__).resolve().parents[1]
-HELPER = ROOT / "scripts" / "launcher.ps1"
+ROOT = Path(__file__).resolve().parents[2]
+HELPER = ROOT / "support" / "launcher.ps1"
 POWERSHELL = shutil.which("powershell.exe")
 pytestmark = pytest.mark.skipif(os.name != "nt" or not POWERSHELL, reason="Windows PowerShell launcher")
 
@@ -50,11 +50,18 @@ def test_helper_parses_on_windows_powershell_and_actual_python_version():
     assert "PASSED" in result.stdout
 
 
+def test_actual_native_package_imports_on_windows_powershell():
+    result = _run_ps("Assert-PackageImports")
+    _assert_ok(result)
+    assert "IMPORT_OK" in result.stdout
+
+
 def test_batch_menu_returns_after_normal_close_and_retries_crash():
     batch = (ROOT / "START_SYSTEM.bat").read_text(encoding="utf-8")
     assert "choice /c 1230" in batch
     assert "if errorlevel 4 exit /b 0" in batch
     assert "-Action Packages" in batch and "-Action Update" in batch
+    assert 'support\\launcher.ps1' in batch and 'scripts\\launcher.ps1' not in batch
     # Windows native crashes may have a negative exit code: only exactly zero is normal.
     assert 'if "%errorlevel%"=="0" goto menu' in batch
     assert "choice /c RM /n /t 10 /d R" in batch
@@ -106,7 +113,7 @@ def test_partial_venv_is_not_overwritten(tmp_path):
 
 def test_package_action_installs_pins_and_checks_syntax_without_start(tmp_path):
     result = _run_ps(
-        "function Assert-AppStopped {}\nfunction Ensure-Python {}\n"
+        "function Assert-AppStopped {}\nfunction Ensure-VietnamTimeZone {}\nfunction Ensure-Python {}\n"
         "$script:calls = @()\n"
         "function Invoke-Native { param($Command, $Arguments); $script:calls += ($Arguments -join '|') }\n"
         "Install-Packages\n"
@@ -114,10 +121,101 @@ def test_package_action_installs_pins_and_checks_syntax_without_start(tmp_path):
     )
     _assert_ok(result)
     calls = json.loads(result.stdout.split("CALLS=", 1)[1].splitlines()[0])
-    assert len(calls) == 3
+    assert len(calls) == 4
     assert "install|--quiet|-r|" in calls[0] and calls[0].endswith("requirements.txt")
     assert calls[1] == "-m|pip|check"
-    assert calls[2].startswith("-m|compileall|-q|")
+    assert calls[2].startswith("-c|import customtkinter, tkinter, numpy")
+    assert calls[3].startswith("-m|compileall|-q|")
+
+
+@pytest.mark.parametrize("current,changes", [("SE Asia Standard Time", 0), ("UTC", 1)])
+def test_timezone_check_only_sets_utc7_when_needed(current, changes):
+    result = _run_ps(
+        f"$script:zone = '{current}'; $script:changes = 0\n"
+        "function Get-TimeZone { [pscustomobject]@{Id=$script:zone} }\n"
+        "function Set-TimeZone { param($Id, $ErrorAction); "
+        "if ($Id -ne 'SE Asia Standard Time') { throw 'WRONG_ZONE' }; "
+        "$script:zone=$Id; $script:changes++ }\n"
+        "Ensure-VietnamTimeZone\nWrite-Output ('CHANGES=' + $script:changes)"
+    )
+    _assert_ok(result)
+    assert f"CHANGES={changes}" in result.stdout
+
+
+def test_timezone_permission_error_has_actionable_message():
+    result = _run_ps(
+        "function Get-TimeZone { [pscustomobject]@{Id='UTC'} }\n"
+        "function Set-TimeZone { throw 'Access denied' }\nEnsure-VietnamTimeZone"
+    )
+    assert result.returncode != 0
+    assert "Run as administrator" in result.stderr
+
+
+def test_timezone_change_is_verified_instead_of_assumed():
+    result = _run_ps(
+        "function Get-TimeZone { [pscustomobject]@{Id='UTC'} }\n"
+        "function Set-TimeZone {}\nEnsure-VietnamTimeZone"
+    )
+    assert result.returncode != 0
+    assert "Windows chua chuyen sang UTC+7" in result.stderr
+
+
+def test_running_app_blocks_timezone_and_package_changes(tmp_path):
+    result = _run_ps(
+        "function Assert-AppStopped { throw 'RUNNING_APP' }\n"
+        "function Ensure-VietnamTimeZone { throw 'CHANGED_ZONE' }\n"
+        "function Ensure-Python { throw 'INSTALLED_PYTHON' }\nInstall-Packages", tmp_path,
+    )
+    assert result.returncode != 0
+    assert "RUNNING_APP" in result.stderr
+    assert "CHANGED_ZONE" not in result.stderr
+
+
+def test_python_preflight_requires_x64_and_tk_before_creating_venv():
+    result = _run_ps(
+        "function Invoke-Native { param($Command, $Arguments); "
+        "$code = $Arguments[-1]; "
+        "if ($code -notlike '*import struct, sys, tkinter*' -or "
+        "$code -notlike '*struct.calcsize(chr(80)) == 8*') { throw 'MISSING_RUNTIME_CHECK' }; '3.13' }\n"
+        "Assert-SupportedPython 'unused' @('-3.13')"
+    )
+    _assert_ok(result)
+
+
+def test_native_import_failure_stops_before_success_message(tmp_path):
+    result = _run_ps(
+        "function Assert-AppStopped {}\nfunction Ensure-VietnamTimeZone {}\nfunction Ensure-Python {}\n"
+        "function Invoke-Native { param($Command, $Arguments); "
+        "if ($Arguments[0] -eq '-c') { throw 'DLL_IMPORT_FAILED' }; "
+        "if ($Arguments -contains 'compileall') { throw 'CONTINUED_AFTER_FAILURE' } }\nInstall-Packages",
+        tmp_path,
+    )
+    assert result.returncode != 0
+    assert "DLL_IMPORT_FAILED" in result.stderr
+    assert "CONTINUED_AFTER_FAILURE" not in result.stderr
+    assert "package/DLL va source da qua kiem tra" not in result.stdout
+
+
+def test_gitignore_keeps_local_data_private_but_tracks_source_templates():
+    git_exe = shutil.which("git.exe")
+    if not git_exe:
+        pytest.skip("Git not installed")
+    excluded = [
+        "viking_v2/.env", "viking_v2/.env.backup", "viking_v2/runtime/accounts/test/settings.json",
+        "viking_v2/runtime/accounts/test/trading.sqlite3", "ckvnvenv/Scripts/python.exe",
+        ".venv/Lib/package.py", ".artifacts/update-backups/test/.env", "audits/temp/report.md",
+        "support/output/positions.json", "credentials.pem", "backup.bak", "report.xlsx", "daemon.log",
+    ]
+    included = [
+        "viking_v2/.env.example", "viking_v2/config.py", "support/launcher.ps1",
+        "support/docs/VIKING.md", "support/tests/test_live_safety.py", "support/tools/preflight.py",
+    ]
+    result = subprocess.run(
+        [git_exe, "check-ignore", "--no-index", "--stdin", "-z"], cwd=ROOT,
+        input="\0".join(excluded + included) + "\0", capture_output=True, text=True, timeout=15,
+    )
+    _assert_ok(result)
+    assert set(filter(None, result.stdout.split("\0"))) == set(excluded)
 
 
 def _update_mock(*, behind=1, ahead=0, dirty=False, incoming="viking_v2/.env.example", app_running=False, package_failure=False, backup_failure=False):

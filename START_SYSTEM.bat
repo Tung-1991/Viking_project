@@ -23,7 +23,7 @@ goto menu
 
 :packages
 cls
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\launcher.ps1" -Action Packages
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0support\launcher.ps1" -Action Packages
 echo.
 pause
 goto menu
@@ -32,7 +32,7 @@ goto menu
 cls
 rem Parse the whole block before Git updates this batch file itself.
 (
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\launcher.ps1" -Action Update
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0support\launcher.ps1" -Action Update
     echo.
     pause
     goto menu

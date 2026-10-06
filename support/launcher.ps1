@@ -39,7 +39,7 @@ function Assert-AppStopped {
 
 function Assert-SupportedPython {
     param([string]$Command, [string[]]$Prefix = @())
-    $version = Invoke-Native $Command ($Prefix + @('-c', 'import sys; print(str(sys.version_info.major) + chr(46) + str(sys.version_info.minor))'))
+    $version = Invoke-Native $Command ($Prefix + @('-c', 'import struct, sys, tkinter; assert struct.calcsize(chr(80)) == 8, ''Can Python x64.''; print(str(sys.version_info.major) + chr(46) + str(sys.version_info.minor))'))
     if ([string]$version -notin @('3.12', '3.13')) {
         throw 'Bo package nay can Python 3.12 hoac 3.13. Khong tu xoa/thay venv hien co.'
     }
@@ -76,15 +76,38 @@ function Ensure-Python {
     Assert-SupportedPython $PythonExe
 }
 
+function Ensure-VietnamTimeZone {
+    $desired = 'SE Asia Standard Time'
+    if ((Get-TimeZone).Id -ne $desired) {
+        Write-Host '[TIME] Dat mui gio UTC+7 (Bangkok, Hanoi, Jakarta)...'
+        try {
+            Set-TimeZone -Id $desired -ErrorAction Stop
+        } catch {
+            throw 'Khong dat duoc UTC+7. Chay BAT bang Run as administrator hoac dat mui gio trong Windows roi thu lai.'
+        }
+        if ((Get-TimeZone).Id -ne $desired) {
+            throw 'Windows chua chuyen sang UTC+7. Kiem tra Time zone roi thu lai.'
+        }
+    }
+    Write-Host '[TIME] UTC+7 OK.'
+}
+
+function Assert-PackageImports {
+    Write-Host '[PACKAGE] Kiem tra Tk va kha nang nap thu vien/DLL...'
+    Invoke-Native $PythonExe @('-c', 'import customtkinter, tkinter, numpy, pandas, numba, llvmlite.binding, requests, dotenv, websocket, msgpack, openpyxl; print(''IMPORT_OK'')')
+}
+
 function Install-Packages {
     Assert-AppStopped
+    Ensure-VietnamTimeZone
     Ensure-Python
     $requirements = Join-Path $ProjectRoot 'requirements.txt'
     Write-Host '[PACKAGE] Kiem tra / cai dung phien ban trong requirements.txt...'
     Invoke-Native $PythonExe @('-m', 'pip', '--disable-pip-version-check', 'install', '--quiet', '-r', $requirements)
     Invoke-Native $PythonExe @('-m', 'pip', 'check')
+    Assert-PackageImports
     Invoke-Native $PythonExe @('-m', 'compileall', '-q', (Join-Path $ProjectRoot 'viking_v2'))
-    Write-Host '[OK] Python, package va bien dich source da qua kiem tra.'
+    Write-Host '[OK] UTC+7, Python x64/Tk, package/DLL va source da qua kiem tra.'
 }
 
 function Backup-LocalData {
