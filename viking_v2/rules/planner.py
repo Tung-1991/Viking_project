@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import uuid
+import time
 from typing import Any
 
 from ..models import OrderIntent, StrategyDecision
@@ -11,6 +12,7 @@ from ..trading.portfolio import sell_quantity_for_fraction, size_buy_order
 from ..trading.state import TradeStateStore
 from ..trading.market import VN_TZ, in_buy_window, parse_clock_minute
 from .state import RuleStateStore
+from ..trading.validation import quote_is_fresh
 
 
 @dataclass(slots=True)
@@ -49,7 +51,7 @@ class StrategyOrderPlanner:
         side = "BUY" if decision.action == "BUY" else "SELL"
         price_key = "ask" if side == "BUY" else "bid"
         price = float(tick.get(price_key, tick.get("price", 0.0)) or 0.0)
-        if price <= 0 or bool(tick.get("stale", False)):
+        if price <= 0 or not quote_is_fresh(tick, symbol, require_timestamp=False):
             return PlanResult(None, "NO_LIVE_EXECUTION_PRICE")
 
         if side == "BUY":
@@ -203,6 +205,13 @@ class StrategyOrderPlanner:
                 if side == "SELL" and isinstance(decision.details, dict) else {}
             ),
         )
+        active = self.trades.get(trade_id) if trade_id else None
+        if active:
+            intent.loan_package_id, intent.deal_id = active.loan_package_id, active.deal_id
+        if side == "BUY":
+            # The signal has already been consumed. It is not a future BUY job.
+            intent.expires_at = min(intent.expires_at, time.time() + 30.0)
+            intent.details["reservation_price"] = price
         if side == "BUY" and window:
             intent.buy_window_start = window["start"]
             intent.buy_window_end = window["end"]

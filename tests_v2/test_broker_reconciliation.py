@@ -35,6 +35,7 @@ def test_partial_and_final_fill_are_applied_as_deltas(tmp_path):
     real = Real([{
         "orderId": "88", "orderStatus": "Partially Filled", "fillQuantity": 400,
         "fee": 40, "tax": 4,
+        "averagePrice": 100_000,
     }])
     service = ExecutionService(real, object(), queue, JSONLineJournal(tmp_path / "journal.jsonl"))
     assert service.reconcile_working("REAL")[0].filled_quantity == 400
@@ -83,18 +84,18 @@ def test_partial_exit_fill_marks_protection_event_immediately(tmp_path):
     assert rule_state.position_metrics("FPT", "T1")["normal_protection_done"] is True
 
 
-def test_cancelled_sell_requeues_only_unfilled_remainder_with_new_attempt(tmp_path):
+def test_cancelled_sell_keeps_fill_but_never_requeues_remainder(tmp_path):
     queue = OrderQueue(tmp_path / "orders.json")
     intent = _working(queue, side="SELL", quantity=1000)
-    real = Real([{"orderId": "88", "orderStatus": "Cancelled", "fillQuantity": 300}])
+    real = Real([{"orderId": "88", "orderStatus": "Cancelled", "fillQuantity": 300, "averagePrice": 100_000}])
     service = ExecutionService(real, object(), queue, JSONLineJournal(tmp_path / "journal.jsonl"))
     pending = service.reconcile_working("REAL")[0]
-    assert pending.status == "PENDING"
+    assert pending.status == "CANCELLED"
     assert pending.filled_quantity == 300
     assert pending.remaining_quantity == 700
-    assert pending.broker_order_id == ""
-    assert pending.request_tag == ""
-    assert pending.attempt == 2
+    assert pending.broker_order_id == "88"
+    assert pending.request_tag == "V2:TAG:1"
+    assert pending.attempt == 1
 
 
 def test_unknown_submission_is_recovered_when_request_tag_appears(tmp_path):
@@ -205,6 +206,7 @@ def test_external_dnse_sell_is_reconciled_without_stopping_remaining_trade(tmp_p
         "orderStatus": "Filled", "fillQuantity": 400,
         "averagePrice": 105_000, "fee": 10_000, "tax": 5_000,
         "remark": "",
+        "createdDate": "2026-10-05T03:00:00Z",
     }
 
     reconciled = service.reconcile_external_sells(

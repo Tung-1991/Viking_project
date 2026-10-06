@@ -45,6 +45,7 @@ def client(session):
     value.connect()
     value.trading_token = "token"
     value.trading_token_expires_at = value._now() + 1000
+    value.cash_package = lambda _symbol: {"id": 1, "initialRate": 1, "brokerFirmBuyingFeeRate": 0.0015}
     return value
 
 
@@ -71,7 +72,7 @@ def test_signature_matches_hmac_contract():
     ],
 )
 def test_stock_endpoints_have_required_market_type(method, expected_path, expected_params):
-    session = Session([Response(data={})])
+    session = Session([Response(data={"positions": [], "orders": []})])
     value = client(session)
     if method in {"get_order_detail", "get_executions"}:
         getattr(value, method)("88")
@@ -109,7 +110,7 @@ def test_secdef_selects_round_lot_board_and_history_is_stock():
     )
     value = client(session)
     assert value.get_secdef("fpt")["floorPrice"] == 90
-    assert value.get_order_history("2026-08-01", "2026-08-06") == [{"id": 1}]
+    assert value.get_order_history("2026-08-01", "2026-08-06") == [{"id": 1, "price_unit": "VND"}]
     assert session.calls[-1][2]["params"]["marketType"] == "STOCK"
 
 
@@ -240,7 +241,7 @@ def test_transport_timeout_reconciles_by_remark_without_resend(monkeypatch):
     result = value.place_order(OrderIntent.create("FPT", "BUY", 100, "MARKET", execution_mode="REAL"))
     assert not result.ok
     assert result.error == "ORDER_STATUS_UNKNOWN"
-    assert len(session.calls) == 2
+    assert len(session.calls) == 1
 
 
 def test_expired_token_stops_before_network():

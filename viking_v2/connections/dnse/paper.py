@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from functools import wraps
+import math
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -9,7 +11,7 @@ from ... import config
 from ...models import BrokerOrderResult, OrderIntent
 from ...trading.market import VN_TZ, stock_is_sellable_after_settlement
 from ...trading.portfolio import available_to_sell, board_price, validate_quantity
-from ...storage import AtomicJSONStore
+from ...trading.durable import DurableJSONStore
 
 
 def _next_business_day(value: datetime, days: int = 2, working_dates: list[str] | None = None) -> datetime:
@@ -36,6 +38,14 @@ def _next_business_day(value: datetime, days: int = 2, working_dates: list[str] 
     return result
 
 
+def _transactional(method):
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self.store.transaction:
+            return method(self, *args, **kwargs)
+    return locked
+
+
 class PaperBroker:
     """Persistent, deliberately simple PAPER adapter matching the legacy fill model."""
 
@@ -54,7 +64,7 @@ class PaperBroker:
         self.fee_rates = fee_rates or (
             lambda: (config.PAPER_BUY_FEE_RATE, config.PAPER_SELL_FEE_RATE, config.PAPER_SELL_TAX_RATE)
         )
-        self.store = AtomicJSONStore(path, default=lambda: self._empty(initial_balance))
+        self.store = DurableJSONStore(path, default=lambda: self._empty(initial_balance))
         self.initial_balance = float(initial_balance)
         self.tick_provider = tick_provider
         self._now = now
@@ -71,8 +81,10 @@ class PaperBroker:
             "realized_pnl": 0.0,
         }
 
+    @_transactional
     def reset(self, balance: float | None = None) -> dict[str, Any]:
         state = self._empty(float(self.initial_balance if balance is None else balance))
+        state["next_id"] = int(self.store.read().get("next_id", 1))
         self.store.write(state)
         return state
 
@@ -110,6 +122,7 @@ class PaperBroker:
             return float(tick.get("ask", tick.get("price", 0.0)) or 0.0)
         return float(tick.get("bid", tick.get("price", 0.0)) or 0.0)
 
+    @_transactional
     def get_balance(self) -> dict[str, Any]:
         state = self._state()
         changed = False
@@ -139,19 +152,30 @@ class PaperBroker:
             "realizedPnl": float(state.get("realized_pnl", 0.0) or 0.0),
         }
 
+    @_transactional
     def get_positions(self) -> list[dict[str, Any]]:
         return list(self._state()["positions"])
 
+    @_transactional
     def get_orders(self) -> list[dict[str, Any]]:
         return list(self._state()["orders"])
 
     def place_order(self, intent: OrderIntent) -> BrokerOrderResult:
+        # Calendar I/O must finish before taking the financial transaction.
+        working_dates = self.working_dates_provider() if intent.side == "BUY" and self.working_dates_provider else None
+        with self.store.transaction:
+            return self._place_order(intent, working_dates)
+
+    def _place_order(self, intent: OrderIntent, working_dates) -> BrokerOrderResult:
         valid, reason, quantity = validate_quantity(intent.quantity)
         if not valid:
             return BrokerOrderResult(False, "REJECTED", message=reason, error="INVALID_QUANTITY")
         state = self._state()
+        existing = next((row for row in state["orders"] if intent.request_tag and row.get("remark") == intent.request_tag), None)
+        if existing:
+            return BrokerOrderResult(True, "FILLED", order_id=existing["orderId"], status_code=200, raw=existing)
         price = self._price(intent)
-        if price <= 0:
+        if not math.isfinite(price) or price <= 0:
             return BrokerOrderResult(False, "REJECTED", message="PAPER không có giá hợp lệ.", error="NO_MARKET_PRICE")
         gross = price * quantity * 1000.0
         order_id = f"PAPER-{int(state.get('next_id', 1))}"
@@ -161,7 +185,6 @@ class PaperBroker:
             cash = float(state.get("cash", 0.0) or 0.0)
             if cash < gross + fee:
                 return BrokerOrderResult(False, "REJECTED", message="PAPER không đủ tiền.", error="INSUFFICIENT_CASH")
-            working_dates = self.working_dates_provider() if self.working_dates_provider else None
             try:
                 settle = _next_business_day(
                     datetime.fromtimestamp(self._now(), VN_TZ), working_dates=working_dates,
@@ -191,6 +214,10 @@ class PaperBroker:
                     "buyFee": fee,
                 }
             )
+            matching = [row for row in state["positions"] if row.get("symbol") == intent.symbol]
+            avg = sum(row["openQuantity"] * row["costPrice"] for row in matching) / sum(row["openQuantity"] for row in matching)
+            for row in matching:
+                row["costPrice"] = avg
         else:
             buy_rate, sell_rate, tax_rate = self.fee_rates()
             fee = gross * sell_rate
@@ -224,6 +251,8 @@ class PaperBroker:
             state["realized_pnl"] = float(state.get("realized_pnl", 0.0) or 0.0) + realized
         order = {
             "orderId": order_id,
+            "remark": intent.request_tag,
+            "price_unit": "BOARD",
             "symbol": intent.symbol,
             "side": "NB" if intent.side == "BUY" else "NS",
             "orderType": intent.order_type,

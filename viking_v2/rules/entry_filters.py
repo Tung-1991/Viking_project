@@ -7,6 +7,7 @@ from typing import Any, Iterable
 from ..models import StrategyDecision
 from ..trading.market import VN_TZ, market_phase, validate_buy_window, exchange_close_minute
 from .business import StaticRule, advance_buy_confirmation, buy_confirmation_conditions
+from ..trading.validation import MAX_DECISION_AGE
 
 
 def apply_buy_filters(
@@ -33,6 +34,13 @@ def apply_buy_filters(
     window = dict(saved.get("window") or {})
     details = dict(decision.details)
     now = observed_at.astimezone(VN_TZ) if observed_at.tzinfo else observed_at.replace(tzinfo=VN_TZ)
+    observation_gap = context.get("max_observation_gap_seconds")
+    if window.get("observed_time") and observation_gap is not None:
+        previous_observation = datetime.fromisoformat(str(window["observed_time"]))
+        if (now - previous_observation).total_seconds() > float(observation_gap):
+            window, confirmation = {}, {}
+    if window:
+        window["observed_time"] = now.isoformat()
     trigger = decision.signal == "BUY"
     window_info: dict[str, Any] = {}
 
@@ -96,6 +104,7 @@ def apply_buy_filters(
             confirmation, raw_trigger=trigger, indicators=details.get("indicators"),
             observed_at=now, exchange=exchange, params=params,
             working_dates=working_dates, holidays=holidays,
+            max_observation_gap_seconds=observation_gap,
         )
         audit["state"] = status
         details["buy_confirmation"] = audit

@@ -424,12 +424,12 @@ class MarketDataService:
         if cached and now - cached[0] < config.REST_TICK_TTL_SECONDS:
             return dict(cached[1])
         if not force_rest and now < self._rest_retry_after.get(symbol, 0.0):
-            return dict(cached[1]) if cached else None
+            return {**cached[1], "stale": True, "health": "REST_UNAVAILABLE"} if cached else None
         trade = self.client.get_latest_trade(symbol)
         quote = self.client.get_latest_quote(symbol)
         if not trade and not quote:
             self._rest_retry_after[symbol] = now + config.REST_TICK_TTL_SECONDS
-            return dict(cached[1]) if cached else None
+            return {**cached[1], "stale": True, "health": "REST_UNAVAILABLE"} if cached else None
         result = self._normalize(symbol, trade, quote)
         self._rest_cache[symbol] = (now, result)
         self._rest_retry_after.pop(symbol, None)

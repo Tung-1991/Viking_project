@@ -9,6 +9,7 @@ from typing import Any
 
 from .. import config
 from ..trading.orders import CLAIMABLE_STATUSES, FINAL_STATUSES, LOCALLY_CONTROLLABLE_STATUSES
+from ..trading.portfolio import account_price
 from .view import _compact_vnd, _display_price, _number, _price_unit
 
 
@@ -158,7 +159,7 @@ class DashboardTablesMixin:
                 if quantity <= 0:
                     continue
                 sellable = int(_number(row.get("tradeQuantity", row.get("sellableQuantity", 0))))
-                avg_price = _price_unit(row.get("costPrice", row.get("averagePrice", 0)))
+                avg_price = account_price(row, row.get("costPrice", row.get("averagePrice", 0)))
                 tick = runtime_ticks.get(symbol) if isinstance(runtime_ticks.get(symbol), dict) else {}
                 tick_price = _price_unit(
                     tick.get("price")
@@ -169,11 +170,12 @@ class DashboardTablesMixin:
                     or tick.get("ask")
                     or 0
                 )
-                market_price = tick_price or _price_unit(row.get("marketPrice", row.get("price", avg_price)))
+                market_price = tick_price or account_price(row, row.get("marketPrice", row.get("price", 0))) or avg_price
                 trade_id = str(row.get("tradeId", row.get("positionId", "")) or "")
                 cycle = self.trade_state.get(trade_id) if trade_id else None
                 if not cycle:
-                    cycle = self.trade_state.active_for(symbol, mode)
+                    package_id = str(row.get("loanPackageId", "") or "")
+                    cycle = (self.trade_state.active_for(symbol, mode, package_id) if package_id else self.trade_state.active_for(symbol, mode))
                 if cycle:
                     trade_id = cycle.id
                 metrics = self.rule_state.position_metrics(symbol, trade_id) if trade_id else {}
@@ -419,7 +421,9 @@ class DashboardTablesMixin:
                         "UNKNOWN": "ĐÓNG·KIỂM TRA",
                     }.get(pending_close.status.upper(), "ĐÓNG·CHỜ")
                     status_parts.insert(0, close_label)
-                if pending_close:
+                if pending_close and pending_close.status.upper() == "WAITING_SETTLEMENT":
+                    row_tag = "position_waiting"
+                elif pending_close:
                     row_tag = "position_closing"
                 elif pending:
                     row_tag = "position_waiting"
@@ -472,6 +476,7 @@ class DashboardTablesMixin:
                     continue
                 if item.broker_order_id:
                     local_broker_ids.add(item.broker_order_id)
+                local_broker_ids.update(item.broker_order_ids)
                 price_text = _display_price(item.limit_price) if item.limit_price > 0 else item.order_type
                 gross = item.limit_price * item.quantity * 1000.0 if item.limit_price > 0 else 0.0
                 cycle = self.trade_state.get(item.trade_id) if item.trade_id else None
@@ -512,15 +517,18 @@ class DashboardTablesMixin:
                     if item.action == "OPEN" else "--"
                 )
                 status_upper = item.status.upper()
-                is_working = status_upper in {"WORKING", "PARTIAL", "UNKNOWN"}
+                is_working = status_upper in {"WORKING", "PARTIAL", "UNKNOWN", "CANCEL_PENDING", "REPLACE_PENDING"}
                 cancellable = status_upper in LOCALLY_CONTROLLABLE_STATUSES or (
                     mode == "REAL" and bool(item.broker_order_id) and is_working
                 )
                 editable = status_upper in LOCALLY_CONTROLLABLE_STATUSES or (
                     mode == "REAL" and bool(item.broker_order_id) and item.order_type == "LO" and is_working
                 )
+                if status_upper in {"CANCEL_PENDING", "REPLACE_PENDING", "UNKNOWN"}:
+                    editable = cancellable = False
                 iid = f"LOCAL:{item.id}"
                 tag = (
+                    "settlement_order" if status_upper == "WAITING_SETTLEMENT" else
                     "partial_order" if status_upper == "PARTIAL" else
                     "sending_order" if status_upper == "SENDING" else
                     "error_order" if status_upper == "UNKNOWN" else
@@ -536,6 +544,8 @@ class DashboardTablesMixin:
                     "WORKING": "[DNSE] ĐANG KHỚP",
                     "PARTIAL": "[DNSE] KHỚP MỘT PHẦN",
                     "UNKNOWN": "[DNSE] CHƯA RÕ TRẠNG THÁI",
+                    "CANCEL_PENDING": "[DNSE] CHỜ XÁC NHẬN HỦY",
+                    "REPLACE_PENDING": "[DNSE] CHỜ XÁC NHẬN SỬA",
                 }.get(status_upper, f"[{status_upper}]")
                 estimated_fee = (
                     self._preview_buy_fee(gross, item.symbol, mode)
@@ -583,7 +593,7 @@ class DashboardTablesMixin:
                 side_raw = str(row.get("side", "") or "").upper()
                 side = "BUY" if side_raw in {"NB", "BUY"} else "SELL" if side_raw in {"NS", "SELL"} else side_raw
                 kind = str(row.get("orderType", "") or "")
-                price = _price_unit(row.get("price", row.get("orderPrice", 0)))
+                price = account_price(row, row.get("price", row.get("orderPrice", 0)))
                 quantity = int(_number(row.get("quantity", row.get("orderQuantity", 0))))
                 filled = int(_number(row.get("fillQuantity", row.get("filledQuantity", 0))))
                 remaining = int(_number(row.get("leaveQuantity", max(0, quantity - filled))))
@@ -611,7 +621,7 @@ class DashboardTablesMixin:
                 self._running_row_actions[mode][iid] = {
                     "kind": "broker", "mode": mode, "symbol": symbol,
                     "broker_order_id": order_id, "order_type": kind,
-                    "quantity": quantity, "price": price,
+                    "quantity": quantity, "filled_quantity": filled, "price": price,
                     "editable": mode == "REAL" and kind == "LO",
                     "cancellable": mode == "REAL" and bool(order_id),
                 }
@@ -636,6 +646,7 @@ class DashboardTablesMixin:
 
     def close(self) -> None:
         self.running = False
+        self.execution.stopping = True
         if getattr(self, "telegram", None):
             self.telegram.cancel_pending_buys()
         for popup in (
@@ -656,6 +667,8 @@ class DashboardTablesMixin:
         except Exception:
             pass
         self._stop_daemon()
-        self._io_executor.shutdown(wait=False, cancel_futures=True)
+        self._io_executor.shutdown(wait=True, cancel_futures=True)
         self.real.close()
+        if getattr(self, "_account_lease", None):
+            self._account_lease.close()
         self.destroy()

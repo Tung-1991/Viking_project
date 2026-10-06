@@ -11,7 +11,7 @@ from ..rules.business import protect_level
 from ..trading.market import market_phase
 from ..trading.portfolio import size_buy_order, validate_quantity
 from .view import (
-    COL_BORDER, COL_GRAY, COL_GREEN, COL_MUTED,
+    COL_BORDER, COL_GRAY, COL_GREEN, COL_MUTED, COL_SETTLEMENT_BG, COL_SETTLEMENT_TEXT,
     COL_PREVIEW_TEXT, COL_RED, COL_SURFACE, COL_SURFACE_2, COL_TEXT, COL_WARN, FONT_BOLD,
     COL_TITLE, FONT_PREVIEW_TITLE, FONT_PREVIEW_VALUE, _compact_vnd, _display_price,
     _number, _price_unit,
@@ -536,10 +536,11 @@ class DashboardPanelsMixin:
             tree.tag_configure("buy_row", background="#193524", foreground=COL_TEXT)
             tree.tag_configure("sell_row", background="#3A2024", foreground=COL_TEXT)
             tree.tag_configure("pending_order", background="#42351B", foreground="#FDE68A")
+            tree.tag_configure("settlement_order", background=COL_SETTLEMENT_BG, foreground=COL_SETTLEMENT_TEXT)
             tree.tag_configure("position_profit", background="#193524", foreground="#E7F8ED")
             tree.tag_configure("position_loss", background="#3A2024", foreground="#FBEAEC")
             tree.tag_configure("position_flat", background=COL_SURFACE_2, foreground=COL_TEXT)
-            tree.tag_configure("position_waiting", background="#4A3B16", foreground="#FFF3B0")
+            tree.tag_configure("position_waiting", background=COL_SETTLEMENT_BG, foreground=COL_SETTLEMENT_TEXT)
             tree.tag_configure("position_closing", background="#5A4214", foreground="#FFE0B2")
             tree.tag_configure("dnse_order", background="#123F6B", foreground="#D7ECFF")
             tree.tag_configure("partial_order", background="#6A3F08", foreground="#FFE0B2")
@@ -1889,7 +1890,8 @@ class DashboardPanelsMixin:
         rows = (
             ("LÃI", "#193524", "Vị thế đang có PnL ròng dương."),
             ("LỖ", "#3A2024", "Vị thế đang có PnL ròng âm."),
-            ("T+2 / CACHE", "#4A3B16", "Cổ phiếu chưa về hoặc lệnh đang chờ trong app."),
+            ("T+2", COL_SETTLEMENT_BG, "Cổ phiếu chưa được phép bán hoặc lệnh bán đang chờ cổ về."),
+            ("CACHE", "#42351B", "Lệnh đang chờ phiên, chờ token hoặc tạm dừng trong app."),
             ("DNSE ĐANG KHỚP", "#123F6B", "Lệnh đã gửi DNSE và vẫn đang chờ khớp."),
             ("KHỚP MỘT PHẦN", "#6A3F08", "Mới khớp một phần khối lượng; phần còn lại vẫn chờ."),
             ("LỖI", "#5A1E1E", "Gửi lệnh lỗi hoặc chưa xác định được trạng thái."),

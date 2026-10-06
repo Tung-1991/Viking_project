@@ -44,19 +44,20 @@ def test_active_runtime_symbols_keep_removed_open_trades_and_pending_orders():
     assert symbols == ["FPT", "HPG", "MBB", "SSI"]
 
 
-def test_daemon_writes_heartbeat_and_starts_off(monkeypatch):
+def test_daemon_writes_heartbeat_and_starts_off(monkeypatch, tmp_path):
     import viking_v2.services.daemon as daemon
 
     statuses = []
 
     class Bridge:
-        log_dir = ".pytest_cache/v2-daemon"
-        rule_state_path = ".pytest_cache/v2-daemon/rule.json"
-        trade_state_path = ".pytest_cache/v2-daemon/trades.json"
-        pending_orders_path = ".pytest_cache/v2-daemon/orders.json"
-        paper_state_path = ".pytest_cache/v2-daemon/paper.json"
-        market_cache_path = ".pytest_cache/v2-daemon/market.json"
-        signal_log_path = ".pytest_cache/v2-daemon/signals.csv"
+        root = tmp_path
+        log_dir = tmp_path / "logs"
+        rule_state_path = tmp_path / "rule.json"
+        trade_state_path = tmp_path / "trades.json"
+        pending_orders_path = tmp_path / "orders.json"
+        paper_state_path = tmp_path / "paper.json"
+        market_cache_path = tmp_path / "market.json"
+        signal_log_path = tmp_path / "signals.csv"
 
         def disarm(self):
             return RuntimeConfig(["FPT"], True, False)

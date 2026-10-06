@@ -4,11 +4,39 @@ Tài liệu này là nguồn tham chiếu duy nhất cho kiến trúc, cấu hì
 vận hành và kết quả backtest đã chốt. Phần **Hiện hành** mô tả code đang chạy;
 phần **Lịch sử** chỉ lưu bằng chứng nghiên cứu và không được dùng làm setting.
 
+Hướng dẫn cập nhật bản vá giao dịch ngày 05/10/2026 và bằng chứng kiểm chứng:
+[GO_LIVE](../audits/live_2026_10_03/GO_LIVE.md).
+
 ## 1. Phạm vi và nguồn cấu hình
 
 Viking V2 là ứng dụng giao dịch chứng khoán cơ sở Việt Nam kết nối DNSE, gồm
 PAPER/REAL, watchlist, rule BUY/EXIT, quản lý lệnh và vị thế, Telegram, backtest
-và giao diện CustomTkinter. `START_SYSTEM.bat` chạy `python -m viking_v2.main`.
+và giao diện CustomTkinter. `START_SYSTEM.bat` cung cấp menu vận hành Windows;
+mục khởi động chạy `python -m viking_v2.main`.
+
+### Menu khởi động/cập nhật Windows
+
+Mở `START_SYSTEM.bat` tại root repo:
+
+1. **Rà soát/cài package:** tạo `ckvnvenv` nếu chưa có, cài đúng bản trong
+   `requirements.txt`, chạy `pip check` và kiểm tra cú pháp source. Cần Python
+   3.12 hoặc 3.13 đã cài; không tự cài Python hệ thống hoặc ghi đè venv hỏng.
+2. **Khởi động:** làm sạch màn hình rồi mở app. Đóng app bình thường quay lại
+   menu; thoát lỗi thử mở lại sau 10 giây, chọn `M` để về menu thay vì thử lại.
+3. **Kiểm tra/cập nhật code Git:** fetch upstream của branch hiện tại. Có bản
+   mới thì sao lưu `viking_v2/runtime` và `viking_v2/.env` vào
+   `.artifacts/update-backups/<thời điểm_ID>/`, cập nhật fast-forward đúng
+   commit đã kiểm tra, rồi cài/kiểm tra package. Chọn `2` để mở lại app.
+0. **Thoát.**
+
+Đóng app trước khi cài package/cập nhật; script từ chối nếu app/daemon của
+venv này còn chạy, có sửa source chưa commit hoặc commit local riêng. Không
+reset/clean Git, không xóa dữ liệu, không tự rollback hoặc bật app sau lỗi.
+`cls` chỉ xóa màn hình. `.env`, runtime, venv và backup được `.gitignore` loại
+khỏi Git; cập nhật code không đồng bộ settings UI giữa hai máy. Cần Git đã
+cài, branch có upstream và máy truy cập được remote. Commit/push code tại máy
+phát triển trước để VPS nhận được bản mới. VPS đang dùng launcher cũ cần lấy
+bản menu này một lần trước khi dùng mục cập nhật.
 
 Nguồn cấu hình theo thứ tự ưu tiên:
 
@@ -101,12 +129,27 @@ là 100,8, còn sàn giữ 90% là 103,6; backend chọn mức cao hơn là 103,
 - `MÃ PRIORITY` là tập con của watchlist: được xếp BUY trước và chỉ bypass
   `MAX_POSITIONS`; cash, exposure và mọi entry guard khác vẫn áp dụng. Vị thế
   Priority không chiếm quota BOT thường.
-- Nên BUY qua Viking. Lượng mua trực tiếp trên DNSE được gắn
-  `EXTERNAL_DNSE`; trade Viking cùng mã vẫn chỉ quản lý khối lượng của nó.
-- SELL khẩn cấp trên DNSE được đối soát từ position và fill không có remark
-  `V2:`. Dữ liệu rõ thì cập nhật trade, hủy SELL cache liên quan, khóa BUY BOT
-  15 phút và báo Telegram theo setting; dữ liệu mơ hồ chỉ tạo
-  `RECONCILE_REQUIRED`, không tự đoán.
+- REAL dùng gói tiền mặt đã xác minh (`initialRate=1`), không tự đổi sang margin.
+  Đơn vị quản lý là toàn bộ Deal đã chọn của đúng tài khoản/mã/gói; mua thêm
+  hoặc bán một phần trong Deal đó cập nhật cùng một trade, giữ chế độ quản lý.
+  Deal khác chưa chọn không được tự nhận quản lý.
+- Nên BUY/SELL qua Viking. Giao dịch trực tiếp trên DNSE trong Deal đang quản lý
+  được đối soát từ số cổ, giá vốn và lịch sử lệnh. Dữ liệu khớp thì cập nhật
+  trade, hủy SELL chưa gửi liên quan sau SELL tay, khóa BUY BOT theo setting
+  và báo Telegram theo setting; dữ liệu mơ hồ tạo `RECONCILE_REQUIRED`, không
+  tự đoán giá khớp. ID lệnh Viking được lưu riêng, không chỉ dựa vào remark.
+- Chọn PAPER không dừng quản lý REAL và ngược lại; cả hai sổ vẫn đối soát
+  lệnh/vị thế. Chỉ sổ đang chọn được tạo BUY BOT mới khi BOT ON.
+- Queue/trade/rule/PAPER dùng chung `trading.sqlite3` của tài khoản. JSON cũ
+  được nhập một lần, giữ bản sao trong `migration-backup`, không còn là nguồn
+  trạng thái tài chính hiện hành. Settings vẫn JSON; không thay bộ ngưỡng rule.
+- Restart bỏ BUY BOT chưa gửi và candidate chờ xác nhận; giữ MANUAL ngoài giờ,
+  SELL chờ cổ về, lệnh đã gửi/UNKNOWN, vị thế và cooldown. Cooldown lưu giờ hết
+  hạn; chốt ngày/reset thống kê vẫn theo nghiệp vụ cũ, không reset tài khoản.
+- MANUAL ngoài giờ có hiệu lực tới hết phiên đủ điều kiện đầu tiên. Không mua
+  ATO khi option tắt. Lệnh đã gửi không bị TTL nội bộ làm mất theo dõi;
+  broker hủy/hết hạn thì không tự đặt lại. RECHECK sau chờ T+2/OTP cần quyết
+  định mới; thiếu dữ liệu thì chờ, điều kiện mất thì hủy, KEEP giữ yêu cầu.
 
 ## 4. Telegram
 

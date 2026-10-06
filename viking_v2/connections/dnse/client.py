@@ -6,6 +6,7 @@ import os
 import random
 import threading
 import time
+import math
 from typing import Any, Callable
 
 import requests
@@ -17,6 +18,10 @@ from .signing import generate_signature_header
 
 
 logger = logging.getLogger("VIKING_V2.dnse")
+
+
+class BrokerSnapshotError(RuntimeError):
+    """An unavailable/incomplete account snapshot is not an empty account."""
 
 
 def _unwrap(data: Any, keys: tuple[str, ...] = ()) -> Any:
@@ -35,6 +40,16 @@ def _first(data: dict[str, Any], *keys: str, default: Any = "") -> Any:
         if key in data and data[key] is not None:
             return data[key]
     return default
+
+
+def _account_rows(data: Any, key: str) -> list[dict[str, Any]]:
+    body = _unwrap(data)
+    rows = _unwrap(data, (key,))
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise BrokerSnapshotError(f"Invalid DNSE {key} response")
+    if isinstance(body, dict) and int(body.get("total", len(rows)) or 0) > len(rows):
+        raise BrokerSnapshotError(f"Incomplete DNSE {key} snapshot")
+    return [{**row, "price_unit": "VND"} for row in rows]
 
 
 class DNSEClient:
@@ -167,7 +182,8 @@ class DNSEClient:
         with self._lock:
             endpoint_lock = self._endpoint_locks.setdefault(family, threading.Lock())
         with endpoint_lock:
-            for attempt in range(config.HTTP_RETRIES + 1):
+            retries = config.HTTP_RETRIES if method.upper() in {"GET", "HEAD"} else 0
+            for attempt in range(retries + 1):
                 try:
                     headers = self._headers(method, path, require_token)
                 except RuntimeError as exc:
@@ -194,7 +210,7 @@ class DNSEClient:
                     if response.status_code == 401 and "token" in message.lower():
                         self.trading_token = ""
                         self.trading_token_expires_at = 0.0
-                    if response.status_code == 429 and attempt < config.HTTP_RETRIES:
+                    if response.status_code == 429 and attempt < retries:
                         try:
                             delay = float(response.headers.get("Retry-After", "") or 0.0)
                         except (TypeError, ValueError):
@@ -205,7 +221,7 @@ class DNSEClient:
                 except Exception as exc:
                     latency = (time.perf_counter() - started) * 1000.0
                     self._record(method, path, 0, latency, str(exc))
-                    if attempt >= config.HTTP_RETRIES:
+                    if attempt >= retries:
                         return False, None, 0, str(exc)
             return False, None, 0, "REQUEST_FAILED"
 
@@ -225,7 +241,12 @@ class DNSEClient:
     def get_balance(self, *, force: bool = False) -> dict[str, Any] | None:
         def load() -> dict[str, Any] | None:
             ok, data, _status, _message = self._request("GET", f"/accounts/{self.account_no}/balances")
-            return data if ok and isinstance(data, dict) else None
+            if not ok or not isinstance(data, dict):
+                raise BrokerSnapshotError("DNSE balance unavailable")
+            body = _unwrap(data)
+            if not isinstance(body, dict) or not isinstance(body.get("stock"), dict):
+                raise BrokerSnapshotError("Invalid DNSE STOCK balance response")
+            return body
 
         return self._cached("balance", config.ACCOUNT_TTL_SECONDS, load, force)
 
@@ -235,11 +256,8 @@ class DNSEClient:
                 "GET", f"/accounts/{self.account_no}/positions", params={"marketType": "STOCK", "pageSize": 1000}
             )
             if not ok:
-                return None
-            rows = _unwrap(data, ("positions",))
-            if isinstance(rows, dict):
-                rows = [rows]
-            return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+                raise BrokerSnapshotError("DNSE positions unavailable")
+            return _account_rows(data, "positions")
 
         return self._cached("positions", config.POSITIONS_TTL_SECONDS, load, force) or []
 
@@ -260,11 +278,8 @@ class DNSEClient:
                 params={"marketType": "STOCK", "symbol": symbol},
             )
             if not ok:
-                return []
-            rows = _unwrap(data, ("loanPackages",))
-            if isinstance(rows, dict):
-                rows = [rows]
-            return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+                raise BrokerSnapshotError("DNSE loan packages unavailable")
+            return _account_rows(data, "loanPackages")
 
         return self._cached(f"stock_packages:{symbol}", 300.0, load, force) or []
 
@@ -294,6 +309,34 @@ class DNSEClient:
         # final fee on the order/execution itself.
         return max(rates) if rates else None
 
+    def cash_package(self, symbol: str) -> dict[str, Any]:
+        configured = str(os.getenv("DNSE_STOCK_CASH_PACKAGE_ID", "") or "")
+        packages = self.get_stock_loan_packages(symbol)
+        candidates = [row for row in packages if (
+            (configured and str(row.get("id")) == configured)
+            or (not configured and (
+                row.get("isCash") is True
+                or str(row.get("type", "")).upper() == "CASH"
+                or float(row.get("initialRate", 0) or 0) == 1.0
+            ))
+        )]
+        if len(candidates) != 1 or not candidates[0].get("id"):
+            raise BrokerSnapshotError("Không xác định duy nhất gói giao dịch tiền mặt DNSE")
+        selected = candidates[0]
+        if selected.get("initialRate") is not None and float(selected["initialRate"]) != 1.0:
+            raise BrokerSnapshotError("Gói cấu hình không phải tiền mặt 100%")
+        return selected
+
+    def get_buying_power(self, symbol: str, loan_package_id: str, price: float) -> dict[str, Any]:
+        ok, data, _status, _message = self._request(
+            "GET", f"/accounts/{self.account_no}/ppse",
+            params={"marketType": "STOCK", "symbol": symbol, "loanPackageId": loan_package_id, "price": dnse_price(price)},
+        )
+        body = _unwrap(data)
+        if not ok or not isinstance(body, dict) or "qmaxBuy" not in body:
+            raise BrokerSnapshotError("DNSE buying power unavailable")
+        return body
+
     def get_orders(self, *, force: bool = False) -> list[dict[str, Any]]:
         def load() -> list[dict[str, Any]] | None:
             ok, data, _status, _message = self._request(
@@ -302,11 +345,8 @@ class DNSEClient:
                 params={"marketType": "STOCK", "orderCategory": "NORMAL", "pageSize": 1000},
             )
             if not ok:
-                return None
-            rows = _unwrap(data, ("orders",))
-            if isinstance(rows, dict):
-                rows = [rows]
-            return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+                raise BrokerSnapshotError("DNSE orders unavailable")
+            return _account_rows(data, "orders")
 
         return self._cached("orders", config.ORDERS_TTL_SECONDS, load, force) or []
 
@@ -317,20 +357,18 @@ class DNSEClient:
             params={"marketType": "STOCK", "from": str(from_date), "to": str(to_date), "pageSize": 1000},
         )
         if not ok:
-            return []
-        rows = _unwrap(data, ("orders",))
-        if isinstance(rows, dict):
-            rows = [rows]
-        return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+            raise BrokerSnapshotError("DNSE order history unavailable")
+        return _account_rows(data, "orders")
 
     def get_order_detail(self, order_id: str) -> dict[str, Any] | None:
-        ok, data, _status, _message = self._request(
-            "GET",
-            f"/accounts/{self.account_no}/orders/{order_id}",
-            params={"marketType": "STOCK", "orderCategory": "NORMAL"},
-        )
-        value = _unwrap(data)
-        return value if ok and isinstance(value, dict) else None
+        def load():
+            ok, data, _status, _message = self._request(
+                "GET", f"/accounts/{self.account_no}/orders/{order_id}",
+                params={"marketType": "STOCK", "orderCategory": "NORMAL"},
+            )
+            value = _unwrap(data)
+            return {**value, "price_unit": "VND"} if ok and isinstance(value, dict) else None
+        return self._cached(f"order_detail:{order_id}", config.ORDERS_TTL_SECONDS, load)
 
     def get_executions(self, order_id: str) -> dict[str, Any] | list[Any] | None:
         ok, data, _status, _message = self._request(
@@ -428,7 +466,7 @@ class DNSEClient:
             message=str(_first(value, "message", "description", default=message) or message),
             error="" if ok else str(message or _first(value, "message", default="ORDER_FAILED")),
             status_code=status,
-            raw=data if isinstance(data, dict) else {"raw": data},
+            raw={**value, "price_unit": "VND"},
         )
 
     def place_order(self, intent: OrderIntent) -> BrokerOrderResult:
@@ -442,8 +480,21 @@ class DNSEClient:
                 message="Trading token required",
                 error="TRADING_TOKEN_REQUIRED",
             )
+        try:
+            package = self.cash_package(intent.symbol)
+            package_id = str(package["id"])
+            if intent.loan_package_id and intent.loan_package_id != package_id:
+                return BrokerOrderResult(False, "REJECTED", error="CASH_PACKAGE_MISMATCH")
+            intent.loan_package_id = package_id
+        except (BrokerSnapshotError, ValueError, TypeError) as exc:
+            return BrokerOrderResult(False, "REJECTED", message=str(exc), error="CASH_PACKAGE_UNAVAILABLE")
         if intent.side == "SELL":
-            available = available_to_sell(self.get_positions(force=True), intent.symbol)
+            try:
+                positions = self.get_positions(force=True)
+            except BrokerSnapshotError as exc:
+                return BrokerOrderResult(False, "REJECTED", message=str(exc), error="ACCOUNT_SNAPSHOT_UNAVAILABLE")
+            positions = [row for row in positions if str(row.get("loanPackageId", "")) == package_id]
+            available = available_to_sell(positions, intent.symbol)
             if available < quantity:
                 return BrokerOrderResult(
                     False,
@@ -458,7 +509,7 @@ class DNSEClient:
         if intent.order_type == "LO":
             floor_price = dnse_price(secdef.get("floorPrice", 0.0))
             ceiling_price = dnse_price(secdef.get("ceilingPrice", 0.0))
-            if not price_in_band(api_limit_price, floor_price, ceiling_price):
+            if not math.isfinite(api_limit_price) or not price_in_band(api_limit_price, floor_price, ceiling_price):
                 return BrokerOrderResult(
                     False,
                     "REJECTED",
@@ -498,6 +549,7 @@ class DNSEClient:
             "orderType": order_type,
             "price": float(api_limit_price),
             "remark": request_tag,
+            "loanPackageId": int(package_id),
         }
         ok, data, status, message = self._request(
             "POST",
@@ -507,9 +559,13 @@ class DNSEClient:
             require_token=True,
         )
         result = self._result(ok, data, status, message)
-        if not ok and status == 0:
-            for order in self.get_orders(force=True):
-                if request_tag in str(order.get("remark", "") or ""):
+        if not ok and (status == 0 or status >= 500):
+            try:
+                orders = self.get_orders(force=True)
+            except BrokerSnapshotError:
+                orders = []
+            for order in orders:
+                if request_tag == str(order.get("remark", "") or ""):
                     return self._result(True, order, 200, "Reconciled after transport error")
             result.status = "UNKNOWN"
             result.error = "ORDER_STATUS_UNKNOWN"
@@ -546,7 +602,11 @@ class DNSEClient:
             require_token=True,
         )
         self._cache.pop("orders", None)
-        return self._result(ok, data, status, message)
+        self._cache.pop(f"order_detail:{order_id}", None)
+        result = self._result(ok, data, status, message)
+        if not ok and (status == 0 or status >= 500):
+            result.status, result.error = "UNKNOWN", "ORDER_STATUS_UNKNOWN"
+        return result
 
     def cancel_order(self, order_id: str) -> BrokerOrderResult:
         ok, data, status, message = self._request(
@@ -556,4 +616,8 @@ class DNSEClient:
             require_token=True,
         )
         self._cache.pop("orders", None)
-        return self._result(ok, data, status, message)
+        self._cache.pop(f"order_detail:{order_id}", None)
+        result = self._result(ok, data, status, message)
+        if not ok and (status == 0 or status >= 500):
+            result.status, result.error = "UNKNOWN", "ORDER_STATUS_UNKNOWN"
+        return result

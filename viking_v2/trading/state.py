@@ -7,14 +7,14 @@ import uuid
 from typing import Any
 
 from ..models import TradeCycle
-from ..storage import AtomicJSONStore
+from .durable import DurableJSONStore
 
 
 class TradeStateStore:
     """Persistent trade-cycle state; business decisions live outside this class."""
 
     def __init__(self, path: str | Path):
-        self.store = AtomicJSONStore(
+        self.store = DurableJSONStore(
             path,
             default={
                 "cycles": [],
@@ -22,8 +22,21 @@ class TradeStateStore:
                 "loss_streak_updated_at": {},
                 "capital": {},
             },
+            validator=self._validate,
         )
-        self._lock = threading.RLock()
+        self._lock = self.store.transaction
+
+    @staticmethod
+    def _validate(raw):
+        rows = raw.get("cycles", [])
+        if any(not isinstance(row, dict) or not row.get("id") or not row.get("symbol") for row in rows):
+            raise ValueError("Invalid trade cycle")
+        cycles = [TradeCycle.from_dict(row) for row in rows]
+        if len({cycle.id for cycle in cycles}) != len(cycles):
+            raise ValueError("Duplicate trade cycle IDs")
+        if any(cycle.open_quantity + cycle.sold_quantity != cycle.entry_quantity for cycle in cycles):
+            raise ValueError("Inconsistent trade quantities")
+        return raw
 
     def _read(self) -> dict[str, Any]:
         raw = self.store.read()
@@ -53,13 +66,14 @@ class TradeStateStore:
     def get(self, trade_id: str) -> TradeCycle | None:
         return next((cycle for cycle in self.list_cycles() if cycle.id == str(trade_id)), None)
 
-    def active_for(self, symbol: str, execution_mode: str) -> TradeCycle | None:
+    def active_for(self, symbol: str, execution_mode: str, loan_package_id: str = "") -> TradeCycle | None:
         key = self._key(symbol, execution_mode)
         return next(
             (
                 cycle
                 for cycle in self.list_cycles()
                 if cycle.status == "OPEN" and self._key(cycle.symbol, cycle.execution_mode) == key
+                and (not loan_package_id or cycle.loan_package_id == str(loan_package_id))
             ),
             None,
         )
@@ -80,9 +94,11 @@ class TradeStateStore:
         entry_market_state: str = "UNKNOWN",
         entry_exposure: float = 0.0,
         entry_budget: float = 0.0,
+        loan_package_id: str = "",
+        deal_id: str = "",
     ) -> TradeCycle:
         with self._lock:
-            active = self.active_for(symbol, execution_mode)
+            active = self.active_for(symbol, execution_mode, loan_package_id)
             if active:
                 return active
             streak = self.loss_streak(symbol, execution_mode)
@@ -101,6 +117,8 @@ class TradeStateStore:
                 entry_market_state=entry_market_state,
                 entry_exposure=entry_exposure,
                 entry_budget=entry_budget,
+                loan_package_id=str(loan_package_id or ""),
+                deal_id=str(deal_id or ""),
             )
             raw = self._read()
             raw["cycles"].append(cycle.to_dict())
@@ -150,11 +168,12 @@ class TradeStateStore:
         return cycle
 
     def record_buy_fill(self, trade_id: str, quantity: int, price: float, fee: float = 0.0) -> TradeCycle | None:
-        cycle = self.get(trade_id)
-        if not cycle:
-            return None
-        cycle.record_buy_fill(quantity, price, fee)
-        return self.save(cycle)
+        with self._lock:
+            cycle = self.get(trade_id)
+            if not cycle:
+                return None
+            cycle.record_buy_fill(quantity, price, fee)
+            return self.save(cycle)
 
     def record_sell_fill(
         self,
@@ -164,19 +183,52 @@ class TradeStateStore:
         fee: float = 0.0,
         *,
         closed_at: float | None = None,
+        keep_open: bool = False,
     ) -> TradeCycle | None:
-        cycle = self.get(trade_id)
-        if not cycle:
-            return None
-        cycle.record_sell_fill(quantity, price, fee, closed_at=closed_at or time.time())
-        return self.save(cycle)
+        with self._lock:
+            cycle = self.get(trade_id)
+            if not cycle:
+                return None
+            cycle.record_sell_fill(quantity, price, fee, closed_at=closed_at or time.time())
+            if keep_open and cycle.open_quantity == 0:
+                cycle.status, cycle.closed_at = "OPEN", 0.0
+            return self.save(cycle)
 
     def mark_exit_once(self, trade_id: str, event: str) -> bool:
-        cycle = self.get(trade_id)
-        if not cycle or not cycle.mark_exit_once(event):
-            return False
-        self.save(cycle)
-        return True
+        with self._lock:
+            cycle = self.get(trade_id)
+            if not cycle or not cycle.mark_exit_once(event):
+                return False
+            self.save(cycle)
+            return True
+
+    def adjust_costs(self, trade_id: str, delta: float) -> None:
+        with self._lock:
+            cycle = self.get(trade_id)
+            if not cycle:
+                return
+            cycle.fees_paid = max(0.0, cycle.fees_paid + delta)
+            cycle.net_pnl -= delta
+            raw = self._read()
+            if cycle.status == "CLOSED":
+                key = self._key(cycle.symbol, cycle.execution_mode)
+                capital = raw["capital"].get(key)
+                if isinstance(capital, dict):
+                    capital["available"] = min(float(capital["principal"]), max(0.0, float(capital["available"]) - delta))
+                closed = sorted((row for row in raw["cycles"] if row.get("status") == "CLOSED" and self._key(row.get("symbol"), row.get("execution_mode")) == key), key=lambda row: float(row.get("closed_at", 0)), reverse=True)
+                streak = 0
+                for row in closed:
+                    pnl = cycle.net_pnl if row.get("id") == cycle.id else float(row.get("net_pnl", 0))
+                    if pnl >= 0:
+                        break
+                    streak += 1
+                raw["loss_streaks"][key] = streak
+                if streak and closed:
+                    raw["loss_streak_updated_at"][key] = float(closed[0].get("closed_at", 0))
+                else:
+                    raw["loss_streak_updated_at"].pop(key, None)
+                self.store.write(raw)
+            self.save(cycle)
 
     def loss_streak(self, symbol: str, execution_mode: str) -> int:
         raw = self._read()
@@ -288,18 +340,19 @@ class TradeStateStore:
         tp_mode: str | None = None,
         tp_value: float | None = None,
     ) -> TradeCycle | None:
-        cycle = self.get(trade_id)
-        if not cycle or cycle.status != "OPEN":
-            return None
-        if em_modes is not None:
-            cycle.em_modes = list(em_modes)
-        if sl_mode is not None:
-            cycle.sl_mode = str(sl_mode)
-        if sl_value is not None:
-            cycle.sl_value = float(sl_value)
-        if tp_mode is not None:
-            cycle.tp_mode = str(tp_mode)
-        if tp_value is not None:
-            cycle.tp_value = float(tp_value)
-        cycle.__post_init__()
-        return self.save(cycle)
+        with self._lock:
+            cycle = self.get(trade_id)
+            if not cycle or cycle.status != "OPEN":
+                return None
+            if em_modes is not None:
+                cycle.em_modes = list(em_modes)
+            if sl_mode is not None:
+                cycle.sl_mode = str(sl_mode)
+            if sl_value is not None:
+                cycle.sl_value = float(sl_value)
+            if tp_mode is not None:
+                cycle.tp_mode = str(tp_mode)
+            if tp_value is not None:
+                cycle.tp_value = float(tp_value)
+            cycle.__post_init__()
+            return self.save(cycle)

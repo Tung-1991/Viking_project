@@ -6,7 +6,7 @@ import threading
 import time
 from typing import Any, Callable
 
-from ..storage import AtomicJSONStore
+from ..trading.durable import DurableJSONStore
 
 
 _LEGACY_SIGNAL_NAMES = {"M": "BUY", "B": "SELL"}
@@ -29,7 +29,7 @@ def _renamed_signal_keys(raw: Any) -> dict[str, Any]:
 
 class RuleStateStore:
     def __init__(self, path: str | Path):
-        self.store = AtomicJSONStore(
+        self.store = DurableJSONStore(
             path,
             default={
                 "market": {},
@@ -43,7 +43,7 @@ class RuleStateStore:
                 "entry_pauses": {},
             },
         )
-        self._lock = threading.RLock()
+        self._lock = self.store.transaction
 
     @staticmethod
     def _position_key(symbol: str, trade_id: str) -> str:
@@ -141,6 +141,17 @@ class RuleStateStore:
         with self._lock:
             value = self._read()["buy_confirmations"].get(key)
             return dict(value) if isinstance(value, dict) else {}
+
+    def discard_buy_candidates(self) -> None:
+        """Restart drops action candidates, not cooldowns or indicator history."""
+        with self._lock:
+            raw = self._read()
+            for key, observation in raw["signal_observations"].items():
+                if observation.get("signal") == "BUY" and observation.get("first_seen"):
+                    stream, _, symbol = key.partition("|")
+                    raw["processed_signals"][f"{stream}|{symbol}|BUY"] = f"{observation['candle_key']}|{observation['first_seen']}"
+            raw["buy_confirmations"] = {}
+            self.store.write(raw)
 
     def save_buy_confirmation(self, symbol: str, stream: str, value: dict[str, Any]) -> None:
         key = self._buy_confirmation_key(symbol, stream)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+import math
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from .. import config
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
 def round_lot_down(quantity: Any, lot: int = STOCK_ROUND_LOT) -> int:
     try:
         value = max(0, int(float(quantity or 0)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
     lot = max(1, int(lot or STOCK_ROUND_LOT))
     return value - (value % lot)
@@ -47,9 +48,13 @@ def sell_quantity_for_fraction(
 
 def validate_quantity(quantity: Any, lot: int = STOCK_ROUND_LOT) -> tuple[bool, str, int]:
     normalized = round_lot_down(quantity, lot)
-    if normalized < lot:
+    try:
+        supplied = float(quantity or 0)
+    except (TypeError, ValueError):
+        supplied = 0
+    if not math.isfinite(supplied) or normalized < lot:
         return False, f"Khối lượng CKCS tối thiểu {lot} và phải là bội số {lot}.", normalized
-    if normalized != int(float(quantity or 0)):
+    if normalized != supplied:
         return False, f"Khối lượng CKCS phải là bội số {lot}.", normalized
     return True, "", normalized
 
@@ -57,7 +62,7 @@ def price_in_band(price: float, floor_price: float, ceiling_price: float) -> boo
     price = float(price or 0.0)
     floor_price = float(floor_price or 0.0)
     ceiling_price = float(ceiling_price or 0.0)
-    if price <= 0:
+    if not all(math.isfinite(value) for value in (price, floor_price, ceiling_price)) or price <= 0:
         return False
     if floor_price > 0 and price < floor_price - 1e-9:
         return False
@@ -78,7 +83,20 @@ def board_price(value: Any) -> float:
         price = max(0.0, float(value or 0.0))
     except (TypeError, ValueError):
         return 0.0
+    if not math.isfinite(price):
+        return 0.0
     return price / 1000.0 if price >= 1000.0 else price
+
+
+def account_price(row: dict[str, Any], value: Any) -> float:
+    """Prefer explicit trading-adapter units over legacy price heuristics."""
+    if row.get("price_unit") == "VND":
+        try:
+            price = float(value or 0)
+            return max(0.0, price / 1000) if math.isfinite(price) else 0.0
+        except (ValueError, TypeError):
+            return 0.0
+    return board_price(value)
 
 
 def dnse_price(value: Any) -> float:
@@ -197,17 +215,19 @@ def position_quantity(row: dict[str, Any]) -> int:
     return max(0, int(_number(row, "openQuantity", "quantity", "volume")))
 
 def position_price(row: dict[str, Any]) -> float:
-    return board_price(_number(row, "marketPrice", "currentPrice", "price", "costPrice", "averagePrice"))
+    return account_price(row, _number(row, "marketPrice", "currentPrice", "price", "costPrice", "averagePrice"))
 
 def position_cost(row: dict[str, Any]) -> float:
-    return board_price(_number(row, "costPrice", "averagePrice", "avgPrice", "price"))
+    return account_price(row, _number(row, "costPrice", "averagePrice", "avgPrice", "price"))
 
 def stock_value(positions: Iterable[dict[str, Any]]) -> float:
     return sum(position_quantity(row) * position_price(row) * 1000.0 for row in positions or [])
 
 def cash_from_balance(balance: dict[str, Any]) -> float:
     stock = balance.get("stock") if isinstance(balance.get("stock"), dict) else {}
-    return _number(stock, "availableCash", "totalCash") or _number(balance, "availableCash", "cash", "balance")
+    if stock:
+        return max(0.0, _number(stock, "availableCash", "cashAvailable"))
+    return max(0.0, _number(balance, "availableCash", "cashAvailable", "cash"))
 
 def nav_from_balance(balance: dict[str, Any], positions: Iterable[dict[str, Any]]) -> float:
     explicit = _number(balance, "equity", "nav", "netAssetValue", "totalAsset")
@@ -260,7 +280,17 @@ class PortfolioContextBuilder:
         ]
         pending_value = 0.0
         for item in pending_buys:
-            price = item.limit_price or float(tick.get("ask", tick.get("price", 0.0)) or 0.0)
+            price = item.limit_price or float(item.details.get("reservation_price", 0) or 0)
+            if not price and item.symbol == symbol:
+                price = float(tick.get("ask", tick.get("price", 0.0)) or 0.0)
+            if not price and item.entry_budget:
+                pending_value += max(0, item.entry_budget)
+                continue
+            if not price:
+                # Unknown reservation is not free money. Wait for that order's
+                # quote/price rather than borrowing another symbol's price.
+                pending_value += cash
+                continue
             pending_value += max(0, item.remaining_quantity) * max(0.0, price) * 1000.0
         budget = order_budget(
             nav=nav,
@@ -306,6 +336,8 @@ class PortfolioContextBuilder:
             if str(value or "").strip()
         }
         active_trade = self.trades.active_for(symbol, mode)
+        if active_trade and active_trade.loan_package_id:
+            matching_rows = [row for row in matching_rows if str(row.get("loanPackageId", "")) == active_trade.loan_package_id]
         active_loss_streak = self.trades.active_loss_streak(
             symbol,
             mode,

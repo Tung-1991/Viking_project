@@ -50,6 +50,12 @@ class OrderIntent:
     broker_filled_quantity: int = 0
     broker_fee_logged: float = 0.0
     broker_tax_logged: float = 0.0
+    broker_notional_logged: float = 0.0
+    handed_off_at: float = 0.0
+    loan_package_id: str = ""
+    deal_id: str = ""
+    broker_order_ids: list[str] = field(default_factory=list)
+    cancel_requested: bool = False
     em_modes: list[str] = field(default_factory=list)
     sl_enabled: bool = True
     sl_mode: str = "DEFAULT"
@@ -78,11 +84,7 @@ class OrderIntent:
         self.source = str(self.source or "MANUAL").strip().upper()
         self.quantity = int(self.quantity or 0)
         self.filled_quantity = max(0, int(self.filled_quantity or 0))
-        self.remaining_quantity = (
-            max(0, self.quantity - self.filled_quantity)
-            if int(self.remaining_quantity) < 0
-            else max(0, int(self.remaining_quantity))
-        )
+        self.remaining_quantity = max(0, self.quantity - self.filled_quantity)
         self.limit_price = float(self.limit_price or 0.0)
         self.created_at = float(self.created_at or time.time())
         self.expires_at = float(self.expires_at or (self.created_at + ORDER_TTL_SECONDS))
@@ -230,9 +232,14 @@ class TradeCycle:
     tp_mode: str = "NONE"
     tp_value: float = 0.0
     capital_principal: float = 0.0
+    buy_notional: float = 0.0
+    sell_notional: float = 0.0
+    external_progress: dict[str, dict[str, Any]] = field(default_factory=dict)
     entry_market_state: str = "UNKNOWN"
     entry_exposure: float = 0.0
     entry_budget: float = 0.0
+    loan_package_id: str = ""
+    deal_id: str = ""
 
     def __post_init__(self) -> None:
         self.id = str(self.id or uuid.uuid4().hex)
@@ -259,6 +266,12 @@ class TradeCycle:
             self.tp_mode = "NONE"
         self.tp_value = float(self.tp_value or 0.0)
         self.capital_principal = max(0.0, float(self.capital_principal or 0.0))
+        self.buy_notional = max(0.0, float(self.buy_notional or 0.0))
+        self.sell_notional = max(0.0, float(self.sell_notional or 0.0))
+        if not self.buy_notional and self.entry_quantity:
+            # Migrate the old ledger without erasing its recorded realized PnL.
+            self.sell_notional = self.avg_exit_price * self.sold_quantity * 1000.0
+            self.buy_notional = max(0.0, self.sell_notional + self.avg_entry_price * self.open_quantity * 1000.0 - self.net_pnl - self.fees_paid)
         self.entry_market_state = str(self.entry_market_state or "UNKNOWN").strip().upper()
         self.entry_exposure = max(0.0, float(self.entry_exposure or 0.0))
         self.entry_budget = max(0.0, float(self.entry_budget or 0.0))
@@ -275,15 +288,19 @@ class TradeCycle:
         fee = max(0.0, float(fee or 0.0))
         if quantity <= 0 or price <= 0:
             return
-        previous_cost = self.avg_entry_price * self.entry_quantity
+        previous_cost = self.avg_entry_price * self.open_quantity
+        previous_quantity = self.open_quantity
         self.entry_quantity += quantity
         self.open_quantity += quantity
-        self.avg_entry_price = (previous_cost + price * quantity) / self.entry_quantity
+        self.avg_entry_price = (previous_cost + price * quantity) / (previous_quantity + quantity)
+        self.status = "OPEN"
+        self.closed_at = 0.0
         self.fees_paid += fee
-        self.net_pnl -= fee
+        self.buy_notional += quantity * price * 1000.0
+        self.refresh_pnl()
         self.capital_principal = max(
             self.capital_principal,
-            self.avg_entry_price * self.entry_quantity * 1000.0 + self.fees_paid,
+            self.avg_entry_price * self.open_quantity * 1000.0 + self.fees_paid,
         )
 
     def record_sell_fill(self, quantity: int, price: float, fee: float = 0.0, closed_at: float | None = None) -> int:
@@ -297,11 +314,22 @@ class TradeCycle:
         self.sold_quantity += quantity
         self.avg_exit_price = (previous_exit_value + price * quantity) / self.sold_quantity
         self.fees_paid += fee
-        self.net_pnl += (price - self.avg_entry_price) * quantity * 1000.0 - fee
+        self.sell_notional += quantity * price * 1000.0
+        self.refresh_pnl()
         if self.open_quantity == 0:
             self.status = "CLOSED"
             self.closed_at = float(closed_at or time.time())
         return quantity
+
+    def refresh_pnl(self) -> None:
+        # Cash-flow identity also works when broker snapshots arrive out of
+        # execution order: sells - buys + remaining cost basis - fees.
+        self.net_pnl = round(self.sell_notional - self.buy_notional + self.avg_entry_price * self.open_quantity * 1000.0 - self.fees_paid, 2)
+
+    def sync_remaining_cost(self, price: float) -> None:
+        if price > 0 and self.open_quantity > 0:
+            self.avg_entry_price = float(price)
+            self.refresh_pnl()
 
     def mark_exit_once(self, event: str) -> bool:
         event = str(event or "").strip().upper()
@@ -377,6 +405,7 @@ class RuntimeStatus:
     active_symbols: list[str]
     ticks: dict[str, dict[str, Any]] = field(default_factory=dict)
     decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    decisions_by_mode: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     api_health: dict[str, Any] = field(default_factory=dict)
     error: str = ""
     working_dates: list[str] = field(default_factory=list)

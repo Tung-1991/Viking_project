@@ -3,13 +3,14 @@ from __future__ import annotations
 import threading
 import time
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
 
 from .market import order_is_due, VN_TZ, in_buy_window
 from ..models import BrokerOrderResult, OrderIntent
-from .portfolio import validate_quantity
-from ..storage import AtomicJSONStore
+from .portfolio import validate_quantity, board_price, account_price
+from .durable import DurableJSONStore
 
 
 FINAL_STATUSES = {"FILLED", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"}
@@ -23,11 +24,30 @@ CLAIMABLE_STATUSES = {"PENDING", "WAITING_TOKEN", "WAITING_SETTLEMENT"}
 LOCALLY_CONTROLLABLE_STATUSES = CLAIMABLE_STATUSES | {"PAUSED"}
 
 
+def _transactional(method):
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return locked
+
+
 class OrderQueue:
     def __init__(self, path: str | Path, *, now=time.time):
-        self.store = AtomicJSONStore(path, default=[])
+        self.store = DurableJSONStore(path, default=[], validator=self._validate_rows)
         self._now = now
-        self._lock = threading.RLock()
+        self._lock = self.store.transaction
+
+    @staticmethod
+    def _validate_rows(rows):
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise ValueError("Invalid order queue structure")
+        intents = [OrderIntent.from_dict(row) for row in rows]
+        if len({item.id for item in intents}) != len(intents):
+            raise ValueError("Duplicate order IDs")
+        if any(item.filled_quantity > item.quantity for item in intents):
+            raise ValueError("Order filled quantity exceeds total")
+        return [item.to_dict() for item in intents]
 
     def _read(self) -> list[dict[str, Any]]:
         value = self.store.read()
@@ -67,14 +87,29 @@ class OrderQueue:
         ]
 
     def add_unique(self, intent: OrderIntent) -> OrderIntent:
-        active = self.find_active(
-            intent.symbol,
-            side=intent.side if intent.side == "BUY" else None,
-            execution_mode=intent.execution_mode,
-        )
-        if intent.side == "BUY" and active:
-            return active[0]
-        return self.add(intent)
+        with self._lock:
+            active = self.find_active(intent.symbol, side=intent.side if intent.side == "BUY" else None, execution_mode=intent.execution_mode)
+            if intent.side == "BUY" and active:
+                return active[0]
+            return self.add(intent)
+
+    def discard_unsubmitted_bot_buys(self, reason: str) -> None:
+        with self._lock:
+            for intent in self.list_all():
+                if intent.source == "BOT" and intent.side == "BUY" and intent.status in LOCALLY_CONTROLLABLE_STATUSES and not intent.handed_off_at and not intent.broker_order_id:
+                    self._update(intent.id, status="CANCELLED", result=reason)
+
+    def recover_claims(self) -> None:
+        with self._lock:
+            for intent in self.list_all():
+                if intent.status != "SENDING":
+                    continue
+                if intent.handed_off_at or intent.details.get("claim_protocol") != "durable-v1":
+                    self._update(intent.id, status="UNKNOWN", result="Restart: đối soát hand-off, không tự gửi lại")
+                elif intent.source == "BOT" and intent.side == "BUY":
+                    self._update(intent.id, status="CANCELLED", result="Restart: bỏ BUY chưa gửi")
+                else:
+                    self.release(intent.id, "PENDING", "Restart: giữ yêu cầu chưa hand-off")
 
     def get(self, order_id: str) -> OrderIntent | None:
         for row in self._read():
@@ -118,7 +153,7 @@ class OrderQueue:
             rows = trimmed
             for row in rows:
                 status = str(row.get("status", "")).upper()
-                if status in FINAL_STATUSES | {"UNKNOWN"}:
+                if status in FINAL_STATUSES | {"UNKNOWN", "WORKING", "PARTIAL", "CANCEL_PENDING", "REPLACE_PENDING"}:
                     continue
                 # A sell waiting for T+2 is not a stale trading instruction.
                 # It cannot legally be sent yet, and weekends/holidays routinely
@@ -129,18 +164,19 @@ class OrderQueue:
                     continue
                 if bool(row.get("defer_expiry_until_eligible", False)) and not bool(row.get("eligible_session_seen", False)):
                     continue
-                if (float(row.get("expires_at", 0.0) or 0.0) <= now
-                        and (not row.get("buy_window_end") or status in LOCALLY_CONTROLLABLE_STATUSES)):
-                    row["status"] = "EXPIRED"
-                    row["result"] = "Hết khung giờ mua" if row.get("buy_window_end") else "Expired after 24 hours"
-                    expired.append(OrderIntent.from_dict(row))
-                    changed = True
-                elif str(row.get("status", "")).upper() == "SENDING":
+                if status == "SENDING":
                     claimed = float(row.get("claimed_at", 0.0) or 0.0)
                     if claimed and now - claimed > 120.0:
                         row["status"] = "UNKNOWN"
-                        row["result"] = "Recovered stale SENDING without retry"
+                        row["result"] = "Recovered SENDING; reconcile without retry"
                         changed = True
+                    continue
+                if (float(row.get("expires_at", 0.0) or 0.0) <= now
+                        and (not row.get("buy_window_end") or status in LOCALLY_CONTROLLABLE_STATUSES)):
+                    row["status"] = "EXPIRED"
+                    row["result"] = "Hết khung giờ mua" if row.get("buy_window_end") else "Hết thời hạn yêu cầu chưa gửi"
+                    expired.append(OrderIntent.from_dict(row))
+                    changed = True
             if changed:
                 self.store.write(rows)
         return expired
@@ -207,6 +243,8 @@ class OrderQueue:
                     and intent.side == "BUY"
                     and intent.source == "BOT"
                 ):
+                    row.update(status="CANCELLED", result="MUA TỰ ĐỘNG đang OFF")
+                    changed = True
                     continue
                 if not self.buy_window_is_due(intent):
                     continue
@@ -215,7 +253,8 @@ class OrderQueue:
                     continue
                 if intent.defer_expiry_until_eligible and not intent.eligible_session_seen:
                     row["eligible_session_seen"] = True
-                    row["expires_at"] = max(float(row.get("expires_at", 0.0) or 0.0), self._now() + 6 * 60 * 60)
+                    deadline = datetime.fromtimestamp(self._now(), VN_TZ).replace(hour=15, minute=0, second=0, microsecond=0).timestamp()
+                    row["expires_at"] = deadline
                     intent = OrderIntent.from_dict(row)
                     changed = True
                 if intent.wait_for_trigger:
@@ -223,6 +262,10 @@ class OrderQueue:
                     if not self._trigger_is_ready(intent, quote):
                         continue
                 if intent.execution_mode == "REAL" and not token_ready:
+                    if intent.side == "BUY" and intent.source == "BOT":
+                        row.update(status="CANCELLED", result="BUY bỏ qua: thiếu trading token")
+                        changed = True
+                        continue
                     if intent.status != "WAITING_TOKEN":
                         row["status"] = "WAITING_TOKEN"
                         row["result"] = "Trading token required"
@@ -230,6 +273,7 @@ class OrderQueue:
                     continue
                 row["status"] = "SENDING"
                 row["claimed_at"] = self._now()
+                row["details"] = {**(row.get("details") or {}), "claim_protocol": "durable-v1"}
                 row["eligible_session_seen"] = True
                 intent = OrderIntent.from_dict(row)
                 claimed.append(intent)
@@ -259,11 +303,19 @@ class OrderQueue:
         raw = raw if isinstance(raw, dict) else {}
         body = raw.get("data") if isinstance(raw.get("data"), dict) else raw
         try:
-            fee = abs(float(body.get("fee", body.get("totalFee", 0.0)) or 0.0))
-            tax = abs(float(body.get("tax", 0.0) or 0.0))
+            notional = OrderQueue._broker_notional(body)
+            # feeRate is documented as the TOTAL rate: never add exchangeFeeRate
+            # again. Explicit broker amounts take precedence over rate estimates.
+            fee = abs(float(body.get("fee", body.get("totalFee", notional * float(body.get("feeRate", 0.0) or 0.0))) or 0.0))
+            tax = abs(float(body.get("tax", notional * float(body.get("taxRate", 0.0) or 0.0)) or 0.0))
         except (AttributeError, TypeError, ValueError):
             return 0.0, 0.0
         return fee, tax
+
+    @staticmethod
+    def _broker_notional(body: dict[str, Any]) -> float:
+        quantity = max(0, int(float(body.get("fillQuantity", body.get("filledQuantity", 0)) or 0)))
+        return quantity * account_price(body, body.get("averagePrice", body.get("price", 0))) * 1000.0
 
     def finish(
         self,
@@ -274,7 +326,7 @@ class OrderQueue:
         keep_sell_remainder: bool = False,
     ) -> OrderIntent | None:
         submitted = max(0, int(submitted_quantity or intent.remaining_quantity or intent.quantity))
-        status = str(result.status or ("FILLED" if result.ok else "FAILED")).upper()
+        status = self._normalized_broker_status(result.status) if result.ok else str(result.status or "FAILED").upper()
         if not result.ok and result.error == "ORDER_STATUS_UNKNOWN":
             status = "UNKNOWN"
         elif not result.ok and result.error == "TRADING_TOKEN_REQUIRED":
@@ -286,27 +338,30 @@ class OrderQueue:
         filled_total = min(intent.quantity, intent.filled_quantity + filled_now)
         remaining = max(0, intent.quantity - filled_total)
         if result.ok:
-            if broker_leaves > 0:
+            if broker_leaves > 0 and status not in FINAL_STATUSES | {"CANCEL_PENDING", "REPLACE_PENDING"}:
                 status = "PARTIAL" if filled_now > 0 else "WORKING"
             elif remaining > 0 and keep_sell_remainder:
                 status = "WAITING_SETTLEMENT"
             elif remaining == 0 and status in {"FILLED", "MATCHED", "COMPLETED", "DONE"}:
                 status = "FILLED"
-            elif status not in {"FILLED", "PARTIAL", "WORKING"}:
+            elif status not in FINAL_STATUSES | {"PARTIAL", "WORKING", "CANCEL_PENDING", "REPLACE_PENDING"}:
                 status = "WORKING"
         reset_broker_costs = status == "WAITING_SETTLEMENT"
         return self._update(
             intent.id,
             status=status,
             result=result.message or result.error,
-            broker_order_id=result.order_id,
-            request_tag=intent.request_tag,
+            broker_order_id="" if reset_broker_costs else result.order_id,
+            request_tag="" if reset_broker_costs else intent.request_tag,
             filled_quantity=filled_total,
             remaining_quantity=remaining,
-            working_quantity=submitted if status in {"WORKING", "PARTIAL"} else 0,
-            broker_filled_quantity=filled_now if status in {"WORKING", "PARTIAL"} else 0,
+            working_quantity=submitted if status in {"WORKING", "PARTIAL", "CANCEL_PENDING", "REPLACE_PENDING", "UNKNOWN"} else 0,
+            broker_filled_quantity=0 if reset_broker_costs else filled_now,
             broker_fee_logged=0.0 if reset_broker_costs else broker_fee,
             broker_tax_logged=0.0 if reset_broker_costs else broker_tax,
+            broker_notional_logged=0.0 if reset_broker_costs else self._broker_notional(result.raw.get("data", result.raw)),
+            attempt=intent.attempt + 1 if reset_broker_costs else intent.attempt,
+            handed_off_at=0.0 if reset_broker_costs else intent.handed_off_at,
             settlement_waited=bool(intent.settlement_waited or status == "WAITING_SETTLEMENT"),
         )
 
@@ -317,13 +372,24 @@ class OrderQueue:
             return "FILLED"
         if compact in {"PARTIAL", "PARTIALLYFILLED", "PARTIALFILLED"}:
             return "PARTIAL"
-        if compact in {"CANCELLED", "CANCELED", "EXPIRED"}:
+        if compact in {"PENDINGCANCEL", "CANCELPENDING"}:
+            return "CANCEL_PENDING"
+        if compact in {"PENDINGREPLACE", "REPLACEPENDING"}:
+            return "REPLACE_PENDING"
+        if compact in {"EXPIRED", "DONEFORDAY"}:
+            return "EXPIRED"
+        if compact in {"CANCELLED", "CANCELED"}:
             return "CANCELLED"
         if compact in {"REJECTED", "REJECT", "FAILED"}:
             return "REJECTED"
         return "WORKING"
 
     def reconcile_broker(self, intent: OrderIntent, broker_order: dict[str, Any]) -> tuple[OrderIntent | None, int]:
+        broker_id = str(broker_order.get("orderId", broker_order.get("id", intent.broker_order_id)) or intent.broker_order_id)
+        details = dict(intent.details)
+        progress = dict(details.get("broker_progress") or {})
+        previous = progress.get(broker_id) or {}
+        previous_filled = int(previous.get("filled", intent.broker_filled_quantity if broker_id == intent.broker_order_id else 0))
         normalized = self._normalized_broker_status(
             str(broker_order.get("orderStatus", broker_order.get("status", "")) or "")
         )
@@ -331,46 +397,76 @@ class OrderQueue:
             absolute_filled = max(0, int(float(broker_order.get("fillQuantity", broker_order.get("filledQuantity", 0)) or 0)))
         except (TypeError, ValueError):
             absolute_filled = 0
-        delta = max(0, absolute_filled - intent.broker_filled_quantity)
+        delta = max(0, absolute_filled - previous_filled)
+        if absolute_filled < previous_filled:
+            return intent, 0  # Older broker snapshot must not rewind progress.
         broker_fee, broker_tax = self._broker_costs(broker_order)
-        filled_total = min(intent.quantity, intent.filled_quantity + delta)
-        remaining = max(0, intent.quantity - filled_total)
+        requested = details.get("requested_replace") or {}
+        logical_quantity = intent.quantity
+        replace_confirmed = False
+        if requested and broker_id == intent.broker_order_id and int(broker_order.get("quantity", 0) or 0) == int(requested.get("broker_quantity", -1)):
+            logical_quantity = int(requested["quantity"])
+            details.pop("requested_replace", None)
+            replace_confirmed = True
+        filled_total = intent.filled_quantity + delta
+        # Preserve the actual executed quantity even if it exceeds the local
+        # replacement estimate. It is money spent, never an ignorable excess.
+        logical_quantity = max(logical_quantity, filled_total)
+        remaining = max(0, logical_quantity - filled_total)
+        progress[broker_id] = {"filled": absolute_filled, "notional": self._broker_notional(broker_order), "fee": broker_fee, "tax": broker_tax, "status": normalized}
+        details["broker_progress"] = progress
         changes: dict[str, Any] = {
+            "quantity": logical_quantity,
             "filled_quantity": filled_total,
             "remaining_quantity": remaining,
             "broker_filled_quantity": absolute_filled,
             "result": normalized,
             "broker_fee_logged": broker_fee,
             "broker_tax_logged": broker_tax,
+            "broker_notional_logged": self._broker_notional(broker_order),
+            "details": details,
+            "broker_order_id": intent.broker_order_id or broker_id,
         }
-        if normalized in {"WORKING", "PARTIAL"}:
+        if replace_confirmed:
+            changes["limit_price"] = account_price(broker_order, broker_order.get("price", 0)) or float(requested["price"])
+        if normalized in {"CANCEL_PENDING", "REPLACE_PENDING"}:
+            changes["status"] = normalized
+        elif normalized in {"WORKING", "PARTIAL"}:
             changes["status"] = "PARTIAL" if absolute_filled > 0 else "WORKING"
         elif normalized == "FILLED":
             changes["working_quantity"] = 0
             changes["status"] = "WAITING_SETTLEMENT" if intent.side == "SELL" and remaining > 0 else "FILLED"
-            changes["broker_order_id"] = "" if remaining > 0 else intent.broker_order_id
-            changes["request_tag"] = "" if remaining > 0 else intent.request_tag
-            if remaining > 0:
+            reset_broker = intent.side == "SELL" and remaining > 0
+            changes["broker_order_id"] = "" if reset_broker else (intent.broker_order_id or broker_id)
+            changes["request_tag"] = "" if reset_broker else intent.request_tag
+            if reset_broker:
                 changes["attempt"] = intent.attempt + 1
                 changes["settlement_waited"] = True
                 changes["broker_filled_quantity"] = 0
                 changes["broker_fee_logged"] = 0.0
                 changes["broker_tax_logged"] = 0.0
-        elif normalized in {"CANCELLED", "REJECTED"}:
+                changes["broker_notional_logged"] = 0.0
+                changes["handed_off_at"] = 0.0
+        elif normalized in {"CANCELLED", "REJECTED", "EXPIRED"}:
             changes["working_quantity"] = 0
-            if intent.side == "SELL" and remaining > 0:
-                changes.update(
-                    status="PENDING",
-                    broker_order_id="",
-                    request_tag="",
-                    attempt=intent.attempt + 1,
-                    broker_filled_quantity=0,
-                    broker_fee_logged=0.0,
-                    broker_tax_logged=0.0,
-                    settlement_waited=True,
-                )
-            else:
-                changes["status"] = normalized
+            changes["status"] = normalized
+        if broker_id != intent.broker_order_id and intent.broker_order_id:
+            # A replaced OLD ID can still report fills; its cancellation must
+            # not terminate the NEW active ID.
+            for key in ("status", "broker_order_id", "request_tag", "attempt", "working_quantity", "broker_filled_quantity", "broker_notional_logged", "broker_fee_logged", "broker_tax_logged", "handed_off_at"):
+                changes.pop(key, None)
+        elif intent.status == "REPLACE_PENDING" and normalized in {"WORKING", "PARTIAL"} and not replace_confirmed and details.get("requested_replace"):
+            changes["status"] = "REPLACE_PENDING"
+        if intent.status in FINAL_STATUSES and changes.get("status") in {"WORKING", "PARTIAL", "CANCEL_PENDING", "REPLACE_PENDING"}:
+            changes["status"] = intent.status
+        if intent.status == "REPLACE_PENDING" and normalized in {"CANCELLED", "EXPIRED"} and details.get("requested_replace") and not any(value != intent.broker_order_id for value in intent.broker_order_ids):
+            changes["status"] = "REPLACE_PENDING"
+        other_open_ids = [value for value in intent.broker_order_ids if value != broker_id and (progress.get(value) or {}).get("status") not in FINAL_STATUSES]
+        if changes.get("status") in FINAL_STATUSES and other_open_ids:
+            changes["status"] = "REPLACE_PENDING"
+        current_status = (progress.get(intent.broker_order_id) or {}).get("status")
+        if intent.status == "REPLACE_PENDING" and not details.get("requested_replace") and not any((progress.get(value) or {}).get("status") not in FINAL_STATUSES for value in intent.broker_order_ids) and current_status in FINAL_STATUSES:
+            changes["status"] = current_status
         return self._update(intent.id, **changes), delta
 
     def release(self, order_id: str, status: str, result: str = "") -> OrderIntent | None:
@@ -388,9 +484,10 @@ class OrderQueue:
             settlement_waited=True,
         )
 
+    @_transactional
     def cancel_waiting_sell(self, order_id: str, result: str) -> OrderIntent | None:
         item = self.get(order_id)
-        if not item or item.side != "SELL" or item.status.upper() not in {"PENDING", "WAITING_SETTLEMENT"}:
+        if not item or item.side != "SELL" or item.status.upper() not in {"PENDING", "WAITING_TOKEN", "WAITING_SETTLEMENT"}:
             return None
         return self._update(
             order_id,
@@ -400,12 +497,14 @@ class OrderQueue:
             working_quantity=0,
         )
 
+    @_transactional
     def cancel_local(self, order_id: str) -> OrderIntent | None:
         item = self.get(order_id)
         if not item or item.status.upper() not in LOCALLY_CONTROLLABLE_STATUSES:
             return None
         return self._update(order_id, status="CANCELLED", result="Cancelled locally")
 
+    @_transactional
     def cancel_claimed_local(self, order_id: str, result: str) -> OrderIntent | None:
         """Cancel a worker-claimed intent only before any broker hand-off."""
         item = self.get(order_id)
@@ -413,6 +512,7 @@ class OrderQueue:
             not item
             or item.status.upper() != "SENDING"
             or item.broker_order_id
+            or item.handed_off_at
             or item.filled_quantity > 0
         ):
             return None
@@ -424,6 +524,7 @@ class OrderQueue:
             working_quantity=0,
         )
 
+    @_transactional
     def pause_local(self, order_id: str) -> OrderIntent | None:
         """Pause one unsent local intent without freeing its reserved slot."""
         item = self.get(order_id)
@@ -439,6 +540,7 @@ class OrderQueue:
             details=details,
         )
 
+    @_transactional
     def resume_local(self, order_id: str) -> OrderIntent | None:
         """Return a paused local intent to the serialized execution queue."""
         item = self.get(order_id)
@@ -458,6 +560,7 @@ class OrderQueue:
             details=details,
         )
 
+    @_transactional
     def replace_local(
         self,
         order_id: str,
@@ -478,12 +581,14 @@ class OrderQueue:
         valid, _reason, normalized = validate_quantity(quantity)
         if not valid:
             return None
+        if normalized < item.filled_quantity:
+            return None
         price = float(limit_price or 0.0)
         if item.order_type == "LO" and price <= 0:
             return None
         changes: dict[str, Any] = {
             "quantity": normalized,
-            "remaining_quantity": normalized,
+            "remaining_quantity": normalized - item.filled_quantity,
             "limit_price": price if item.order_type == "LO" else 0.0,
             "result": "Updated locally",
         }
@@ -509,6 +614,7 @@ class OrderQueue:
             **changes,
         )
 
+    @_transactional
     def mark_broker_replaced(
         self,
         order_id: str,
@@ -516,25 +622,38 @@ class OrderQueue:
         quantity: int,
         limit_price: float,
         result: str = "Updated at broker",
+        broker_order_id: str = "",
+        broker_quantity: int | None = None,
     ) -> OrderIntent | None:
         item = self.get(order_id)
         if not item:
             return None
-        filled = max(0, item.filled_quantity)
-        normalized = max(filled, int(quantity or 0))
+        details = dict(item.details)
+        if int(quantity) < item.filled_quantity:
+            return None
+        details["requested_replace"] = {"quantity": int(quantity), "broker_quantity": int(quantity if broker_quantity is None else broker_quantity), "price": float(limit_price)}
+        aliases = list(dict.fromkeys([*item.broker_order_ids, item.broker_order_id, broker_order_id]))
+        if broker_order_id and broker_order_id != item.broker_order_id:
+            progress = dict(details.get("broker_progress") or {})
+            progress.setdefault(item.broker_order_id, {"filled": item.broker_filled_quantity, "notional": item.broker_notional_logged, "fee": item.broker_fee_logged, "tax": item.broker_tax_logged})
+            details["broker_progress"] = progress
         return self._update(
             order_id,
-            quantity=normalized,
-            remaining_quantity=max(0, normalized - filled),
-            working_quantity=max(0, normalized - filled),
-            limit_price=float(limit_price or 0.0),
+            status="REPLACE_PENDING",
+            details=details,
+            broker_order_ids=[value for value in aliases if value],
+            broker_order_id=broker_order_id or item.broker_order_id,
+            broker_filled_quantity=0 if broker_order_id and broker_order_id != item.broker_order_id else item.broker_filled_quantity,
+            broker_notional_logged=0.0 if broker_order_id and broker_order_id != item.broker_order_id else item.broker_notional_logged,
+            broker_fee_logged=0.0 if broker_order_id and broker_order_id != item.broker_order_id else item.broker_fee_logged,
+            broker_tax_logged=0.0 if broker_order_id and broker_order_id != item.broker_order_id else item.broker_tax_logged,
             result=result,
         )
 
     def mark_broker_cancelled(self, order_id: str, result: str = "Cancelled at broker") -> OrderIntent | None:
         return self._update(
             order_id,
-            status="CANCELLED",
+            status="CANCEL_PENDING",
+            cancel_requested=True,
             result=result,
-            working_quantity=0,
         )

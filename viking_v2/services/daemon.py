@@ -21,6 +21,7 @@ from ..trading.portfolio import PortfolioContextBuilder, sell_quantity_for_fract
 from .runtime import RuntimeBridge
 from ..storage import AtomicJSONStore
 from ..rules.state import RuleStateStore
+from ..trading.validation import MAX_DECISION_AGE, quote_is_fresh
 from ..rules.business import (
     StaticRule,
     StaticRuleParameters,
@@ -30,6 +31,7 @@ from ..rules.business import (
 )
 from ..rules.entry_filters import apply_buy_filters
 from ..trading.state import TradeStateStore
+from ..trading.durable import AccountLease
 
 
 def merge_live_tick(
@@ -130,6 +132,7 @@ def active_runtime_symbols(
 
 def run(account_id: str | None = None) -> int:
     bridge = RuntimeBridge(account_id)
+    worker_lease = AccountLease(bridge.root, "market-worker.lock")
     logger = setup_logging(bridge.log_dir, "daemon")
     # Every daemon process begins disarmed, even if a stale file said ON.
     runtime = bridge.disarm()
@@ -139,8 +142,10 @@ def run(account_id: str | None = None) -> int:
     settings = load_settings(account_id)
     rule = StaticRule(StaticRuleParameters.from_dict(settings.rule_parameters))
     rule_state = RuleStateStore(bridge.rule_state_path)
+    rule_state.discard_buy_candidates()
     trades = TradeStateStore(bridge.trade_state_path)
     queue = OrderQueue(bridge.pending_orders_path)
+    queue.discard_unsubmitted_bot_buys("Restart: bỏ BUY tự động chưa gửi")
     portfolio_builder = PortfolioContextBuilder(
         queue, trades, rule_state, buy_fee_rate=lambda: settings.buy_fee_pct / 100.0,
     )
@@ -201,17 +206,15 @@ def run(account_id: str | None = None) -> int:
 
     connected = client.connect()
     execution_mode = "PAPER" if runtime.paper_mode else "REAL"
-    symbols = active_runtime_symbols(
-        runtime.watchlist, settings.priority_symbols,
-        trades.list_cycles(), queue.list_all(), execution_mode,
-    )
+    symbols = list(dict.fromkeys(symbol for book in (execution_mode, "REAL" if execution_mode == "PAPER" else "PAPER")
+        for symbol in active_runtime_symbols(runtime.watchlist, settings.priority_symbols, trades.list_cycles(), queue.list_all(), book)))
     if connected and symbols:
         market.start(symbols)
     logger.info("Viking V2 daemon started; BOT is OFF.")
     last_symbols: list[str] = []
     previous_runtime_status = bridge.read_status()
-    ticks: dict[str, dict] = dict(previous_runtime_status.get("ticks") or {})
-    decisions: dict[str, dict] = dict(previous_runtime_status.get("decisions") or {})
+    ticks: dict[str, dict] = {symbol: {**tick, "stale": True} for symbol, tick in (previous_runtime_status.get("ticks") or {}).items() if isinstance(tick, dict)}
+    decisions: dict[str, dict] = {}
     initial_phase = "CALENDAR_UNKNOWN" if connected else "NOT_CONFIGURED"
     publish_status(
         RuntimeStatus(
@@ -270,11 +273,10 @@ def run(account_id: str | None = None) -> int:
             execution_mode = "PAPER" if runtime.paper_mode else "REAL"
             priority_symbol_set = set(settings.priority_symbols)
             entry_symbols = set(runtime.watchlist) | priority_symbol_set
-            symbols = active_runtime_symbols(
-                runtime.watchlist, settings.priority_symbols,
-                trades.list_cycles(), queue.list_all(), execution_mode,
-            )
+            symbols = list(dict.fromkeys(symbol for book in (execution_mode, "REAL" if execution_mode == "PAPER" else "PAPER")
+                for symbol in active_runtime_symbols(runtime.watchlist, settings.priority_symbols, trades.list_cycles(), queue.list_all(), book)))
             active_symbol_set = set(symbols)
+            decisions_by_mode = {"PAPER": {}, "REAL": {}}
             decisions = {
                 symbol: value for symbol, value in decisions.items()
                 if symbol in active_symbol_set
@@ -413,263 +415,287 @@ def run(account_id: str | None = None) -> int:
                     if override_enabled
                     else rule.params.exposure.get(effective_market_state, 0.0)
                 )
-                if runtime.paper_mode:
-                    balance = paper.get_balance()
-                    positions = paper.get_positions()
-                else:
-                    balance = client.get_balance() or {}
-                    positions = client.get_positions()
-                cycle_decision_time = datetime.now(VN_TZ)
-                for symbol in symbols:
+                active_mode = "PAPER" if runtime.paper_mode else "REAL"
+                decisions_by_mode = {"PAPER": {}, "REAL": {}}
+                management_modes = {cycle.execution_mode for cycle in trades.list_cycles() if cycle.status == "OPEN"}
+                for decision_mode in (active_mode, "REAL" if active_mode == "PAPER" else "PAPER"):
+                    if decision_mode != active_mode and decision_mode not in management_modes:
+                        continue
+                    decisions = decisions_by_mode[decision_mode]
                     try:
-                        symbol_phase = symbol_phases.get(symbol, "UNKNOWN_EXCHANGE")
-                        symbol_exchange = resolved_exchanges.get(symbol, "")
-                        symbol_live = symbol_phase in {"ATO", "OPEN", "ATC"}
-                        if symbol_live:
-                            live_tick = market.get_tick(symbol)
-                            if live_tick:
-                                fallback_tick = market.frozen_tick_from_bars(
-                                    symbol, bars_by_symbol.get(symbol, [])
-                                )
-                                tick = merge_live_tick(
-                                    live_tick,
-                                    ticks.get(symbol),
-                                    fallback_tick,
-                                )
+                        if decision_mode == "PAPER":
+                            balance = paper.get_balance()
+                            positions = paper.get_positions()
                         else:
-                            tick = ticks.get(symbol)
-                            if tick:
-                                tick = {**tick, "frozen": True}
-                            else:
-                                tick = market.frozen_tick_from_bars(symbol, bars_by_symbol.get(symbol, []))
-                        if tick:
-                            ticks[symbol] = tick
+                            balance = client.get_balance() or {}
+                            positions = client.get_positions()
+                    except Exception as exc:
+                        cycle_error = f"{decision_mode} account snapshot unavailable: {exc}"
+                        continue
+                    cycle_decision_time = datetime.now(VN_TZ)
+                    for symbol in symbols:
+                        try:
+                            symbol_phase = symbol_phases.get(symbol, "UNKNOWN_EXCHANGE")
+                            symbol_exchange = resolved_exchanges.get(symbol, "")
+                            symbol_live = symbol_phase in {"ATO", "OPEN", "ATC"}
+                            tick = None
                             if symbol_live:
-                                bars_by_symbol[symbol] = merge_tick_into_daily_bars(
-                                    bars_by_symbol.get(symbol, []),
-                                    tick,
-                                )
-                            bars = bars_by_symbol.get(symbol, [])
-                            portfolio_tick = dict(tick)
-                            if bars:
-                                portfolio_tick["daily_close"] = float(bars[-1].get("close", 0.0) or 0.0)
-                                portfolio_tick["daily_bar_closed"] = bool(bars[-1].get("closed", False))
-                            context = dict(tick)
-                            context["market_phase"] = symbol_phase
-                            context["exchange"] = symbol_exchange
-                            context["bars"] = bars_by_symbol.get(symbol, [])
-                            context["vnindex_bars"] = vnindex_bars
-                            context["signal_mode"] = settings.signal_mode
-                            context["previous_market_state"] = rule_state.confirmed_market_state()
-                            context["confirmed_market_state"] = effective_market_state
-                            context["market_confirmation"] = market_confirmation
-                            context["effective_exposure"] = effective_exposure
-                            context["entry_allowed"] = symbol in entry_symbols
-                            context["priority_entry"] = symbol in priority_symbol_set
-                            context["market_override"] = {
-                                "enabled": override_enabled,
-                                "state": settings.market_phase_override,
-                                "exposure": settings.market_phase_override_exposure_pct / 100.0,
-                                "auto_state": confirmed_market_state,
-                            }
-                            candle_key = str((bars[-1] if bars else {}).get("time", "") or "")
-                            current_indicators: dict = {}
-                            if settings.signal_mode == "REALTIME" and bars:
-                                stream = "PAPER" if runtime.paper_mode else "REAL"
-                                interval = settings.realtime_indicator_interval
-                                context["indicator_interval"] = interval
-                                if interval == "TICK":
-                                    current_indicators = indicator_snapshot_at_close(
-                                        bars, float(bars[-1].get("close", 0.0) or 0.0), rule.params,
+                                live_tick = market.get_tick(symbol)
+                                if live_tick:
+                                    fallback_tick = market.frozen_tick_from_bars(
+                                        symbol, bars_by_symbol.get(symbol, [])
                                     )
-                                    context["previous_indicators"] = rule_state.observe_indicators(
-                                        symbol, stream, candle_key, current_indicators,
+                                    tick = merge_live_tick(
+                                        live_tick,
+                                        ticks.get(symbol),
+                                        fallback_tick,
+                                    )
+                            else:
+                                tick = ticks.get(symbol)
+                                if tick:
+                                    tick = {**tick, "frozen": True}
+                                else:
+                                    tick = market.frozen_tick_from_bars(symbol, bars_by_symbol.get(symbol, []))
+                            if tick and str(tick.get("symbol", symbol)).upper() != symbol:
+                                tick = None
+                            if tick and symbol_live and not quote_is_fresh(tick, symbol):
+                                ticks[symbol] = {**tick, "stale": True}
+                                rule_state.save_buy_confirmation(symbol, decision_mode, {})
+                                tick = None
+                            if not tick:
+                                decisions.pop(symbol, None)
+                            if tick:
+                                ticks[symbol] = tick
+                                if symbol_live:
+                                    bars_by_symbol[symbol] = merge_tick_into_daily_bars(
+                                        bars_by_symbol.get(symbol, []),
+                                        tick,
+                                    )
+                                bars = bars_by_symbol.get(symbol, [])
+                                portfolio_tick = dict(tick)
+                                if bars:
+                                    portfolio_tick["daily_close"] = float(bars[-1].get("close", 0.0) or 0.0)
+                                    portfolio_tick["daily_bar_closed"] = bool(bars[-1].get("closed", False))
+                                context = dict(tick)
+                                context["market_phase"] = symbol_phase
+                                context["max_observation_gap_seconds"] = MAX_DECISION_AGE
+                                context["exchange"] = symbol_exchange
+                                context["bars"] = bars_by_symbol.get(symbol, [])
+                                context["vnindex_bars"] = vnindex_bars
+                                context["signal_mode"] = settings.signal_mode
+                                context["previous_market_state"] = rule_state.confirmed_market_state()
+                                context["confirmed_market_state"] = effective_market_state
+                                context["market_confirmation"] = market_confirmation
+                                context["effective_exposure"] = effective_exposure
+                                context["entry_allowed"] = symbol in entry_symbols
+                                context["priority_entry"] = symbol in priority_symbol_set
+                                context["market_override"] = {
+                                    "enabled": override_enabled,
+                                    "state": settings.market_phase_override,
+                                    "exposure": settings.market_phase_override_exposure_pct / 100.0,
+                                    "auto_state": confirmed_market_state,
+                                }
+                                candle_key = str((bars[-1] if bars else {}).get("time", "") or "")
+                                current_indicators: dict = {}
+                                if settings.signal_mode == "REALTIME" and bars:
+                                    stream = decision_mode
+                                    interval = settings.realtime_indicator_interval
+                                    context["indicator_interval"] = interval
+                                    if interval == "TICK":
+                                        current_indicators = indicator_snapshot_at_close(
+                                            bars, float(bars[-1].get("close", 0.0) or 0.0), rule.params,
+                                        )
+                                        context["previous_indicators"] = rule_state.observe_indicators(
+                                            symbol, stream, candle_key, current_indicators,
+                                        )
+                                    else:
+                                        observed_at = cycle_decision_time
+                                        closed_bars = [
+                                            row for row in bars
+                                            if isinstance(row, dict) and bool(row.get("closed", True))
+                                        ]
+                                        baseline = indicator_snapshot_at_close(
+                                            closed_bars,
+                                            float((closed_bars[-1] if closed_bars else {}).get("close", 0.0) or 0.0),
+                                            rule.params,
+                                        )
+                                        observation = rule_state.observe_indicator_bucket(
+                                            symbol,
+                                            stream,
+                                            observed_at.date().isoformat(),
+                                            interval,
+                                            realtime_indicator_bucket(observed_at, interval),
+                                            float(bars[-1].get("close", 0.0) or 0.0),
+                                            baseline,
+                                            lambda frozen_close, source=bars: indicator_snapshot_at_close(
+                                                source, frozen_close, rule.params,
+                                            ),
+                                        )
+                                        current_indicators = dict(observation.get("current") or baseline)
+                                        context["previous_indicators"] = dict(
+                                            observation.get("previous") or current_indicators
+                                        )
+                                        accepted_bucket = int(observation.get("bucket", 0) or 0)
+                                        candle_key = f"{candle_key}|{interval}|{accepted_bucket or 'INIT'}"
+                                    context["indicator_snapshot"] = current_indicators
+                                exposure = effective_exposure
+                                portfolio = portfolio_builder.build(
+                                    symbol,
+                                    execution_mode=decision_mode,
+                                    balance=balance,
+                                    positions=positions,
+                                    tick=portfolio_tick,
+                                    exposure=exposure,
+                                    max_positions=rule.params.max_positions,
+                                    priority_symbols=settings.priority_symbols,
+                                    no_compound_enabled=rule.params.no_compound_enabled,
+                                    loss_lock_count=rule.params.loss_lock_count,
+                                    loss_lock_hours=rule.params.loss_lock_hours,
+                                    corporate_actions=settings.corporate_actions,
+                                    working_dates=working_dates,
+                                    normal_t2_reset_enabled=bool(
+                                        rule.params.normal_dynamic_enabled
+                                        and rule.params.normal_t2_reset_enabled
+                                        and rule.params.normal_policy == "AUTO"
+                                    ),
+                                    normal_arm_pct=rule.params.normal_arm_pct,
+                                )
+                                if not symbol_exchange:
+                                    decision = StrategyDecision(
+                                        "WAIT", symbol, "UNKNOWN_EXCHANGE",
+                                        market_state=effective_market_state,
+                                        details={"indicators": current_indicators if settings.signal_mode == "REALTIME" and bars else {}},
                                     )
                                 else:
-                                    observed_at = cycle_decision_time
-                                    closed_bars = [
-                                        row for row in bars
-                                        if isinstance(row, dict) and bool(row.get("closed", True))
-                                    ]
-                                    baseline = indicator_snapshot_at_close(
-                                        closed_bars,
-                                        float((closed_bars[-1] if closed_bars else {}).get("close", 0.0) or 0.0),
-                                        rule.params,
-                                    )
-                                    observation = rule_state.observe_indicator_bucket(
+                                    decision = rule.evaluate(context, portfolio)
+                                completed_daily = [
+                                    row for row in bars
+                                    if isinstance(row, dict) and bool(row.get("closed", True))
+                                ]
+                                atr14_daily_pct = average_true_range_pct(completed_daily)
+                                decision.details["atr14_daily_pct"] = atr14_daily_pct
+                                decision.details["atr14_daily_asof"] = (
+                                    (completed_daily[-1] if completed_daily else {}).get("time", "")
+                                )
+                                decision.details["dynamic_start_pct"] = (
+                                    atr14_daily_pct * rule.params.normal_atr_activation_multiplier
+                                    if rule.params.normal_atr_activation_enabled else 0.0
+                                )
+                                decision.details["dynamic_trail_pct"] = (
+                                    atr14_daily_pct * rule.params.normal_atr_multiplier
+                                    if rule.params.normal_atr_trail_enabled else 0.0
+                                )
+                                decision.details["updated_at"] = cycle_decision_time.isoformat()
+                                decision.details["execution_mode"] = decision_mode
+                                trade_id = str(portfolio.get("trade_id", "") or "")
+                                protect_state = str(
+                                    decision.details.get("normal_state", "") or ""
+                                ).upper()
+                                if trade_id and protect_state in {"DYN", "ARM", "ALERT", "REARM"}:
+                                    protect_state_row = rule_state.update_protect_metrics(
                                         symbol,
-                                        stream,
-                                        observed_at.date().isoformat(),
-                                        interval,
-                                        realtime_indicator_bucket(observed_at, interval),
-                                        float(bars[-1].get("close", 0.0) or 0.0),
-                                        baseline,
-                                        lambda frozen_close, source=bars: indicator_snapshot_at_close(
-                                            source, frozen_close, rule.params,
+                                        trade_id,
+                                        trigger_price=float(
+                                            decision.details.get("normal_trigger_price", 0.0) or 0.0
+                                        ),
+                                        atr_pct=float(
+                                            decision.details.get("normal_atr_pct", 0.0) or 0.0
+                                        ),
+                                        atr_multiplier=float(
+                                            decision.details.get("normal_atr_multiplier", 0.0) or 0.0
+                                        ),
+                                        atr_activation_multiplier=float(
+                                            decision.details.get(
+                                                "normal_atr_activation_multiplier", 0.0,
+                                            ) or 0.0
+                                        ),
+                                        retention_pct=float(
+                                            decision.details.get("normal_retention_pct", 0.0) or 0.0
+                                        ),
+                                        retention_until_pct=float(
+                                            decision.details.get(
+                                                "normal_retention_until_pct", 0.0,
+                                            ) or 0.0
                                         ),
                                     )
-                                    current_indicators = dict(observation.get("current") or baseline)
-                                    context["previous_indicators"] = dict(
-                                        observation.get("previous") or current_indicators
+                                    if protect_state_row:
+                                        decision.details["normal_trigger_price"] = float(
+                                            protect_state_row.get("normal_trigger_price", 0.0) or 0.0
+                                        )
+                                if trade_id and (
+                                    decision.reason == "NORMAL_ARMED"
+                                    or bool(decision.details.get("normal_should_arm"))
+                                ):
+                                    rule_state.arm_normal(symbol, trade_id)
+                                if trade_id and decision.reason == "PROTECT_ALERT":
+                                    alert_state = rule_state.mark_protection_alert(
+                                        symbol,
+                                        trade_id,
+                                        occurrence=str(decision.details.get("protect_occurrence", "") or ""),
+                                        trigger_peak_pct=float(
+                                            decision.details.get("normal_trigger_peak_pct", 0.0) or 0.0
+                                        ),
+                                        rearm_mfe_pct=float(
+                                            decision.details.get("normal_rearm_after_pct", 0.0) or 0.0
+                                        ),
                                     )
-                                    accepted_bucket = int(observation.get("bucket", 0) or 0)
-                                    candle_key = f"{candle_key}|{interval}|{accepted_bucket or 'INIT'}"
-                                context["indicator_snapshot"] = current_indicators
-                            exposure = effective_exposure
-                            portfolio = portfolio_builder.build(
-                                symbol,
-                                execution_mode="PAPER" if runtime.paper_mode else "REAL",
-                                balance=balance,
-                                positions=positions,
-                                tick=portfolio_tick,
-                                exposure=exposure,
-                                max_positions=rule.params.max_positions,
-                                priority_symbols=settings.priority_symbols,
-                                no_compound_enabled=rule.params.no_compound_enabled,
-                                loss_lock_count=rule.params.loss_lock_count,
-                                loss_lock_hours=rule.params.loss_lock_hours,
-                                corporate_actions=settings.corporate_actions,
-                                working_dates=working_dates,
-                                normal_t2_reset_enabled=bool(
-                                    rule.params.normal_dynamic_enabled
-                                    and rule.params.normal_t2_reset_enabled
-                                    and rule.params.normal_policy == "AUTO"
-                                ),
-                                normal_arm_pct=rule.params.normal_arm_pct,
-                            )
-                            if not symbol_exchange:
-                                decision = StrategyDecision(
-                                    "WAIT", symbol, "UNKNOWN_EXCHANGE",
-                                    market_state=effective_market_state,
-                                    details={"indicators": current_indicators if settings.signal_mode == "REALTIME" and bars else {}},
-                                )
-                            else:
-                                decision = rule.evaluate(context, portfolio)
-                            completed_daily = [
-                                row for row in bars
-                                if isinstance(row, dict) and bool(row.get("closed", True))
-                            ]
-                            atr14_daily_pct = average_true_range_pct(completed_daily)
-                            decision.details["atr14_daily_pct"] = atr14_daily_pct
-                            decision.details["atr14_daily_asof"] = (
-                                (completed_daily[-1] if completed_daily else {}).get("time", "")
-                            )
-                            decision.details["dynamic_start_pct"] = (
-                                atr14_daily_pct * rule.params.normal_atr_activation_multiplier
-                                if rule.params.normal_atr_activation_enabled else 0.0
-                            )
-                            decision.details["dynamic_trail_pct"] = (
-                                atr14_daily_pct * rule.params.normal_atr_multiplier
-                                if rule.params.normal_atr_trail_enabled else 0.0
-                            )
-                            decision.details["updated_at"] = cycle_decision_time.isoformat()
-                            trade_id = str(portfolio.get("trade_id", "") or "")
-                            protect_state = str(
-                                decision.details.get("normal_state", "") or ""
-                            ).upper()
-                            if trade_id and protect_state in {"DYN", "ARM", "ALERT", "REARM"}:
-                                protect_state_row = rule_state.update_protect_metrics(
-                                    symbol,
-                                    trade_id,
-                                    trigger_price=float(
-                                        decision.details.get("normal_trigger_price", 0.0) or 0.0
-                                    ),
-                                    atr_pct=float(
-                                        decision.details.get("normal_atr_pct", 0.0) or 0.0
-                                    ),
-                                    atr_multiplier=float(
-                                        decision.details.get("normal_atr_multiplier", 0.0) or 0.0
-                                    ),
-                                    atr_activation_multiplier=float(
-                                        decision.details.get(
-                                            "normal_atr_activation_multiplier", 0.0,
-                                        ) or 0.0
-                                    ),
-                                    retention_pct=float(
-                                        decision.details.get("normal_retention_pct", 0.0) or 0.0
-                                    ),
-                                    retention_until_pct=float(
-                                        decision.details.get(
-                                            "normal_retention_until_pct", 0.0,
-                                        ) or 0.0
-                                    ),
-                                )
-                                if protect_state_row:
-                                    decision.details["normal_trigger_price"] = float(
-                                        protect_state_row.get("normal_trigger_price", 0.0) or 0.0
+                                    decision.details["normal_event_count"] = int(
+                                        alert_state.get("normal_alert_count", 0) or 0
                                     )
-                            if trade_id and (
-                                decision.reason == "NORMAL_ARMED"
-                                or bool(decision.details.get("normal_should_arm"))
-                            ):
-                                rule_state.arm_normal(symbol, trade_id)
-                            if trade_id and decision.reason == "PROTECT_ALERT":
-                                alert_state = rule_state.mark_protection_alert(
-                                    symbol,
-                                    trade_id,
-                                    occurrence=str(decision.details.get("protect_occurrence", "") or ""),
-                                    trigger_peak_pct=float(
-                                        decision.details.get("normal_trigger_peak_pct", 0.0) or 0.0
-                                    ),
-                                    rearm_mfe_pct=float(
-                                        decision.details.get("normal_rearm_after_pct", 0.0) or 0.0
-                                    ),
+                                    logger.info(
+                                        "PROTECT ALERT symbol=%s trade=%s price=%.4f mfe=%.4f peak=%.4f "
+                                        "effective_trail=%.4f atr=%.4f start_multiplier=%.4f "
+                                        "trail_multiplier=%.4f "
+                                        "protect=%.4f sell=%.2f hypothetical_qty=%d "
+                                        "occurrence=%s",
+                                        symbol,
+                                        trade_id,
+                                        float(decision.details.get("current_price", 0.0) or 0.0),
+                                        float(decision.details.get("normal_mfe_pct", 0.0) or 0.0),
+                                        float(decision.details.get("normal_peak_price", 0.0) or 0.0),
+                                        float(decision.details.get("normal_effective_trail_pct", 0.0) or 0.0),
+                                        float(decision.details.get("normal_atr_pct", 0.0) or 0.0),
+                                        float(
+                                            decision.details.get(
+                                                "normal_atr_activation_multiplier", 0.0,
+                                            ) or 0.0
+                                        ),
+                                        float(decision.details.get("normal_atr_multiplier", 0.0) or 0.0),
+                                        float(decision.details.get("normal_trigger_price", 0.0) or 0.0),
+                                        float(decision.details.get("sell_share_pct", 0.0) or 0.0),
+                                        sell_quantity_for_fraction(
+                                            int(portfolio.get("position_quantity", 0) or 0),
+                                            float(decision.details.get("sell_share_pct", 0.0) or 0.0) / 100.0,
+                                        ),
+                                        str(decision.details.get("protect_occurrence", "") or ""),
+                                    )
+                                stream = decision_mode
+                                next_filters, decision = apply_buy_filters(
+                                    rule, decision, context, portfolio,
+                                    rule_state.buy_confirmation(symbol, stream),
+                                    observed_at=cycle_decision_time, exchange=symbol_exchange,
+                                    working_dates=working_dates, holidays=settings.trading_holidays,
                                 )
-                                decision.details["normal_event_count"] = int(
-                                    alert_state.get("normal_alert_count", 0) or 0
+                                rule_state.save_buy_confirmation(symbol, stream, next_filters)
+                                first_seen = rule_state.observe_signal_time(
+                                    symbol, stream, decision.signal, candle_key,
+                                    cycle_decision_time.isoformat(),
                                 )
-                                logger.info(
-                                    "PROTECT ALERT symbol=%s trade=%s price=%.4f mfe=%.4f peak=%.4f "
-                                    "effective_trail=%.4f atr=%.4f start_multiplier=%.4f "
-                                    "trail_multiplier=%.4f "
-                                    "protect=%.4f sell=%.2f hypothetical_qty=%d "
-                                    "occurrence=%s",
-                                    symbol,
-                                    trade_id,
-                                    float(decision.details.get("current_price", 0.0) or 0.0),
-                                    float(decision.details.get("normal_mfe_pct", 0.0) or 0.0),
-                                    float(decision.details.get("normal_peak_price", 0.0) or 0.0),
-                                    float(decision.details.get("normal_effective_trail_pct", 0.0) or 0.0),
-                                    float(decision.details.get("normal_atr_pct", 0.0) or 0.0),
-                                    float(
-                                        decision.details.get(
-                                            "normal_atr_activation_multiplier", 0.0,
-                                        ) or 0.0
-                                    ),
-                                    float(decision.details.get("normal_atr_multiplier", 0.0) or 0.0),
-                                    float(decision.details.get("normal_trigger_price", 0.0) or 0.0),
-                                    float(decision.details.get("sell_share_pct", 0.0) or 0.0),
-                                    sell_quantity_for_fraction(
-                                        int(portfolio.get("position_quantity", 0) or 0),
-                                        float(decision.details.get("sell_share_pct", 0.0) or 0.0) / 100.0,
-                                    ),
-                                    str(decision.details.get("protect_occurrence", "") or ""),
-                                )
-                            stream = "PAPER" if runtime.paper_mode else "REAL"
-                            next_filters, decision = apply_buy_filters(
-                                rule, decision, context, portfolio,
-                                rule_state.buy_confirmation(symbol, stream),
-                                observed_at=cycle_decision_time, exchange=symbol_exchange,
-                                working_dates=working_dates, holidays=settings.trading_holidays,
-                            )
-                            rule_state.save_buy_confirmation(symbol, stream, next_filters)
-                            first_seen = rule_state.observe_signal_time(
-                                symbol, stream, decision.signal, candle_key,
-                                cycle_decision_time.isoformat(),
-                            )
-                            if first_seen:
-                                decision.details.setdefault("signal_time", first_seen)
-                                decision.details["signal_cycle"] = (
-                                    f"{candle_key}|{first_seen}"
-                                )
-                            decision.details["candle_key"] = candle_key
-                            decision.details["order_budget"] = portfolio.get("order_budget", 0.0)
-                            decision.details["trade_id"] = portfolio.get("trade_id", "")
-                            decision.details["position_quantity"] = portfolio.get("position_quantity", 0)
-                            decisions[symbol] = decision.to_dict()
-                    except Exception as exc:
-                        cycle_error = str(exc)
-                        logger.warning("Market update %s failed: %s", symbol, exc)
+                                if first_seen:
+                                    decision.details.setdefault("signal_time", first_seen)
+                                    decision.details["signal_cycle"] = (
+                                        f"{candle_key}|{first_seen}"
+                                    )
+                                decision.details["candle_key"] = candle_key
+                                decision.details["order_budget"] = portfolio.get("order_budget", 0.0)
+                                decision.details["trade_id"] = portfolio.get("trade_id", "")
+                                decision.details["position_quantity"] = portfolio.get("position_quantity", 0)
+                                decisions[symbol] = decision.to_dict()
+                        except Exception as exc:
+                            decisions.pop(symbol, None)
+                            cycle_error = str(exc)
+                            logger.warning("Market update %s failed: %s", symbol, exc)
+                decisions = decisions_by_mode[active_mode]
             publish_status(
                 RuntimeStatus(
                     heartbeat_at=time.time(),
@@ -679,6 +705,7 @@ def run(account_id: str | None = None) -> int:
                     active_symbols=symbols,
                     ticks=ticks,
                     decisions=decisions,
+                    decisions_by_mode=decisions_by_mode,
                     api_health=market.health(),
                     error=cycle_error,
                     working_dates=working_dates,
@@ -711,6 +738,7 @@ def run(account_id: str | None = None) -> int:
             )
         )
         logger.info("Viking V2 daemon stopped.")
+        worker_lease.close()
     return exit_code
 
 

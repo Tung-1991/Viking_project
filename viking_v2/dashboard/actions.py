@@ -34,6 +34,7 @@ from ..services.signal_coordinator import (
 from ..storage import CSVOrderJournal
 from ..trading.market import VN_TZ, market_phase, market_session_clock, normalize_exchange
 from ..trading.portfolio import sell_quantity_for_fraction
+from ..trading.validation import decision_is_fresh, quote_is_fresh
 from .view import (
     COL_GRAY, COL_GREEN, COL_MUTED, COL_PREVIEW_TEXT, COL_RED, COL_SURFACE_2,
     COL_TEXT, COL_TITLE, COL_WARN, _cash, _compact_vnd, _display_price, _equity, _number,
@@ -1513,6 +1514,11 @@ class DashboardActionsMixin:
             entry_budget=float(entry_checks.get("order_budget", 0.0) or 0.0),
         )
         phase = self._current_market_phase()
+        if active_cycle:
+            intent.loan_package_id, intent.deal_id = active_cycle.loan_package_id, active_cycle.deal_id
+        if side == "BUY":
+            tick = self._shared_tick(symbol) or {}
+            intent.details["reservation_price"] = limit_price or _price_unit(tick.get("ask", tick.get("price", 0)) or 0)
         result = self.execution.submit(intent, phase=phase, process_immediately=False)
         if symbol not in self.settings.watchlist:
             self.settings.watchlist.append(symbol)
@@ -1522,7 +1528,7 @@ class DashboardActionsMixin:
         message = f"{mode} {side} {quantity} {symbol} {kind}: {result.status}"
         self._log(message)
         if result.status == "WAITING_TOKEN":
-            messagebox.showwarning("Trading token", "Lệnh đã cache 24 giờ. Nhập OTP trong Advanced để tiếp tục.", parent=self)
+            messagebox.showwarning("Trading token", "Lệnh chưa gửi; chờ OTP và chỉ có hiệu lực trong phiên đủ điều kiện đầu tiên.", parent=self)
         elif result.status in {"REJECTED", "FAILED"}:
             messagebox.showerror("Order", result.result or result.status, parent=self)
         self._refresh_local()
@@ -1555,8 +1561,13 @@ class DashboardActionsMixin:
                 local_id = str(action.get("local_id", "") or "")
                 broker_order_id = str(action.get("broker_order_id", "") or "")
                 if broker_order_id and action.get("mode") == "REAL":
+                    current_item = self.queue.get(local_id) if local_id else None
+                    if current_item and current_item.status in {"CANCEL_PENDING", "REPLACE_PENDING", "UNKNOWN"}:
+                        continue
+                    if local_id:
+                        self.queue.mark_broker_cancelled(local_id, "Yêu cầu hủy đang gửi DNSE")
                     result = self.real.cancel_order(broker_order_id)
-                    if result.ok and local_id:
+                    if (result.ok or result.status == "UNKNOWN") and local_id:
                         self.queue.mark_broker_cancelled(local_id, result.message or "USER_CANCELLED_DNSE")
                     messages.append(
                         f"DNSE #{broker_order_id}: {result.status} {result.message or result.error}".strip()
@@ -1668,7 +1679,7 @@ class DashboardActionsMixin:
         if not item and not action.get("broker_order_id"):
             return
         order_type = item.order_type if item else str(action.get("order_type", "LO") or "LO")
-        quantity_value = item.quantity if item else int(action.get("quantity", 0) or 0)
+        quantity_value = (item.remaining_quantity if item.broker_order_id else item.quantity) if item else max(0, int(action.get("quantity", 0) or 0) - int(action.get("filled_quantity", 0) or 0))
         price_value = item.limit_price if item else float(action.get("price", 0.0) or 0.0)
         local_editable = bool(item and item.status.upper() in {"PENDING", "WAITING_TOKEN", "WAITING_SETTLEMENT", "PAUSED"})
         selected = set(item.em_modes if item else [])
@@ -1884,11 +1895,18 @@ class DashboardActionsMixin:
                 status.configure(text="Đang gửi yêu cầu sửa DNSE…", text_color=COL_WARN)
 
                 def replace_broker() -> None:
+                    current_item = self.queue.get(local_id) if local_id else None
+                    if current_item and current_item.status in {"CANCEL_PENDING", "REPLACE_PENDING", "UNKNOWN"}:
+                        return
+                    logical_quantity = (current_item.filled_quantity if current_item else 0) + quantity
+                    if local_id:
+                        self.queue.mark_broker_replaced(local_id, quantity=logical_quantity, broker_quantity=quantity, limit_price=price, result="Yêu cầu sửa đang gửi DNSE")
                     result = self.real.replace_order(broker_order_id, price=price, quantity=quantity)
-                    if result.ok and local_id:
+                    if (result.ok or result.status == "UNKNOWN") and local_id:
                         self.queue.mark_broker_replaced(
-                            local_id, quantity=quantity, limit_price=price,
+                            local_id, quantity=logical_quantity, broker_quantity=quantity, limit_price=price,
                             result=result.message or "USER_REPLACED_DNSE",
+                            broker_order_id=result.order_id,
                         )
 
                     def finish() -> None:
@@ -1960,7 +1978,8 @@ class DashboardActionsMixin:
         trade_id = str(action.get("trade_id", "") or "")
         cycle = self.trade_state.get(trade_id) if trade_id else None
         if not cycle:
-            cycle = self.trade_state.active_for(symbol, mode)
+            package_id = str((action.get("position") or {}).get("loanPackageId", "") or "")
+            cycle = (self.trade_state.active_for(symbol, mode, package_id) if package_id else self.trade_state.active_for(symbol, mode))
         row = action.get("position") if isinstance(action.get("position"), dict) else {}
         quantity = int(_number(row.get("openQuantity", row.get("quantity", 0))))
         avg_price = _price_unit(row.get("costPrice", row.get("averagePrice", 0)))
@@ -2218,6 +2237,8 @@ class DashboardActionsMixin:
                     symbol, mode, source="EXTERNAL_DNSE", trade_id=uuid.uuid4().hex,
                     em_modes=sorted(selected), sl_mode=sl_mode, sl_value=sl_value,
                     tp_mode=tp_mode, tp_value=tp_value,
+                    loan_package_id=str(row.get("loanPackageId", "") or ""),
+                    deal_id=str(row.get("id", row.get("positionId", "")) or ""),
                 )
                 self.trade_state.record_buy_fill(cycle.id, quantity, avg_price, 0.0)
                 if symbol not in self.settings.watchlist:
@@ -2579,10 +2600,19 @@ class DashboardActionsMixin:
         return bot_symbols, operator_symbols
 
     def _consume_bot_decisions(self, status: dict[str, Any], daemon_status: str) -> None:
+        runtime = self.bridge.read_config()
+        active_mode = "PAPER" if runtime.paper_mode else "REAL"
+        books = status.get("decisions_by_mode") or {}
+        DashboardActionsMixin._consume_book_decisions(self, status, daemon_status, active_mode, False)
+        other_mode = "REAL" if active_mode == "PAPER" else "PAPER"
+        if isinstance(books.get(other_mode), dict) and books[other_mode]:
+            other_status = {**status, "decisions": books[other_mode]}
+            DashboardActionsMixin._consume_book_decisions(self, other_status, daemon_status, other_mode, True)
+
+    def _consume_book_decisions(self, status: dict[str, Any], daemon_status: str, mode: str, management_only: bool) -> None:
         if daemon_status != "RUNNING":
             return
         runtime = self.bridge.read_config()
-        mode = "PAPER" if runtime.paper_mode else "REAL"
         protect_policy = str(
             (self.settings.rule_parameters or {}).get("normal_policy", "AUTO") or "AUTO"
         ).upper()
@@ -2614,7 +2644,7 @@ class DashboardActionsMixin:
             self._protect_alert_broker_orders = current_ids
         bot_enabled = bool(status.get("bot_enabled", False))
         entry_pause = self.rule_state.entry_pause(mode)
-        buy_enabled = bot_enabled and not bool(entry_pause.get("active", False))
+        buy_enabled = bot_enabled and not management_only and not bool(entry_pause.get("active", False))
         buy_block_reason = "MANUAL_SELL_PAUSE" if entry_pause.get("active") else "BOT_OFF"
         pause_until = float(entry_pause.get("until", 0.0) or 0.0)
         if pause_until > float(getattr(self, "_entry_pause_logged_until", 0.0) or 0.0):
@@ -2629,6 +2659,10 @@ class DashboardActionsMixin:
         decisions: dict[str, StrategyDecision] = {}
         for symbol, raw in raw_decisions.items():
             if not isinstance(raw, dict):
+                continue
+            if not decision_is_fresh(raw, symbol, mode):
+                continue
+            if management_only and str(raw.get("scope", "ENTRY")) != "POSITION_MANAGEMENT":
                 continue
             try:
                 decisions[str(symbol).upper()] = StrategyDecision.from_dict(raw)
@@ -2762,15 +2796,16 @@ class DashboardActionsMixin:
     def _latest_sell_decision(self, symbol: str, execution_mode: str) -> dict[str, Any] | None:
         runtime = self.bridge.read_config()
         active_mode = "PAPER" if runtime.paper_mode else "REAL"
-        if active_mode != str(execution_mode or "").upper():
-            return None
         status = self.bridge.read_status()
         heartbeat = float(status.get("heartbeat_at", 0.0) or 0.0)
         if heartbeat <= 0 or time.time() - heartbeat > max(6.0, config.HEARTBEAT_SECONDS * 3):
             return None
-        decisions = status.get("decisions") if isinstance(status.get("decisions"), dict) else {}
+        books = status.get("decisions_by_mode") or {}
+        decisions = books.get(str(execution_mode).upper(), {})
+        if not decisions and active_mode == str(execution_mode).upper():
+            decisions = status.get("decisions") if isinstance(status.get("decisions"), dict) else {}
         value = decisions.get(str(symbol or "").upper())
-        return value if isinstance(value, dict) else None
+        return value if decision_is_fresh(value, symbol, execution_mode) else None
 
     def _notify_corporate_action(
         self,
@@ -2979,6 +3014,7 @@ class DashboardActionsMixin:
 
         def work() -> list[tuple[str, OrderIntent, Any]]:
             self.execution.reconcile_working("REAL")
+            self.execution.reconcile_working("PAPER")
             completed: list[tuple[str, OrderIntent, Any]] = []
             runtime = self.bridge.read_config()
             for selected_mode in ("PAPER", "REAL"):
@@ -3101,13 +3137,13 @@ class DashboardActionsMixin:
                         active_warning_keys.add(key)
                         if key not in warning_keys:
                             self._log(
-                                f"[DNSE] {item.get('symbol', '')} cần đối soát SELL ngoài app: "
+                                f"[DNSE] {item.get('symbol', '')} cần đối soát Deal ngoài app: "
                                 f"{item.get('reason', '')}",
                                 "bot",
                             )
                     elif item.get("status") == "RECONCILED":
                         self._log(
-                            f"[DNSE] Đã đồng bộ SELL ngoài app {item.get('symbol', '')} "
+                            f"[DNSE] Đã đồng bộ giao dịch ngoài app {item.get('symbol', '')} "
                             f"{int(item.get('quantity', 0) or 0)} CP; còn "
                             f"{int(item.get('remaining_quantity', 0) or 0)} CP.",
                             "bot",

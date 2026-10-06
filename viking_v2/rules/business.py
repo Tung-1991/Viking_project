@@ -527,6 +527,7 @@ def advance_buy_confirmation(
     params: StaticRuleParameters,
     working_dates: Iterable[str] | None = None,
     holidays: Iterable[str] | None = None,
+    max_observation_gap_seconds: float | None = None,
 ) -> tuple[dict[str, Any], str, dict[str, Any]]:
     """Advance one BUY candidate using only active minutes of its exchange."""
     if not params.buy_confirmation_enabled:
@@ -537,6 +538,11 @@ def advance_buy_confirmation(
     if not market:
         return {}, "INVALID", {"reason": "UNKNOWN_EXCHANGE"}
     current = dict(state or {})
+    if current.get("updated_at") and max_observation_gap_seconds is not None:
+        previous_observation = datetime.fromisoformat(str(current["updated_at"]))
+        if active_trading_minutes(previous_observation, observed_at, market,
+                                  working_dates=working_dates, holidays=holidays) * 60 > max_observation_gap_seconds:
+            current = {}  # Unobserved downtime is not confirmation time.
     rule_signature = (
         f"{params.buy_confirmation_minutes}:"
         f"{int(params.buy_confirmation_require_ema)}:"

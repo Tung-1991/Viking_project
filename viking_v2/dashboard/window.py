@@ -22,6 +22,7 @@ from ..storage import DailyFeeTracker, JSONLineJournal, SignalLog
 from ..trading.execution import ExecutionService
 from ..trading.orders import OrderQueue
 from ..trading.state import TradeStateStore
+from ..trading.durable import AccountLease
 from .info import InfoPopup
 from .windows import DataTablePopup, HistoryPopup, install_fast_scroll
 
@@ -37,6 +38,7 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         self.running = True
         self.settings: AppSettings = load_settings(self.account_id)
         self.bridge = RuntimeBridge(self.account_id)
+        self._account_lease = AccountLease(self.bridge.root)
         self.bridge.disarm(self.settings.watchlist, self.settings.paper_mode)
         self.logger = setup_logging(self.bridge.log_dir, "ui")
         self.real = DNSEClient(account_no=None if self.account_id == "PAPER" else self.account_id)
@@ -56,6 +58,8 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
             ],
         )
         self.queue = OrderQueue(self.bridge.pending_orders_path)
+        self.queue.recover_claims()
+        self.queue.discard_unsubmitted_bot_buys("Restart: bỏ BUY tự động chưa gửi")
         self.trade_state = TradeStateStore(self.bridge.trade_state_path)
         self.rule_state = RuleStateStore(self.bridge.rule_state_path)
         self.signal_log = SignalLog(self.bridge.signal_log_path)
@@ -74,6 +78,10 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
                 float(
                     self.settings.manual_sell_pause_minutes or 0.0
                 ) * 60.0,
+            ),
+            bot_buy_allowed_provider=lambda mode: (
+                self.bridge.read_config().bot_enabled
+                and mode == ("PAPER" if self.bridge.read_config().paper_mode else "REAL")
             ),
         )
         self.daily_fees = DailyFeeTracker(

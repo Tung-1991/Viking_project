@@ -10,7 +10,7 @@ def test_broker_cancel_is_distinct_from_local_cancel(tmp_path):
     queue._update(intent.id, status="WORKING", broker_order_id="88")
     assert queue.cancel_local(intent.id) is None
     cancelled = queue.mark_broker_cancelled(intent.id, "USER_CANCELLED_DNSE")
-    assert cancelled.status == "CANCELLED"
+    assert cancelled.status == "CANCEL_PENDING"
     assert cancelled.result == "USER_CANCELLED_DNSE"
 
 

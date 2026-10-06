@@ -269,6 +269,8 @@ class JSONLineJournal:
 
     def append(self, value: dict[str, Any]) -> None:
         with self._lock:
+            if value.get("event_id") and any(row.get("event_id") == value["event_id"] for row in self.read_all(limit=1000)):
+                return
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8", newline="\n") as handle:
                 handle.write(json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -395,13 +397,14 @@ class CSVOrderJournal:
         "timestamp", "execution_mode", "cache_id", "broker_order_id", "trade_id",
         "symbol", "side", "action", "order_type", "limit_price", "quantity",
         "filled_quantity", "remaining_quantity", "source", "queue_status",
-        "broker_status", "fee", "tax", "message", "error",
+        "broker_status", "fee", "tax", "message", "error", "event_id",
     )
     RECENT_CSV_ROWS = 1000
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self._lock = threading.RLock()
+        SignalLog._ensure_schema(self)
         self.excel_archive = MonthlyExcelArchive(self.path, self.FIELDS, "LỆNH")
         self._recent_count: int | None = None
 
@@ -411,6 +414,7 @@ class CSVOrderJournal:
         raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
         body = raw.get("data") if isinstance(raw.get("data"), dict) else raw
         row = {
+            "event_id": event.get("event_id", ""),
             "timestamp": event.get("ts", ""),
             "execution_mode": intent.get("execution_mode", ""),
             "cache_id": intent.get("id", ""),
@@ -433,6 +437,8 @@ class CSVOrderJournal:
             "error": result.get("error", ""),
         }
         with self._lock:
+            if row["event_id"] and any(old.get("event_id") == row["event_id"] for old in self.read_all(limit=1000)):
+                return
             if self._recent_count is None:
                 self._recent_count = self.excel_archive.bootstrap_csv(
                     self.path, self.RECENT_CSV_ROWS,
@@ -544,8 +550,11 @@ class DailyFeeTracker:
             if timestamp <= start or timestamp > end:
                 continue
             try:
-                fee = abs(float(row.get("fee", 0.0) or 0.0))
-                tax = abs(float(row.get("tax", 0.0) or 0.0))
+                signed = str(row.get("message", "")) in {"BROKER_COST_RECONCILED", "BROKER_FILL_RECONCILED"}
+                fee = float(row.get("fee", 0.0) or 0.0)
+                tax = float(row.get("tax", 0.0) or 0.0)
+                if not signed:
+                    fee, tax = abs(fee), abs(tax)
             except (TypeError, ValueError):
                 continue
             fees += fee + tax

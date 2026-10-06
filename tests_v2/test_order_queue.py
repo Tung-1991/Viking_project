@@ -159,7 +159,7 @@ def test_bot_off_blocks_cached_bot_buy_but_not_manual_buy_or_sell(tmp_path):
     )
 
     assert {item.id for item in due} == {manual_buy.id, sell.id}
-    assert queue.get(bot_buy.id).status == "PENDING"
+    assert queue.get(bot_buy.id).status == "CANCELLED"
 
 
 def test_cached_order_can_be_paused_resumed_edited_and_cancelled(tmp_path):
