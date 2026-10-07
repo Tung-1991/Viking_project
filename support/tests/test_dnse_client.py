@@ -62,6 +62,21 @@ def test_signature_matches_hmac_contract():
     assert 'nonce="abc"' in signature
 
 
+@pytest.mark.parametrize("otp_type", ["email_otp", "smart_otp"])
+def test_email_and_smart_otp_use_selected_type_and_create_trading_token(otp_type):
+    session = Session([Response(data={"tradingToken": "fake-otp-token"})])
+    value = client(session)
+    value.otp_type = otp_type
+    now = value._now()
+    result = value.verify_otp("fake-code")
+    assert result.ok and result.status == "TOKEN_READY"
+    method, url, kwargs = session.calls[-1]
+    assert method == "POST" and url.endswith("/registration/trading-token")
+    assert kwargs["json"] == {"otpType": otp_type, "passcode": "fake-code"}
+    assert value.trading_token == "fake-otp-token"
+    assert now + 8 * 60 * 60 <= value.trading_token_expires_at <= value._now() + 8 * 60 * 60
+
+
 @pytest.mark.parametrize(
     ("method", "expected_path", "expected_params"),
     [

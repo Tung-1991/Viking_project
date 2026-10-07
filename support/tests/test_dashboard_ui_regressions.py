@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
+
+import pytest
 
 from viking_v2.dashboard.actions import DashboardActionsMixin
 from viking_v2.dashboard.panels import (
@@ -14,7 +17,9 @@ from viking_v2.dashboard.tables import (
     RUNNING_COLUMNS,
     RUNNING_HEADERS,
     RUNNING_WIDTHS,
+    VISIBLE_LOG_LINE_LIMIT,
 )
+from viking_v2.models import OrderIntent, TradeCycle
 from viking_v2.dashboard.windows import (
     FONT_KEY,
     FONT_MONO_VALUE,
@@ -260,6 +265,227 @@ def test_running_headers_fit_their_rendered_font(ui_root) -> None:
             assert int(tree.column(column, "width")) >= required
     finally:
         tree.destroy()
+
+
+def _running_subject(tree, mode, items=(), positions=(), broker_orders=(), cycles=()):
+    subject = DashboardTablesMixin()
+    subject.trees = {mode: tree}
+    subject._running_row_actions = {}
+    subject.queue = SimpleNamespace(list_all=lambda: list(items))
+    subject.snapshots = {mode: ({}, list(positions), list(broker_orders))}
+    subject.settings = SimpleNamespace(rule_parameters={})
+    subject.trade_state = SimpleNamespace(list_cycles=lambda: list(cycles))
+    subject.rule_state = SimpleNamespace(position_metrics=lambda *_: {})
+    subject._cached_fee_rate = lambda *_: None
+    subject._preview_buy_fee = lambda *_: None
+    subject._row_time = lambda value: str(value)
+    subject._sync_cancel_button = lambda: None
+    return subject
+
+
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+def test_unchanged_rows_do_not_rebuild_table_or_reset_operator_state(ui_root, monkeypatch, mode):
+    from tkinter import ttk
+
+    tree = ttk.Treeview(ui_root, show="headings")
+    items = [OrderIntent("keep-row", "FPT", "SELL", 100, "LO", limit_price=100,
+                         execution_mode=mode, action="CLOSE")]
+    subject = _running_subject(tree, mode, items)
+    try:
+        subject._render_tables({})
+        iid, = tree.get_children()
+        tree.selection_set(iid)
+        tree.focus(iid)
+        ui_root.update_idletasks()
+        viewport = tree.yview()
+        calls = []
+        for name in ("insert", "delete", "move", "selection_set", "yview_moveto"):
+            monkeypatch.setattr(tree, name, lambda *args, operation=name, **kwargs: calls.append(operation))
+        real_item = tree.item
+
+        def item(row, option=None, **options):
+            if options:
+                calls.append("item_update")
+            return real_item(row, option, **options)
+
+        monkeypatch.setattr(tree, "item", item)
+        monkeypatch.setattr(subject, "_configure_tree", lambda *_: calls.append("configure"))
+        subject._render_tables({})
+        assert calls == []
+        assert tuple(tree.selection()) == (iid,)
+        assert tree.focus() == iid and tree.yview() == viewport
+    finally:
+        tree.destroy()
+
+
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+def test_row_updates_partial_fills_and_action_metadata_without_reinsert(ui_root, monkeypatch, mode):
+    from tkinter import ttk
+
+    tree = ttk.Treeview(ui_root, show="headings")
+    intent = OrderIntent("partial-row", "FPT", "BUY", 10000, "LO", limit_price=100,
+                         execution_mode=mode, status="WORKING", broker_order_id="fake-id")
+    subject = _running_subject(tree, mode, [intent])
+    try:
+        subject._render_tables({})
+        iid = f"LOCAL:{intent.id}"
+        tree.selection_set(iid)
+        monkeypatch.setattr(tree, "insert", lambda *args, **kwargs: pytest.fail("reinserted existing order"))
+        monkeypatch.setattr(tree, "delete", lambda *args: pytest.fail("deleted existing order"))
+        intent.status = "PARTIAL"
+        intent.filled_quantity = 8000
+        subject._render_tables({})
+        assert tuple(tree.item(iid, "tags")) == ("partial_order",)
+        assert "Khớp 8000/10000" in tree.item(iid, "values")[6]
+        assert subject._running_row_actions[mode][iid]["status"] == "PARTIAL"
+        # Same rounded display price must not leave stale right-click action data.
+        intent.limit_price = 100.000001
+        subject._render_tables({})
+        assert subject._running_row_actions[mode][iid]["price"] == 100.000001
+        intent.status = "CANCEL_PENDING"
+        subject._render_tables({})
+        action = subject._running_row_actions[mode][iid]
+        assert not action["editable"] and not action["cancellable"]
+        assert tuple(tree.selection()) == (iid,)
+    finally:
+        tree.destroy()
+
+
+def test_finished_order_is_removed_but_other_rows_and_selection_survive(ui_root):
+    from tkinter import ttk
+
+    tree = ttk.Treeview(ui_root, show="headings")
+    first = OrderIntent("first", "FPT", "SELL", 100, "LO", execution_mode="REAL", action="CLOSE")
+    second = OrderIntent("second", "VIX", "SELL", 100, "LO", execution_mode="REAL", action="CLOSE")
+    items = [first, second]
+    subject = _running_subject(tree, "REAL", items)
+    try:
+        subject._render_tables({})
+        tree.selection_set("LOCAL:first", "LOCAL:second")
+        first.status = "FILLED"
+        subject._render_tables({})
+        assert tree.get_children() == ("LOCAL:second",)
+        assert tree.selection() == ("LOCAL:second",)
+        assert set(subject._running_row_actions["REAL"]) == {"LOCAL:second"}
+        second.status = "CANCELLED"
+        subject._render_tables({})
+        assert not tree.get_children() and not tree.selection()
+        assert subject._running_row_actions["REAL"] == {}
+    finally:
+        tree.destroy()
+
+
+def test_table_order_matches_current_queue_even_when_rows_are_reused(ui_root):
+    from tkinter import ttk
+
+    tree = ttk.Treeview(ui_root, show="headings")
+    items = [OrderIntent(name, "FPT", "SELL", 100, "LO", execution_mode="REAL", action="CLOSE")
+             for name in ("first", "second", "third")]
+    subject = _running_subject(tree, "REAL", items)
+    try:
+        subject._render_tables({})
+        assert tree.get_children() == ("LOCAL:third", "LOCAL:second", "LOCAL:first")
+        items[:] = [items[2], items[0], items[1]]
+        subject._render_tables({})
+        assert tree.get_children() == ("LOCAL:second", "LOCAL:first", "LOCAL:third")
+    finally:
+        tree.destroy()
+
+
+def test_display_cycle_snapshot_is_read_once_and_respects_mode_package_and_next_refresh(ui_root):
+    from tkinter import ttk
+
+    real_tree = ttk.Treeview(ui_root, show="headings")
+    paper_tree = ttk.Treeview(ui_root, show="headings")
+    cycles = [
+        TradeCycle("closed", "FPT", "REAL", status="CLOSED"),
+        TradeCycle("real-1", "FPT", "REAL", loan_package_id="1", sl_mode="PERCENT", sl_value=-3),
+        TradeCycle("real-2", "FPT", "REAL", loan_package_id="2", sl_mode="PERCENT", sl_value=-8),
+        TradeCycle("paper-1", "FPT", "PAPER", sl_mode="PERCENT", sl_value=-2),
+    ]
+    position = {"symbol": "FPT", "openQuantity": 100, "tradeQuantity": 100, "costPrice": 100}
+    subject = _running_subject(real_tree, "REAL", positions=[{**position, "loanPackageId": "2"}])
+    subject.trees["PAPER"] = paper_tree
+    subject.snapshots["PAPER"] = ({}, [position], [])
+    reads = []
+
+    def list_cycles():
+        reads.append(1)
+        return cycles
+
+    subject.trade_state.list_cycles = list_cycles
+    try:
+        subject._render_tables({})
+        assert len(reads) == 1
+        real_id, = real_tree.get_children()
+        paper_id, = paper_tree.get_children()
+        assert subject._running_row_actions["REAL"][real_id]["trade_id"] == "real-2"
+        assert subject._running_row_actions["PAPER"][paper_id]["trade_id"] == "paper-1"
+        assert "(-8%)" in real_tree.item(real_id, "values")[3]
+        assert "(-2%)" in paper_tree.item(paper_id, "values")[3]
+        cycles[2] = TradeCycle("real-2", "FPT", "REAL", loan_package_id="2", sl_enabled=False)
+        subject._render_tables({})
+        assert len(reads) == 2
+        assert "SL OFF" in real_tree.item(real_id, "values")[3]
+    finally:
+        real_tree.destroy()
+        paper_tree.destroy()
+
+
+def test_empty_tables_do_not_decode_historical_cycles(ui_root):
+    from tkinter import ttk
+
+    tree = ttk.Treeview(ui_root, show="headings")
+    subject = _running_subject(tree, "REAL")
+    subject.trade_state.list_cycles = lambda: pytest.fail("decoded unused historical ledger")
+    try:
+        subject._render_tables({})
+        assert not tree.get_children()
+    finally:
+        tree.destroy()
+
+
+def test_screen_log_is_bounded_but_every_message_still_reaches_logger(ui_root):
+    import customtkinter as ctk
+
+    manual = ctk.CTkTextbox(ui_root)
+    bot = ctk.CTkTextbox(ui_root)
+    subject = DashboardTablesMixin()
+    recorded = []
+    subject.logger = SimpleNamespace(info=recorded.append)
+    subject.log_manual = manual
+    subject.log_bot = bot
+    subject._set_log_unread = lambda *_: None
+    try:
+        for index in range(VISIBLE_LOG_LINE_LIMIT + 7):
+            subject._log(f"event-{index}")
+        lines = manual.get("1.0", "end-1c").splitlines()
+        assert len(lines) == VISIBLE_LOG_LINE_LIMIT
+        assert lines[0].endswith("event-7")
+        assert lines[-1].endswith(f"event-{VISIBLE_LOG_LINE_LIMIT + 6}")
+        assert len(recorded) == VISIBLE_LOG_LINE_LIMIT + 7
+        subject._log("bot event", "bot")
+        assert "bot event" in bot.get("1.0", "end-1c")
+        assert len(manual.get("1.0", "end-1c").splitlines()) == VISIBLE_LOG_LINE_LIMIT
+        subject._log("line 1\nline 2\nline 3")
+        assert len(manual.get("1.0", "end-1c").splitlines()) == VISIBLE_LOG_LINE_LIMIT
+        assert "line 1\nline 2\nline 3" in manual.get("1.0", "end-1c")
+    finally:
+        manual.destroy()
+        bot.destroy()
+
+
+@pytest.mark.parametrize("label,otp_type,state,button_text", [
+    ("EMAIL OTP", "email_otp", "normal", "GỬI EMAIL"),
+    ("SMART OTP", "smart_otp", "disabled", "SMART OTP TRÊN APP"),
+])
+def test_otp_selector_routes_correct_method_without_sending_email_for_smart(label, otp_type, state, button_text):
+    from viking_v2.connections.window import ConnectionPopup
+
+    subject = SimpleNamespace(client=SimpleNamespace(otp_type=""), btn_send_otp=_Label())
+    ConnectionPopup._otp_type_changed(subject, label)
+    assert subject.client.otp_type == otp_type
+    assert subject.btn_send_otp.options == {"state": state, "text": button_text}
 
 
 class _Tabs:

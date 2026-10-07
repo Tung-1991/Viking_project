@@ -57,6 +57,7 @@ RUNNING_ANCHORS = {
     "Status": "w",
     "X": "center",
 }
+VISIBLE_LOG_LINE_LIMIT = 2000
 
 
 class DashboardTablesMixin:
@@ -130,6 +131,24 @@ class DashboardTablesMixin:
                 stretch=False,
             )
 
+    @staticmethod
+    def _update_running_row(
+        tree: ttk.Treeview,
+        existing: dict[str, dict[str, Any]],
+        row_order: list[str],
+        *,
+        iid: str,
+        tags: tuple[str, ...],
+        values: tuple[str, ...],
+    ) -> None:
+        """Update display cells only; action metadata is rebuilt separately."""
+        row_order.append(iid)
+        previous = existing.get(iid)
+        if previous is None:
+            tree.insert("", "end", iid=iid, tags=tags, values=values)
+        elif tuple(previous["values"]) != values or tuple(previous["tags"]) != tags:
+            tree.item(iid, tags=tags, values=values)
+
     def _render_tables(self, runtime_status: dict[str, Any] | None = None) -> None:
         runtime_status = runtime_status if isinstance(runtime_status, dict) else self.bridge.read_status()
         runtime_ticks = runtime_status.get("ticks") if isinstance(runtime_status.get("ticks"), dict) else {}
@@ -140,12 +159,29 @@ class DashboardTablesMixin:
         for item in self.queue.list_all():
             if item.status.upper() not in FINAL_STATUSES:
                 local_by_mode[item.execution_mode].append(item)
+        # One fresh read per render, not one full ledger decode per visible row.
+        # These indexes are local display snapshots; no trading decision uses them.
+        needs_cycles = (
+            any(self.snapshots.get(mode, ({}, [], []))[1] for mode in self.trees)
+            or any(local_by_mode.values())
+        )
+        cycles = self.trade_state.list_cycles() if needs_cycles else []
+        cycles_by_id = {cycle.id: cycle for cycle in cycles}
+        active_cycles: dict[tuple[str, ...], Any] = {}
+        for cycle in cycles:
+            if cycle.status == "OPEN":
+                key = (cycle.symbol, cycle.execution_mode)
+                active_cycles.setdefault(key, cycle)
+                active_cycles.setdefault((*key, cycle.loan_package_id), cycle)
         for mode, tree in self.trees.items():
             selected_before = tuple(tree.selection())
             yview_before = tree.yview()
-            tree.delete(*tree.get_children())
+            previous_order = tuple(tree.get_children())
+            existing = {iid: tree.item(iid) for iid in previous_order}
+            row_order: list[str] = []
             self._running_row_actions[mode] = {}
-            self._configure_tree(tree, columns)
+            if tuple(tree["columns"]) != columns:
+                self._configure_tree(tree, columns)
             balance, positions, broker_orders = self.snapshots.get(mode, ({}, [], []))
             params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
             take_profit_pct = float(params.get("take_profit_pct", 7.0) or 7.0)
@@ -172,10 +208,11 @@ class DashboardTablesMixin:
                 )
                 market_price = tick_price or account_price(row, row.get("marketPrice", row.get("price", 0))) or avg_price
                 trade_id = str(row.get("tradeId", row.get("positionId", "")) or "")
-                cycle = self.trade_state.get(trade_id) if trade_id else None
+                cycle = cycles_by_id.get(trade_id) if trade_id else None
                 if not cycle:
                     package_id = str(row.get("loanPackageId", "") or "")
-                    cycle = (self.trade_state.active_for(symbol, mode, package_id) if package_id else self.trade_state.active_for(symbol, mode))
+                    key = (symbol, mode, package_id) if package_id else (symbol, mode)
+                    cycle = active_cycles.get(key)
                 if cycle:
                     trade_id = cycle.id
                 metrics = self.rule_state.position_metrics(symbol, trade_id) if trade_id else {}
@@ -445,8 +482,8 @@ class DashboardTablesMixin:
                     f"SL▼ {_display_price(sl_price)} ({sl_pct:+g}%)"
                     if sl_enabled else "SL OFF"
                 )
-                tree.insert(
-                    "", "end", iid=iid, tags=(row_tag,),
+                self._update_running_row(
+                    tree, existing, row_order, iid=iid, tags=(row_tag,),
                     values=(
                         f"#{(trade_id or str(row.get('positionId', index)))[:12]}",
                         self._row_time(opened),
@@ -479,7 +516,7 @@ class DashboardTablesMixin:
                 local_broker_ids.update(item.broker_order_ids)
                 price_text = _display_price(item.limit_price) if item.limit_price > 0 else item.order_type
                 gross = item.limit_price * item.quantity * 1000.0 if item.limit_price > 0 else 0.0
-                cycle = self.trade_state.get(item.trade_id) if item.trade_id else None
+                cycle = cycles_by_id.get(item.trade_id) if item.trade_id else None
                 display_source = {
                     "MANUAL": "MANUAL_VIKING",
                     "EXTERNAL": "EXTERNAL_DNSE",
@@ -554,8 +591,8 @@ class DashboardTablesMixin:
                 fee_text = _compact_vnd(estimated_fee) if estimated_fee is not None else "--"
                 risk_text = item_sl_label
                 reward_text = item_tp_label
-                tree.insert(
-                    "", "end", iid=iid, tags=(tag,),
+                self._update_running_row(
+                    tree, existing, row_order, iid=iid, tags=(tag,),
                     values=(
                         f"[CACHE] {item.id[:8]}",
                         self._row_time(item.created_at),
@@ -604,8 +641,8 @@ class DashboardTablesMixin:
                     if fee_rate is not None:
                         fee = gross * fee_rate
                 iid = f"BROKER:{mode}:{order_id or index}"
-                tree.insert(
-                    "", "end", iid=iid, tags=(("partial_order",) if partial else ("dnse_order",)),
+                self._update_running_row(
+                    tree, existing, row_order, iid=iid, tags=(("partial_order",) if partial else ("dnse_order",)),
                     values=(
                         f"[DNSE] {(order_id or str(index))[:10]}",
                         self._row_time(row.get('createdAt', row.get('createdDate', ''))),
@@ -625,10 +662,17 @@ class DashboardTablesMixin:
                     "editable": mode == "REAL" and kind == "LO",
                     "cancellable": mode == "REAL" and bool(order_id),
                 }
-            restored = [row_id for row_id in selected_before if tree.exists(row_id)]
-            if restored:
+            current_ids = set(row_order)
+            removed = [iid for iid in previous_order if iid not in current_ids]
+            if removed:
+                tree.delete(*removed)
+            if tuple(tree.get_children()) != tuple(row_order):
+                for index, iid in enumerate(row_order):
+                    tree.move(iid, "", index)
+            restored = tuple(iid for iid in selected_before if iid in current_ids)
+            if tuple(tree.selection()) != restored:
                 tree.selection_set(restored)
-            if yview_before:
+            if yview_before and previous_order != tuple(row_order):
                 tree.yview_moveto(yview_before[0])
         self._sync_cancel_button()
 
@@ -638,6 +682,10 @@ class DashboardTablesMixin:
         widget = self.log_bot if target == "bot" else self.log_manual
         if widget.winfo_exists():
             widget.insert("end", f"[{datetime.now():%H:%M:%S}] {message}\n")
+            # Bound the on-screen Text buffer for 24/7 sessions, not the file log.
+            last_line = int(widget.index("end-1c").split(".", 1)[0])
+            if last_line > VISIBLE_LOG_LINE_LIMIT + 1:
+                widget.delete("1.0", f"{last_line - VISIBLE_LOG_LINE_LIMIT}.0")
             widget.see("end")
             active = self.log_tabview.get() if hasattr(self, "log_tabview") else ""
             active_target = "bot" if active == "Bot" else "manual" if active == "Manual" else ""

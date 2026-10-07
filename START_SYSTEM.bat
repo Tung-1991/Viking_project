@@ -9,20 +9,32 @@ cls
 echo ========================================
 echo               VIKING V2
 echo ========================================
-echo   1. Ra soat / cai package
-echo   2. Khoi dong
-echo   3. Kiem tra / cap nhat code Git
+echo   1. Ra soat / cai moi truong
+echo   2. Kiem tra / cap nhat code Git (ghi de source)
+echo   3. Khoi dong
 echo   0. Thoat
 echo.
 choice /c 1230 /n /m "Chon [1/2/3/0]: "
 if errorlevel 4 exit /b 0
-if errorlevel 3 goto update
-if errorlevel 2 goto start
-if errorlevel 1 goto packages
+if errorlevel 3 goto start
+if errorlevel 2 goto update
+if errorlevel 1 goto environment
+goto menu
+
+:environment
+cls
+echo   1. Chi ra soat (khong cai / khong doi Windows)
+echo   2. Cai phan thieu / sua package sai phien ban
+echo   0. Quay lai
+choice /c 120 /n /m "Chon [1/2/0]: "
+if errorlevel 3 goto menu
+if errorlevel 2 goto packages
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0support\launcher.ps1" -Action Check
+echo.
+pause
 goto menu
 
 :packages
-cls
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0support\launcher.ps1" -Action Packages
 echo.
 pause
@@ -40,18 +52,7 @@ rem Parse the whole block before Git updates this batch file itself.
 
 :start
 cls
-if not exist "%~dp0ckvnvenv\Scripts\python.exe" (
-    echo [LOI] Chua co venv. Chon muc 1 de cai package truoc.
-    pause
-    goto menu
-)
-
-:run
-echo [%date% %time%] Khoi chay VIKING V2...
-"%~dp0ckvnvenv\Scripts\python.exe" -m viking_v2.main
-if "%errorlevel%"=="0" goto menu
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0support\launcher.ps1" -Action Start
 echo.
-echo [LOI] App thoat bat thuong. Thu lai sau 10 giay.
-choice /c RM /n /t 10 /d R /m "R = khoi dong lai, M = ve menu: "
-if errorlevel 2 goto menu
-goto run
+pause
+goto menu

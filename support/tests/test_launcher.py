@@ -56,15 +56,228 @@ def test_actual_native_package_imports_on_windows_powershell():
     assert "IMPORT_OK" in result.stdout
 
 
-def test_batch_menu_returns_after_normal_close_and_retries_crash():
+def test_actual_pin_check_on_windows_powershell():
+    _assert_ok(_run_ps("Assert-PinnedPackages; Write-Output 'PINS_OK'"))
+
+
+def test_pin_check_reports_missing_and_mismatched_packages(tmp_path):
+    (tmp_path / "requirements.txt").write_text("numpy==0.0.0\nviking-fake-missing-package==1.0\n", encoding="utf-8")
+    result = _run_ps(f"$PythonExe = {_ps_quote(ROOT / 'ckvnvenv/Scripts/python.exe')}\nAssert-PinnedPackages", tmp_path)
+    assert result.returncode != 0
+    assert "numpy:" in result.stdout and "viking-fake-missing-package: MISSING" in result.stdout
+
+
+def test_environment_audit_is_read_only_and_reports_all_missing_groups(tmp_path):
+    result = _run_ps(
+        "function Get-GitExe { throw 'NO_GIT' }\n"
+        "function Get-MissingVCRuntime { 'msvcp140.dll' }\n"
+        "function Get-TimeZone { [pscustomobject]@{Id='UTC'} }\n"
+        "function Find-SupportedPython { $null }\n"
+        "function Install-SignedTool { throw 'UNEXPECTED_INSTALL' }\n"
+        "function Ensure-VietnamTimeZone { throw 'UNEXPECTED_TIME_CHANGE' }\n"
+        "function Install-Packages { throw 'UNEXPECTED_PACKAGES' }\n"
+        "$ok=Test-Environment; if ($ok -isnot [bool] -or $ok) { throw 'WRONG_RESULT' }; 'READ_ONLY_OK'",
+        tmp_path,
+    )
+    _assert_ok(result)
+    assert "NO_GIT" in result.stdout and "msvcp140.dll" in result.stdout
+    assert "[CHECK] 5 nhom" in result.stdout and "READ_ONLY_OK" in result.stdout
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_environment_audit_success_returns_only_boolean():
+    result = _run_ps(
+        "function Get-GitExe { 'mock-git' }\nfunction Get-MissingVCRuntime {}\n"
+        "function Get-TimeZone { [pscustomobject]@{Id='SE Asia Standard Time'} }\n"
+        "function Assert-SupportedPython {}\nfunction Assert-PinnedPackages { 'PINS_OUTPUT' }\n"
+        "function Assert-PackageImports { 'IMPORT_OUTPUT' }\nfunction Invoke-Native { 'NATIVE_OUTPUT' }\n"
+        "$ok=Test-Environment; if ($ok -isnot [bool] -or -not $ok) { throw 'WRONG_RESULT' }; 'AUDIT_OK'"
+    )
+    _assert_ok(result)
+    assert "AUDIT_OK" in result.stdout
+
+
+def test_environment_audit_continues_after_package_errors():
+    result = _run_ps(
+        "function Get-GitExe { 'mock-git' }\nfunction Get-MissingVCRuntime {}\n"
+        "function Get-TimeZone { [pscustomobject]@{Id='SE Asia Standard Time'} }\n"
+        "function Assert-SupportedPython {}\nfunction Assert-PinnedPackages { throw 'PINS_BAD' }\n"
+        "function Assert-PackageImports { throw 'IMPORT_BAD' }\nfunction Invoke-Native {}\n"
+        "$ok=Test-Environment; if ($ok) { throw 'FALSE_SUCCESS' }; 'CHECKED_ALL'"
+    )
+    _assert_ok(result)
+    assert "PINS_BAD" in result.stdout and "IMPORT_BAD" in result.stdout
+    assert "[CHECK] 2 nhom" in result.stdout
+
+
+def test_existing_tools_are_not_reinstalled(tmp_path):
+    python = tmp_path / "ckvnvenv" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"mock existing interpreter")
+    result = _run_ps(
+        "function Get-GitExe { 'mock-git' }\nfunction Get-MissingVCRuntime {}\n"
+        "function Invoke-Native {}\nfunction Install-SignedTool { throw 'UNEXPECTED_INSTALL' }\n"
+        "function Find-SupportedPython { throw 'UNEXPECTED_PYTHON_SEARCH' }\nEnsure-SystemTools; 'SKIPPED_ALL'",
+        tmp_path,
+    )
+    _assert_ok(result)
+    assert "SKIPPED_ALL" in result.stdout
+
+
+@pytest.mark.parametrize("missing", ["Python", "Git", "VC"])
+def test_system_tools_install_only_missing_prerequisite(tmp_path, missing):
+    result = _run_ps(
+        "$script:installed=@(); $script:gitInstalled=$false; $script:vcInstalled=$false\n"
+        f"function Find-SupportedPython {{ {'$null' if missing == 'Python' else '[pscustomobject]@{Command=\'mock-python\'; Prefix=@()}'} }}\n"
+        f"function Get-GitExe {{ {'if (-not $script:gitInstalled) { throw \'NO_GIT\' };' if missing == 'Git' else ''} 'mock-git' }}\n"
+        f"function Get-MissingVCRuntime {{ {'if (-not $script:vcInstalled) { \'msvcp140.dll\' }' if missing == 'VC' else ''} }}\n"
+        "function Assert-Administrator {}\nfunction Invoke-Native {}\n"
+        "function Invoke-RestMethod { [pscustomobject]@{assets=@([pscustomobject]@{"
+        "name='Git-2.56.0.2-64-bit.exe'; browser_download_url='https://github.com/git-for-windows/git/releases/download/test/Git-2.56.0.2-64-bit.exe'})} }\n"
+        "function Install-SignedTool { param($Name, $Uri, $Publisher, $Arguments, $AllowedCodes); "
+        "$script:installed += $Name; $script:gitInstalled=$true; $script:vcInstalled=$true }\n"
+        "Ensure-SystemTools\nWrite-Output ('INSTALLED=' + (ConvertTo-Json -Compress -InputObject $script:installed))",
+        tmp_path,
+    )
+    _assert_ok(result)
+    installed = json.loads(result.stdout.split("INSTALLED=", 1)[1].splitlines()[0])
+    assert len(installed) == 1 and missing in installed[0]
+
+
+@pytest.mark.parametrize("exit_code,allowed,expected", [
+    (0, "@(0,3010)", "INSTALLED_OK"),
+    (1638, "@(0,3010,1638)", "INSTALLED_OK"),
+    (3010, "@(0,3010)", "Windows yeu cau reboot"),
+    (1603, "@(0,3010)", "exit 1603"),
+])
+def test_signed_installer_exit_codes_and_no_automatic_reboot(tmp_path, exit_code, allowed, expected):
+    result = _run_ps(
+        f"$env:TEMP={_ps_quote(tmp_path)}\nfunction Assert-Administrator {{}}\n"
+        "function Invoke-WebRequest {}\n"
+        "function Get-AuthenticodeSignature { [pscustomobject]@{Status='Valid'; SignerCertificate="
+        "[pscustomobject]@{Subject='CN=Microsoft Corporation'}} }\n"
+        f"function Start-Process {{ param($FilePath,$ArgumentList,$WindowStyle,[switch]$Wait,[switch]$PassThru); "
+        "if ($WindowStyle -ne 'Hidden' -or -not $Wait -or $ArgumentList -notcontains '/norestart') { throw 'UNSAFE_INSTALL' }; "
+        f"[pscustomobject]@{{ExitCode={exit_code}}} }}\n"
+        f"Install-SignedTool -Name 'VC' -Uri 'https://example.invalid/mock.exe' -Publisher 'Microsoft Corporation' "
+        f"-Arguments @('/install','/quiet','/norestart') -AllowedCodes {allowed}\n'INSTALLED_OK'"
+    )
+    assert (result.returncode == 0) == (exit_code in {0, 1638})
+    assert expected in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("status,publisher", [("NotSigned", "Microsoft Corporation"), ("Valid", "Wrong Publisher")])
+def test_invalid_signature_or_publisher_blocks_installer(tmp_path, status, publisher):
+    result = _run_ps(
+        f"$env:TEMP={_ps_quote(tmp_path)}\nfunction Assert-Administrator {{}}\nfunction Invoke-WebRequest {{}}\n"
+        f"function Get-AuthenticodeSignature {{ [pscustomobject]@{{Status='{status}'; SignerCertificate="
+        f"[pscustomobject]@{{Subject='CN={publisher}'}}}} }}\n"
+        "function Start-Process { throw 'LAUNCHED_UNTRUSTED_INSTALLER' }\n"
+        "Install-SignedTool -Name 'VC' -Uri 'https://example.invalid/mock.exe' -Publisher 'Microsoft Corporation' -Arguments @('/quiet')"
+    )
+    assert result.returncode != 0
+    assert "Chu ky / nha phat hanh" in result.stderr
+    assert "LAUNCHED_UNTRUSTED_INSTALLER" not in result.stderr
+
+
+def test_admin_error_stops_before_downloading_installer():
+    result = _run_ps(
+        "function Assert-Administrator { throw 'NEED_ADMIN' }\n"
+        "function Invoke-WebRequest { throw 'DOWNLOADED_WITHOUT_ADMIN' }\n"
+        "Install-SignedTool -Name 'VC' -Uri 'https://example.invalid/mock.exe' -Publisher 'Microsoft' -Arguments @('/quiet')"
+    )
+    assert result.returncode != 0
+    assert "NEED_ADMIN" in result.stderr and "DOWNLOADED_WITHOUT_ADMIN" not in result.stderr
+
+
+def test_missing_pip_is_bootstrapped_and_verified():
+    result = _run_ps(
+        "$script:ready=$false; $script:calls=@()\n"
+        "function Invoke-Native { param($Command,$Arguments); $call=$Arguments -join '|'; $script:calls+=$call; "
+        "if ($Arguments -contains 'ensurepip') { $script:ready=$true } "
+        "elseif (-not $script:ready) { throw 'NO_PIP' } }\n"
+        "Ensure-Pip; Write-Output ('CALLS=' + (ConvertTo-Json -Compress -InputObject $script:calls))"
+    )
+    _assert_ok(result)
+    calls = json.loads(result.stdout.split("CALLS=", 1)[1].splitlines()[0])
+    assert calls == ["-m|pip|--version", "-m|ensurepip|--upgrade", "-m|pip|--version"]
+
+
+def test_vc_install_is_not_assumed_to_repair_missing_dll(tmp_path):
+    result = _run_ps(
+        "function Find-SupportedPython { [pscustomobject]@{Command='mock-python'; Prefix=@()} }\n"
+        "function Get-GitExe { 'mock-git' }\nfunction Invoke-Native {}\n"
+        "function Get-MissingVCRuntime { 'msvcp140.dll' }\n"
+        "function Install-SignedTool {}\nEnsure-SystemTools", tmp_path,
+    )
+    assert result.returncode != 0
+    assert "Windows con thieu DLL: msvcp140.dll" in result.stderr
+
+
+def test_git_release_asset_must_use_official_download_url(tmp_path):
+    result = _run_ps(
+        "function Find-SupportedPython { [pscustomobject]@{Command='mock-python'; Prefix=@()} }\n"
+        "function Get-GitExe { throw 'NO_GIT' }\nfunction Assert-Administrator {}\n"
+        "function Invoke-RestMethod { [pscustomobject]@{assets=@([pscustomobject]@{"
+        "name='Git-2.56.0.2-64-bit.exe'; browser_download_url='https://example.invalid/untrusted.exe'})} }\n"
+        "function Install-SignedTool { throw 'INSTALLED_UNTRUSTED_ASSET' }\nEnsure-SystemTools", tmp_path,
+    )
+    assert result.returncode != 0
+    assert "installer Git x64 chinh thuc" in result.stderr
+    assert "INSTALLED_UNTRUSTED_ASSET" not in result.stderr
+
+
+@pytest.mark.parametrize("exit_code", [0, 130, -1073741510])
+def test_start_normal_close_and_ctrl_c_do_not_restart(tmp_path, exit_code):
+    fake = tmp_path / "fake-python.ps1"
+    fake.write_text(f"Write-Output 'FAKE_APP_LOG'; $global:LASTEXITCODE={exit_code}\n", encoding="utf-8")
+    result = _run_ps(
+        f"$PythonExe={_ps_quote(fake)}\nfunction Assert-AppStopped {{}}\n"
+        "function Wait-AppRetry { throw 'RESTARTED_AFTER_OPERATOR_STOP' }\nStart-App; 'START_STOP_OK'", tmp_path,
+    )
+    _assert_ok(result)
+    assert "FAKE_APP_LOG" in result.stdout and "START_STOP_OK" in result.stdout
+
+
+def test_start_crash_retries_and_stops_when_next_run_closes_normally(tmp_path):
+    fake = tmp_path / "fake-python.ps1"
+    fake.write_text(
+        "$global:appRuns++; if ($global:appRuns -eq 1) { $global:LASTEXITCODE=-123 } "
+        "else { $global:LASTEXITCODE=0 }; Write-Output ('ARGS=' + ($args -join '|'))\n", encoding="utf-8",
+    )
+    result = _run_ps(
+        f"$PythonExe={_ps_quote(fake)}\n$global:appRuns=0; $script:retries=0\nfunction Assert-AppStopped {{}}\n"
+        "function Wait-AppRetry { $script:retries++; $true }\nStart-App\n"
+        "if ($global:appRuns -ne 2 -or $script:retries -ne 1) { throw 'WRONG_RETRY' }; 'RETRY_OK'", tmp_path,
+    )
+    _assert_ok(result)
+    assert "RETRY_OK" in result.stdout and "ARGS=-u|-m|viking_v2.main" in result.stdout
+
+
+def test_start_crash_can_return_to_menu_without_retry(tmp_path):
+    fake = tmp_path / "fake-python.ps1"
+    fake.write_text("$global:appRuns++; $global:LASTEXITCODE=8\n", encoding="utf-8")
+    result = _run_ps(
+        f"$PythonExe={_ps_quote(fake)}\n$global:appRuns=0\nfunction Assert-AppStopped {{}}\n"
+        "function Wait-AppRetry { $false }\nStart-App\n"
+        "if ($global:appRuns -ne 1) { throw 'DID_NOT_RETURN_TO_MENU' }; 'MENU_OK'", tmp_path,
+    )
+    _assert_ok(result)
+    assert "MENU_OK" in result.stdout
+
+
+def test_batch_menu_routes_environment_update_start_and_preserves_logs():
     batch = (ROOT / "START_SYSTEM.bat").read_text(encoding="utf-8")
     assert "choice /c 1230" in batch
     assert "if errorlevel 4 exit /b 0" in batch
-    assert "-Action Packages" in batch and "-Action Update" in batch
+    assert all(f"-Action {action}" in batch for action in ("Check", "Packages", "Update", "Start"))
+    assert "if errorlevel 3 goto start" in batch
+    assert "if errorlevel 2 goto update" in batch
+    assert "choice /c 120" in batch
     assert 'support\\launcher.ps1' in batch and 'scripts\\launcher.ps1' not in batch
-    # Windows native crashes may have a negative exit code: only exactly zero is normal.
-    assert 'if "%errorlevel%"=="0" goto menu' in batch
-    assert "choice /c RM /n /t 10 /d R" in batch
+    helper = HELPER.read_text(encoding="utf-8")
+    assert "/c RM /n /t 10 /d R" in helper
+    assert "@(0, 130, -1073741510)" in helper
     assert "cls" in batch
     assert all(forbidden not in batch.lower() for forbidden in ("del ", "rmdir", "taskkill", "reset --hard"))
 
@@ -114,6 +327,7 @@ def test_partial_venv_is_not_overwritten(tmp_path):
 def test_package_action_installs_pins_and_checks_syntax_without_start(tmp_path):
     result = _run_ps(
         "function Assert-AppStopped {}\nfunction Ensure-VietnamTimeZone {}\nfunction Ensure-Python {}\n"
+        "function Ensure-SystemTools {}\n"
         "$script:calls = @()\n"
         "function Invoke-Native { param($Command, $Arguments); $script:calls += ($Arguments -join '|') }\n"
         "Install-Packages\n"
@@ -121,11 +335,13 @@ def test_package_action_installs_pins_and_checks_syntax_without_start(tmp_path):
     )
     _assert_ok(result)
     calls = json.loads(result.stdout.split("CALLS=", 1)[1].splitlines()[0])
-    assert len(calls) == 4
-    assert "install|--quiet|-r|" in calls[0] and calls[0].endswith("requirements.txt")
-    assert calls[1] == "-m|pip|check"
-    assert calls[2].startswith("-c|import customtkinter, tkinter, numpy")
-    assert calls[3].startswith("-m|compileall|-q|")
+    assert len(calls) == 6
+    assert calls[0] == "-m|pip|--version"
+    assert "install|--quiet|-r|" in calls[1] and calls[1].endswith("requirements.txt")
+    assert "import importlib.metadata" in calls[2]
+    assert calls[3] == "-m|pip|check"
+    assert calls[4].startswith("-c|import customtkinter, tkinter, numpy")
+    assert calls[5].startswith("-m|compileall|-q|")
 
 
 @pytest.mark.parametrize("current,changes", [("SE Asia Standard Time", 0), ("UTC", 1)])
@@ -185,6 +401,7 @@ def test_python_preflight_requires_x64_and_tk_before_creating_venv():
 def test_native_import_failure_stops_before_success_message(tmp_path):
     result = _run_ps(
         "function Assert-AppStopped {}\nfunction Ensure-VietnamTimeZone {}\nfunction Ensure-Python {}\n"
+        "function Ensure-SystemTools {}\nfunction Assert-PinnedPackages {}\n"
         "function Invoke-Native { param($Command, $Arguments); "
         "if ($Arguments[0] -eq '-c') { throw 'DLL_IMPORT_FAILED' }; "
         "if ($Arguments -contains 'compileall') { throw 'CONTINUED_AFTER_FAILURE' } }\nInstall-Packages",
@@ -218,7 +435,7 @@ def test_gitignore_keeps_local_data_private_but_tracks_source_templates():
     assert set(filter(None, result.stdout.split("\0"))) == set(excluded)
 
 
-def _update_mock(*, behind=1, ahead=0, dirty=False, incoming="viking_v2/.env.example", app_running=False, package_failure=False, backup_failure=False):
+def _update_mock(*, behind=1, incoming="viking_v2/.env.example", tracked="code.py", app_running=False, package_failure=False, backup_failure=False):
     return f"""
 $script:calls = @()
 function Invoke-Native {{
@@ -227,15 +444,14 @@ function Invoke-Native {{
     $script:calls += $call
     switch ($call) {{
         'rev-parse|--is-inside-work-tree' {{ 'true' }}
+        'rev-parse|--show-toplevel' {{ $ProjectRoot }}
         'rev-parse|--abbrev-ref|--symbolic-full-name|@{{u}}' {{ 'origin/main' }}
         'fetch' {{}}
         'rev-parse|HEAD' {{ 'old-sha' }}
-        'rev-parse|@{{u}}' {{ 'new-sha' }}
-        'rev-list|--count|old-sha..new-sha' {{ '{behind}' }}
-        'rev-list|--count|new-sha..old-sha' {{ '{ahead}' }}
-        'status|--porcelain|--untracked-files=normal' {{ {"' M code.py'" if dirty else ''} }}
+        'rev-parse|@{{u}}' {{ '{'new-sha' if behind else 'old-sha'}' }}
         'ls-tree|-r|--name-only|new-sha' {{ {_ps_quote(incoming)} }}
-        'merge|--ff-only|new-sha' {{}}
+        'ls-files' {{ {_ps_quote(tracked)} }}
+        'reset|--hard|new-sha' {{}}
         default {{ throw ('UNEXPECTED_CALL: ' + $call) }}
     }}
 }}
@@ -255,17 +471,20 @@ def _mock_update_result(tmp_path, **kwargs):
 
 
 @pytest.mark.parametrize("options,error", [
-    ({"dirty": True}, "Co file sua/chua commit"),
-    ({"ahead": 1}, "May nay co commit rieng"),
-    ({"incoming": "viking_v2/.env"}, "Ban Git moi chua runtime/.env"),
-    ({"incoming": "viking_v2/runtime/accounts/123/settings.json"}, "Ban Git moi chua runtime/.env"),
+    ({"incoming": "viking_v2/.env"}, "Git chua runtime/.env/venv/backup"),
+    ({"incoming": "viking_v2/runtime/accounts/123/settings.json"}, "Git chua runtime/.env/venv/backup"),
+    ({"incoming": "viking_v2/runtime"}, "Git chua runtime/.env/venv/backup"),
+    ({"incoming": "viking_v2"}, "Git chua runtime/.env/venv/backup"),
+    ({"incoming": "ckvnvenv/Scripts/python.exe"}, "Git chua runtime/.env/venv/backup"),
+    ({"incoming": ".artifacts/update-backups/private/.env"}, "Git chua runtime/.env/venv/backup"),
+    ({"tracked": "viking_v2/runtime/settings.json"}, "Git chua runtime/.env/venv/backup"),
     ({"app_running": True}, "RUNNING_APP"),
     ({"backup_failure": True}, "BACKUP_FAILED"),
 ])
-def test_update_refuses_unsafe_states_before_merge(tmp_path, options, error):
+def test_update_refuses_private_paths_and_running_app_before_overwrite(tmp_path, options, error):
     result, calls = _mock_update_result(tmp_path, **options)
     assert "ERROR=" + error in result.stdout
-    assert "merge|--ff-only|new-sha" not in calls
+    assert "reset|--hard|new-sha" not in calls
     assert "PACKAGES" not in calls
 
 
@@ -290,16 +509,16 @@ def test_clean_update_backs_up_local_files_before_exact_revision(tmp_path):
     assert (backups[0] / ".env").read_bytes() == env.read_bytes()
     assert (backups[0] / "runtime" / "accounts" / "test" / "trading.sqlite3").read_bytes() == (runtime / "trading.sqlite3").read_bytes()
     assert (backups[0] / "revision.txt").read_text().strip() == "old-sha"
-    assert calls[-2:] == ["merge|--ff-only|new-sha", "PACKAGES"]
+    assert calls[-2:] == ["reset|--hard|new-sha", "PACKAGES"]
     assert calls.count("fetch") == 1
-    assert not any(call.startswith(("pull", "reset", "clean")) for call in calls)
+    assert not any(call.startswith(("pull", "clean", "push")) for call in calls)
 
 
 def test_package_failure_after_update_is_reported_without_state_rollback(tmp_path):
     result, calls = _mock_update_result(tmp_path, package_failure=True)
     assert "ERROR=PACKAGE_FAILED" in result.stdout
-    assert calls[-2:] == ["merge|--ff-only|new-sha", "PACKAGES"]
-    assert "Da cap nhat. Chon muc 2" not in result.stdout
+    assert calls[-2:] == ["reset|--hard|new-sha", "PACKAGES"]
+    assert "Da cap nhat. Chon muc 3" not in result.stdout
 
 
 def test_real_native_nonzero_exit_is_not_ignored():
@@ -308,9 +527,9 @@ def test_real_native_nonzero_exit_is_not_ignored():
     assert "exit 7" in result.stderr
 
 
-@pytest.mark.parametrize("dirty", [False, True])
-def test_local_git_remote_update_integration(tmp_path, dirty):
-    """Real Git fetch/merge and backup; local remote only, no pip/account access."""
+@pytest.mark.parametrize("local_changes", ["clean", "dirty", "staged", "commit", "untracked_collision"])
+def test_local_git_remote_update_integration(tmp_path, local_changes):
+    """Real Git overwrite and backup; disposable local remote, no pip/account access."""
     git_exe = shutil.which("git.exe")
     if not git_exe:
         pytest.skip("Git not installed")
@@ -336,36 +555,47 @@ def test_local_git_remote_update_integration(tmp_path, dirty):
     git("remote", "add", "origin", remote)
     git("push", "-u", "origin", "main")
     git("clone", remote, deployed)
+    (deployed / "keep-untracked.txt").write_text("keep my unrelated file", encoding="utf-8")
+    if local_changes in {"dirty", "staged", "commit"}:
+        (deployed / "code.txt").write_text("local changes to overwrite", encoding="utf-8")
+    if local_changes in {"staged", "commit"}:
+        git("add", "code.txt", cwd=deployed)
+    if local_changes == "commit":
+        git("commit", "-m", "VPS local commit", cwd=deployed)
     old_revision = git("rev-parse", "HEAD", cwd=deployed)
     runtime = deployed / "viking_v2" / "runtime"
     runtime.mkdir(parents=True)
     (runtime / "settings.json").write_text('{"machine": "VPS"}', encoding="utf-8")
     env = deployed / "viking_v2" / ".env"
     env.write_text("FAKE_KEY=VPS-only", encoding="utf-8")
+    venv = deployed / "ckvnvenv"
+    venv.mkdir()
+    (venv / "keep.txt").write_text("venv data", encoding="utf-8")
+    git("config", "--local", "core.excludesFile", str(author / "local-ignore"), cwd=deployed)
+    (author / "local-ignore").write_text("ckvnvenv/\n", encoding="utf-8")
+    if local_changes == "untracked_collision":
+        (deployed / "new-code.txt").write_text("old untracked source", encoding="utf-8")
+    (author / "new-code.txt").write_text("new source", encoding="utf-8")
     (author / "code.txt").write_text("updated revision", encoding="utf-8")
-    git("add", ".")
+    git("add", "code.txt", "new-code.txt")
     git("commit", "-m", "update")
     git("push")
     expected_revision = git("rev-parse", "HEAD")
-    if dirty:
-        (deployed / "uncommitted.txt").write_text("preserve my work", encoding="utf-8")
     result = _run_ps(
         "function Install-Packages { Write-Output 'PACKAGE_CHECK_MOCKED' }\nUpdate-Code", deployed,
     )
-    if dirty:
-        assert result.returncode != 0
-        assert "Co file sua/chua commit" in result.stderr
-        assert git("rev-parse", "HEAD", cwd=deployed) == old_revision
-        assert not (deployed / ".artifacts").exists()
-    else:
-        _assert_ok(result)
-        assert "PACKAGE_CHECK_MOCKED" in result.stdout
-        assert git("rev-parse", "HEAD", cwd=deployed) == expected_revision
-        assert (deployed / "code.txt").read_text() == "updated revision"
-        backups = list((deployed / ".artifacts" / "update-backups").iterdir())
-        assert len(backups) == 1
-        assert (backups[0] / "runtime" / "settings.json").read_bytes() == (runtime / "settings.json").read_bytes()
-        assert (backups[0] / ".env").read_bytes() == env.read_bytes()
-        assert git("status", "--porcelain", cwd=deployed) == ""
+    _assert_ok(result)
+    assert "PACKAGE_CHECK_MOCKED" in result.stdout
+    assert git("rev-parse", "HEAD", cwd=deployed) == expected_revision
+    assert (deployed / "code.txt").read_text() == "updated revision"
+    assert (deployed / "new-code.txt").read_text() == "new source"
+    assert (deployed / "keep-untracked.txt").read_text() == "keep my unrelated file"
+    assert (venv / "keep.txt").read_text() == "venv data"
+    backups = list((deployed / ".artifacts" / "update-backups").iterdir())
+    assert len(backups) == 1
+    assert (backups[0] / "runtime" / "settings.json").read_bytes() == (runtime / "settings.json").read_bytes()
+    assert (backups[0] / ".env").read_bytes() == env.read_bytes()
+    assert (backups[0] / "revision.txt").read_text().strip() == old_revision
+    assert git("status", "--porcelain", cwd=deployed) == "?? keep-untracked.txt"
     assert env.read_text() == "FAKE_KEY=VPS-only"
     assert (runtime / "settings.json").read_text() == '{"machine": "VPS"}'

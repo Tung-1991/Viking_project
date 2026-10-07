@@ -20,6 +20,7 @@ def _table_subject(tree, mode, items, positions=()):
     subject.snapshots = {mode: ({}, list(positions), [])}
     subject.settings = SimpleNamespace(rule_parameters={})
     subject.trade_state = SimpleNamespace(
+        list_cycles=lambda: [],
         get=lambda _trade_id: None,
         active_for=lambda _symbol, _mode: None,
     )

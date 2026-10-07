@@ -343,23 +343,54 @@ settings thực tế, `.env` và runtime giữ tại đúng máy, không chép g
 
 ### Cài lần đầu
 
-1. Cài Git và Python 3.13 x64 có pip, Launcher và Tcl/Tk. Phiên bản đã chọn
-   cho VPS ngày 06/10/2026: Python 3.13.16; không nâng cả bộ thư viện lên latest.
-2. Clone repo, mở `START_SYSTEM.bat`, chọn **1** rồi **2**.
+1. Cài Git để clone repo (hoặc tải source ZIP). Mở `START_SYSTEM.bat`.
+2. Chọn **1 → 1** để chỉ rà soát, **1 → 2** để cài phần thiếu, rồi **3** để mở app.
+   Phần cài kiểm tra Python 3.12/3.13 x64 có pip/Tk, Git, VC++ v14 x64/UCRT,
+   venv, đúng pin trong requirements, xung đột package và import DLL thật.
+   Thiếu Python thì cài 3.13.16; thiếu Git thì lấy bản x64 stable từ release
+   chính thức. Bản đang dùng phù hợp không bị nâng cấp chỉ vì có bản mới.
+   Installer tải từ Python.org, Git for Windows và Microsoft; kiểm tra chữ ký
+   và publisher trước khi chạy. Cần cài phần mềm hệ thống thì chạy BAT bằng
+   **Run as administrator**. Không tự reboot; exit 3010 yêu cầu operator reboot
+   rồi chạy lại kiểm tra. Venv hỏng/không tương thích được báo, không tự xóa.
 3. Nhập API KEY/SECRET của tài khoản VPS, chọn đúng account và xác thực OTP.
 4. Kiểm tra giá mới, tiền, danh mục và lệnh chờ so với DNSE. App bắt đầu với
    BUY BOT OFF. OFF không dừng SELL đang quản lý hoặc MANUAL đã yêu cầu.
 5. Lệnh REAL đầu tiên do operator chủ động đặt với vốn chấp nhận rủi ro;
    đối chiếu ID, số khớp/còn lại, giá vốn và phí trước khi bật BUY BOT.
 
-Launcher không tự khởi động app sau reboot Windows; operator cần mở BAT và
-chọn 2. Ngắt kết nối RDP không phải đăng xuất; đăng xuất/reboot đóng ứng dụng.
+Launcher giữ PowerShell chạy foreground, không mở app ẩn. Mục **3** dùng
+Python unbuffered; console hiện log UI, log daemon vẫn ghi vào thư mục
+`viking_v2/runtime/accounts/<account>/logs/` như trước. `Ctrl+C` hoặc đóng UI
+là dừng theo yêu cầu, không tự restart; crash khác vẫn có lựa chọn retry sau
+10 giây. Khi đã dừng, console chờ nhấn phím để về menu, không xóa log trên ổ.
+Không tự khởi động app sau reboot Windows; operator cần mở BAT và chọn **3**.
+Ngắt kết nối RDP không phải đăng xuất; đăng xuất/reboot đóng ứng dụng.
+Rà soát chỉ đọc môi trường, không nạp `.env`, không gửi yêu cầu DNSE/Telegram.
+Phần cài đặt UTC+7 nếu cần; không tự sửa NTP hoặc coi UTC+7 là đã đồng bộ giờ.
+
+### Email OTP / Smart OTP
+
+Viking có sẵn cả hai lựa chọn trong cửa sổ kết nối. `EMAIL OTP` bật nút
+`GỬI EMAIL`; nhận mã rồi bấm `XÁC THỰC`. `SMART OTP` không gửi email: trên
+app DNSE, mở SmartOTP → **Lấy mã OTP cho thiết bị khác**, nhập vào Viking
+rồi xác thực. Loại chọn trong Viking phải trùng phương thức đang kích hoạt
+trên tài khoản DNSE; chọn nút trong Viking không tự đổi đăng ký 2FA ở DNSE.
+OTP không lưu; Trading Token nhận sau xác thực dùng theo thời hạn DNSE.
+Tham chiếu: [DNSE — Xác thực](https://developers.dnse.com.vn/docs/guide/intro/authentication/).
 
 ### Cập nhật những lần sau
 
-Đóng app, chọn **3**, chờ backup/cập nhật/kiểm tra package xong rồi chọn **2**.
+Đóng app, chọn **2**, chờ backup/cập nhật/kiểm tra môi trường xong rồi chọn **3**.
+Không có revision khác trên upstream thì kết thúc, không cài lại hoặc backup.
+Có revision khác thì **ghi đè source local về đúng upstream**, kể cả source
+đã sửa/stage hoặc commit riêng trên VPS. Không dùng `git clean`; file untracked
+không trùng source mới được giữ. Không dùng mục này trên máy phát triển khi
+đang có code chưa đưa lên GitHub mà muốn giữ. `.env`, runtime, venv và backup
+giữ nguyên; từ chối cập nhật nếu Git root sai hoặc cây tracked có dữ liệu riêng.
 Backup nằm trong `.artifacts/update-backups/`, gồm runtime, `.env` và revision.
 Không ghi đè dữ liệu VPS bằng runtime hoặc settings của máy phát triển.
+Không tự push, mở app hoặc phục hồi runtime cũ khi cập nhật/package thất bại.
 
 SQLite phải nằm trên ổ local. Backup khi app/daemon đã dừng, sao lưu cả thư mục
 account; backup khi chạy phải dùng SQLite backup API, không copy riêng DB bỏ WAL.
@@ -397,3 +428,26 @@ passed trong 37,84 giây** trên máy phát triển Windows/Python 3.13.14. Đã
 import thư viện thật qua PowerShell 5.1; các test đổi múi giờ dùng mock,
 không đổi timezone máy phát triển. Package vẫn giữ phiên bản đã chốt,
 code trong `viking_v2/` và runtime tài khoản không thay đổi trong lượt này.
+
+Ngày 07/10/2026, cập nhật menu môi trường/update/start: **557/557 test passed
+trong 51,33 giây**, gồm 62 test launcher. Rà soát thật trên máy phát triển báo
+0 nhóm thiếu/lỗi. Installer, quyền admin và reboot dùng mock; cập nhật ghi đè
+được thử bằng Git thật trên repo tạm với source sửa/stage/commit riêng, giữ
+`.env`, runtime và venv. Không cài phần mềm hệ thống, đổi giờ, mở app giao dịch
+hoặc gửi lệnh thật trong lượt này. Source giao dịch và requirements không đổi.
+
+Tối ưu UI ngày 07/10/2026: chỉ đổi `dashboard/tables.py`, không đổi backend
+giao dịch/rule/API hoặc chu kỳ polling. Bảng cập nhật dòng thay đổi, giữ selection,
+focus và scroll thay vì xóa/dựng lại toàn bộ; thông tin thao tác lệnh vẫn dựng
+mới mỗi lượt. Sổ trade đọc một lần mỗi lượt vẽ, index chỉ tồn tại trong hàm,
+không giữ tín hiệu/giá để giao dịch. Ô log giới hạn 2.000 dòng màn hình;
+logger trên ổ, lịch sử lệnh và tín hiệu không bị cắt bởi giới hạn này.
+
+Microbenchmark offline trên máy phát triển, dữ liệu giả, hai sổ REAL/PAPER:
+5 vị thế/sổ không đổi giảm khoảng 6,4 → 0,9 ms; 40 vị thế/sổ 9,6 → 4,0 ms.
+Với SQLite chứa 1.000 trade lịch sử và 5 vị thế/sổ: 179 → 18 ms/lượt vẽ.
+Không suy ra toàn bộ app nhanh gấp 10 hoặc RAM của VPS từ các số đo này.
+Sau tối ưu: **570/570 test passed trong 50,32 giây**; smoke test khởi tạo,
+vẽ và đóng GUI đầy đủ offline thành công, `pip check`/`compileall` thành công.
+OTP có test request mock cho cả `email_otp`/`smart_otp` và selector UI; không
+xác thực OTP thật, không gọi API giao dịch hay Telegram trong lượt này.
