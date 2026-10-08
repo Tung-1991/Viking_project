@@ -55,6 +55,8 @@ danh sách/hạn mức/P1/max mã, giữ kết nối/rule khác/runtime; yêu c�
   Priority preview dùng bản sao setting nháp và cùng bộ tính vốn; không gọi DNSE.
 - Refresh tài khoản xử lý lỗi riêng REAL/PAPER; không bỏ kết quả sổ đã đọc được.
   HEALTH kiểm tra cả hai REST client và dùng `quote_is_fresh`, không lấy số request làm mốc mới nhất.
+- Secdef dùng chung cache 60 giây trong mỗi client; 429 nghỉ toàn endpoint 60 giây.
+  Lỗi tạm giữ dữ liệu tối đa 5 phút, không qua ngày VN; hết hiệu lực thì chờ giá, không báo hết tiền.
 - XÓA API bỏ Key/Secret/token ở RAM và .env, nạp lại daemon cùng workspace;
   giữ account/runtime/settings và lệnh DNSE. XÓA TOKEN không xóa API.
 - Chỉ quản lý Deal đã chọn của đúng account/mã/gói. Giao dịch ngoài app đối soát được

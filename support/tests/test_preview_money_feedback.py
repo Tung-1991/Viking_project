@@ -1,12 +1,16 @@
 """Offline ticket feedback: missing data is not zero money; caps stay binding."""
 from types import SimpleNamespace
+from datetime import datetime
 
 import pytest
 
 from viking_v2 import config
 from viking_v2.dashboard.actions import DashboardActionsMixin
 from viking_v2.dashboard.panels import DashboardPanelsMixin, _auto_quantity_feedback
+from viking_v2.connections.dnse.client import DNSEClient
 from viking_v2.rules.state import RuleStateStore
+from viking_v2.services.daemon import tick_with_price_bound
+from viking_v2.trading.market import VN_TZ
 from viking_v2.trading.orders import OrderQueue
 from viking_v2.trading.state import TradeStateStore
 
@@ -103,6 +107,54 @@ def test_paper_100m_without_own_cap_can_buy_msn(tmp_path):
     view.settings.priority_capital_enabled = True
     assert view._suggested_order_quantity(74.2, {"ticks": {"MSN": {"ceiling_price": 80.4}}}, "MSN")[0] == 0
     assert view._preview_auto_feedback["reason"] == "HẠN MỨC CHƯA ĐỦ 100 CP"
+
+
+def test_paper_switch_and_reference_recovery_never_misreport_zero_cash(tmp_path, monkeypatch):
+    view = ticket(tmp_path, mode="PAPER", cash=99_973_842.9)
+    value = DNSEClient(api_key="fake", api_secret="fake", account_no="offline")
+    clock = [datetime(2026, 10, 8, 14, tzinfo=VN_TZ).timestamp()]
+    value._now = lambda: clock[0]
+    responses = iter([(False, None, 429, "rate limited"),
+                      (True, {"ceilingPrice": 80.4}, 200, ""),
+                      (False, None, 503, "unavailable")])
+    monkeypatch.setattr(value, "_request", lambda *_a, **_kw: next(responses))
+    tick = {"symbol": "MSN", "price": 74.2, "ceiling_price": 0}
+    tick = tick_with_price_bound(tick, value.get_secdef("MSN"))
+    status = {"ticks": {"MSN": tick}}
+    assert view._suggested_order_quantity(74.2, status, "MSN")[0] == 0
+    assert view._preview_auto_feedback["reason"] == "CHỜ GIÁ TRẦN TÍNH KL"
+    assert view._preview_auto_feedback["waiting"]
+    assert view.snapshots["PAPER"][0]["availableCash"] == 99_973_842.9
+
+    # A successful reference distinguishes a real envelope limit from API failure.
+    clock[0] += 61
+    status["ticks"]["MSN"] = tick_with_price_bound(tick, value.get_secdef("MSN"))
+    assert view._suggested_order_quantity(74.2, status, "MSN")[0] == 0
+    assert view._preview_auto_feedback["reason"] == "HẠN MỨC CHƯA ĐỦ 100 CP"
+    view.settings.priority_allocations["MSN"]["use_pct"] = 100
+    assert view._suggested_order_quantity(74.2, status, "MSN")[0] == 100
+
+    # A short outage cannot turn the recovered bound back into zero.
+    clock[0] += 61
+    status["ticks"]["MSN"] = tick_with_price_bound(tick, value.get_secdef("MSN"))
+    assert view._suggested_order_quantity(74.2, status, "MSN")[0] == 100
+    view.snapshots["REAL"] = ({"equity": 0, "availableCash": 0}, [], [])
+    view.mode = value_control = SimpleNamespace(get=lambda: "REAL")
+    assert view._suggested_order_quantity(74.2, status, "MSN")[0] == 0
+    value_control.get = lambda: "PAPER"
+    assert view._suggested_order_quantity(74.2, status, "MSN")[0] == 100
+    assert view.queue.list_all() == []
+    assert view.trade_state.list_cycles() == []
+
+
+@pytest.mark.parametrize("definition", [None, {}, {"ceilingPrice": 0},
+                                        {"ceilingPrice": "bad"}, {"ceilingPrice": float("nan")}])
+def test_expired_or_invalid_reference_cannot_reuse_old_tick_bound(definition):
+    old = {"symbol": "MSN", "price": 74.2, "ceiling_price": 80.4}
+    updated = tick_with_price_bound(old, definition)
+    assert "ceiling_price" not in updated
+    assert updated["price"] == 74.2
+    assert old["ceiling_price"] == 80.4
 
 
 @pytest.mark.parametrize("failed_book", ["REAL", "PAPER", "RECONCILE"])

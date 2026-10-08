@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime
 import logging
 import os
 import random
@@ -13,11 +14,16 @@ import requests
 
 from ... import config
 from ...models import BrokerOrderResult, OrderIntent
+from ...trading.market import VN_TZ
 from ...trading.portfolio import available_to_sell, dnse_price, price_in_band, validate_quantity
 from .signing import generate_signature_header
 
 
 logger = logging.getLogger("VIKING_V2.dnse")
+SECDEF_TTL_SECONDS = 60.0
+SECDEF_MAX_AGE_SECONDS = 300.0
+SECDEF_RETRY_SECONDS = 30.0
+SECDEF_RATE_LIMIT_SECONDS = 60.0
 
 
 class BrokerSnapshotError(RuntimeError):
@@ -91,6 +97,9 @@ class DNSEClient:
         self._endpoint_locks: dict[str, threading.Lock] = {}
         self._lock = threading.RLock()
         self._cache: dict[str, tuple[float, Any]] = {}
+        self._secdef_lock = threading.Lock()
+        self._secdef_retry_after: dict[str, float] = {}
+        self._secdef_rate_limit_until = 0.0
         self._health: dict[str, Any] = {
             "started_at": self._now(),
             "total_requests": 0,
@@ -379,15 +388,60 @@ class DNSEClient:
         return _unwrap(data) if ok else None
 
     def get_secdef(self, symbol: str) -> dict[str, Any] | None:
-        ok, data, _status, _message = self._request("GET", f"/price/{symbol.upper()}/secdef")
-        value = _unwrap(data)
-        if isinstance(value, list):
-            # Prefer the normal round-lot board when the endpoint returns all boards.
-            value = next(
-                (row for row in value if isinstance(row, dict) and row.get("boardId") == "G1"),
-                next((row for row in value if isinstance(row, dict)), None),
-            )
-        return value if ok and isinstance(value, dict) else None
+        """Share reference data across loops/books, without retrying every tick.
+
+        Refresh once a minute. On transient failure, retain a successful response
+        for at most five minutes and only within the same VN calendar day.
+        Neither quotes nor trading signals/orders are cached here.
+        """
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return None
+        # Single-flight covers both strategy books and parallel UI consumers.
+        with self._secdef_lock:
+            now = self._now()
+            key = f"secdef:{symbol}"
+            cached = self._cache.get(key)
+            age = now - cached[0] if cached else float("inf")
+            same_day = bool(cached and 0 <= age and (
+                datetime.fromtimestamp(cached[0], VN_TZ).date()
+                == datetime.fromtimestamp(now, VN_TZ).date()
+            ))
+            if same_day and age < SECDEF_TTL_SECONDS:
+                return deepcopy(cached[1])
+            recent = cached[1] if same_day and age <= SECDEF_MAX_AGE_SECONDS else None
+            if now < max(self._secdef_retry_after.get(symbol, 0.0),
+                         self._secdef_rate_limit_until):
+                return deepcopy(recent)
+
+            ok, data, status, _message = self._request("GET", f"/price/{symbol}/secdef")
+            value = _unwrap(data)
+            if isinstance(value, list):
+                # Prefer the normal round-lot board when all boards are returned.
+                value = next(
+                    (row for row in value if isinstance(row, dict) and row.get("boardId") == "G1"),
+                    next((row for row in value if isinstance(row, dict)), None),
+                )
+            completed = self._now()
+            if ok and isinstance(value, dict) and value:
+                self._cache[key] = (completed, deepcopy(value))
+                self._secdef_retry_after.pop(symbol, None)
+                return value
+
+            self._secdef_retry_after[symbol] = completed + SECDEF_RETRY_SECONDS
+            if status == 429:
+                # One throttled symbol pauses this endpoint for the whole list.
+                self._secdef_rate_limit_until = completed + SECDEF_RATE_LIMIT_SECONDS
+            transient = status == 0 or status == 429 or status >= 500 or ok
+            # Account/auth failures are not concealed by a successful old reply.
+            if not transient:
+                self._cache.pop(key, None)
+            if transient and cached and 0 <= completed - cached[0] <= SECDEF_MAX_AGE_SECONDS and (
+                datetime.fromtimestamp(cached[0], VN_TZ).date()
+                == datetime.fromtimestamp(completed, VN_TZ).date()
+            ):
+                return deepcopy(cached[1])
+            return None
 
     def get_latest_trade(self, symbol: str) -> dict[str, Any] | None:
         ok, data, _status, _message = self._request(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import signal
 import threading
 import time
@@ -64,6 +65,20 @@ def merge_live_tick(
     merged["frozen"] = False
     merged["price_frozen"] = not live_has_price
     return merged
+
+
+def tick_with_price_bound(tick: dict, secdef: dict | None) -> dict:
+    """Use the adapter's bounded-age reference, never an old tick's daily bound."""
+    updated = dict(tick)
+    try:
+        ceiling = float((secdef or {}).get("ceilingPrice", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        ceiling = 0.0
+    if math.isfinite(ceiling) and ceiling > 0:
+        updated["ceiling_price"] = ceiling
+    else:
+        updated.pop("ceiling_price", None)
+    return updated
 
 
 def realtime_indicator_bucket(at: datetime, interval: str) -> int:
@@ -483,6 +498,8 @@ def run(account_id: str | None = None) -> int:
                             if not tick:
                                 decisions.pop(symbol, None)
                             if tick:
+                                if settings.priority_capital_enabled or settings.priority_symbols:
+                                    tick = tick_with_price_bound(tick, client.get_secdef(symbol))
                                 ticks[symbol] = tick
                                 if symbol_live:
                                     bars_by_symbol[symbol] = merge_tick_into_daily_bars(
@@ -491,9 +508,6 @@ def run(account_id: str | None = None) -> int:
                                     )
                                 bars = bars_by_symbol.get(symbol, [])
                                 portfolio_tick = dict(tick)
-                                if settings.priority_capital_enabled or settings.priority_symbols:
-                                    portfolio_tick["ceiling_price"] = float((client.get_secdef(symbol) or {}).get("ceilingPrice", 0.0) or 0.0)
-                                    tick["ceiling_price"] = portfolio_tick["ceiling_price"]
                                 if bars:
                                     portfolio_tick["daily_close"] = float(bars[-1].get("close", 0.0) or 0.0)
                                     portfolio_tick["daily_bar_closed"] = bool(bars[-1].get("closed", False))

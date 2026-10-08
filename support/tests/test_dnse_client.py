@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from urllib.parse import quote
 
 import pytest
@@ -11,6 +13,7 @@ import requests
 from viking_v2.connections.dnse.client import DNSEClient
 from viking_v2.connections.dnse.signing import generate_signature_header
 from viking_v2.models import OrderIntent
+from viking_v2.trading.market import VN_TZ
 
 
 class Response:
@@ -127,6 +130,96 @@ def test_secdef_selects_round_lot_board_and_history_is_stock():
     assert value.get_secdef("fpt")["floorPrice"] == 90
     assert value.get_order_history("2026-08-01", "2026-08-06") == [{"id": 1, "price_unit": "VND"}]
     assert session.calls[-1][2]["params"]["marketType"] == "STOCK"
+
+
+def test_secdef_is_cached_per_symbol_and_returns_isolated_copies():
+    session = Session([Response(data={"symbol": symbol, "ceilingPrice": 80.4})
+                       for symbol in ("MSN", "CTS", "HDB", "IDC")])
+    value = client(session)
+    for _ in range(100):
+        for symbol in ("MSN", "CTS", "HDB", "IDC"):
+            definition = value.get_secdef(symbol.lower())
+            assert definition["symbol"] == symbol
+            assert definition["ceilingPrice"] == 80.4
+            definition["ceilingPrice"] = 0
+    assert len(session.calls) == 4
+
+
+def test_secdef_429_pauses_all_symbols_then_recovers(monkeypatch):
+    monkeypatch.setattr("viking_v2.config.HTTP_RETRIES", 0)
+    session = Session([Response(status=429), Response(data={"ceilingPrice": 80.4})])
+    value = client(session)
+    clock = [datetime(2026, 10, 8, 14, tzinfo=VN_TZ).timestamp()]
+    value._now = lambda: clock[0]
+    for _ in range(100):
+        for symbol in ("MSN", "CTS", "HDB", "IDC"):
+            assert value.get_secdef(symbol) is None
+    assert len(session.calls) == 1
+    clock[0] += 61
+    assert value.get_secdef("MSN")["ceilingPrice"] == 80.4
+    assert len(session.calls) == 2
+
+
+def test_secdef_keeps_recent_same_day_prices_on_error_but_expires_them(monkeypatch):
+    monkeypatch.setattr("viking_v2.config.HTTP_RETRIES", 0)
+    session = Session([Response(data={"ceilingPrice": 80.4}),
+                       Response(status=503), Response(status=503)])
+    value = client(session)
+    clock = [datetime(2026, 10, 8, 14, tzinfo=VN_TZ).timestamp()]
+    value._now = lambda: clock[0]
+    assert value.get_secdef("MSN")["ceilingPrice"] == 80.4
+    clock[0] += 61
+    for _ in range(100):
+        assert value.get_secdef("MSN")["ceilingPrice"] == 80.4
+    assert len(session.calls) == 2
+    clock[0] += 241
+    assert value.get_secdef("MSN") is None
+    assert len(session.calls) == 3
+
+
+def test_secdef_never_reuses_yesterdays_bound_even_inside_ttl(monkeypatch):
+    monkeypatch.setattr("viking_v2.config.HTTP_RETRIES", 0)
+    session = Session([Response(data={"ceilingPrice": 80.4}), Response(status=503)])
+    value = client(session)
+    clock = [datetime(2026, 10, 8, 23, 59, 50, tzinfo=VN_TZ).timestamp()]
+    value._now = lambda: clock[0]
+    assert value.get_secdef("MSN")["ceilingPrice"] == 80.4
+    clock[0] += 20
+    assert value.get_secdef("MSN") is None
+    assert len(session.calls) == 2
+
+
+def test_secdef_empty_response_does_not_replace_valid_data():
+    session = Session([Response(data={"ceilingPrice": 80.4}), Response(data={})])
+    value = client(session)
+    clock = [datetime(2026, 10, 8, 14, tzinfo=VN_TZ).timestamp()]
+    value._now = lambda: clock[0]
+    assert value.get_secdef("MSN")["ceilingPrice"] == 80.4
+    clock[0] += 61
+    assert value.get_secdef("MSN")["ceilingPrice"] == 80.4
+    assert value.get_secdef("MSN")["ceilingPrice"] == 80.4
+    assert len(session.calls) == 2
+
+
+def test_secdef_parallel_consumers_share_one_request():
+    session = Session([Response(data={"ceilingPrice": 80.4})])
+    value = client(session)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(value.get_secdef, ["MSN"] * 16))
+    assert all(row["ceilingPrice"] == 80.4 for row in results)
+    assert len(session.calls) == 1
+
+
+def test_secdef_auth_failure_does_not_fall_back_to_cached_prices():
+    session = Session([Response(data={"ceilingPrice": 80.4}), Response(status=401)])
+    value = client(session)
+    clock = [datetime(2026, 10, 8, 14, tzinfo=VN_TZ).timestamp()]
+    value._now = lambda: clock[0]
+    assert value.get_secdef("MSN")["ceilingPrice"] == 80.4
+    clock[0] += 61
+    assert value.get_secdef("MSN") is None
+    assert value.get_secdef("MSN") is None
+    assert len(session.calls) == 2
 
 
 def test_stock_fee_rate_comes_from_dnse_cash_package_and_is_cached():
