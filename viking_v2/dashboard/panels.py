@@ -7,10 +7,10 @@ from typing import Any
 
 import customtkinter as ctk
 
-from ..rules.business import protect_level
-from ..trading.market import market_phase
+from ..rules.business import average_true_range_pct, indicator_snapshot, protect_level
+from ..trading.market import VN_TZ, market_now, market_phase, merge_tick_into_daily_bars
 from ..trading.portfolio import nav_from_balance, size_buy_order, stock_exposure_limit, validate_quantity
-from ..trading.validation import decision_is_fresh
+from ..trading.validation import decision_is_fresh, quote_is_fresh
 from .view import (
     COL_BORDER, COL_GRAY, COL_GREEN, COL_MUTED, COL_SETTLEMENT_BG, COL_SETTLEMENT_TEXT,
     COL_PREVIEW_TEXT, COL_RED, COL_SURFACE, COL_SURFACE_2, COL_TEXT, COL_WARN, FONT_BOLD,
@@ -47,7 +47,7 @@ def _preview_panel_height(viewport_pixels: int, widget_scaling: float) -> int:
 
     scaling = max(0.1, float(widget_scaling or 1.0))
     logical_height = int(round(max(0, viewport_pixels) / scaling))
-    return max(360, logical_height - 4)
+    return max(300, logical_height - 4)
 
 
 class DashboardPanelsMixin:
@@ -698,10 +698,8 @@ class DashboardPanelsMixin:
     def _build_order_preview_tab(self, parent: ctk.CTkFrame) -> None:
         parent.grid_columnconfigure(0, weight=1)
         parent.grid_rowconfigure(0, weight=0)
-        # Keep enough real height for P1/P2/P3 and the decision reason. The
-        # parent is scrollable, so a short viewport scrolls instead of clipping
-        # the final guard/status lines.
-        panel = ctk.CTkFrame(parent, height=360, fg_color=COL_SURFACE_2, corner_radius=8)
+        # Keep the original compact height; explanations belong in hover hints.
+        panel = ctk.CTkFrame(parent, height=300, fg_color=COL_SURFACE_2, corner_radius=8)
         panel.grid(row=0, column=0, sticky="ew")
         panel.grid_propagate(False)
         self.preview_focus_panel = panel
@@ -817,17 +815,17 @@ class DashboardPanelsMixin:
             )
             card.grid_columnconfigure(0, weight=1)
             title_widget = ctk.CTkLabel(
-                card, text=title, width=1, height=18, font=("Segoe UI", 11, "bold", "italic"),
+                card, text=title, width=1, height=16, font=("Segoe UI", 11, "bold", "italic"),
                 text_color=title_color, anchor="w",
             )
             title_widget.grid(row=0, column=0, sticky="ew", padx=9, pady=(3, 0))
             value = ctk.CTkLabel(
-                card, text="NA", width=1, height=20, font=("Cascadia Mono", 12),
+                card, text="NA", width=1, height=18, font=("Cascadia Mono", 12),
                 text_color=title_color, anchor="w",
             )
             value.grid(row=1, column=0, sticky="ew", padx=9, pady=(1, 0))
             detail = ctk.CTkLabel(
-                card, text="", width=1, height=18, font=("Segoe UI", 10),
+                card, text="", width=1, height=14, font=("Segoe UI", 10),
                 text_color=COL_PREVIEW_TEXT, anchor="w",
             )
             detail.grid(row=2, column=0, sticky="ew", padx=9, pady=(0, 2))
@@ -842,8 +840,7 @@ class DashboardPanelsMixin:
         )
         _HoverHint(
             atr_title,
-            "ATR14 dùng 14 phiên ngày đã đóng gần nhất. START là mức lãi đỉnh cần đạt để Dynamic bắt đầu; "
-            "LÙI là khoảng giảm từ đỉnh theo ATR. Dashboard chỉ hiện kết quả; công thức nằm trong RULE → E/M.",
+            self._atr_preview_hint,
             placement="inside",
         )
         self.preview_em_normal, self.preview_normal_value, self.preview_normal_detail = level_card(
@@ -892,7 +889,7 @@ class DashboardPanelsMixin:
             card.grid_columnconfigure(0, weight=0)
             card.grid_columnconfigure(1, weight=1)
             title_widget = ctk.CTkLabel(
-                card, text=f"{title}{'  ⓘ' if hint else ''}", font=("Segoe UI", 12, "bold", "italic"),
+                card, text=f"{title}{'  ⓘ' if hint else ''}", height=18, font=("Segoe UI", 12, "bold", "italic"),
                 text_color="#60A5FA", anchor="w",
             )
             title_widget.grid(row=0, column=0, sticky="w", padx=(8, 6), pady=4)
@@ -907,29 +904,19 @@ class DashboardPanelsMixin:
             anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_market.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=4)
-        self.preview_rule_market_money = ctk.CTkLabel(
-            phase1, text="NAV — · CP — · GIỮ —", width=1, height=14,
-            font=("Cascadia Mono", 11), text_color=COL_PREVIEW_TEXT,
-            anchor="w", justify="left", wraplength=300,
-        )
-        self.preview_rule_market_money.grid(
-            row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=0,
-        )
         _HoverHint(self.preview_rule_market, self._market_confirmation_hint, placement="inside")
-        _HoverHint(self.preview_rule_market_money, self._market_confirmation_hint, placement="inside")
         self.preview_rule_market_detail = ctk.CTkLabel(
-            phase1, text="CHỜ PHÂN LOẠI", font=("Segoe UI", 10),
+            phase1, text="CHỜ PHÂN LOẠI", height=14, font=("Segoe UI", 10),
             text_color=COL_PREVIEW_TEXT, anchor="w",
         )
-        self.preview_rule_market_detail.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 4))
+        self.preview_rule_market_detail.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 4))
         self.preview_rule_market_detail.grid_remove()
         _HoverHint(self.preview_rule_market_detail, self._market_confirmation_hint, placement="inside")
 
         phase2 = phase_card(
             2,
             "P2 · BUY / E",
-            "RSI hiển thị giá trị hiện tại và chiều thay đổi so với phiên trước.\n"
-            "WAIT nghĩa là hiện chưa xuất hiện điểm cắt đủ điều kiện BUY hoặc SELL.",
+            self._indicator_preview_hint,
         )
         self.preview_rule_ema = ctk.CTkLabel(
             phase2, text="BUY EMA 3/6 · --/--", width=1, height=14,
@@ -962,7 +949,7 @@ class DashboardPanelsMixin:
             self._entry_capital_hint,
         )
         self.preview_rule_phase3 = ctk.CTkLabel(
-            phase3, text="--/-- · --/MÃ", width=1, font=("Cascadia Mono", 12),
+            phase3, text="--/-- · --/MÃ", width=1, height=18, font=("Cascadia Mono", 11),
             text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_phase3.grid(
@@ -970,7 +957,7 @@ class DashboardPanelsMixin:
         )
         _HoverHint(self.preview_rule_phase3, self._entry_capital_hint, placement="inside")
         self.preview_rule_phase3_detail = ctk.CTkLabel(
-            phase3, text="AUTO --", font=("Segoe UI", 12),
+            phase3, text="AUTO --", height=16, font=("Segoe UI", 12),
             text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_phase3_detail.grid(
@@ -1146,6 +1133,99 @@ class DashboardPanelsMixin:
                 selected[symbol] = decision
         return {**status, "decisions": selected}
 
+    def _preview_indicator_details(self, status: dict[str, Any], symbol: str) -> dict[str, Any]:
+        """Read-only display fallback: daily bars are not trading decisions."""
+        from datetime import datetime
+        from ..rules.business import StaticRuleParameters
+
+        symbol = str(symbol or "").strip().upper()
+        status = self._book_preview_status(status)
+        decision = (status.get("decisions") or {}).get(symbol) or {}
+        details = dict(decision.get("details") or {})
+        params = StaticRuleParameters.from_dict(self.settings.rule_parameters)
+        expected_periods = {
+            "buy_ema_fast_period": params.buy_ema_fast, "buy_ema_slow_period": params.buy_ema_slow,
+            "sell_ema_fast_period": params.sell_ema_fast, "sell_ema_slow_period": params.sell_ema_slow,
+            "rsi_period": params.rsi_period,
+        }
+        indicators = dict(details.get("indicators") or {})
+        if any(indicators.get(key, value) != value for key, value in expected_periods.items()):
+            indicators = {}  # Do not show a previous settings generation.
+        source = "DECISION" if indicators else "MISSING"
+        asof = details.get("updated_at", "")
+        rows = []
+        today = market_now().date()
+        if getattr(self, "_preview_bars_symbol", "") == symbol:
+            for raw in getattr(self, "_preview_bars", []):
+                row = dict(raw)
+                try:
+                    day = datetime.fromtimestamp(float(row["time"]), VN_TZ).date()
+                except (KeyError, ValueError, TypeError, OSError, OverflowError):
+                    continue
+                if day > today:
+                    continue
+                if day < today:
+                    row["closed"] = True  # A saved live candle closes overnight.
+                rows.append(row)
+        if rows:
+            completed = [row for row in rows if bool(row.get("closed", True))]
+            working = rows
+            if self.settings.signal_mode == "REALTIME":
+                tick = (status.get("ticks") or {}).get(symbol) or {}
+                if (not tick.get("frozen") and quote_is_fresh(tick, symbol)
+                        and (status.get("symbol_phases") or {}).get(symbol) in {"ATO", "OPEN", "ATC"}):
+                    working = merge_tick_into_daily_bars(rows, tick)
+            else:
+                working = completed
+            calculated = indicator_snapshot(
+                working, params.buy_ema_fast, params.buy_ema_slow, params.rsi_period,
+                sell_fast=params.sell_ema_fast, sell_slow=params.sell_ema_slow,
+            )
+            if not indicators or any(indicators.get(key) is None for key in (
+                "buy_ema_fast", "buy_ema_slow", "sell_ema_fast", "sell_ema_slow", "rsi",
+            )):
+                indicators = {**calculated, **{key: value for key, value in indicators.items() if value is not None}}
+                source = "DAILY_PREVIEW"
+                asof = datetime.fromtimestamp(float(working[-1]["time"]), VN_TZ).strftime("%Y-%m-%d %H:%M") if working else ""
+            if _number(details.get("atr14_daily_pct")) <= 0 and len(completed) >= 14:
+                details["atr14_daily_pct"] = average_true_range_pct(completed)
+                details["atr14_daily_asof"] = completed[-1]["time"]
+        details["indicators"] = {**expected_periods, **indicators}
+        atr = _number(details.get("atr14_daily_pct"))
+        details["dynamic_start_pct"] = atr * params.normal_atr_activation_multiplier if params.normal_atr_activation_enabled else 0.0
+        details["dynamic_trail_pct"] = atr * params.normal_atr_multiplier if params.normal_atr_trail_enabled else 0.0
+        self._preview_indicator_source = {"symbol": symbol, "source": source, "asof": asof,
+                                          "atr_asof": details.get("atr14_daily_asof", "")}
+        return details
+
+    def _indicator_preview_hint(self) -> str:
+        preview = getattr(self, "_preview_indicator_source", {})
+        source = preview.get("source", "MISSING")
+        text = (
+            "EMA/RSI của đúng mã đang xem, dùng chu kỳ trong RULE. CLOSED dùng nến ngày đã đóng; REALTIME dùng nến đang chạy.\n"
+            "Có quyết định: hiện chỉ số bot đã dùng. Chưa có quyết định: tính preview từ nến có sẵn; không tạo tín hiệu hoặc đặt lệnh.\n"
+            "Nhịp phút: khi chưa có quyết định, preview tham khảo cập nhật theo giá; quyết định bot vẫn theo nhịp đã chọn.\n"
+            "EMA nhanh > chậm không tự nó là lệnh BUY: còn phải có điểm cắt và đủ điều kiện RSI/rule."
+        )
+        if source == "MISSING":
+            return text + "\nChưa có nến cho mã này: chờ daemon tải lịch sử. Có giá tức thời không đồng nghĩa đã có nến để tính chỉ số."
+        return text + f"\nNguồn: {'quyết định bot' if source == 'DECISION' else 'preview nến'} · {preview.get('symbol', '')} · {preview.get('asof', '')}."
+
+    def _atr_preview_hint(self) -> str:
+        from datetime import datetime
+        preview = getattr(self, "_preview_indicator_source", {})
+        asof = preview.get("atr_asof", "")
+        try:
+            asof = datetime.fromtimestamp(float(asof), VN_TZ).strftime("%Y-%m-%d")
+        except (TypeError, ValueError, OSError, OverflowError):
+            asof = "chưa có đủ nến"
+        return (
+            "ATR14 · 1D: độ biến động theo % giá đóng cửa, tính bằng cùng công thức Wilder của bot. Không dùng nến hôm nay chưa đóng.\n"
+            "START = ATR × hệ số bắt đầu; LÙI = ATR × hệ số lùi trong RULE → E/M.\n"
+            "Ví dụ ATR 4%, START ×0,55 → 2,2%; LÙI ×0,8 → 3,2%. Các mức chỉ có tác dụng khi bật Dynamic.\n"
+            f"Phiên cuối dùng tính ATR: {asof}. Dấu -- nghĩa là chưa đủ dữ liệu, không phải ATR bằng 0."
+        )
+
     def _market_confirmation_hint(self) -> str:
         current = getattr(self, "_preview_market_confirmation", {})
         count, required = current.get("confirmation_count", 0), current.get("confirmation_required", 3)
@@ -1192,7 +1272,8 @@ class DashboardPanelsMixin:
             "MANUAL nhập khối lượng tự quyết, không bị ép về VỐN AUTO; vẫn kiểm tra tiền/phí và điều kiện lệnh. "
             "AUTO 100 khi bật chỉ nâng lên 1 lô nếu còn đủ tiền và room; không vượt cap Priority.\n"
             "BOT = số mã đang giữ/BUY chờ trên tối đa; Priority giữ slot bên trong tổng. "
-            "Chống nhiễu và LOSS/BLOCK chỉ chặn BUY BOT mới, không chặn SELL hay lưu tín hiệu mua lại."
+            "Chống nhiễu và LOSS/BLOCK chỉ chặn BUY BOT mới, không chặn SELL hay lưu tín hiệu mua lại.\n"
+            f"Hiện tại: {getattr(self, '_preview_entry_summary', 'chờ dữ liệu')}."
         )
 
     def _phase1_capital_preview(self, details: dict[str, Any]) -> dict[str, Any]:
@@ -1448,7 +1529,7 @@ class DashboardPanelsMixin:
         }
         decisions = status.get("decisions") if isinstance(status.get("decisions"), dict) else {}
         decision = decisions.get(symbol) if isinstance(decisions.get(symbol), dict) else {}
-        decision_details = decision.get("details") if isinstance(decision.get("details"), dict) else {}
+        decision_details = self._preview_indicator_details(status, symbol)
         atr_pct = _number(decision_details.get("atr14_daily_pct"))
         start_pct = _number(decision_details.get("dynamic_start_pct"))
         trail_pct = _number(decision_details.get("dynamic_trail_pct"))
@@ -1514,7 +1595,7 @@ class DashboardPanelsMixin:
         status = self._book_preview_status(status)
         decisions = status.get("decisions") if isinstance(status.get("decisions"), dict) else {}
         decision = decisions.get(symbol) if isinstance(decisions.get(symbol), dict) else {}
-        details = decision.get("details") if isinstance(decision.get("details"), dict) else {}
+        details = self._preview_indicator_details(status, symbol)
         indicators = details.get("indicators") if isinstance(details.get("indicators"), dict) else {}
         rule_params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
         buy_ema_enabled = bool(rule_params.get("buy_signal_use_ema", True))
@@ -1577,10 +1658,6 @@ class DashboardPanelsMixin:
             text=f"{state_label} · CP {exposure_pct:g}% · TIỀN {cash_pct:g}%",
             text_color=market_color,
         )
-        self.preview_rule_market_money.configure(
-            text=(f"NAV {_compact_vnd(allocation['nav'])} · CP ≤{_compact_vnd(allocation['stock_limit'])} · GIỮ ≥{_compact_vnd(allocation['cash_reserve'])}"
-                  if allocation["nav"] is not None else "NAV — · CP — · GIỮ —"),
-        )
         market_notes: list[str] = []
         override_enabled = bool(market_details.get("override_enabled", False))
         if override_enabled:
@@ -1609,7 +1686,7 @@ class DashboardPanelsMixin:
         )
         if market_notes:
             self.preview_rule_market_detail.grid(
-                row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 3),
+                row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 3),
             )
         else:
             self.preview_rule_market_detail.grid_remove()
@@ -1711,8 +1788,9 @@ class DashboardPanelsMixin:
             f"VỐN AUTO {_compact_vnd(capital)}" if "order_budget" in (budget_checks if budget_checks is not None else checks)
             else "VỐN AUTO —"
         )
+        self._preview_entry_summary = " · ".join(phase3_parts)
         self.preview_rule_phase3.configure(
-            text=" · ".join(phase3_parts),
+            text=f"BOT {slot_used}/{slot_max or '--'} · {phase3_parts[-1].replace('VỐN AUTO', 'AUTO')}",
             text_color=COL_WARN if guard_warn else COL_TEXT,
         )
         symbol_tick = (status.get("ticks") or {}).get(symbol) or {}

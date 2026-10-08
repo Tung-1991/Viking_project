@@ -57,9 +57,9 @@ def test_dynamic_atr_preview_uses_the_selected_symbols_completed_daily_atr() -> 
 
 
 def test_preview_height_reverses_customtkinter_dpi_scaling() -> None:
-    assert _preview_panel_height(600, 2.0) == 360
-    assert _preview_panel_height(720, 2.0) == 360
-    assert _preview_panel_height(290, 1.0) == 360
+    assert _preview_panel_height(600, 2.0) == 300
+    assert _preview_panel_height(720, 2.0) == 356
+    assert _preview_panel_height(290, 1.0) == 300
 
 
 def test_operator_typography_separates_keys_from_values() -> None:

@@ -93,9 +93,9 @@ def test_unconfirmed_p1_does_not_reuse_exposure_from_old_decision():
 
 
 @pytest.mark.parametrize("budget", [4_000_000, 0, None])
-def test_rule_preview_renders_current_money_and_keeps_confirmation_below_amounts(budget):
+def test_rule_preview_keeps_current_money_in_hint_not_an_extra_row(budget):
     view = subject()
-    for name in ("market", "market_money", "market_detail", "title", "ema", "sell_ema", "rsi",
+    for name in ("market", "market_detail", "title", "ema", "sell_ema", "rsi",
                  "phase3", "phase3_detail", "phase3_guard", "reason"):
         setattr(view, f"preview_rule_{name}", Label())
     view._em_states = {}
@@ -112,10 +112,10 @@ def test_rule_preview_renders_current_money_and_keeps_confirmation_below_amounts
               }}}}
     view._refresh_rule_preview(status, "AAA")
     assert "CP 90% · TIỀN 10%" in view.preview_rule_market.options["text"]
-    assert view.preview_rule_market_money.options["text"] == "NAV 50.00 tr · CP ≤45.00 tr · GIỮ ≥5.00 tr"
+    assert not hasattr(view, "preview_rule_market_money")
     assert "XÁC NHẬN GIẢM · 1/3 PHIÊN" in view.preview_rule_market_detail.options["text"]
     expected = "4.00 tr" if budget else "0" if budget == 0 else "—"
-    assert f"VỐN AUTO {expected}" in view.preview_rule_phase3.options["text"]
+    assert f"AUTO {expected}" in view.preview_rule_phase3.options["text"]
     hint = view._market_confirmation_hint()
     assert "NAV" in hint and "45.00 tr" in hint and "5.00 tr" in hint
     assert "không phải tỷ trọng đang nắm" in hint
@@ -125,10 +125,11 @@ def test_rule_preview_renders_current_money_and_keeps_confirmation_below_amounts
     assert "CP 10% / TIỀN 90%" in hint
     assert "không phải bật BUY BOT" in hint
     assert "9 triệu/mã" in view._entry_capital_hint()
+    assert f"VỐN AUTO {expected}" in view._entry_capital_hint()
     assert "MANUAL" in view._entry_capital_hint()
 
 
-def test_rule_card_layout_keeps_money_confirmation_and_guards_visible(ui_root):
+def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root):
     import customtkinter as ctk
     import tkinter as tk
     top = ctk.CTkToplevel(ui_root)
@@ -142,22 +143,48 @@ def test_rule_card_layout_keeps_money_confirmation_and_guards_visible(ui_root):
         view._slot_summary = {"mode": "REAL", "used": 0, "max": 5}
         view._preview_entry_checks = lambda *_args: {"order_budget": 9_000_000,
                                                     "nav": 50_000_000, "available_cash": 40_000_000}
-        view._refresh_rule_preview({"execution_mode": "REAL", "decisions": {"AAA": {
+        from datetime import datetime, timedelta
+        from viking_v2.trading.market import VN_TZ, market_now
+        from viking_v2.dashboard.actions import DashboardActionsMixin
+        view._preview_bars_symbol = "AAA"
+        view._preview_bars = [
+            {"time": int(datetime.combine(market_now().date() - timedelta(days=30-i), datetime.min.time(), VN_TZ).timestamp()),
+             "open": 7+i*.01, "high": 7.2+i*.01, "low": 6.8+i*.01, "close": 7+i*.01, "closed": True}
+            for i in range(30)
+        ]
+        view.symbol, view.order_type = Value("AAA"), Value("MARKET")
+        view.quantity, view.tp, view.sl = Value("100"), Value("7%"), Value("-3.5%")
+        view._current_tick_price = 7.25
+        view._symbol_exchange = lambda *_args: "HOSE"
+        view._preview_buy_fee = lambda gross, *_args: gross * .00045
+        view._buy_button_presentation = DashboardActionsMixin._buy_button_presentation
+        view.real = SimpleNamespace(has_trading_token=lambda: False)
+        view.execute_button = Label()
+        view._refresh_full_order_preview({"execution_mode": "REAL", "decisions": {"AAA": {
             "market_state": "UPTREND", "details": {"exposure": .9,
                 "market": {"confirmation_pending": True, "candidate_state": "DOWNTREND",
                            "confirmation_count": 1, "confirmation_required": 3},
                 "indicators": {"buy_ema_fast": 7.159, "buy_ema_slow": 7.156,
                                "sell_ema_fast": 7.159, "sell_ema_slow": 7.156,
                                "rsi": 48.7, "rsi_previous": 49.2},
-            }}}}, "AAA")
+            }}}})
+        assert view.preview_atr.cget("text") != "--"
+        assert "START --" not in view.preview_atr_detail.cget("text")
+        assert "--/--" not in view.preview_rule_ema.cget("text")
         settled = tk.BooleanVar(master=ui_root, value=False)
         ui_root.after(220, lambda: settled.set(True))
         ui_root.wait_variable(settled)
         ui_root.update_idletasks()
         card = view.preview_rule_market.master
-        assert view.preview_rule_market_money.winfo_y() + view.preview_rule_market_money.winfo_height() <= view.preview_rule_market_detail.winfo_y()
+        assert not hasattr(view, "preview_rule_market_money")
+        assert int(view.preview_focus_panel.cget("height")) == 300
+        assert int(view.preview_rule_market_detail.grid_info()["row"]) == 1
         assert view.preview_rule_market_detail.winfo_y() + view.preview_rule_market_detail.winfo_height() <= card.winfo_height()
         assert view.preview_rule_reason.winfo_y() + view.preview_rule_reason.winfo_height() <= view.preview_rule_reason.master.winfo_height()
+        for value in (view.preview_tp_value, view.preview_sl_value, view.preview_atr,
+                      view.preview_normal_value, view.preview_exit_value):
+            content_bottom = max(child.winfo_y() + child.winfo_height() for child in value.master.winfo_children())
+            assert content_bottom <= value.master.winfo_height()
         import os
         if os.getenv("VIKING_CAPTURE_UI") == "1":
             import ctypes

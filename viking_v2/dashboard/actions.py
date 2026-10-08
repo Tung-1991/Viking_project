@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import json
 import os
 import queue
 import subprocess
@@ -2301,6 +2302,52 @@ class DashboardActionsMixin:
         tick = ticks.get(str(symbol).upper())
         return tick if isinstance(tick, dict) else None
 
+    def _refresh_preview_bars(self, symbol: str) -> None:
+        """Read the daemon's existing history off Tk; no API or trading writes."""
+        now = time.monotonic()
+        if (not self.running or getattr(self, "_preview_bars_busy", False)
+                or (getattr(self, "_preview_bars_symbol", "") == symbol
+                    and now < getattr(self, "_preview_bars_retry_after", 0.0))):
+            return
+        self._preview_bars_busy = True
+        path = self.bridge.market_cache_path
+        previous = getattr(self, "_preview_bars_signature", None)
+
+        def read() -> tuple[Any, list[dict[str, Any]] | None]:
+            try:
+                signature = (symbol, path.stat().st_mtime_ns)
+                if signature == previous:
+                    return signature, None
+                raw = json.loads(path.read_text(encoding="utf-8-sig"))
+                rows = (raw.get("symbols") or {}).get(symbol) or []
+                return signature, [dict(row) for row in rows[-260:] if isinstance(row, dict)]
+            except (OSError, ValueError, TypeError, AttributeError):
+                return None, []
+
+        future = self._io_executor.submit(read)
+
+        def completed(result: Any) -> None:
+            try:
+                signature, rows = result.result()
+            except Exception:
+                signature, rows = None, []
+
+            def apply() -> None:
+                self._preview_bars_busy = False
+                # A completed worker must not put the previous ticker in the UI.
+                if self.symbol.get().strip().upper() != symbol:
+                    return
+                self._preview_bars_symbol = symbol
+                self._preview_bars_signature = signature
+                self._preview_bars_retry_after = time.monotonic() + 5.0
+                if rows is not None:
+                    self._preview_bars = rows
+                    self._update_order_preview()
+
+            self._post_ui(apply)
+
+        future.add_done_callback(completed)
+
     def _symbol_exchange(self, symbol: str | None = None) -> str:
         selected = str(symbol or self.symbol.get() or "").strip().upper()
         status = self.bridge.read_status()
@@ -2409,6 +2456,7 @@ class DashboardActionsMixin:
         self._current_tick_price = price
         self._current_tick = dict(tick) if isinstance(tick, dict) else {}
         self._current_market_status = selected_phase.upper()
+        self._refresh_preview_bars(symbol)
         if self.order_type.get() == "LO":
             self._populate_default_lo()
         self._update_order_preview()

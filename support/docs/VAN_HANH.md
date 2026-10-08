@@ -25,6 +25,8 @@
    Nhập khối lượng = dùng số đặt tay. TP/SL preview tiền là trước phí/thuế.
    P1 CP%/TIỀN% tính trên NAV sổ đang xem; số tiền là giới hạn phân bổ, không phải
    danh mục thực tế. VỐN AUTO là ngân sách gợi ý cho mã đang chọn, không ép lệnh MANUAL.
+   Hover P1 xem số tiền; hover P2/ATR xem nguồn nến. Chưa có quyết định thì chỉ số
+   vẫn có preview từ nến đã tải, không tạo lệnh. ATR chỉ dùng nến ngày đã đóng.
    XÁC NHẬN GIẢM 1/3 PHIÊN: đang kiểm tra đổi trạng thái; vẫn dùng P1 đã xác nhận,
    không phải chờ giá giảm để mua/bán. Hover dòng/ⓘ xem trạng thái và tỷ trọng trước/sau.
 5. Lệnh REAL đầu tiên đối chiếu ID, khớp/còn lại, giá vốn và phí trước khi tăng quy mô.
