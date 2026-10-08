@@ -58,9 +58,9 @@ def test_private_pool_preview_shows_current_book_total_and_savings(tmp_path, mod
     popup, parent = preview(tmp_path, mode=mode)
     before = asdict(parent.settings)
     overview, rows, invalid = popup._priority_preview_data()
-    assert f"PREVIEW {mode} · NAV {nav} tr · TIỀN KHẢ DỤNG {cash} tr" in overview
-    assert "QUỸ PRIORITY 50 tr · ĐÃ CHIA 50 tr · CHƯA CHIA 0 tr" in overview
-    assert "MUA TỐI ĐA 35 tr · GIỮ TIỀN 15 tr" in overview
+    assert f"PREVIEW {mode} · TỔNG TÀI SẢN {nav} tr · TIỀN KHẢ DỤNG {cash} tr" in overview
+    assert "PRIORITY 50 tr = ĐƯỢC MUA 35 tr + ĐỂ DÀNH 15 tr" in overview
+    assert "HẠN MỨC ĐÃ CHIA 50 tr · CHƯA CHIA 0 tr" in overview
     assert rows == [
         ("MSN", "30 tr", "50%", "15 tr", "15 tr", "15 tr"),
         ("CTS", "20 tr", "100%", "20 tr", "0 tr", "20 tr"),
@@ -68,6 +68,43 @@ def test_private_pool_preview_shows_current_book_total_and_savings(tmp_path, mod
     assert not invalid
     assert asdict(parent.settings) == before
     assert parent.queue.list_all() == parent.trade_state.list_cycles() == []
+
+
+@pytest.mark.parametrize("use_pct,buy,saved", [(50, 25, 25), (100, 50, 0)])
+def test_va_50m_preview_is_group_total_not_25m_per_symbol(tmp_path, use_pct, buy, saved):
+    popup, parent = preview(tmp_path)
+    symbols = ["MSN", "CTS", "HDB", "IDC"]
+    popup.priority_picker.value = symbols
+    popup._priority_allocations = {
+        symbol: {"limit_vnd": cap * 1_000_000, "use_pct": use_pct}
+        for symbol, cap in zip(symbols, [15, 15, 5, 15])
+    }
+    parent.snapshots["PAPER"] = ({"equity": 99_973_842.9, "availableCash": 99_973_842.9}, [], [])
+    before = asdict(parent.settings)
+    overview, rows, invalid = popup._priority_preview_data()
+    assert not invalid
+    assert f"PRIORITY 50 tr = ĐƯỢC MUA {buy} tr + ĐỂ DÀNH {saved} tr" in overview
+    assert "TÀI SẢN NGOÀI NGÂN SÁCH 49.974 tr" in overview
+    assert len(overview.splitlines()) == 3
+    assert rows[0] == ("MSN", "15 tr", f"{use_pct}%", "7.5 tr" if use_pct == 50 else "15 tr",
+                       "7.5 tr" if use_pct == 50 else "0 tr", "7.5 tr" if use_pct == 50 else "15 tr")
+    hint = popup._priority_preview_hint(rows, invalid)
+    assert f"MSN: 15 tr × {use_pct}% = được mua " in hint
+    assert f"HDB: 5 tr × {use_pct}% = được mua " in hint
+    assert "P1 100% không tự đổi mức sử dụng 50%" in hint
+    assert "không cộng thêm vào hạn mức" in hint
+    assert asdict(parent.settings) == before
+    assert parent.queue.list_all() == parent.trade_state.list_cycles() == []
+
+
+def test_unallocated_pool_is_part_of_savings_not_extra_buying_power(tmp_path):
+    popup, _parent = preview(tmp_path)
+    popup.priority_total.value = "60"
+    overview, rows, invalid = popup._priority_preview_data()
+    assert not invalid
+    assert "PRIORITY 60 tr = ĐƯỢC MUA 35 tr + ĐỂ DÀNH 25 tr" in overview
+    assert "HẠN MỨC ĐÃ CHIA 50 tr · CHƯA CHIA 10 tr" in overview
+    assert "phần không dùng + phần chưa chia" in popup._priority_preview_hint(rows, invalid)
 
 
 def test_remaining_limit_deducts_holdings_and_pending_in_same_book(tmp_path):
@@ -91,7 +128,7 @@ def test_private_off_uses_original_p1_budget_ignoring_draft_limits(tmp_path):
     popup._priority_allocations["MSN"] = {"limit_vnd": 1_000_000, "use_pct": 1}
     overview, rows, invalid = popup._priority_preview_data()
     assert "VỐN RIÊNG OFF" in overview
-    assert "QUỸ PRIORITY" not in overview
+    assert "ĐƯỢC MUA" not in overview
     assert rows[0] == ("MSN", "25 tr", "100%", "25 tr", "0 tr", "25 tr")
     assert not invalid
     assert parent._preview_entry_checks("MSN", {})["order_budget"] == 25_000_000
@@ -102,7 +139,8 @@ def test_draft_total_and_limits_refresh_without_saving_or_placing_orders(tmp_pat
     popup.priority_total.value = "60"
     popup._priority_allocations["MSN"]["limit_vnd"] = 40_000_000
     overview, rows, invalid = popup._priority_preview_data()
-    assert "QUỸ PRIORITY 60 tr · ĐÃ CHIA 60 tr" in overview
+    assert "PRIORITY 60 tr = ĐƯỢC MUA 40 tr + ĐỂ DÀNH 20 tr" in overview
+    assert "HẠN MỨC ĐÃ CHIA 60 tr" in overview
     assert rows[0][3] == "20 tr"
     assert parent.settings.priority_total_capital == 50_000_000
     assert parent.settings.priority_allocations["MSN"]["limit_vnd"] == 30_000_000
@@ -125,8 +163,8 @@ def test_preview_without_account_snapshot_does_not_invent_cash(tmp_path):
     popup, parent = preview(tmp_path)
     parent.snapshots = {}
     overview, rows, invalid = popup._priority_preview_data()
-    assert "NAV — · TIỀN KHẢ DỤNG —" in overview
-    assert "QUỸ PRIORITY 50 tr" in overview
+    assert "TỔNG TÀI SẢN — · TIỀN KHẢ DỤNG —" in overview
+    assert "PRIORITY 50 tr" in overview
     assert rows[0][-1] == "—" and not invalid
 
 
@@ -201,8 +239,84 @@ def test_priority_preview_widgets_update_without_rebuilding_unchanged_values(ui_
         popup.priority_total.delete(0, "end")
         popup.priority_total.insert(0, "50")
         popup._refresh_priority_summary()
-        assert "QUỸ PRIORITY 50 tr" in popup.priority_preview.cget("text")
+        assert "PRIORITY 50 tr" in popup.priority_preview.cget("text")
         assert "CHƯA CHIA 50 tr" in popup.priority_preview.cget("text")
     finally:
         popup._close()
         client.close()
+
+
+def test_priority_preview_and_money_headings_have_specific_hints(ui_root, monkeypatch):
+    import viking_v2.connections.window as module
+    attached = []
+    real_hint = module._HoverHint
+
+    def capture(widget, text, *args, **kwargs):
+        attached.append((widget, text))
+        return real_hint(widget, text, *args, **kwargs)
+
+    monkeypatch.setattr(module, "_HoverHint", capture)
+    client = DNSEClient(account_no="PAPER")
+    popup = ConnectionPopup(ui_root, config.AppSettings.from_dict({
+        "watchlist": ["MSN"], "priority_symbols": ["MSN"],
+        "priority_capital_enabled": True, "priority_total_capital": 15_000_000,
+        "priority_allocations": {"MSN": {"limit_vnd": 15_000_000, "use_pct": 50}},
+    }), "PAPER", client, lambda: None)
+    try:
+        assert any(widget is popup.priority_preview and "MSN: 15 tr × 50%" in text
+                   for widget, text in attached)
+        heading_hints = {widget.cget("text"): text for widget, text in attached
+                         if widget.master is popup.priority_summary and widget is not popup.priority_preview}
+        assert "15 triệu × 50% = 7,5 triệu" in heading_hints["ĐƯỢC MUA"]
+        assert "không phải % của cả tài khoản" in heading_hints["DÙNG (%)"]
+        assert "không phải tiền khả dụng" in heading_hints["CÒN HẠN MỨC"]
+    finally:
+        popup._close()
+        client.close()
+
+
+@pytest.mark.parametrize("scale,width", [(1.0, 760), (1.0, 1080), (1.25, 760), (1.25, 1080)])
+def test_va_priority_summary_stays_three_lines_at_supported_widths(ui_root, monkeypatch, scale, width):
+    import customtkinter as ctk
+    import tkinter as tk
+    from tkinter import font as tkfont
+    symbols = ["MSN", "CTS", "HDB", "IDC"]
+    settings = config.AppSettings.from_dict({
+        "watchlist": symbols, "priority_symbols": symbols,
+        "priority_capital_enabled": True, "priority_total_capital": 50_000_000,
+        "priority_allocations": {symbol: {"limit_vnd": cap * 1_000_000, "use_pct": 50}
+                                 for symbol, cap in zip(symbols, [15, 15, 5, 15])},
+    })
+    monkeypatch.setattr(ui_root, "mode", Value("PAPER"), raising=False)
+    monkeypatch.setattr(ui_root, "snapshots", {
+        "PAPER": ({"equity": 99_973_842.9, "availableCash": 99_973_842.9}, [], []),
+    }, raising=False)
+    client = DNSEClient(account_no="PAPER")
+    ctk.set_widget_scaling(scale)
+    popup = ConnectionPopup(ui_root, settings, "PAPER", client, lambda: None)
+    try:
+        popup.tabs.set("MÃ CK")
+        popup.top.geometry(f"{int(width * scale)}x{int(720 * scale)}")
+        settled = tk.BooleanVar(master=ui_root, value=False)
+        ui_root.after(220, lambda: settled.set(True))
+        ui_root.wait_variable(settled)
+        ui_root.update_idletasks()
+        label = popup.priority_preview
+        lines = label.cget("text").splitlines()
+        assert len(lines) == 3
+        font = tkfont.Font(root=ui_root, font=label._label.cget("font"))
+        assert max(font.measure(line) for line in lines) <= label.winfo_width()
+        assert label._label.winfo_reqheight() < 4 * font.metrics("linespace")
+        import os
+        if os.getenv("VIKING_CAPTURE_UI") == "1" and scale == 1.0 and width == 1080:
+            from pathlib import Path
+            from PIL import ImageGrab
+            path = Path(__file__).resolve().parents[2] / ".artifacts" / "ui-review" / "priority-money-clear.png"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            box = popup.priority_summary
+            x, y = box.winfo_rootx(), box.winfo_rooty()
+            ImageGrab.grab(bbox=(x, y, x + box.winfo_width(), y + box.winfo_height()), all_screens=True).save(path)
+    finally:
+        popup._close()
+        client.close()
+        ctk.set_widget_scaling(1.0)

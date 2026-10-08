@@ -48,6 +48,7 @@ KẾT NỐI → MÃ CK → VỐN RIÊNG ON, tổng **50 triệu**, ⚙ từng m�
 | IDC | 15 triệu | 50% | 7,5 triệu | 7,5 triệu |
 
 **LƯU PRIORITY**. P1 100% không ép mua hết tiền; % từng mã vẫn giữ tiền riêng.
+Tổng 4 mã: **50 triệu = được mua 25 triệu + để dành 25 triệu** (cả nhóm, không phải mỗi mã).
 PAPER 100 triệu cũng chịu cap này: MSN 15 triệu × 50% vẫn chỉ dùng 7,5 triệu.
 Nếu 100 CP theo giá trần + phí vượt cap, MARKET AUTO không mua; xem hint KL để biết số tiền cần.
 Có thêm 10 triệu: đổi tổng thành 60, cap HDB thành 15 rồi lưu; không tự mua bù.

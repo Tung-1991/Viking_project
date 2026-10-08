@@ -1107,7 +1107,9 @@ class ConnectionPopup:
             "100 triệu, P1 100%, tối đa 4 mã → mỗi mã 25 triệu, không phải một mã dùng hết tài khoản.\n"
             "ON: dùng hạn mức riêng gồm phí; 15 triệu × 50% → mua tối đa 7,5 triệu, giữ 7,5 triệu.\n"
             "Quỹ 50 triệu trong tài khoản NAV 100 triệu → dành ngân sách 50 triệu cho Priority, không chuyển tiền DNSE.\n"
-            "CÒN HẠN MỨC = MUA TỐI ĐA trừ vốn cổ đang giữ và BUY đang chờ, gồm phí. "
+            "Tổng 50 triệu, tất cả dùng 50% → cả nhóm được mua 25 triệu, để dành 25 triệu.\n"
+            "P1 100% chỉ là trần cổ phiếu của tài khoản; không đổi % sử dụng từng mã.\n"
+            "CÒN HẠN MỨC = ĐƯỢC MUA trừ vốn cổ đang giữ và BUY đang chờ, gồm phí. "
             "Đây không phải tiền khả dụng hay cam kết sẽ mua; vẫn kiểm tra tiền, room P1 và lô giao dịch.\n"
             "CHIA HẠN MỨC thay các hạn mức nháp bằng Tổng / số Priority, giữ % sử dụng. "
             "Phải LƯU mới áp dụng, không tạo lệnh. Tiền giữ lại không cho mã khác mượn; vẫn chịu tiền thật và room P1."
@@ -1783,14 +1785,46 @@ class ConnectionPopup:
             justify="left", wraplength=950, text_color=self.RED if invalid else self.MUTED,
         )
         self.priority_preview.grid(row=0, column=0, columnspan=6, sticky="ew", padx=10, pady=(6, 5))
-        for column, title in enumerate(("MÃ", "HẠN MỨC", "DÙNG", "MUA TỐI ĐA", "GIỮ TIỀN", "CÒN HẠN MỨC")):
+        _HoverHint(self.priority_preview, self._priority_preview_hint(rows, invalid))
+        headings = (
+            ("MÃ", "Mã Priority được cấu hình ở bảng này."),
+            ("HẠN MỨC", "Ngân sách dành cho mã, gồm tiền mua và phí; không phải số tiền đã mua."),
+            ("DÙNG (%)", "Tỷ lệ được mua trong hạn mức của mã, không phải % của cả tài khoản."),
+            ("ĐƯỢC MUA", "Hạn mức × % sử dụng, gồm phí. Ví dụ 15 triệu × 50% = 7,5 triệu."),
+            ("ĐỂ DÀNH", "Hạn mức − được mua. Ví dụ 15 triệu − 7,5 triệu = để dành 7,5 triệu."),
+            ("CÒN HẠN MỨC", "Được mua trừ vốn cổ đang giữ và BUY đang chờ; không phải tiền khả dụng."),
+        )
+        for column, (title, hint) in enumerate(headings):
             self.priority_summary.grid_columnconfigure(column, weight=1, uniform="priority-money")
-            ctk.CTkLabel(self.priority_summary, text=title, font=("Segoe UI", 11, "bold"),
-                         text_color=self.MUTED).grid(row=1, column=column, padx=5, pady=3)
+            heading = ctk.CTkLabel(self.priority_summary, text=title, font=("Segoe UI", 11, "bold"),
+                                  text_color=self.MUTED)
+            heading.grid(row=1, column=column, padx=5, pady=3)
+            _HoverHint(heading, hint)
         for index, values in enumerate(rows, 2):
             for column, value in enumerate(values):
                 ctk.CTkLabel(self.priority_summary, text=value, font=("Segoe UI", 12),
                              text_color=self.TEXT).grid(row=index, column=column, padx=5, pady=2)
+
+    def _priority_preview_hint(self, rows: list[tuple[str, ...]], invalid: bool) -> str:
+        """Explain the displayed draft without adding another money rule."""
+        if invalid:
+            return "Ngân sách phải > 0; tổng hạn mức từng mã không được vượt ngân sách. Chưa áp dụng bản nháp này."
+        if not self.priority_capital_enabled.get():
+            return (
+                "VỐN RIÊNG OFF: mỗi mã dùng ngân sách theo NAV × P1 / tối đa mã BOT.\n"
+                "Ví dụ 100 triệu × P1 100% / 4 mã = 25 triệu/mã. Bỏ qua hạn mức và % riêng đang nhập."
+            )
+        examples = [f"{symbol}: {cap} × {pct} = được mua {buy}; để dành {saved}."
+                    for symbol, cap, pct, buy, saved, _remaining in rows]
+        return "\n".join([
+            "ĐÂY LÀ HẠN MỨC CẤU HÌNH, không phải tiền đã mua hay số tiền được mua ngay.",
+            *examples,
+            "ĐƯỢC MUA là tổng mức trần của các mã, gồm phí; ĐỂ DÀNH là phần không dùng + phần chưa chia.",
+            "CÒN HẠN MỨC trừ vốn cổ đang giữ và BUY đang chờ. Số mua thực tế còn theo tiền, P1 và lô 100 CP.",
+            "P1 100% không tự đổi mức sử dụng 50% của mã thành 100%.",
+            "TÀI SẢN NGOÀI NGÂN SÁCH = NAV − ngân sách Priority, không cộng thêm vào hạn mức của các mã này.",
+            "Phải LƯU PRIORITY mới áp dụng bản nháp; không chuyển hay phong tỏa tiền tại DNSE.",
+        ])
 
     def _priority_preview_data(self) -> tuple[str, list[tuple[str, ...]], bool]:
         """Read-only draft preview: reuse sizing rules, never queue or save a BUY."""
@@ -1804,7 +1838,7 @@ class ConnectionPopup:
         mode = mode_var.get() if mode_var is not None else ("PAPER" if self.settings.paper_mode else "REAL")
         balance, positions, _orders = getattr(self.parent, "snapshots", {}).get(mode, ({}, [], []))
         nav, cash = (nav_from_balance(balance, positions), cash_from_balance(balance)) if balance else (None, None)
-        overview = f"PREVIEW {mode} · NAV {money(nav) if nav is not None else '—'} · TIỀN KHẢ DỤNG {money(cash) if cash is not None else '—'}"
+        overview = f"PREVIEW {mode} · TỔNG TÀI SẢN {money(nav) if nav is not None else '—'} · TIỀN KHẢ DỤNG {money(cash) if cash is not None else '—'}"
         invalid = False
         try:
             total = self._priority_total_vnd() if enabled else 0.0
@@ -1818,10 +1852,10 @@ class ConnectionPopup:
             if invalid:
                 overview += "\nQUỸ KHÔNG HỢP LỆ · Tổng > 0 và tổng hạn mức ≤ quỹ"
             else:
-                overview += f"\nQUỸ PRIORITY {money(total)} · ĐÃ CHIA {money(allocated)} · CHƯA CHIA {money(total - allocated)}"
-                overview += f"\nMUA TỐI ĐA {money(buying)} · GIỮ TIỀN {money(total - buying)} (gồm chưa chia)"
+                overview += f"\nPRIORITY {money(total)} = ĐƯỢC MUA {money(buying)} + ĐỂ DÀNH {money(total - buying)}"
+                overview += f"\nHẠN MỨC ĐÃ CHIA {money(allocated)} · CHƯA CHIA {money(total - allocated)}"
                 if nav is not None:
-                    overview += f" · NAV NGOÀI QUỸ {money(max(0.0, nav - total))}"
+                    overview += f" · TÀI SẢN NGOÀI NGÂN SÁCH {money(max(0.0, nav - total))}"
                     if total > nav:
                         overview += " · QUỸ VƯỢT NAV"
         else:
