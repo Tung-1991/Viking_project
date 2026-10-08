@@ -9,7 +9,7 @@ import customtkinter as ctk
 
 from ..rules.business import protect_level
 from ..trading.market import market_phase
-from ..trading.portfolio import size_buy_order, validate_quantity
+from ..trading.portfolio import nav_from_balance, size_buy_order, stock_exposure_limit, validate_quantity
 from ..trading.validation import decision_is_fresh
 from .view import (
     COL_BORDER, COL_GRAY, COL_GREEN, COL_MUTED, COL_SETTLEMENT_BG, COL_SETTLEMENT_TEXT,
@@ -47,7 +47,7 @@ def _preview_panel_height(viewport_pixels: int, widget_scaling: float) -> int:
 
     scaling = max(0.1, float(widget_scaling or 1.0))
     logical_height = int(round(max(0, viewport_pixels) / scaling))
-    return max(300, logical_height - 4)
+    return max(360, logical_height - 4)
 
 
 class DashboardPanelsMixin:
@@ -701,7 +701,7 @@ class DashboardPanelsMixin:
         # Keep enough real height for P1/P2/P3 and the decision reason. The
         # parent is scrollable, so a short viewport scrolls instead of clipping
         # the final guard/status lines.
-        panel = ctk.CTkFrame(parent, height=300, fg_color=COL_SURFACE_2, corner_radius=8)
+        panel = ctk.CTkFrame(parent, height=360, fg_color=COL_SURFACE_2, corner_radius=8)
         panel.grid(row=0, column=0, sticky="ew")
         panel.grid_propagate(False)
         self.preview_focus_panel = panel
@@ -907,12 +907,23 @@ class DashboardPanelsMixin:
             anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_market.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=4)
+        self.preview_rule_market_money = ctk.CTkLabel(
+            phase1, text="NAV — · CP — · GIỮ —", width=1, height=14,
+            font=("Cascadia Mono", 11), text_color=COL_PREVIEW_TEXT,
+            anchor="w", justify="left", wraplength=300,
+        )
+        self.preview_rule_market_money.grid(
+            row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=0,
+        )
+        _HoverHint(self.preview_rule_market, self._market_confirmation_hint, placement="inside")
+        _HoverHint(self.preview_rule_market_money, self._market_confirmation_hint, placement="inside")
         self.preview_rule_market_detail = ctk.CTkLabel(
             phase1, text="CHỜ PHÂN LOẠI", font=("Segoe UI", 10),
             text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_market_detail.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 4))
         self.preview_rule_market_detail.grid_remove()
+        _HoverHint(self.preview_rule_market_detail, self._market_confirmation_hint, placement="inside")
 
         phase2 = phase_card(
             2,
@@ -948,9 +959,7 @@ class DashboardPanelsMixin:
         phase3 = phase_card(
             3,
             "P3 · VỐN & KHÓA",
-            "BOT: số mã đang giữ hoặc BUY chờ / tối đa. Priority giữ slot bên trong tổng.\n"
-            "Vốn/mã thường = NAV × P1 / tối đa; Priority vốn riêng dùng hạn mức × % sử dụng.\n"
-            "Whipsaw và LOSS/BLOCK chỉ chặn BUY BOT mới, không chặn SELL và không giữ tín hiệu để mua lại.",
+            self._entry_capital_hint,
         )
         self.preview_rule_phase3 = ctk.CTkLabel(
             phase3, text="--/-- · --/MÃ", width=1, font=("Cascadia Mono", 12),
@@ -959,6 +968,7 @@ class DashboardPanelsMixin:
         self.preview_rule_phase3.grid(
             row=0, column=1, sticky="ew", padx=(0, 8), pady=4
         )
+        _HoverHint(self.preview_rule_phase3, self._entry_capital_hint, placement="inside")
         self.preview_rule_phase3_detail = ctk.CTkLabel(
             phase3, text="AUTO --", font=("Segoe UI", 12),
             text_color=COL_PREVIEW_TEXT, anchor="w",
@@ -1141,16 +1151,74 @@ class DashboardPanelsMixin:
         count, required = current.get("confirmation_count", 0), current.get("confirmation_required", 3)
         state = str(current.get("candidate_state", "UNKNOWN"))
         labels = {"UPTREND": "TĂNG", "DOWNTREND": "GIẢM", "ACCUMULATION": "TÍCH LŨY", "DISTRIBUTION": "PHÂN PHỐI"}
+        allocation = getattr(self, "_preview_market_budget", {})
+        active = labels.get(str(allocation.get("state", "UNKNOWN")), "CHƯA XÁC NHẬN")
+        active_pct = _number(allocation.get("exposure_pct"))
+        headline = f"ĐANG DÙNG: {active} · CP {active_pct:g}% / TIỀN {100 - active_pct:g}%.\n"
         if current.get("override_enabled"):
-            headline = "OVERRIDE: đang dùng trạng thái và tỷ trọng nhập tay, không chờ xác nhận."
+            explanation = "OVERRIDE: dùng trạng thái/tỷ trọng chọn tay, không chờ phiên xác nhận.\n"
         elif current.get("confirmation_pending"):
-            headline = f"Chờ đổi sang {labels.get(state, 'CHƯA CÓ')} · đã ghi nhận {count}/{required} phiên."
+            from ..rules.business import StaticRuleParameters
+            candidate_pct = StaticRuleParameters.from_dict(self.settings.rule_parameters).exposure.get(state)
+            target = f" (CP {candidate_pct * 100:g}% / TIỀN {100 - candidate_pct * 100:g}%)" if candidate_pct is not None else ""
+            explanation = (
+                f"ĐANG XÁC NHẬN: {labels.get(state, 'ĐANG TÍNH')} · {count}/{required} PHIÊN.\n"
+                f"Cần {required} phiên liên tiếp cùng trạng thái mới đổi sang {labels.get(state, 'trạng thái mới')}{target}. "
+                f"Trong lúc chờ vẫn dùng {active}; ứng viên đổi thì đếm lại.\n"
+            )
         else:
-            headline = "Hiện không có trạng thái mới đang chờ xác nhận."
-        return (f"{headline}\n"
-                "1/3 = đã đạt 1 trong 3 phiên liên tiếp, không phải số lần bot quét hay xác nhận mua.\n"
-                "3 là setting RULE → P1 → Xác nhận (phiên), đổi được; ứng viên đổi thì đếm lại. "
-                "Trong lúc chờ vẫn dùng trạng thái đã xác nhận. OVERRIDE dùng tỷ trọng nhập tay.")
+            explanation = "Hiện không có trạng thái mới đang chờ xác nhận.\n"
+        nav = allocation.get("nav")
+        example = (
+            f"{allocation.get('mode', '')}: NAV {_compact_vnd(nav)} → CP tối đa "
+            f"{_compact_vnd(allocation.get('stock_limit'))}, giữ theo P1 {_compact_vnd(allocation.get('cash_reserve'))}.\n"
+            if nav is not None else "Chờ snapshot tài khoản để tính số tiền theo P1.\n"
+        )
+        return (f"{headline}{explanation}"
+                "P1 TỰ ĐỘNG = tự phân loại VNINDEX, không phải bật BUY BOT; không chờ giảm giá để mua/bán.\n"
+                "CP% / TIỀN% tính trên NAV của sổ REAL/PAPER đang xem: tiền + giá trị cổ phiếu.\n"
+                f"{example}"
+                "Đây là giới hạn phân bổ, không phải tỷ trọng đang nắm hay ngân sách của một lệnh. "
+                "Đổi P1 không tự bán để cân lại danh mục.\n"
+                f"{count}/{required} đếm phiên, không đếm lần quét bot. Đổi số phiên tại RULE → P1 → Xác nhận (phiên).")
+
+    def _entry_capital_hint(self) -> str:
+        return (
+            "VỐN AUTO là ngân sách mua gợi ý cho mã đang chọn, tại thời điểm preview; tiền mua cổ trước phí.\n"
+            "Ví dụ NAV 50 triệu × P1 90% / tối đa 5 mã = 9 triệu/mã. "
+            "Tiền, room P1, BUY chờ và no-compound còn giới hạn con số thực tế.\n"
+            "Priority vốn riêng dùng hạn mức × % sử dụng, trừ vốn đang giữ/BUY chờ và phí. "
+            "Lô 100 và giá dự phòng khiến tiền mua thực tế thường thấp hơn ngân sách.\n"
+            "MANUAL nhập khối lượng tự quyết, không bị ép về VỐN AUTO; vẫn kiểm tra tiền/phí và điều kiện lệnh. "
+            "AUTO 100 khi bật chỉ nâng lên 1 lô nếu còn đủ tiền và room; không vượt cap Priority.\n"
+            "BOT = số mã đang giữ/BUY chờ trên tối đa; Priority giữ slot bên trong tổng. "
+            "Chống nhiễu và LOSS/BLOCK chỉ chặn BUY BOT mới, không chặn SELL hay lưu tín hiệu mua lại."
+        )
+
+    def _phase1_capital_preview(self, details: dict[str, Any]) -> dict[str, Any]:
+        """Display the current book's P1 envelope, not its actual stock/cash mix."""
+        from ..rules.business import StaticRuleParameters
+        params = StaticRuleParameters.from_dict(self.settings.rule_parameters)
+        mode = self.mode.get()
+        state_fn = getattr(getattr(self, "rule_state", None), "confirmed_market_state", None)
+        state = state_fn() if callable(state_fn) else "UNKNOWN"
+        if self.settings.market_phase_override_enabled:
+            exposure = self.settings.market_phase_override_exposure_pct / 100.0
+            state = self.settings.market_phase_override
+        elif callable(state_fn):
+            exposure = params.exposure.get(state, 0.0)
+        else:
+            exposure = _number(details.get("exposure"))
+            exposure = exposure / 100.0 if exposure > 1.0 else exposure
+        exposure = stock_exposure_limit(1.0, exposure)
+        balance, positions, _orders = getattr(self, "snapshots", {}).get(mode, ({}, [], []))
+        nav = nav_from_balance(balance, positions) if balance else None
+        stock_limit = stock_exposure_limit(nav, exposure) if nav is not None else None
+        return {
+            "mode": mode, "nav": nav, "state": state, "exposure_pct": exposure * 100.0,
+            "state_authoritative": bool(callable(state_fn) or self.settings.market_phase_override_enabled),
+            "stock_limit": stock_limit, "cash_reserve": nav - stock_limit if nav is not None else None,
+        }
 
     def _refresh_full_order_preview(self, status: dict[str, Any] | None = None) -> None:
         if not hasattr(self, "preview_order_title"):
@@ -1470,9 +1538,22 @@ class DashboardPanelsMixin:
             text_color=COL_GREEN if bot_enabled else COL_RED,
         )
         market_details = details.get("market") if isinstance(details.get("market"), dict) else {}
+        confirmation_fn = getattr(getattr(self, "rule_state", None), "market_confirmation", None)
+        if callable(confirmation_fn):
+            confirmation = confirmation_fn(int(rule_params.get("confirm_sessions", 3)))
+            market_details = {
+                **market_details, "confirmed_state": confirmation["confirmed"],
+                "candidate_state": confirmation["candidate"], "confirmation_count": confirmation["count"],
+                "confirmation_required": confirmation["required"], "confirmation_pending": confirmation["pending"],
+            }
+        market_details = {**market_details, "override_enabled": self.settings.market_phase_override_enabled}
+        if self.settings.market_phase_override_enabled:
+            market_details["confirmation_pending"] = False
         self._preview_market_confirmation = market_details
+        allocation = self._phase1_capital_preview(details)
+        self._preview_market_budget = allocation
         display_state = str(
-            market_state
+            allocation["state"] if allocation["state_authoritative"] else market_state
             or "UNKNOWN"
         ).upper()
         state_labels = {
@@ -1490,16 +1571,22 @@ class DashboardPanelsMixin:
             else COL_WARN
         )
         pending_confirmation = bool(market_details.get("confirmation_pending", False))
-        exposure = _number(details.get("exposure"))
-        exposure_pct = exposure * 100.0 if abs(exposure) <= 1.0 else exposure
+        exposure_pct = allocation["exposure_pct"]
         cash_pct = max(0.0, 100.0 - exposure_pct)
         self.preview_rule_market.configure(
             text=f"{state_label} · CP {exposure_pct:g}% · TIỀN {cash_pct:g}%",
             text_color=market_color,
         )
+        self.preview_rule_market_money.configure(
+            text=(f"NAV {_compact_vnd(allocation['nav'])} · CP ≤{_compact_vnd(allocation['stock_limit'])} · GIỮ ≥{_compact_vnd(allocation['cash_reserve'])}"
+                  if allocation["nav"] is not None else "NAV — · CP — · GIỮ —"),
+        )
         market_notes: list[str] = []
         override_enabled = bool(market_details.get("override_enabled", False))
-        market_notes.append("OVERRIDE" if override_enabled else "AUTO")
+        if override_enabled:
+            market_notes.append("OVERRIDE")
+        elif not pending_confirmation:
+            market_notes.append("P1 TỰ ĐỘNG")
         if pending_confirmation:
             confirmation_count = max(
                 0, int(market_details.get("confirmation_count", 0) or 0),
@@ -1508,7 +1595,7 @@ class DashboardPanelsMixin:
                 1, int(market_details.get("confirmation_required", 1) or 1),
             )
             market_notes.append(
-                f"CHỜ {state_labels.get(str(market_details.get('candidate_state', '')).upper(), '?')} {confirmation_count}/{confirmation_required}"
+                f"XÁC NHẬN {state_labels.get(str(market_details.get('candidate_state', '')).upper(), '?')} · {confirmation_count}/{confirmation_required} PHIÊN"
             )
         volume_confidence = str(market_details.get("volume_confidence") or "OFF").upper()
         if volume_confidence != "OFF":
@@ -1522,7 +1609,7 @@ class DashboardPanelsMixin:
         )
         if market_notes:
             self.preview_rule_market_detail.grid(
-                row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 3),
+                row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 3),
             )
         else:
             self.preview_rule_market_detail.grid_remove()
@@ -1580,6 +1667,14 @@ class DashboardPanelsMixin:
         self.preview_rule_rsi.configure(text=rsi_text, text_color=rsi_color)
 
         checks = details.get("entry_checks") if isinstance(details.get("entry_checks"), dict) else {}
+        budget_fn = getattr(self, "_preview_entry_checks", None)
+        budget_checks = budget_fn(symbol, status) if callable(budget_fn) else None
+        if budget_checks is not None:
+            # Keep signal guards/slot counts, but money comes from the current
+            # book, exactly as in the AUTO ticket. No signal or broker call here.
+            checks = {**checks, **budget_checks}
+            for key in ("order_budget", "available_capital", "available_cash", "nav", "minimum_order_room"):
+                checks[key] = budget_checks.get(key, 0.0)
         open_positions = max(0, int(checks.get("open_positions", 0) or 0))
         max_positions = max(0, int(checks.get("max_positions", 0) or 0))
         capital = _number(checks.get("order_budget") or checks.get("available_capital"))
@@ -1612,8 +1707,10 @@ class DashboardPanelsMixin:
             phase3_parts.append(f"TỔNG {total_positions}")
         if pending_buys:
             phase3_parts.append(f"BUY CHỜ {pending_buys}")
-        if capital > 0:
-            phase3_parts.append(f"VỐN KẾ { _compact_vnd(capital)}")
+        phase3_parts.append(
+            f"VỐN AUTO {_compact_vnd(capital)}" if "order_budget" in (budget_checks if budget_checks is not None else checks)
+            else "VỐN AUTO —"
+        )
         self.preview_rule_phase3.configure(
             text=" · ".join(phase3_parts),
             text_color=COL_WARN if guard_warn else COL_TEXT,

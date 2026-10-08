@@ -23,6 +23,10 @@
    PREVIEW là ước tính; **CHƯA LƯU** chưa áp dụng, `—` là thiếu dữ liệu/số lượng.
    Để trống KHỐI LƯỢNG = AUTO theo P1/OVERRIDE và hạn mức; không cần tín hiệu BUY.
    Nhập khối lượng = dùng số đặt tay. TP/SL preview tiền là trước phí/thuế.
+   P1 CP%/TIỀN% tính trên NAV sổ đang xem; số tiền là giới hạn phân bổ, không phải
+   danh mục thực tế. VỐN AUTO là ngân sách gợi ý cho mã đang chọn, không ép lệnh MANUAL.
+   XÁC NHẬN GIẢM 1/3 PHIÊN: đang kiểm tra đổi trạng thái; vẫn dùng P1 đã xác nhận,
+   không phải chờ giá giảm để mua/bán. Hover dòng/ⓘ xem trạng thái và tỷ trọng trước/sau.
 5. Lệnh REAL đầu tiên đối chiếu ID, khớp/còn lại, giá vốn và phí trước khi tăng quy mô.
 
 ## Bộ thử MSN / CTS / HDB / IDC
@@ -59,6 +63,8 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   mua sau là quyết định MANUAL mới. Ưu tiên thao tác qua Viking.
 - BLOCK phải **MỞ BLOCK** đúng mã/sổ. ↻ reset thống kê/khóa chờ, không mở BLOCK,
   không xóa vị thế. THEO NGÀY chốt đúng giờ GMT+7; CỘNG DỒN từ lần ↻ gần nhất.
+- Telegram: GOM chờ gom tin BUY, không chờ đặt lệnh; GIÃN hạn chế tin mới cùng mã/loại.
+  0 phút vẫn chống tin trùng. 1 TIN/VỊ THẾ = tổng kết khi BOT bán hết, không phải mỗi lần khớp.
 
 ## Khi có bất thường
 

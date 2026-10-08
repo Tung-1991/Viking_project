@@ -1167,7 +1167,11 @@ class ConnectionPopup:
         body = self._body(frame)
         card = self._card(
             body, "THÔNG BÁO TELEGRAM",
-            "Chỉ điều khiển gửi tin; không thay đổi AUTO/ALERT hay hành vi đặt lệnh.",
+            "Chỉ điều khiển gửi tin; không thay đổi AUTO/ALERT hay hành vi đặt lệnh.\n"
+            "GOM: chờ gom tin BUY, không trì hoãn đặt lệnh. GIÃN: cách giữa các thông báo mới cùng loại/mã.\n"
+            "0 phút = không chờ/không giãn thời gian, vẫn chống tin trùng. "
+            "Vị thế đóng gửi 1 tin tổng kết cho mỗi vị thế BOT đã bán hết, không phải giới hạn toàn bot một tin.\n"
+            "Cần bật Telegram, bật loại tin và LƯU. GỬI THỬ kiểm tra token/chat ID; không đặt lệnh.",
         )
         card.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
         card.grid_columnconfigure(1, weight=1)
@@ -1222,7 +1226,7 @@ class ConnectionPopup:
             border_width=1, border_color=self.BORDER,
         )
         event_box.grid(row=4, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 3))
-        event_box.grid_columnconfigure(0, weight=1)
+        event_box.grid_columnconfigure(2, weight=1)
         ctk.CTkLabel(
             event_box, text="LOẠI THÔNG BÁO", font=("Segoe UI", 10, "bold"),
             text_color=self.MUTED, anchor="w",
@@ -1230,31 +1234,33 @@ class ConnectionPopup:
         ctk.CTkLabel(
             event_box, text="GỬI", font=("Segoe UI", 10, "bold"),
             text_color=self.MUTED,
-        ).grid(row=0, column=1, padx=4, pady=(5, 2))
+        ).grid(row=0, column=3, padx=4, pady=(5, 2))
         ctk.CTkLabel(
-            event_box, text="THỜI GIAN", font=("Segoe UI", 10, "bold"),
+            event_box, text="GOM / GIÃN TIN", font=("Segoe UI", 10, "bold"),
             text_color=self.MUTED,
-        ).grid(row=0, column=2, padx=4, pady=(5, 2))
+        ).grid(row=0, column=4, columnspan=2, padx=4, pady=(5, 2))
+        self.tele_event_labels: dict[str, Any] = {}
+        self.tele_event_hint_buttons: dict[str, Any] = {}
         self.tele_event_switches: dict[str, tk.BooleanVar] = {}
         self.tele_cooldown_entries: dict[str, ctk.CTkEntry] = {}
         self.tele_event_time_controls: dict[str, Any] = {}
         rows = (
-            ("buy_queued", "BOT BUY ĐÃ XẾP LỆNH", "Gom nhiều BUY BOT trong cửa sổ phút này thành một tin; MANUAL không gửi loại tin này.", "batch"),
-            ("closed", "VỊ THẾ BOT ĐÃ ĐÓNG", "Chỉ gửi sau khi bán hết vị thế và chống trùng đúng một lần cho mỗi trade; không dùng cooldown thời gian.", "once"),
-            ("protect", "PROTECT CHẠM MỨC", "AUTO vẫn bán dù OFF. ON = AUTO vừa bán vừa báo; ALERT chỉ báo và không bán.", "cooldown"),
-            ("indicator_exit", "E · EXIT ALERT", "Báo khi E phát tín hiệu; E ở ALERT không đặt lệnh.", "cooldown"),
+            ("buy_queued", "BOT BUY ĐÃ XẾP LỆNH", "Báo BUY BOT đã tạo lệnh, không có nghĩa đã khớp. 30 phút = gom các BUY thành một tin; 0 = gửi ngay. Lệnh vẫn xử lý ngay, không chờ Telegram. MANUAL không gửi loại tin này.", "batch"),
             (
-                "blocked_buy", "TÍN HIỆU",
+                "blocked_buy", "BUY CÓ TÍN HIỆU · CHƯA MUA",
                 "Gửi BUY đã xuất hiện trong bảng TÍN HIỆU nhưng không thành lệnh, "
                 "ví dụ BOT OFF, đủ slot, khóa mua, thiếu vốn hoặc broker từ chối.",
                 "cooldown",
             ),
+            ("protect", "PROTECT CHẠM MỨC", "OFF ở đây chỉ tắt tin, PROTECT AUTO vẫn bán. ON = AUTO vừa bán vừa báo; PROTECT ALERT chỉ báo, không bán. Phút = giãn các tin mới cùng mã, không trì hoãn SELL.", "cooldown"),
+            ("indicator_exit", "E · EXIT ALERT", "Báo khi E phát tín hiệu ALERT; ALERT không đặt lệnh. Phút = giãn các tin mới cùng mã, không phải cứ mỗi khoảng này gửi một tin.", "cooldown"),
+            ("closed", "VỊ THẾ BOT ĐÃ ĐÓNG", "Gửi 1 tin tổng kết khi vị thế BOT đã bán hết, không chờ phút. Ví dụ mua 1.000 CP: bán 500 chưa tổng kết; bán nốt 500 gửi 1 tin. Vị thế BOT tiếp theo có tin riêng. Cần bật Telegram + dòng này và LƯU.", "once"),
+            ("external_sell", "SELL TRÊN DNSE APP", "Báo khi Viking phát hiện và đồng bộ một lệnh bán ngoài app Viking. Phút = giãn các thông báo mới; 0 = không giãn thời gian, vẫn chống trùng theo lệnh.", "cooldown"),
             (
                 "corporate_action", "LỊCH NGHỈ & CHỐT QUYỀN",
                 "Báo ngày thị trường nghỉ và cảnh báo mã đang giữ tới ngày giao dịch không hưởng quyền.",
                 "cooldown",
             ),
-            ("external_sell", "SELL TRÊN DNSE APP", "Báo khi Viking phát hiện và đồng bộ một lệnh bán ngoài app Viking.", "cooldown"),
             (
                 "system", "HỆ THỐNG",
                 "Báo lỗi thật của daemon, lịch giao dịch, DNSE API/WS hoặc xử lý lệnh; "
@@ -1265,19 +1271,21 @@ class ConnectionPopup:
         notifications = self.settings.telegram_notifications
         cooldowns = self.settings.telegram_cooldown_minutes
         for row_index, (key, label, hint, timing_mode) in enumerate(rows, start=1):
-            label_box = ctk.CTkFrame(event_box, fg_color="transparent")
-            label_box.grid(row=row_index, column=0, sticky="ew", padx=(8, 2), pady=1)
-            ctk.CTkLabel(
-                label_box, text=label, font=("Segoe UI", 11, "bold"),
+            label_widget = ctk.CTkLabel(
+                event_box, text=label, font=("Segoe UI", 11, "bold"),
                 text_color=self.TEXT, anchor="w",
-            ).pack(side="left")
-            self._hint_icon(label_box, hint).pack(side="left", padx=(5, 0))
+            )
+            label_widget.grid(row=row_index, column=0, sticky="w", padx=(10, 4), pady=1)
+            self.tele_event_labels[key] = label_widget
+            hint_button = self._hint_icon(event_box, hint)
+            hint_button.grid(row=row_index, column=1, padx=(0, 8), pady=1)
+            self.tele_event_hint_buttons[key] = hint_button
             variable = tk.BooleanVar(value=bool(notifications.get(key, False)))
             self.tele_event_switches[key] = variable
             ctk.CTkSwitch(
                 event_box, text="", variable=variable, width=38,
                 progress_color=self.GREEN, button_color=self.TEXT,
-            ).grid(row=row_index, column=1, padx=6, pady=1)
+            ).grid(row=row_index, column=3, padx=6, pady=1)
             if timing_mode in {"batch", "cooldown"}:
                 entry = ctk.CTkEntry(
                     event_box, width=58, height=26, justify="center",
@@ -1291,7 +1299,7 @@ class ConnectionPopup:
                         else cooldowns.get(key, 0)
                     ),
                 )
-                entry.grid(row=row_index, column=2, padx=(4, 2), pady=1)
+                entry.grid(row=row_index, column=4, padx=(4, 2), pady=1)
                 self.tele_event_time_controls[key] = entry
                 if timing_mode == "batch":
                     self.tele_batch = entry
@@ -1299,16 +1307,17 @@ class ConnectionPopup:
                     self.tele_cooldown_entries[key] = entry
                 suffix = ctk.CTkLabel(
                     event_box,
-                    text="ph · gom" if timing_mode == "batch" else "ph",
+                    text="ph · gom" if timing_mode == "batch" else "ph · giãn",
                     font=("Segoe UI", 9), text_color=self.MUTED,
                 )
-                suffix.grid(row=row_index, column=3, sticky="w", padx=(0, 8))
+                suffix.grid(row=row_index, column=5, sticky="w", padx=(0, 8))
             else:
                 timing = ctk.CTkLabel(
-                    event_box, text="1 LẦN/TRADE", font=("Segoe UI", 9, "bold"),
+                    event_box, text="1 TIN/VỊ THẾ", font=("Segoe UI", 9, "bold"),
                     text_color=self.MUTED,
                 )
-                timing.grid(row=row_index, column=2, columnspan=2, padx=6)
+                timing.grid(row=row_index, column=4, columnspan=2, padx=6)
+                _HoverHint(timing, hint)
                 self.tele_event_time_controls[key] = timing
         tele_actions = ctk.CTkFrame(card, fg_color="transparent")
         tele_actions.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 3))

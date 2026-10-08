@@ -57,9 +57,9 @@ def test_dynamic_atr_preview_uses_the_selected_symbols_completed_daily_atr() -> 
 
 
 def test_preview_height_reverses_customtkinter_dpi_scaling() -> None:
-    assert _preview_panel_height(600, 2.0) == 300
-    assert _preview_panel_height(720, 2.0) == 356
-    assert _preview_panel_height(290, 1.0) == 300
+    assert _preview_panel_height(600, 2.0) == 360
+    assert _preview_panel_height(720, 2.0) == 360
+    assert _preview_panel_height(290, 1.0) == 360
 
 
 def test_operator_typography_separates_keys_from_values() -> None:
@@ -246,6 +246,9 @@ def test_compact_rules_priority_draft_and_read_only_previews(ui_root, monkeypatc
         assert connection.dnse_key.cget("show") == "•"
         connection.tabs.set("DNSE")
         capture(connection.top, "connection")
+        connection.tabs.set("TELEGRAM")
+        capture(connection.top, "telegram")
+        assert len({button.winfo_x() for button in connection.tele_event_hint_buttons.values()}) == 1
         connection.daily_stats_choice.set("CỘNG DỒN")
         connection._refresh_stats_time_state()
         assert connection.daily_stats_time.cget("state") == "disabled"
@@ -754,7 +757,12 @@ def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> 
         assert connection_popup.daily_stats_time.get() == "00:00"
         assert connection_popup.btn_save_daily_stats.cget("text") == "LƯU"
         assert connection_popup.tele_event_time_controls["buy_queued"] is connection_popup.tele_batch
-        assert connection_popup.tele_event_time_controls["closed"].cget("text") == "1 LẦN/TRADE"
+        assert connection_popup.tele_event_time_controls["closed"].cget("text") == "1 TIN/VỊ THẾ"
+        assert list(connection_popup.tele_event_labels) == [
+            "buy_queued", "blocked_buy", "protect", "indicator_exit", "closed",
+            "external_sell", "corporate_action", "system",
+        ]
+        assert {int(button.grid_info()["column"]) for button in connection_popup.tele_event_hint_buttons.values()} == {1}
         assert connection_popup.save_telegram_token_switch.cget("text") == "LƯU BOT TOKEN"
         assert connection_popup.btn_clear_telegram_token.cget("text") == "XÓA"
         assert set(connection_popup.tele_cooldown_entries) == {
