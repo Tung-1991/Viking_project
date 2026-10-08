@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import math
 import threading
 import time
 import uuid
@@ -388,6 +389,11 @@ class TradeStateStore:
         with self._lock:
             cycle = self.get(trade_id)
             if not cycle or cycle.status != "OPEN":
+                return None
+            try:
+                if not all(math.isfinite(float(value)) for value in (sl_value, tp_value) if value is not None):
+                    return None
+            except (ValueError, TypeError, OverflowError):
                 return None
             if em_modes is not None:
                 cycle.em_modes = list(em_modes)

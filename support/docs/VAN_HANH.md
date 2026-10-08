@@ -75,6 +75,9 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Nạp preset không gắn E vào vị thế cũ đang OFF; vị thế đã bật E dùng chính sách AUTO mới.
 - CACHE vàng: chưa gửi ở app. PARTIAL: khớp một phần, phần khớp được quản lý.
   T+ tím: đã mua nhưng chưa đủ cổ được phép bán. PendingCancel: chưa hủy xong.
+  Log Bot/Manual ghi đúng sổ, ID, KL đã khớp/còn lại; CHỜ KHỚP không phải đã mua xong.
+  Chỉ ghi khi trạng thái/KL đổi, không phát lại log cũ khi restart. Vị thế ngoài app
+  chưa nhận quản lý hiển thị SL OFF; PROTECT CHỜ DỮ LIỆU không phải mức lùi bằng 0.
 - BUY bỏ qua không tự mua lại khi có tiền/slot. Lịch sử tín hiệu để đối chiếu;
   mua sau là quyết định MANUAL mới. Ưu tiên thao tác qua Money Hunter.
 - BLOCK phải **MỞ BLOCK** đúng mã/sổ. ↻ reset thống kê/khóa chờ, không mở BLOCK,

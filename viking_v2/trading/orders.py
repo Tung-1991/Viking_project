@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import threading
 import time
 from datetime import datetime
@@ -583,7 +584,12 @@ class OrderQueue:
             return None
         if normalized < item.filled_quantity:
             return None
-        price = float(limit_price or 0.0)
+        try:
+            price = float(limit_price or 0.0)
+            if not all(math.isfinite(float(value)) for value in (price, sl_value, tp_value) if value is not None):
+                return None
+        except (ValueError, TypeError, OverflowError):
+            return None
         if item.order_type == "LO" and price <= 0:
             return None
         changes: dict[str, Any] = {

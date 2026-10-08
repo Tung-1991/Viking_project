@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 COL_GREEN = "#22C55E"
@@ -25,8 +26,9 @@ FONT_PREVIEW_VALUE = ("Cascadia Mono", 14)
 
 def _number(value: Any, default: float = 0.0) -> float:
     try:
-        return float(value or default)
-    except (TypeError, ValueError):
+        result = float(value or default)
+        return result if math.isfinite(result) else default
+    except (TypeError, ValueError, OverflowError):
         return default
 
 def _cash(balance: dict[str, Any]) -> float:

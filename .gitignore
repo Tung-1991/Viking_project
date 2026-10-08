@@ -43,6 +43,10 @@ Thumbs.db
 
 # Ban sao va bao cao kiem tra cuc bo; khong dua du lieu tai khoan len Git
 audits/
+# Thu muc cu da gom vao support; khong dua lai cache/layout cu len Git.
+/docs/
+/scripts/
+/tests_v2/
 support/output/
 *.bak
 *.tmp

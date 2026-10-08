@@ -78,6 +78,21 @@ def test_current_book_decision_has_priority_over_read_only_preview():
     assert view._preview_indicator_source["source"] == "DECISION"
 
 
+@pytest.mark.parametrize("mode", ["PAPER", "REAL"])
+def test_stale_daemon_decision_does_not_freeze_indicator_preview(mode):
+    view = subject(mode)
+    old = indicator_snapshot(history())
+    old["buy_ema_fast"] = 999
+    status = {"decisions_by_mode": {mode: {"AAA": {
+        "symbol": "AAA", "details": {"execution_mode": mode, "updated_at": time.time() - 120,
+                                    "indicators": old, "atr14_daily_pct": 99},
+    }}}}
+    result = view._preview_indicator_details(status, "AAA")
+    assert result["indicators"]["buy_ema_fast"] == pytest.approx(indicator_snapshot(history())["buy_ema_fast"])
+    assert result["atr14_daily_pct"] == pytest.approx(average_true_range_pct(history()))
+    assert view._preview_indicator_source["source"] == "DAILY_PREVIEW"
+
+
 def test_setting_change_recalculates_preview_instead_of_showing_old_ema_period():
     view = subject()
     view.settings.rule_parameters.update(buy_ema_fast=5, buy_ema_slow=10, rsi_period=20)

@@ -61,6 +61,10 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         self.queue = OrderQueue(self.bridge.pending_orders_path)
         self.queue.recover_claims()
         self.queue.discard_unsubmitted_bot_buys("Restart: bỏ BUY tự động chưa gửi")
+        self._order_log_states = {
+            (item.execution_mode, item.id): self._order_progress_signature(item)
+            for item in self.queue.list_all()
+        }
         self.trade_state = TradeStateStore(
             self.bridge.trade_state_path,
             loss_lock_policy=lambda: (

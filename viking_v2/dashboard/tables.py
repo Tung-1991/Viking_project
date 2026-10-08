@@ -10,6 +10,7 @@ from typing import Any
 from .. import config
 from ..trading.orders import CLAIMABLE_STATUSES, FINAL_STATUSES, LOCALLY_CONTROLLABLE_STATUSES
 from ..trading.portfolio import account_price
+from ..trading.validation import decision_is_fresh, decisions_for_mode
 from .view import _compact_vnd, _display_price, _number, _price_unit
 
 
@@ -152,11 +153,13 @@ class DashboardTablesMixin:
     def _render_tables(self, runtime_status: dict[str, Any] | None = None) -> None:
         runtime_status = runtime_status if isinstance(runtime_status, dict) else self.bridge.read_status()
         runtime_ticks = runtime_status.get("ticks") if isinstance(runtime_status.get("ticks"), dict) else {}
-        runtime_decisions = runtime_status.get("decisions") if isinstance(runtime_status.get("decisions"), dict) else {}
         self._last_running_render = time.time()
         columns = RUNNING_COLUMNS
         local_by_mode = {"REAL": [], "PAPER": []}
-        for item in self.queue.list_all():
+        local_items = self.queue.list_all()
+        if hasattr(self, "_order_log_states"):
+            self._sync_order_progress(local_items)
+        for item in local_items:
             if item.status.upper() not in FINAL_STATUSES:
                 local_by_mode[item.execution_mode].append(item)
         # One fresh read per render, not one full ledger decode per visible row.
@@ -174,6 +177,9 @@ class DashboardTablesMixin:
                 active_cycles.setdefault(key, cycle)
                 active_cycles.setdefault((*key, cycle.loan_package_id), cycle)
         for mode, tree in self.trees.items():
+            runtime_decisions = decisions_for_mode(
+                runtime_status, mode, default_paper=getattr(self.settings, "paper_mode", True),
+            )
             selected_before = tuple(tree.selection())
             yview_before = tree.yview()
             previous_order = tuple(tree.get_children())
@@ -209,6 +215,9 @@ class DashboardTablesMixin:
                 market_price = tick_price or account_price(row, row.get("marketPrice", row.get("price", 0))) or avg_price
                 trade_id = str(row.get("tradeId", row.get("positionId", "")) or "")
                 cycle = cycles_by_id.get(trade_id) if trade_id else None
+                if cycle and (cycle.execution_mode != mode or cycle.symbol != symbol):
+                    cycle = None
+                    trade_id = ""
                 if not cycle:
                     package_id = str(row.get("loanPackageId", "") or "")
                     key = (symbol, mode, package_id) if package_id else (symbol, mode)
@@ -217,7 +226,7 @@ class DashboardTablesMixin:
                     trade_id = cycle.id
                 metrics = self.rule_state.position_metrics(symbol, trade_id) if trade_id else {}
                 cycle_modes = set(cycle.em_modes if cycle else [])
-                sl_enabled = bool(cycle.sl_enabled) if cycle else True
+                sl_enabled = bool(cycle.sl_enabled) if cycle else False
                 if not sl_enabled:
                     sl_pct = 0.0
                     sl_price = 0.0
@@ -241,10 +250,9 @@ class DashboardTablesMixin:
                 elif cycle and cycle.tp_mode == "PERCENT" and cycle.tp_value > 0:
                     tp_pct = float(cycle.tp_value)
                     tp_price = avg_price * (1.0 + tp_pct / 100.0) if avg_price > 0 else 0.0
-                elif cycle and str(cycle.source).upper() == "MANUAL":
-                    # Compatibility for manual positions created before TP was persisted.
-                    tp_pct = 7.0
-                    tp_price = avg_price * 1.07 if avg_price > 0 else 0.0
+                elif "TP" in cycle_modes:
+                    tp_pct = take_profit_pct
+                    tp_price = avg_price * (1.0 + tp_pct / 100.0) if avg_price > 0 else 0.0
                 else:
                     tp_pct = 0.0
                     tp_price = 0.0
@@ -294,10 +302,14 @@ class DashboardTablesMixin:
                     opened = cycle.opened_at
                 iid = f"POSITION:{mode}:{trade_id or symbol}:{index}"
                 peak_pct = float(metrics.get("peak_profit_pct", pnl_pct) or pnl_pct)
-                take_profit_enabled = "TP" in cycle_modes
+                take_profit_enabled = tp_price > 0
                 normal_enabled = "NORMAL" in cycle_modes
                 indicator_enabled = "IND_EXIT" in cycle_modes
                 decision = runtime_decisions.get(symbol) if isinstance(runtime_decisions.get(symbol), dict) else {}
+                if (not decision_is_fresh(decision, symbol, mode)
+                        or ((decision.get("details") or {}).get("trade_id")
+                            and (decision.get("details") or {})["trade_id"] != trade_id)):
+                    decision = {}
                 decision_details = decision.get("details") if isinstance(decision.get("details"), dict) else {}
                 repeat_effective = bool(
                     params.get("normal_repeat_enabled", False)
@@ -364,12 +376,14 @@ class DashboardTablesMixin:
                 start_text = (
                     f"START {_number(protect_activation_mfe):.1f}% "
                     f"(ATR1D T−1 {_number(protect_atr):.1f}%×{_number(protect_atr_activation_multiplier):g})"
-                    if start_active else "START OFF"
+                    if start_active and protect_atr is not None and protect_activation_mfe is not None
+                    else "START CHỜ ATR" if start_active else "START OFF"
                 )
                 atr_text = (
                     f"LÙI ATR {_number(protect_atr) * _number(protect_atr_multiplier):.1f}% "
                     f"({_number(protect_atr_multiplier):g}×ATR)"
-                    if atr_active else "ATR TRAIL OFF"
+                    if atr_active and protect_atr is not None
+                    else "LÙI CHỜ ATR" if atr_active else "ATR TRAIL OFF"
                 )
                 until_text = f"{_number(protect_retention_until):g}%" if until_active else "ARM"
                 keep_text = (
@@ -429,12 +443,12 @@ class DashboardTablesMixin:
                     entry_context += f" · {entry_budget / 1_000_000.0:.2f}tr"
                 take_profit_state = (
                     "OFF" if not take_profit_enabled
-                    else "HIT" if pnl_pct >= take_profit_pct else "WAIT"
+                    else "HIT" if market_price + 1e-9 >= tp_price else "WAIT"
                 )
                 status_parts = [
                     entry_context,
                     settlement_status,
-                    f"TP {take_profit_state}·+{take_profit_pct:g}%",
+                    f"TP {take_profit_state}" + (f"·+{tp_pct:g}%" if take_profit_enabled else ""),
                     (
                         f"PROTECT {protect_mode}/{normal_state}"
                         f"·MFE {_number(protect_mfe):.1f}%"
@@ -444,7 +458,11 @@ class DashboardTablesMixin:
                         f"·{keep_text}"
                         f"·{_display_price(protect_price)}"
                         f"·SELL {_number(protect_sell):g}%"
-                    ),
+                    ) if normal_enabled and protect_mfe is not None and protect_trail is not None else (
+                        f"PROTECT {protect_mode}/{normal_state}"
+                        + ("·CHỜ DỮ LIỆU" if normal_state != "DONE" else "")
+                        + f"·SELL {_number(protect_sell):g}%"
+                    ) if normal_enabled else "PROTECT OFF",
                     f"E {indicator_state}",
                 ]
                 if cycle and cycle.is_reentry:
@@ -505,10 +523,16 @@ class DashboardTablesMixin:
                     "trade_id": trade_id, "position": row,
                     "local_id": pending_close.id if pending_close else "",
                     "broker_order_id": pending_close.broker_order_id if pending_close else "",
-                    "cancellable": bool(pending_close),
+                    "cancellable": bool(pending_close and (
+                        pending_close.status.upper() in LOCALLY_CONTROLLABLE_STATUSES
+                        or (mode == "REAL" and pending_close.broker_order_id
+                            and pending_close.status.upper() in {"WORKING", "PARTIAL"})
+                    )),
                 }
 
-            local_broker_ids: set[str] = set()
+            # Include close requests merged into a position row as well.
+            local_broker_ids = {value for item in local_by_mode[mode]
+                                for value in [item.broker_order_id, *item.broker_order_ids] if value}
             for item in reversed(local_by_mode[mode]):
                 if item.id in consumed_close_ids:
                     continue
@@ -525,7 +549,7 @@ class DashboardTablesMixin:
                     "EXTERNAL_DNSE": "EXTERNAL_DNSE",
                 }.get(str(item.source).upper(), str(item.source).upper())
                 item_modes = set(cycle.em_modes if cycle else item.em_modes)
-                item_take_profit = "TP" in item_modes
+                item_take_profit = "TP" in item_modes or (item.tp_mode in {"PRICE", "PERCENT"} and item.tp_value > 0)
                 item_normal = "NORMAL" in item_modes
                 item_indicator = "IND_EXIT" in item_modes
                 item_sl_enabled = bool(cycle.sl_enabled) if cycle else bool(item.sl_enabled)
@@ -541,8 +565,8 @@ class DashboardTablesMixin:
                     item_tp_label = _display_price(item.tp_value)
                 elif item.tp_mode == "PERCENT" and item.tp_value > 0:
                     item_tp_label = f"+{item.tp_value:g}%"
-                elif item.action == "OPEN" and str(item.source).upper() == "MANUAL":
-                    item_tp_label = "+7%"
+                elif item_take_profit:
+                    item_tp_label = f"+{take_profit_pct:g}%"
                 else:
                     item_tp_label = "--"
                 target_text = (
@@ -550,7 +574,7 @@ class DashboardTablesMixin:
                     else f"SL {item_sl_label}   ·   TP {item_tp_label}"
                 )
                 em_text = (
-                    f"TP {'+' + format(take_profit_pct, 'g') + '%' if item_take_profit else 'OFF'}"
+                    f"TP {item_tp_label if item_take_profit else 'OFF'}"
                     f"   ·   PROTECT {'+' + format(normal_tp, 'g') + '%' if item_normal else 'OFF'}"
                     f"   ·   E {'ON' if item_indicator else 'OFF'}"
                     if item.action == "OPEN" else "--"
@@ -575,17 +599,19 @@ class DashboardTablesMixin:
                     "pending_order"
                 )
                 status_label = {
-                    "PENDING": "[CACHE] CHỜ PHIÊN",
+                    "PENDING": "[CACHE] CHỜ GỬI",
                     "WAITING_TOKEN": "[CACHE] CHỜ TOKEN",
                     "WAITING_SETTLEMENT": "[T+2] CHỜ CỔ VỀ",
                     "PAUSED": "[CACHE] TẠM DỪNG",
                     "SENDING": "[DNSE] ĐANG GỬI",
-                    "WORKING": "[DNSE] ĐANG KHỚP",
+                    "WORKING": "[DNSE] CHỜ KHỚP",
                     "PARTIAL": "[DNSE] KHỚP MỘT PHẦN",
                     "UNKNOWN": "[DNSE] CHƯA RÕ TRẠNG THÁI",
                     "CANCEL_PENDING": "[DNSE] CHỜ XÁC NHẬN HỦY",
                     "REPLACE_PENDING": "[DNSE] CHỜ XÁC NHẬN SỬA",
                 }.get(status_upper, f"[{status_upper}]")
+                if mode == "PAPER":
+                    status_label = status_label.replace("[DNSE]", "[PAPER]")
                 estimated_fee = (
                     self._preview_buy_fee(gross, item.symbol, mode)
                     if item.side == "BUY" else None
@@ -626,7 +652,12 @@ class DashboardTablesMixin:
                 status = str(row.get("orderStatus", row.get("status", "")) or "").upper()
                 compact = status.replace("_", "").replace(" ", "")
                 partial = "PART" in compact
-                if not partial and any(token in compact for token in ("FILLED", "MATCHED", "CANCEL", "REJECT", "EXPIRED", "DONE", "COMPLETED")):
+                pending_ack = {
+                    "PENDINGCANCEL": "CHỜ XÁC NHẬN HỦY", "CANCELPENDING": "CHỜ XÁC NHẬN HỦY",
+                    "PENDINGREPLACE": "CHỜ XÁC NHẬN SỬA", "REPLACEPENDING": "CHỜ XÁC NHẬN SỬA",
+                    "UNKNOWN": "CHƯA RÕ TRẠNG THÁI",
+                }.get(compact, "")
+                if not pending_ack and not partial and any(token in compact for token in ("FILLED", "MATCHED", "CANCEL", "REJECT", "EXPIRED", "DONE", "COMPLETED")):
                     continue
                 symbol = str(row.get("symbol", row.get("instrumentId", "?")) or "?").upper()
                 side_raw = str(row.get("side", "") or "").upper()
@@ -644,7 +675,8 @@ class DashboardTablesMixin:
                         fee = gross * fee_rate
                 iid = f"BROKER:{mode}:{order_id or index}"
                 self._update_running_row(
-                    tree, existing, row_order, iid=iid, tags=(("partial_order",) if partial else ("dnse_order",)),
+                    tree, existing, row_order, iid=iid,
+                    tags=(("error_order",) if compact == "UNKNOWN" else ("partial_order",) if partial else ("dnse_order",)),
                     values=(
                         f"[DNSE] {(order_id or str(index))[:10]}",
                         self._row_time(row.get('createdAt', row.get('createdDate', ''))),
@@ -653,16 +685,16 @@ class DashboardTablesMixin:
                         f"FEE {_compact_vnd(fee)}",
                         "--",
                         f"-- · -- · -- · Khớp {filled}/{quantity}",
-                        f"[DNSE][{'PARTIAL' if partial else 'WORKING'}] · CÒN {remaining}",
-                        "✖" if mode == "REAL" and bool(order_id) else "",
+                        f"[DNSE][{pending_ack or ('PARTIAL' if partial else 'WORKING')}] · CÒN {remaining}",
+                        "✖" if mode == "REAL" and bool(order_id) and not pending_ack else "",
                     ),
                 )
                 self._running_row_actions[mode][iid] = {
                     "kind": "broker", "mode": mode, "symbol": symbol,
                     "broker_order_id": order_id, "order_type": kind,
                     "quantity": quantity, "filled_quantity": filled, "price": price,
-                    "editable": mode == "REAL" and kind == "LO",
-                    "cancellable": mode == "REAL" and bool(order_id),
+                    "editable": mode == "REAL" and kind == "LO" and not pending_ack,
+                    "cancellable": mode == "REAL" and bool(order_id) and not pending_ack,
                 }
             current_ids = set(row_order)
             removed = [iid for iid in previous_order if iid not in current_ids]

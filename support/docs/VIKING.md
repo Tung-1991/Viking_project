@@ -64,6 +64,9 @@ Preset VA 50 triệu: MSN/CTS/HDB 15 triệu, IDC 5 triệu, 100%, MAX=1; IDC kh
   P1/OVERRIDE qua `PortfolioContextBuilder.build(budget_only=True)`, không cần decision
   BUY, không đổi cooldown/vị thế. Thiếu dữ liệu không đoán vốn. CHƯA LƯU chưa áp dụng.
   Priority preview dùng bản sao setting nháp và cùng bộ tính vốn; không gọi DNSE.
+- Bảng vị thế chọn decision đúng sổ/trade còn mới, TP theo giá trigger thật (không theo
+  PNL sau phí); vị thế chưa nhận quản lý không hiện SL tự động. Log UI theo snapshot
+  queue đã lưu, fingerprint trạng thái/khớp/còn lại; không gọi broker hoặc phát lại khi restart.
 - Refresh tài khoản xử lý lỗi riêng REAL/PAPER; không bỏ kết quả sổ đã đọc được.
   HEALTH kiểm tra cả hai REST client và dùng `quote_is_fresh`, không lấy số request làm mốc mới nhất.
 - Secdef dùng chung cache 60 giây trong mỗi client; 429 nghỉ toàn endpoint 60 giây.

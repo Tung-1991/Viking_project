@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 import json
+import math
 import os
 import queue
 import subprocess
@@ -35,8 +36,8 @@ from ..services.signal_coordinator import (
 )
 from ..storage import CSVOrderJournal
 from ..trading.market import VN_TZ, market_phase, market_session_clock, normalize_exchange
-from ..trading.portfolio import PortfolioContextBuilder, sell_quantity_for_fraction
-from ..trading.validation import decision_is_fresh, quote_is_fresh
+from ..trading.portfolio import PortfolioContextBuilder, sell_quantity_for_fraction, validate_quantity
+from ..trading.validation import decision_is_fresh, decisions_for_mode, quote_is_fresh
 from .view import (
     COL_GRAY, COL_GREEN, COL_MUTED, COL_PREVIEW_TEXT, COL_RED, COL_SURFACE_2,
     COL_TEXT, COL_TITLE, COL_WARN, _cash, _compact_vnd, _display_price, _equity, _number,
@@ -66,6 +67,66 @@ HISTORY_DAY_LIMIT = 7
 
 
 class DashboardActionsMixin:
+    @staticmethod
+    def _order_progress_signature(intent: OrderIntent) -> tuple[Any, ...]:
+        return (
+            intent.status, intent.quantity, intent.filled_quantity,
+            intent.remaining_quantity, intent.limit_price, intent.broker_order_id,
+        )
+
+    def _log_order_progress(self, intent: OrderIntent) -> None:
+        """Display persisted order progress, never treat a POST ack as a fill."""
+        states = getattr(self, "_order_log_states", {})
+        self._order_log_states = states
+        key = (intent.execution_mode, intent.id)
+        signature = DashboardActionsMixin._order_progress_signature(intent)
+        if states.get(key) == signature:
+            return
+        states[key] = signature
+        label = {
+            "PENDING": "CHỜ GỬI", "WAITING_TOKEN": "CHỜ OTP",
+            "WAITING_SETTLEMENT": "CHỜ CỔ VỀ", "PAUSED": "TẠM DỪNG",
+            "SENDING": "ĐANG GỬI", "WORKING": "ĐÃ GỬI · CHỜ KHỚP",
+            "PARTIAL": "KHỚP MỘT PHẦN", "FILLED": "KHỚP HẾT",
+            "CANCEL_PENDING": "CHỜ XÁC NHẬN HỦY",
+            "REPLACE_PENDING": "CHỜ XÁC NHẬN SỬA",
+            "CANCELLED": "ĐÃ HỦY", "REJECTED": "BỊ TỪ CHỐI",
+            "FAILED": "THẤT BẠI", "EXPIRED": "HẾT HIỆU LỰC",
+            "UNKNOWN": "CHƯA RÕ KẾT QUẢ · KHÔNG GỬI LẠI",
+        }.get(intent.status, intent.status)
+        message = (
+            f"{intent.execution_mode} {intent.side} {intent.symbol} #{intent.id[:8]} "
+            f"{intent.order_type} · {label} · KL {intent.quantity}"
+            f" · KHỚP {intent.filled_quantity} · CÒN {intent.remaining_quantity}"
+        )
+        if intent.limit_price > 0:
+            message += f" · GIÁ {_display_price(intent.limit_price)}"
+        if intent.broker_order_id:
+            broker_name = "DNSE" if intent.execution_mode == "REAL" else "PAPER"
+            message += f" · {broker_name} #{intent.broker_order_id}"
+        if intent.result and intent.status in {"REJECTED", "FAILED", "EXPIRED", "WAITING_TOKEN", "WAITING_SETTLEMENT"}:
+            message += " · " + " ".join(str(intent.result).split())[:220]
+        self._log(message, "bot" if intent.source == "BOT" else "manual")
+
+    def _sync_order_progress(self, items: list[OrderIntent]) -> None:
+        """Observe a local render snapshot; no broker calls or replay on startup."""
+        states = getattr(self, "_order_log_states", None)
+        if states is None:
+            self._order_log_states = {
+                (item.execution_mode, item.id): DashboardActionsMixin._order_progress_signature(item)
+                for item in items
+            }
+            return
+        for item in items:
+            key = (item.execution_mode, item.id)
+            if key not in states and item.status == "PENDING":
+                # The manual/planner submission already logs the new candidate.
+                states[key] = DashboardActionsMixin._order_progress_signature(item)
+            else:
+                DashboardActionsMixin._log_order_progress(self, item)
+        current_keys = {(item.execution_mode, item.id) for item in items}
+        self._order_log_states = {key: value for key, value in states.items() if key in current_keys}
+
     def _post_ui(self, callback: Any) -> None:
         """Hand work back to Tk without calling Tcl from a worker thread."""
         if self.running:
@@ -1406,7 +1467,7 @@ class DashboardActionsMixin:
             except ValueError:
                 messagebox.showerror("Manual order", "Giá LO không hợp lệ.", parent=self)
                 return
-            if limit_price <= 0:
+            if not math.isfinite(limit_price) or limit_price <= 0:
                 messagebox.showerror("Manual order", "Lệnh LO bắt buộc có giá.", parent=self)
                 return
         raw_quantity = self.quantity.get().strip().replace(",", "")
@@ -1466,6 +1527,10 @@ class DashboardActionsMixin:
         except ValueError:
             messagebox.showerror("Manual order", "Stop Loss không hợp lệ.", parent=self)
             return
+        if (not math.isfinite(sl_value)
+                or (sl_mode != "DEFAULT" and (sl_value == 0 or (sl_mode == "PRICE" and sl_value < 0)))):
+            messagebox.showerror("Manual order", "Stop Loss phải là số hữu hạn, khác 0; giá phải lớn hơn 0.", parent=self)
+            return
         tp_mode, tp_value = "NONE", 0.0
         tp_raw = str(self.tp.get() or "").strip().replace(",", "")
         try:
@@ -1475,6 +1540,9 @@ class DashboardActionsMixin:
                 tp_mode, tp_value = "PRICE", _price_unit(float(tp_raw))
         except ValueError:
             messagebox.showerror("Manual order", "Take Profit không hợp lệ.", parent=self)
+            return
+        if not math.isfinite(tp_value) or (tp_mode != "NONE" and tp_value <= 0):
+            messagebox.showerror("Manual order", "Take Profit phải là số hữu hạn, lớn hơn 0.", parent=self)
             return
         # A manual SELL of a Viking-managed position must close the same trade
         # cycle.  Leaving trade_id blank made the broker position disappear
@@ -1497,14 +1565,13 @@ class DashboardActionsMixin:
             messagebox.showerror("Order", "UPCOM không có ATC.", parent=self)
             return
         runtime_status = self.bridge.read_status()
-        runtime_decisions = (
-            runtime_status.get("decisions")
-            if isinstance(runtime_status.get("decisions"), dict) else {}
-        )
+        runtime_decisions = decisions_for_mode(runtime_status, mode, default_paper=self.settings.paper_mode)
         entry_decision = (
             runtime_decisions.get(symbol)
             if isinstance(runtime_decisions.get(symbol), dict) else {}
         )
+        if not decision_is_fresh(entry_decision, symbol, mode):
+            entry_decision = {}
         entry_details = (
             entry_decision.get("details")
             if isinstance(entry_decision.get("details"), dict) else {}
@@ -1537,8 +1604,7 @@ class DashboardActionsMixin:
             save_settings(self.settings, self.account_id)
             current = self.bridge.read_config()
             self.bridge.write_config(RuntimeConfig(self.settings.watchlist, current.paper_mode, current.bot_enabled))
-        message = f"{mode} {side} {quantity} {symbol} {kind}: {result.status}"
-        self._log(message)
+        DashboardActionsMixin._log_order_progress(self, result)
         if result.status == "WAITING_TOKEN":
             messagebox.showwarning("Trading token", "Lệnh chưa gửi; chờ OTP và chỉ có hiệu lực trong phiên đủ điều kiện đầu tiên.", parent=self)
         elif result.status in {"REJECTED", "FAILED"}:
@@ -1879,7 +1945,7 @@ class DashboardActionsMixin:
                 return ("DEFAULT", 0.0) if stop else ("NONE", 0.0)
             if value.endswith("%"):
                 number = float(value[:-1])
-                if number == 0:
+                if not math.isfinite(number) or number == 0:
                     raise ValueError
                 return "PERCENT", abs(number)
             price = _price_unit(float(value))
@@ -1890,6 +1956,9 @@ class DashboardActionsMixin:
         def save() -> None:
             try:
                 quantity = int(quantity_entry.get().replace(",", ""))
+                valid, _reason, quantity = validate_quantity(quantity)
+                if not valid:
+                    raise ValueError
                 raw_price = float(price_entry.get().replace(",", "")) if order_type == "LO" else 0.0
                 price = _price_unit(raw_price)
                 if quantity <= 0 or (order_type == "LO" and price <= 0):
@@ -2200,9 +2269,13 @@ class DashboardActionsMixin:
                 return "NONE", 0.0, 0.0
             if value.endswith("%"):
                 pct = float(value[:-1])
+                if not math.isfinite(pct) or pct == 0:
+                    raise ValueError
                 pct = -abs(pct) if stop else abs(pct)
                 return "PERCENT", abs(pct) if stop else pct, avg_price * (1.0 + pct / 100.0)
             price = _price_unit(float(value))
+            if price <= 0:
+                raise ValueError
             return "PRICE", price, price
 
         def refresh_preview(_event: Any = None) -> None:
@@ -3263,10 +3336,6 @@ class DashboardActionsMixin:
                         str(self.mode.get() or "").upper(),
                     )
                 for selected_mode, intent, broker_result in rows:
-                    self._log(
-                        f"{selected_mode} {intent.side} {intent.symbol}: "
-                        f"{broker_result.status} {broker_result.message}"
-                    )
                     self._record_failed_buy_execution(
                         selected_mode, intent, broker_result,
                     )

@@ -11,7 +11,7 @@ from ..branding import APP_NAME
 from ..rules.business import average_true_range_pct, indicator_snapshot, protect_level
 from ..trading.market import VN_TZ, market_now, market_phase, merge_tick_into_daily_bars
 from ..trading.portfolio import nav_from_balance, size_buy_order, stock_exposure_limit, validate_quantity
-from ..trading.validation import decision_is_fresh, quote_is_fresh
+from ..trading.validation import decision_is_fresh, decisions_for_mode, quote_is_fresh
 from .view import (
     COL_BORDER, COL_GRAY, COL_GREEN, COL_MUTED, COL_SETTLEMENT_BG, COL_SETTLEMENT_TEXT,
     COL_PREVIEW_TEXT, COL_RED, COL_SURFACE, COL_SURFACE_2, COL_TEXT, COL_WARN, FONT_BOLD,
@@ -1222,20 +1222,9 @@ class DashboardPanelsMixin:
         """Select the viewed book, never borrow a decision from the other book."""
         status = status if isinstance(status, dict) else self.bridge.read_status()
         mode = str(self.mode.get()).upper() if hasattr(self, "mode") else "PAPER"
-        books = status.get("decisions_by_mode")
-        if isinstance(books, dict):
-            decisions = books.get(mode) or {}
-        else:
-            default_paper = getattr(getattr(self, "settings", None), "paper_mode", True)
-            active = str(status.get("execution_mode") or ("PAPER" if status.get("paper_mode", default_paper) else "REAL")).upper()
-            decisions = status.get("decisions", {}) if active == mode else {}
-        selected = {}
-        for symbol, decision in decisions.items():
-            if not isinstance(decision, dict):
-                continue
-            details = decision.get("details") or {}
-            if str(details.get("execution_mode", mode)).upper() == mode:
-                selected[symbol] = decision
+        selected = decisions_for_mode(status, mode, default_paper=getattr(
+            getattr(self, "settings", None), "paper_mode", True,
+        ))
         return {**status, "decisions": selected}
 
     def _preview_indicator_details(self, status: dict[str, Any], symbol: str) -> dict[str, Any]:
@@ -1247,13 +1236,16 @@ class DashboardPanelsMixin:
         status = self._book_preview_status(status)
         decision = (status.get("decisions") or {}).get(symbol) or {}
         details = dict(decision.get("details") or {})
+        mode = str(self.mode.get()).upper() if hasattr(self, "mode") else "PAPER"
+        if (details.get("updated_at") or decision.get("timestamp")) and not decision_is_fresh(decision, symbol, mode):
+            details = {}  # A stopped daemon must not pin old EMA/RSI over newer preview bars.
         params = StaticRuleParameters.from_dict(self.settings.rule_parameters)
         expected_periods = {
             "buy_ema_fast_period": params.buy_ema_fast, "buy_ema_slow_period": params.buy_ema_slow,
             "sell_ema_fast_period": params.sell_ema_fast, "sell_ema_slow_period": params.sell_ema_slow,
             "rsi_period": params.rsi_period,
         }
-        indicators = dict(details.get("indicators") or {})
+        indicators = dict(details.get("indicators") or {}) if isinstance(details.get("indicators"), dict) else {}
         if any(indicators.get(key, value) != value for key, value in expected_periods.items()):
             indicators = {}  # Do not show a previous settings generation.
         source = "DECISION" if indicators else "MISSING"
