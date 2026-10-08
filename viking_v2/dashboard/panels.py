@@ -457,8 +457,10 @@ class DashboardPanelsMixin:
         form.pack(fill="x", padx=8, pady=(1, 5))
         form.grid_columnconfigure((0, 1), weight=1, uniform="manual_input")
         self.quantity = self._manual_input(
-            form, 0, "KHỐI LƯỢNG", "", placeholder="AUTO", row=0,
+            form, 0, "KL · AUTO", "", placeholder="AUTO", row=0,
         )
+        _HoverHint(self.quantity._viking_title_widget, self._auto_quantity_hint)
+        self.quantity.bind("<FocusOut>", lambda _event: self._update_order_preview(), add="+")
         self.price = self._manual_input(form, 1, "GIÁ LO", "", row=0)
         self.tp = self._manual_input(
             form, 0, "TAKE PROFIT", self._default_tp_text(), dimmed=True, row=1,
@@ -531,10 +533,11 @@ class DashboardPanelsMixin:
             row=row, column=column,
             padx=(0 if column == 0 else 4, 0), pady=(0, 4), sticky="ew",
         )
-        ctk.CTkLabel(
+        title_widget = ctk.CTkLabel(
             box, text=label, width=96, font=FONT_KEY,
             text_color=COL_TITLE, anchor="w",
-        ).grid(row=0, column=0, sticky="w", padx=(8, 2), pady=4)
+        )
+        title_widget.grid(row=0, column=0, sticky="w", padx=(8, 2), pady=4)
         entry = ctk.CTkEntry(
             box, width=1, font=FONT_MONO_VALUE, height=32,
             justify="right", fg_color="#1A1E23", border_width=0,
@@ -545,6 +548,13 @@ class DashboardPanelsMixin:
         )
         entry.insert(0, value)
         entry.grid(row=0, column=1, sticky="ew", padx=(2, 5), pady=4)
+        entry._viking_title_widget = title_widget
+        entry._viking_editing = False
+        entry.bind("<FocusIn>", lambda _event: setattr(entry, "_viking_editing", True), add="+")
+        entry.bind("<FocusOut>", lambda _event: setattr(entry, "_viking_editing", False), add="+")
+        # The whole input card is clickable, not just its inner Tk text area.
+        for click_target in (box, title_widget, entry._canvas):
+            click_target.bind("<Button-1>", lambda _event: entry.focus_set(), add="+")
 
         def fit_current_text(_event: Any = None) -> None:
             shown = str(entry.get() or entry.cget("placeholder_text") or "")
@@ -1288,14 +1298,24 @@ class DashboardPanelsMixin:
         self._preview_auto_feedback = _auto_quantity_feedback(
             checks, entry_price, budget, quantity, missing_bound=missing_bound,
         )
-        if hasattr(self, "quantity") and not self.quantity.get().strip():
+        if hasattr(self, "quantity"):
+            manual = bool(self.quantity.get().strip())
+            title_widget = getattr(self.quantity, "_viking_title_widget", None)
+            if title_widget is not None:
+                title_widget.configure(text="KL · TAY" if manual else "KL · AUTO")
             quantity_text = f"{quantity:,} CP" if quantity > 0 else "AUTO"
-            self.quantity.configure(
-                placeholder_text=quantity_text
-            )
-            fit_callback = getattr(self.quantity, "_viking_fit_text", None)
-            if callable(fit_callback):
-                fit_callback()
+            editing = bool(getattr(self.quantity, "_viking_editing", getattr(self.quantity, "_is_focused", False)))
+            # CTkEntry.configure(placeholder_text=...) activates a placeholder
+            # even while focused. Native typing then becomes invisible to get()
+            # and the next preview refresh overwrites it. Never configure it
+            # during editing, and avoid re-inserting an unchanged suggestion.
+            if (not manual and not editing
+                    and getattr(self.quantity, "_viking_auto_placeholder", None) != quantity_text):
+                self.quantity.configure(placeholder_text=quantity_text)
+                self.quantity._viking_auto_placeholder = quantity_text
+                fit_callback = getattr(self.quantity, "_viking_fit_text", None)
+                if callable(fit_callback):
+                    fit_callback()
         return quantity, budget, forced_minimum
 
     def _order_status_hint(self) -> str:
@@ -1310,8 +1330,9 @@ class DashboardPanelsMixin:
 
     def _auto_quantity_hint(self) -> str:
         return (
-            str(getattr(self, "_preview_auto_feedback", {}).get("hint", "Chờ tính AUTO."))
-            + "\nTrống KL = AUTO (450 → 400 CP); nhập KL = đặt tay."
+            "KL AUTO: ô trống; số CP hiện mờ là gợi ý theo ngân sách, chưa phải lệnh đã mua.\n"
+            "KL TAY: bấm ô rồi nhập số CP, ví dụ 200; xóa hết để trở lại AUTO.\n"
+            + str(getattr(self, "_preview_auto_feedback", {}).get("hint", "Chờ tính AUTO."))
         )
 
     def _book_preview_status(self, status: dict[str, Any] | None = None) -> dict[str, Any]:

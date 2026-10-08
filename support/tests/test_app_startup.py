@@ -65,6 +65,48 @@ with tempfile.TemporaryDirectory(prefix="money-hunter-startup-") as directory:
         assert app.mode.get() == os.environ.get("STARTUP_SMOKE_MODE", "PAPER")
         assert "ⓘ" in app.info_title.cget("text")
         app.update_idletasks()
+        # Native Tk typing must survive periodic AUTO refreshes. CTkEntry's
+        # programmatic insert() hides the placeholder bug, so use the inner Tk
+        # widget just as Tk's keyboard class binding does.
+        old_preview_checks = app._preview_entry_checks
+        app._preview_entry_checks = lambda *_args, **_kwargs: {
+            "order_budget": 7_500_000, "available_cash": 50_000_000, "nav": 50_000_000,
+        }
+        for book in ("REAL", "PAPER"):
+            app.mode.set(book)
+            app.quantity.delete(0, tk.END)
+            app.quantity._entry.event_generate("<FocusOut>")
+            app._suggested_order_quantity(74.2, {})
+            assert app.quantity.cget("state") == "normal"
+            assert app.quantity.get() == ""
+            assert app.quantity.cget("placeholder_text") == "100 CP"
+            app.quantity._entry.event_generate("<FocusIn>")
+            assert app.quantity._viking_editing
+            for _refresh in range(3):
+                app._suggested_order_quantity(74.2, {})
+                assert app.quantity._entry.get() == ""
+            for digit in "200":
+                app.quantity._entry.insert(tk.END, digit)
+                app.quantity._entry.event_generate("<KeyRelease>")
+                app._suggested_order_quantity(74.2, {})
+            assert app.quantity.get() == "200"
+            assert app.quantity._viking_title_widget.cget("text") == "KL · TAY"
+            # Removing the final digit while focused must not restore a
+            # placeholder that swallows the next native keystroke.
+            app.quantity._entry.delete(0, tk.END)
+            app._suggested_order_quantity(74.2, {})
+            assert app.quantity._entry.get() == ""
+            app.quantity._entry.insert(0, "300")
+            app._suggested_order_quantity(74.2, {})
+            assert app.quantity.get() == "300"
+            app.quantity._entry.delete(0, tk.END)
+            app.quantity._entry.event_generate("<FocusOut>")
+            app._suggested_order_quantity(74.2, {})
+            assert not app.quantity._viking_editing
+            assert app.quantity.get() == ""
+            assert app.quantity._viking_title_widget.cget("text") == "KL · AUTO"
+        app._preview_entry_checks = old_preview_checks
+        app.mode.set(os.environ.get("STARTUP_SMOKE_MODE", "PAPER"))
         for tab in ("Manual", "Bot", "PREVIEW"):
             app._select_info_tab(tab)
             assert app.log_tabview.get() == tab

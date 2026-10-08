@@ -322,6 +322,34 @@ def test_auto_quantity_placeholder_is_compact_and_unambiguous() -> None:
     assert subject.quantity.options["placeholder_text"] == "100 CP"
 
 
+@pytest.mark.parametrize("editing", [True, False])
+def test_auto_quantity_refresh_does_not_touch_the_focused_editor(editing) -> None:
+    subject = DashboardPanelsMixin()
+    subject.symbol = _Value("AAA")
+    subject.quantity = _Entry()
+    subject.quantity._viking_editing = editing
+    subject.quantity._viking_title_widget = _Label()
+    status = {"decisions": {"AAA": {"details": {"entry_checks": {
+        "order_budget": 1_400_000, "available_cash": 100_000_000, "nav": 100_000_000,
+    }}}}}
+    for _refresh in range(5):
+        subject._suggested_order_quantity(7.29, status)
+    assert ("placeholder_text" in subject.quantity.options) is (not editing)
+    assert subject.quantity._viking_title_widget.options["text"] == "KL · AUTO"
+    subject.quantity.value = "200"
+    subject.quantity.options.clear()
+    for _refresh in range(5):
+        subject._suggested_order_quantity(7.29, status)
+    assert "placeholder_text" not in subject.quantity.options
+    assert subject.quantity.get() == "200"
+    assert subject.quantity._viking_title_widget.options["text"] == "KL · TAY"
+    assert "KL TAY" in subject._auto_quantity_hint()
+    subject.quantity.value = ""
+    subject.quantity._viking_editing = False
+    subject._suggested_order_quantity(7.29, status)
+    assert subject.quantity._viking_title_widget.options["text"] == "KL · AUTO"
+
+
 class _Real:
     @staticmethod
     def api_health() -> dict[str, object]:
