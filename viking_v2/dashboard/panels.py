@@ -74,9 +74,11 @@ def _auto_quantity_feedback(
         if priority.get("limit_vnd"):
             lines.append(
                 f"Priority: hạn mức {_compact_vnd(priority['limit_vnd'])} × {_number(priority.get('use_pct')):g}%"
-                f" = {_compact_vnd(priority.get('buy_limit_vnd'))} gồm phí;"
+                f" = tối đa {_compact_vnd(priority.get('per_order_limit_vnd', priority.get('buy_limit_vnd')))} / lần gồm phí;"
                 f" đã dùng {_compact_vnd(priority.get('committed_vnd'))}."
             )
+            lines.append(f"Tổng được mua {_compact_vnd(priority.get('buy_limit_vnd'))}; MAX LỆNH {priority.get('max_orders', 1)}. Mua thêm cần tín hiệu mới.")
+            lines.append(f"BOT đã dùng {checks.get('entry_orders_used', 0)}/{checks.get('entry_orders_max', 1)} lần BUY trong vị thế; MANUAL không dùng giới hạn số lần BOT.")
         if priority:
             lines.append(f"Tiền giữ cho mã khác/phần tiết kiệm: {_compact_vnd(priority.get('reserved_cash'))}.")
         if checks.get("priority_capital_enabled"):
@@ -1958,6 +1960,8 @@ class DashboardPanelsMixin:
             "HOLD_POSITION": "GIỮ VỊ THẾ",
             "BUY_ALREADY_PENDING": "ĐÃ CÓ LỆNH MUA CHỜ",
             "MAX_POSITIONS": "ĐÃ ĐỦ SỐ MÃ",
+            "MAX_SYMBOL_ORDERS": "ĐỦ SỐ LẦN BUY MÃ",
+            "POSITION_NOT_READY_FOR_ADD": "CHƯA ĐƯỢC MUA THÊM",
             "BOT_OFF": "BOT ĐANG TẮT",
             "MANUAL_SELL_PAUSE": "TẠM KHÓA BUY SAU BÁN TAY",
             "NO_AVAILABLE_CAPITAL": "KHÔNG ĐỦ CASH",

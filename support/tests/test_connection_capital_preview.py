@@ -70,6 +70,44 @@ def test_private_pool_preview_shows_current_book_total_and_savings(tmp_path, mod
     assert parent.queue.list_all() == parent.trade_state.list_cycles() == []
 
 
+def test_two_entries_preview_changes_total_not_per_entry_percentage(tmp_path):
+    popup, _parent = preview(tmp_path)
+    popup._priority_allocations["MSN"]["max_orders"] = 2
+    overview, rows, invalid = popup._priority_preview_data()
+    assert not invalid
+    assert "ĐƯỢC MUA 50 tr + ĐỂ DÀNH 0 tr" in overview
+    assert rows[0][2:5] == ("50% · 2 lệnh", "30 tr", "0 tr")
+    assert "mỗi lần ≤ 15 triệu, tối đa 2 lần; tổng ≤ 30 tr" in popup._priority_preview_hint(rows, invalid)
+
+
+def test_division_preserves_maximum_and_gear_preview_fits(ui_root):
+    import customtkinter as ctk
+    from viking_v2.connections.window import ConnectionPopup
+    client = DNSEClient(account_no="PAPER")
+    popup = ConnectionPopup(ui_root, config.AppSettings.from_dict({
+        "watchlist": ["MSN"], "priority_symbols": ["MSN"], "priority_total_capital": 15e6,
+        "priority_allocations": {"MSN": {"limit_vnd": 15e6, "use_pct": 50, "max_orders": 2}},
+    }), "PAPER", client, lambda: None)
+    previous = set(popup.top.winfo_children())
+    top = None
+    try:
+        popup._divide_priority_capital()
+        assert popup._priority_allocations["MSN"]["max_orders"] == 2
+        popup._configure_priority_symbol("MSN")
+        top = next(child for child in popup.top.winfo_children() if child not in previous and isinstance(child, ctk.CTkToplevel))
+        ui_root.update_idletasks()
+        labels = [child.cget("text") for child in top.winfo_children() if isinstance(child, ctk.CTkLabel)]
+        assert any("MAX LỆNH" in text for text in labels)
+        assert any("Mỗi lần ≤ 7.5 triệu · Tổng ≤ 15 triệu" in text for text in labels)
+        button = next(child for child in top.winfo_children() if isinstance(child, ctk.CTkButton))
+        assert button.winfo_y() + button.winfo_height() <= top.winfo_height()
+    finally:
+        if top is not None:
+            top.destroy()
+        popup._close()
+        client.close()
+
+
 @pytest.mark.parametrize("use_pct,buy,saved", [(50, 25, 25), (100, 50, 0)])
 def test_va_50m_preview_is_group_total_not_25m_per_symbol(tmp_path, use_pct, buy, saved):
     popup, parent = preview(tmp_path)
@@ -267,8 +305,8 @@ def test_priority_preview_and_money_headings_have_specific_hints(ui_root, monkey
                    for widget, text in attached)
         heading_hints = {widget.cget("text"): text for widget, text in attached
                          if widget.master is popup.priority_summary and widget is not popup.priority_preview}
-        assert "15 triệu × 50% = 7,5 triệu" in heading_hints["ĐƯỢC MUA"]
-        assert "không phải % của cả tài khoản" in heading_hints["DÙNG (%)"]
+        assert "15 triệu × 50% × 2 = 15 triệu" in heading_hints["ĐƯỢC MUA"]
+        assert "một lần BUY" in heading_hints["DÙNG / LỆNH"]
         assert "không phải tiền khả dụng" in heading_hints["CÒN HẠN MỨC"]
     finally:
         popup._close()

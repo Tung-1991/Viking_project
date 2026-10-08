@@ -1037,6 +1037,10 @@ class StaticRule:
                 "whipsaw_window": self.params.whipsaw_x,
                 "corporate_action_blocked": bool(portfolio.get("corporate_action_blocked", False)),
                 "pending_buy": bool(portfolio.get("pending_buy", False)),
+                "entry_orders_used": int(portfolio.get("entry_orders_used", 0)),
+                "entry_orders_max": int(portfolio.get("entry_orders_max", 1)),
+                "entry_orders_available": bool(portfolio.get("entry_orders_available", True)),
+                "scale_in_allowed": bool(portfolio.get("scale_in_allowed", False)),
                 "priority_entry": bool(context.get("priority_entry", False)),
                 "buy_volume": buy_volume,
             },
@@ -1052,7 +1056,16 @@ class StaticRule:
                     "WAIT", symbol, "MANUAL_OR_EXTERNAL_POSITION", signal=signal,
                     market_state=market_state, details=details, scope="POSITION_MANAGEMENT",
                 )
-            return self._evaluate_position(symbol, market_state, signal, bars, position, details)
+            exit_decision = self._evaluate_position(symbol, market_state, signal, bars, position, details)
+            if (exit_decision.reason == "HOLD_POSITION" and signal == "BUY"
+                    and int(portfolio.get("entry_orders_max", 1)) > 1
+                    and not portfolio.get("entry_orders_available", True)):
+                return StrategyDecision("WAIT", symbol, "MAX_SYMBOL_ORDERS", signal=signal, market_state=market_state, details=details)
+            # Always evaluate exits first. Scaling in cannot swallow an SL,
+            # PROTECT arm/alert or a pending/partly executed exit.
+            if (exit_decision.reason != "HOLD_POSITION" or signal != "BUY"
+                    or not portfolio.get("scale_in_allowed", False)):
+                return exit_decision
 
         if signal != "BUY":
             return StrategyDecision("WAIT", symbol, "NO_NEW_BUY_SIGNAL", signal=signal, market_state=market_state, details=details)
@@ -1078,6 +1091,8 @@ class StaticRule:
             return StrategyDecision("WAIT", symbol, "MARKET_STATE_UNKNOWN", signal=signal, market_state=market_state, details=details)
         if bool(portfolio.get("pending_buy")):
             return StrategyDecision("WAIT", symbol, "BUY_ALREADY_PENDING", signal=signal, market_state=market_state, details=details)
+        if not bool(portfolio.get("entry_orders_available", True)):
+            return StrategyDecision("WAIT", symbol, "MAX_SYMBOL_ORDERS", signal=signal, market_state=market_state, details=details)
         if bool(portfolio.get("loss_blocked")) or int(portfolio.get("loss_streak", 0) or 0) >= self.params.loss_lock_count:
             return StrategyDecision("WAIT", symbol, "LOCKED_AFTER_LOSSES", signal=signal, market_state=market_state, details=details)
         details["whipsaw_crossovers"] = crosses

@@ -24,7 +24,7 @@ def apply_buy_filters(
 ) -> tuple[dict[str, Any], StrategyDecision]:
     params = rule.params
     position = portfolio.get("position") or {}
-    if (position.get("quantity", portfolio.get("position_quantity", 0))
+    if ((position.get("quantity", portfolio.get("position_quantity", 0)) and not portfolio.get("scale_in_allowed", False))
             or portfolio.get("pending_buy")
             or not (params.buy_window_enabled or params.buy_confirmation_enabled)):
         return {}, decision

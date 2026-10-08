@@ -112,6 +112,8 @@ def fit_label_text(
 _SIGNAL_REASONS = {
     "WHIPSAW_LOCK": "EMA nhiễu, khóa mua",
     "MAX_POSITIONS": "Đã đủ số vị thế",
+    "MAX_SYMBOL_ORDERS": "Đã đủ số lần BUY của mã trong vị thế này",
+    "POSITION_NOT_READY_FOR_ADD": "Chưa được mua thêm: vị thế/thoát lệnh cần kiểm tra",
     "BOT_OFF": "BOT đang tắt",
     "MANUAL_SELL_PAUSE": "Tạm khóa BUY sau khi operator bán tay",
     "LOCKED_AFTER_3_LOSSES": "Khóa sau chuỗi 3 lệnh lỗ",

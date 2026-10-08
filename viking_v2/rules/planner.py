@@ -70,6 +70,8 @@ class StrategyOrderPlanner:
                 and isinstance(decision.details.get("entry_checks"), dict)
                 else {}
             )
+            if not checks.get("entry_orders_available", True):
+                return PlanResult(None, "MAX_SYMBOL_ORDERS")
             if style != "LO_LOCAL" and checks.get("priority_capital_enabled"):
                 price = max(price, float(checks.get("buy_budget_price", 0.0) or 0.0))
                 if float(checks.get("buy_budget_price", 0.0) or 0.0) <= 0:
@@ -108,7 +110,7 @@ class StrategyOrderPlanner:
                 if isinstance(decision.details, dict)
                 else ""
             )
-            trade_id = str(alerted_id or uuid.uuid4().hex)
+            trade_id = str(portfolio.get("trade_id", "") or alerted_id or uuid.uuid4().hex)
         else:
             trade_id = str(portfolio.get("trade_id", "") or "")
             remaining = max(0, int(portfolio.get("position_quantity", 0) or 0))

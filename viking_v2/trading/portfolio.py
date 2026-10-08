@@ -194,11 +194,13 @@ def priority_capital_budget(
                                 for value in priority if value != symbol)
     limit = limits.get(symbol, 0.0)
     use_pct = rows.get(symbol, {}).get("use_pct", 100.0)
-    buy_limit = limit * use_pct / 100.0
+    per_order_limit = limit * use_pct / 100.0
+    max_orders = config.priority_max_orders(rows.get(symbol, {}).get("max_orders", 1))
+    buy_limit = config.priority_buy_limit(rows.get(symbol, {}))
     if symbol in priority:
         # Even the current symbol cannot spend its explicit savings.
         reserved += max(0.0, limit - max(buy_limit, committed[symbol]))
-        symbol_room = max(0.0, buy_limit - committed[symbol]) / fee_factor
+        symbol_room = min(per_order_limit, max(0.0, buy_limit - committed[symbol])) / fee_factor
     else:
         symbol_room = max(0.0, budget)
     cash_room = max(0.0, cash - pending_cash - reserved) / fee_factor
@@ -206,9 +208,45 @@ def priority_capital_budget(
     return {
         "budget": allowed, "minimum_room": allowed,
         "limit_vnd": limit, "use_pct": use_pct, "buy_limit_vnd": buy_limit,
+        "per_order_limit_vnd": per_order_limit, "max_orders": max_orders,
         "committed_vnd": committed.get(symbol, 0.0), "reserved_cash": reserved,
         "reason": "" if allowed > 0 else "PRIORITY_CAPITAL_LIMIT",
     }
+
+
+def priority_entry_orders(
+    symbol: str, mode: str, trades: TradeStateStore, queue: OrderQueue,
+    enabled: bool, symbols: Iterable[str], allocations: dict[str, Any],
+    *, exclude_intent_id: str = "",
+) -> dict[str, Any]:
+    """Count entries in the current position, independently for each book.
+
+    Filled IDs survive queue cleanup/restart. Old positions without IDs count
+    as at least one entry. A partially filled pending order is counted once.
+    """
+    cycle = trades.active_for(symbol, mode)
+    maximum = config.priority_max_orders(allocations.get(symbol, {}).get("max_orders", 1)) if enabled and symbol in symbols else 1
+    intents = [item for item in queue.list_all() if item.symbol == symbol and item.execution_mode == mode]
+    bot_cycle = cycle if cycle and cycle.source == "BOT" else None
+    filled = set(bot_cycle.entry_order_ids) if bot_cycle else set()
+    if bot_cycle and not filled:
+        filled.update(item.id for item in intents if item.side == "BUY" and item.source == "BOT"
+                      and item.trade_id == bot_cycle.id and item.filled_quantity > 0)
+    used = max(len(filled), int(bool(bot_cycle and bot_cycle.entry_quantity > 0)))
+    pending_buys = [item for item in intents if item.side == "BUY" and item.id != exclude_intent_id
+                    and item.status not in {"FILLED", "CANCELLED", "EXPIRED", "FAILED", "REJECTED"}]
+    pending = {item.id for item in pending_buys if item.source == "BOT"}
+    # The legacy marker stands for the original filled order if its old row
+    # is still working. Do not count that same partial fill twice.
+    covered = filled | {item.id for item in intents if bot_cycle and item.source == "BOT"
+                        and item.trade_id == bot_cycle.id and item.filled_quantity > 0}
+    used += len(pending - covered)
+    exiting = any(item.side == "SELL" and item.status not in {"FILLED", "CANCELLED", "EXPIRED", "FAILED", "REJECTED"} for item in intents)
+    allowed = bool(enabled and symbol in symbols and maximum > 1 and cycle
+                   and cycle.source == "BOT" and cycle.open_quantity > 0
+                   and cycle.sold_quantity == 0 and not pending_buys and not exiting and used < maximum)
+    return {"entry_orders_used": used, "entry_orders_max": maximum,
+            "entry_orders_available": used < maximum, "scale_in_allowed": allowed}
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,6 +426,12 @@ class PortfolioContextBuilder:
                 value = str(row.get("symbol", "")).upper()
                 cost = position_quantity(row) * (position_cost(row) or position_price(row)) * 1000.0 * (1.0 + fee_rate)
                 holding_costs[value] = holding_costs.get(value, 0.0) + cost
+            for cycle in self.trades.list_cycles():
+                if (cycle.execution_mode == mode and cycle.status == "OPEN"
+                        and cycle.open_quantity > 0 and cycle.sold_quantity == 0):
+                    # Lowering today's fee must not erase fees already paid.
+                    extra_fee = max(0.0, cycle.fees_paid - cycle.buy_notional * fee_rate)
+                    holding_costs[cycle.symbol] = holding_costs.get(cycle.symbol, 0.0) + extra_fee
             envelope = stock_exposure_limit(nav, exposure) / max(1, max_positions) * (1.0 + fee_rate)
             allocations = (priority_allocations or {}) if priority_capital_enabled else {
                 value: {"limit_vnd": envelope, "use_pct": 100.0} for value in priority_symbols}
@@ -410,6 +454,10 @@ class PortfolioContextBuilder:
                 self.trades.capital_available(symbol, mode, float("inf"))
                 / (1.0 + max(0.0, float(self.buy_fee_rate() or 0.0))),
             )
+        entry_orders = priority_entry_orders(
+            symbol, mode, self.trades, self.queue, priority_capital_enabled,
+            priority_symbols, priority_allocations or {}, exclude_intent_id=exclude_intent_id,
+        )
         if budget_only:
             # UI sizing reads the same money rules without updating cooldowns,
             # settlement/protection state or evaluating a trading signal.
@@ -423,6 +471,7 @@ class PortfolioContextBuilder:
                 "priority_capital": priority_capital,
                 "priority_capital_enabled": bool(priority_capital),
                 "buy_budget_price": board_price(tick.get("ceiling_price", 0.0)) if priority_capital else 0.0,
+                **entry_orders,
             }
         matching_rows = [
             row for row in rows
@@ -446,6 +495,9 @@ class PortfolioContextBuilder:
         active_trade = self.trades.active_for(symbol, mode)
         if active_trade and active_trade.loan_package_id:
             matching_rows = [row for row in matching_rows if str(row.get("loanPackageId", "")) == active_trade.loan_package_id]
+        if active_trade and sum(position_quantity(row) for row in matching_rows) < active_trade.open_quantity:
+            # A lagging/incomplete position snapshot must not authorize an add.
+            entry_orders["scale_in_allowed"] = False
         active_loss_streak = self.trades.active_loss_streak(
             symbol,
             mode,
@@ -456,6 +508,10 @@ class PortfolioContextBuilder:
         )
         slots = bot_slot_state(max_positions, priority_set,
                                bot_open_symbols | {item.symbol for item in bot_pending_buys}, symbol)
+        if entry_orders["scale_in_allowed"]:
+            # Adding to an existing symbol uses its existing slot, not a fifth code.
+            slots["entry_available"] = (len(priority_set) <= max_positions and
+                                       len(bot_open_symbols | {item.symbol for item in bot_pending_buys}) <= max_positions)
         context: dict[str, Any] = {
             "nav": nav,
             "available_cash": cash,
@@ -471,6 +527,7 @@ class PortfolioContextBuilder:
             "entry_slot_available": slots["entry_available"],
             "priority_reserved": slots["reserved"],
             "pending_buy": bool(self.queue.find_active(symbol, side="BUY", execution_mode=mode)),
+            **entry_orders,
             "loss_streak": active_loss_streak,
             "loss_blocked": symbol in self.trades.loss_blocks(mode),
             "priority_capital": priority_capital,
@@ -542,6 +599,7 @@ class PortfolioContextBuilder:
             t2_dynamic_enabled=normal_t2_reset_enabled,
             sellable=fully_sellable,
             normal_arm_pct=normal_arm_pct,
+            entry_avg_price=avg_price if entry_orders["entry_orders_max"] > 1 else 0.0,
         ) if trade_id else {}
         context["position"] = {
             "quantity": quantity,

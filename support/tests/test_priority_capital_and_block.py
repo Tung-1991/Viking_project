@@ -180,7 +180,7 @@ def test_settings_round_trip_filters_priority_only_and_preserves_defaults():
     settings = config.AppSettings.from_dict({"watchlist": PRIORITY, "priority_symbols": PRIORITY,
         "priority_capital_enabled": True, "priority_total_capital": 60_000_000,
         "priority_allocations": {**ALLOCATIONS, "MBB": {"limit_vnd": 20_000_000, "use_pct": 10}}})
-    assert config.AppSettings.from_dict(settings.to_dict()).priority_allocations == ALLOCATIONS
+    assert config.AppSettings.from_dict(settings.to_dict()).priority_allocations == config.normalize_priority_allocations(ALLOCATIONS, PRIORITY)
     assert not config.AppSettings.from_dict({}).priority_capital_enabled
     assert config.AppSettings.from_dict({}).rule_parameters["loss_lock_mode"] == "TIMED"
     assert config.AppSettings.from_dict({"priority_total_capital": float("nan")}).priority_total_capital == 0
@@ -426,10 +426,10 @@ def test_minimal_setting_controls_construct_save_and_unlock_offline(tmp_path, ui
         client = SimpleNamespace(account_no="", otp_type="email_otp", has_trading_token=lambda: False)
         connection = ConnectionPopup(root, settings, "CONTROL_TEST", client, lambda: None)
         connection._divide_priority_capital()
-        assert connection._priority_allocations == ALLOCATIONS
+        assert connection._priority_allocations == config.normalize_priority_allocations(ALLOCATIONS, PRIORITY)
         connection._save_priority()
         saved = config.load_settings("CONTROL_TEST")
-        assert saved.priority_allocations == ALLOCATIONS
+        assert saved.priority_allocations == config.normalize_priority_allocations(ALLOCATIONS, PRIORITY)
         assert saved.priority_capital_enabled
         connection._configure_priority_symbol("FPT")
         root.update_idletasks()

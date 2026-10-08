@@ -88,6 +88,10 @@ class BacktestConfig:
         self.priority_total_capital = config.finite_nonnegative(self.priority_total_capital)
         if self.priority_capital_enabled:
             config.validate_priority_capital(self.priority_total_capital, self.priority_symbols, self.priority_allocations)
+            # Replay currently has one entry/settlement lot per symbol. Refuse
+            # to silently report results for a policy it does not simulate.
+            if any(row["max_orders"] > 1 for row in self.priority_allocations.values()):
+                raise ValueError("Backtest chưa mô phỏng MAX LỆNH > 1; đặt 1 khi backtest. LIVE/PAPER hỗ trợ mua thêm.")
         self.whipsaw_enabled = bool(self.whipsaw_enabled)
         self.em_modes = normalize_exit_modes(self.em_modes)
         self.sell_wait_policy = str(self.sell_wait_policy or "RECHECK").upper()

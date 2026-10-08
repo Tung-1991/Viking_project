@@ -1148,6 +1148,7 @@ class DashboardActionsMixin:
         tick: dict[str, Any],
         *,
         signal_id: str = "",
+        entry_id: str = "",
         execution_mode: str = "",
     ) -> dict[str, Any] | None:
         service = self.telegram
@@ -1269,9 +1270,9 @@ class DashboardActionsMixin:
         # not become a real position, forget it silently so the next BUY can
         # receive a new ID.  An actual position keeps the ID until fully closed.
         if signal == "SELL":
-            record = self.rule_state.active_telegram_signal(symbol)
+            record = self.rule_state.active_telegram_signal(symbol, execution_mode)
             if record and not self.trade_state.get(str(record.get("id", ""))):
-                self.rule_state.discard_telegram_signal(symbol)
+                self.rule_state.discard_telegram_signal(symbol, execution_mode)
             return None
 
         if not service:
@@ -1292,15 +1293,21 @@ class DashboardActionsMixin:
             price=price,
             market_state=decision.market_state,
             signal_id=signal_id,
+            stream=execution_mode,
         )
         if not record:
-            return self.rule_state.active_telegram_signal(symbol)
+            record = self.rule_state.active_telegram_signal(symbol, execution_mode)
+            if (not entry_id or not record or record.get("id") != signal_id
+                    or not (details.get("entry_checks") or {}).get("scale_in_allowed")
+                    or not DashboardActionsMixin._telegram_notification_enabled(self, "buy_queued")
+                    or not DashboardActionsMixin._claim_telegram_event(self, f"buy_entry|{execution_mode}", symbol, entry_id)):
+                return record
         if DashboardActionsMixin._telegram_notification_enabled(self, "buy_queued"):
             threading.Thread(
                 target=service.notify_buy,
                 kwargs={
                     "symbol": symbol,
-                    "signal_id": str(record.get("id", "")),
+                    "signal_id": str(record.get("id", "")) + (f"/{entry_id}" if entry_id else ""),
                     "price": price,
                     "market_state": decision.market_state,
                     "execution_mode": execution_mode,
@@ -1374,7 +1381,7 @@ class DashboardActionsMixin:
                 return
         elif event != "CLOSED" or cycle.source != "BOT":
             return
-        record = self.rule_state.claim_closed_telegram_signal(cycle.symbol, cycle.id)
+        record = self.rule_state.claim_closed_telegram_signal(cycle.symbol, cycle.id, cycle.execution_mode)
         if (
             not record
             or not self.telegram
@@ -1421,9 +1428,10 @@ class DashboardActionsMixin:
                     )
             quantity, _budget, _forced_minimum = self._suggested_order_quantity(entry_price)
             if quantity <= 0:
+                feedback = getattr(self, "_preview_auto_feedback", {})
                 messagebox.showerror(
                     "Đặt lệnh",
-                    "Không đủ vốn mua tối thiểu 100 CP.",
+                    feedback.get("hint") or feedback.get("reason") or "Chưa tính được khối lượng AUTO. Xem PREVIEW.",
                     parent=self,
                 )
                 return
@@ -2501,6 +2509,13 @@ class DashboardActionsMixin:
             if fresh["loss_blocked"] or fresh["loss_streak"] >= int(self.settings.rule_parameters.get("loss_lock_count", 3)):
                 from ..rules.planner import PlanResult
                 return PlanResult(None, "LOCKED_AFTER_LOSSES")
+            if not fresh["entry_orders_available"]:
+                from ..rules.planner import PlanResult
+                return PlanResult(None, "MAX_SYMBOL_ORDERS")
+            active_cycle = self.trade_state.active_for(decision.symbol, mode)
+            if active_cycle and active_cycle.open_quantity > 0 and not fresh["scale_in_allowed"]:
+                from ..rules.planner import PlanResult
+                return PlanResult(None, "POSITION_NOT_READY_FOR_ADD")
             if not fresh["entry_slot_available"]:
                 from ..rules.planner import PlanResult
                 return PlanResult(None, "MAX_POSITIONS")
@@ -2508,6 +2523,9 @@ class DashboardActionsMixin:
             checks.update(minimum_order_room=fresh["minimum_order_room"], priority_capital=fresh["priority_capital"])
             checks["priority_capital_enabled"] = bool(fresh["priority_capital"])
             checks["buy_budget_price"] = fresh["buy_budget_price"] or checks.get("buy_budget_price", 0.0)
+            checks.update({key: fresh[key] for key in ("entry_orders_used", "entry_orders_max", "entry_orders_available", "scale_in_allowed")})
+            if fresh.get("scale_in_allowed"):
+                details["trade_id"] = fresh.get("trade_id", "")
         portfolio = {
             "order_budget": details.get("order_budget", 0.0),
             "trade_id": details.get("trade_id", ""),
@@ -2619,6 +2637,11 @@ class DashboardActionsMixin:
         context = self._build_entry_limits(intent.symbol, intent.execution_mode, quote,
                                          balance, positions, exposure, intent.id,
                                          fee_rate=quote.get("buy_fee_rate"))
+        if not context["entry_orders_available"]:
+            return "MAX_SYMBOL_ORDERS"
+        active_cycle = self.trade_state.active_for(intent.symbol, intent.execution_mode)
+        if active_cycle and active_cycle.open_quantity > 0 and not context["scale_in_allowed"]:
+            return "POSITION_NOT_READY_FOR_ADD"
         if not context["entry_slot_available"]:
             return "MAX_POSITIONS"
         price = intent.limit_price if intent.order_type == "LO" else _price_unit(
@@ -2843,6 +2866,8 @@ class DashboardActionsMixin:
             max_positions, positions, current_intents, mode,
             bot_symbols=bot_symbols,
             priority_symbols=getattr(self.settings, "priority_symbols", ()),
+            scale_in_symbols=[symbol for symbol, decision in decisions.items()
+                              if (decision.details.get("entry_checks") or {}).get("scale_in_allowed")],
         )
         self._slot_summary = {
             "mode": mode,
@@ -2940,7 +2965,7 @@ class DashboardActionsMixin:
                 )
                 self._notify_rule_signal(
                     symbol, decision, tick,
-                    signal_id=intent.trade_id, execution_mode=mode,
+                    signal_id=intent.trade_id, entry_id=intent.id, execution_mode=mode,
                 )
             else:
                 self._claim_terminal_buy(final, mode)
@@ -3151,7 +3176,10 @@ class DashboardActionsMixin:
             "FAILED": "BROKER_FAILED",
             "EXPIRED": "BUY_WINDOW_EXPIRED",
         }.get(status, "BROKER_FAILED")
-        self.rule_state.discard_telegram_signal(intent.symbol)
+        trades = getattr(self, "trade_state", None)
+        cycle = trades.get(intent.trade_id) if trades else None
+        if not cycle or cycle.open_quantity <= 0:
+            self.rule_state.discard_telegram_signal(intent.symbol, intent.execution_mode, signal_id=intent.trade_id)
         decision = StrategyDecision(
             "WAIT", intent.symbol, reason, signal="BUY",
             details={

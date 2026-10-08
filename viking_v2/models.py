@@ -235,6 +235,8 @@ class TradeCycle:
     buy_notional: float = 0.0
     sell_notional: float = 0.0
     external_progress: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # One ID per BOT BUY intent which filled; partial fills are one entry.
+    entry_order_ids: list[str] = field(default_factory=list)
     entry_market_state: str = "UNKNOWN"
     entry_exposure: float = 0.0
     entry_budget: float = 0.0
@@ -255,6 +257,7 @@ class TradeCycle:
         self.net_pnl = float(self.net_pnl or 0.0)
         self.fees_paid = max(0.0, float(self.fees_paid or 0.0))
         self.exit_events = list(dict.fromkeys(str(value) for value in self.exit_events if str(value)))
+        self.entry_order_ids = list(dict.fromkeys(str(value) for value in self.entry_order_ids if str(value)))
         self.em_modes = normalize_exit_modes(self.em_modes)
         self.sl_enabled = bool(self.sl_enabled)
         self.sl_mode = str(self.sl_mode or "DEFAULT").strip().upper()

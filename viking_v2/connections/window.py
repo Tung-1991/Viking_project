@@ -1105,13 +1105,13 @@ class ConnectionPopup:
         self._hint_icon(capital,
             "OFF: mỗi Priority giữ ngân sách NAV × P1 / số mã BOT tối đa.\n"
             "100 triệu, P1 100%, tối đa 4 mã → mỗi mã 25 triệu, không phải một mã dùng hết tài khoản.\n"
-            "ON: dùng hạn mức riêng gồm phí; 15 triệu × 50% → mua tối đa 7,5 triệu, giữ 7,5 triệu.\n"
+            "ON: dùng hạn mức riêng gồm phí; 15 triệu × 50% → mỗi BUY ≤ 7,5 triệu. MAX 1 giữ 7,5 triệu; MAX 2 mua tổng ≤ 15 triệu.\n"
             "Quỹ 50 triệu trong tài khoản NAV 100 triệu → dành ngân sách 50 triệu cho Priority, không chuyển tiền DNSE.\n"
-            "Tổng 50 triệu, tất cả dùng 50% → cả nhóm được mua 25 triệu, để dành 25 triệu.\n"
+            "Tổng 50 triệu, tất cả dùng 50%, MAX 1 → cả nhóm được mua 25 triệu, để dành 25 triệu.\n"
             "P1 100% chỉ là trần cổ phiếu của tài khoản; không đổi % sử dụng từng mã.\n"
             "CÒN HẠN MỨC = ĐƯỢC MUA trừ vốn cổ đang giữ và BUY đang chờ, gồm phí. "
             "Đây không phải tiền khả dụng hay cam kết sẽ mua; vẫn kiểm tra tiền, room P1 và lô giao dịch.\n"
-            "CHIA HẠN MỨC thay các hạn mức nháp bằng Tổng / số Priority, giữ % sử dụng. "
+            "CHIA HẠN MỨC thay các hạn mức nháp bằng Tổng / số Priority, giữ % sử dụng và MAX LỆNH. "
             "Phải LƯU mới áp dụng, không tạo lệnh. Tiền giữ lại không cho mã khác mượn; vẫn chịu tiền thật và room P1."
         ).pack(side="left", padx=8)
         self.priority_summary = ctk.CTkFrame(self.priority_card, fg_color=self.SURFACE_2, corner_radius=7)
@@ -1789,8 +1789,8 @@ class ConnectionPopup:
         headings = (
             ("MÃ", "Mã Priority được cấu hình ở bảng này."),
             ("HẠN MỨC", "Ngân sách dành cho mã, gồm tiền mua và phí; không phải số tiền đã mua."),
-            ("DÙNG (%)", "Tỷ lệ được mua trong hạn mức của mã, không phải % của cả tài khoản."),
-            ("ĐƯỢC MUA", "Hạn mức × % sử dụng, gồm phí. Ví dụ 15 triệu × 50% = 7,5 triệu."),
+            ("DÙNG / LỆNH", "% hạn mức cho một lần BUY / số lần tối đa trong vị thế. Ví dụ 50% · 2 lệnh: mỗi lần ≤ 7,5 triệu trên hạn mức 15 triệu."),
+            ("ĐƯỢC MUA", "Tổng tối đa = hạn mức × % sử dụng × MAX LỆNH, không vượt hạn mức. 15 triệu × 50% × 2 = 15 triệu, gồm phí."),
             ("ĐỂ DÀNH", "Hạn mức − được mua. Ví dụ 15 triệu − 7,5 triệu = để dành 7,5 triệu."),
             ("CÒN HẠN MỨC", "Được mua trừ vốn cổ đang giữ và BUY đang chờ; không phải tiền khả dụng."),
         )
@@ -1814,14 +1814,24 @@ class ConnectionPopup:
                 "VỐN RIÊNG OFF: mỗi mã dùng ngân sách theo NAV × P1 / tối đa mã BOT.\n"
                 "Ví dụ 100 triệu × P1 100% / 4 mã = 25 triệu/mã. Bỏ qua hạn mức và % riêng đang nhập."
             )
-        examples = [f"{symbol}: {cap} × {pct} = được mua {buy}; để dành {saved}."
-                    for symbol, cap, pct, buy, saved, _remaining in rows]
+        examples = []
+        for symbol, cap, pct, buy, saved, _remaining in rows:
+            allocation = self._priority_allocations.get(symbol, {})
+            maximum = config.priority_max_orders(allocation.get("max_orders", 1))
+            if maximum > 1:
+                per_order = config.finite_nonnegative(allocation.get("limit_vnd")) * config.finite_nonnegative(allocation.get("use_pct", 100)) / 100
+                examples.append(f"{symbol}: mỗi lần ≤ {per_order / 1_000_000:g} triệu, tối đa {maximum} lần; tổng ≤ {buy}; để dành {saved}.")
+            else:
+                examples.append(f"{symbol}: {cap} × {pct} = được mua {buy}; để dành {saved}.")
         return "\n".join([
             "ĐÂY LÀ HẠN MỨC CẤU HÌNH, không phải tiền đã mua hay số tiền được mua ngay.",
             *examples,
             "ĐƯỢC MUA là tổng mức trần của các mã, gồm phí; ĐỂ DÀNH là phần không dùng + phần chưa chia.",
             "CÒN HẠN MỨC trừ vốn cổ đang giữ và BUY đang chờ. Số mua thực tế còn theo tiền, P1 và lô 100 CP.",
             "P1 100% không tự đổi mức sử dụng 50% của mã thành 100%.",
+            "MAX LỆNH đếm BUY đã khớp/đang chờ trong vị thế BOT; khớp nhiều đợt tính 1. Bán hết mới đếm lại.",
+            "Mua thêm cần tín hiệu BUY mới; không mua thêm khi đang thoát/đã bán một phần. Cộng vào cùng vị thế và giá vốn bình quân.",
+            "Tối đa mã BOT đếm mã, không đếm số lần mua. MAX LỆNH riêng chỉ áp dụng khi VỐN RIÊNG ON.",
             "TÀI SẢN NGOÀI NGÂN SÁCH = NAV − ngân sách Priority, không cộng thêm vào hạn mức của các mã này.",
             "Phải LƯU PRIORITY mới áp dụng bản nháp; không chuyển hay phong tỏa tiền tại DNSE.",
         ])
@@ -1848,7 +1858,7 @@ class ConnectionPopup:
             total, invalid = 0.0, True
         if enabled:
             allocated = sum(row["limit_vnd"] for row in allocations.values())
-            buying = sum(row["limit_vnd"] * row["use_pct"] / 100.0 for row in allocations.values())
+            buying = sum(config.priority_buy_limit(row) for row in allocations.values())
             if invalid:
                 overview += "\nQUỸ KHÔNG HỢP LỆ · Tổng > 0 và tổng hạn mức ≤ quỹ"
             else:
@@ -1879,9 +1889,10 @@ class ConnectionPopup:
                 capital = checks.get("priority_capital") or {}
             if not enabled:
                 cap, pct = capital.get("limit_vnd"), 100.0
-            buy_limit = cap * pct / 100.0 if cap is not None else None
+            maximum = config.priority_max_orders(allocation.get("max_orders", 1)) if enabled else 1
+            buy_limit = config.priority_buy_limit(allocation) if enabled else cap
             remaining = max(0.0, buy_limit - capital["committed_vnd"]) if buy_limit is not None and "committed_vnd" in capital else None
-            rows.append((symbol, money(cap) if cap is not None else "THEO RULE", f"{pct:g}%",
+            rows.append((symbol, money(cap) if cap is not None else "THEO RULE", f"{pct:g}%" + (f" · {maximum} lệnh" if maximum > 1 else ""),
                          money(buy_limit) if buy_limit is not None else "THEO P1",
                          money(cap - buy_limit) if cap is not None else "—",
                          money(remaining) if remaining is not None else "—"))
@@ -1894,7 +1905,8 @@ class ConnectionPopup:
                 raise ValueError("Thêm mã Priority trước khi chia vốn.")
             limit = self._priority_total_vnd() // len(symbols)
             self._priority_allocations = {
-                symbol: {"limit_vnd": limit, "use_pct": self._priority_allocations.get(symbol, {}).get("use_pct", 100.0)}
+                symbol: {"limit_vnd": limit, "use_pct": self._priority_allocations.get(symbol, {}).get("use_pct", 100.0),
+                         "max_orders": config.priority_max_orders(self._priority_allocations.get(symbol, {}).get("max_orders", 1))}
                 for symbol in symbols
             }
             self.priority_status.configure(text=f"BẢN NHÁP · {limit / 1_000_000:g} triệu/mã · cần LƯU", text_color=self.WARN)
@@ -1903,36 +1915,59 @@ class ConnectionPopup:
             self.priority_status.configure(text=str(exc), text_color=self.RED)
 
     def _configure_priority_symbol(self, symbol: str) -> None:
-        top = _window(self.top, f"PRIORITY · {symbol}", "430x270")
+        top = _window(self.top, f"PRIORITY · {symbol}", "480x390")
         row = self._priority_allocations.get(symbol, {"limit_vnd": 0.0, "use_pct": 100.0})
         ctk.CTkLabel(top, text=f"{symbol} · NGÂN SÁCH RIÊNG", font=("Segoe UI", 16, "bold")).pack(pady=10)
         ctk.CTkLabel(top, text="HẠN MỨC (triệu đồng, gồm phí)").pack()
         limit = ctk.CTkEntry(top)
         limit.insert(0, f"{row['limit_vnd'] / 1_000_000:g}")
         limit.pack()
-        ctk.CTkLabel(top, text="SỬ DỤNG (%) · phần còn lại giữ tiền").pack()
+        ctk.CTkLabel(top, text="MỖI LẦN MUA (%) · tính trên hạn mức").pack()
         use = ctk.CTkEntry(top)
         use.insert(0, f"{row['use_pct']:g}")
         use.pack()
-        status = ctk.CTkLabel(top, text="Chỉ áp dụng khi VỐN RIÊNG được bật.")
+        ctk.CTkLabel(top, text="MAX LỆNH · số lần BUY trong một vị thế BOT").pack(pady=(5, 0))
+        maximum = ctk.CTkEntry(top)
+        maximum.insert(0, str(config.priority_max_orders(row.get("max_orders", 1))))
+        maximum.pack()
+        _HoverHint(maximum, "1–100 lần. Khớp nhiều đợt vẫn là 1; hủy chưa khớp không tính. Bán hết mới đếm lại.\nMua thêm phải có tín hiệu mới; không mua khi đang thoát/đã bán một phần. Các lần mua dùng chung SL/PROTECT theo giá vốn bình quân.\nVí dụ hạn mức 15 triệu, mỗi lần 50%, MAX 2: mỗi lần ≤ 7,5 triệu, tổng ≤ 15 triệu gồm phí. Chỉ áp dụng khi VỐN RIÊNG ON; MANUAL không dùng giới hạn số lần BOT.")
+        status = ctk.CTkLabel(top, text="Chỉ áp dụng khi VỐN RIÊNG được bật.", wraplength=450)
         status.pack(pady=5)
+
+        def refresh(_event=None) -> None:
+            try:
+                allocation = self._priority_allocation_inputs(limit.get(), use.get(), maximum.get())
+                once = allocation["limit_vnd"] * allocation["use_pct"] / 100
+                total = config.priority_buy_limit(allocation)
+                status.configure(text=f"Mỗi lần ≤ {once / 1_000_000:g} triệu · Tổng ≤ {total / 1_000_000:g} triệu\nĐể dành {(allocation['limit_vnd'] - total) / 1_000_000:g} triệu · gồm phí", text_color=self.MUTED)
+            except (ValueError, TypeError):
+                status.configure(text="Hạn mức ≥ 0; mỗi lần 0–100%; MAX LỆNH nguyên 1–100.", text_color=self.RED)
+        for entry in (limit, use, maximum):
+            entry.bind("<KeyRelease>", refresh)
+        refresh()
 
         def apply() -> None:
             try:
-                cap, pct = float(limit.get()) * 1_000_000, float(use.get())
-                if not math.isfinite(cap) or not math.isfinite(pct) or cap < 0 or not 0 <= pct <= 100:
-                    raise ValueError("Hạn mức ≥ 0; sử dụng từ 0 đến 100%.")
+                allocation = self._priority_allocation_inputs(limit.get(), use.get(), maximum.get())
+                cap, pct = allocation["limit_vnd"], allocation["use_pct"]
                 if symbol not in self.priority_picker.get():
                     raise ValueError("Mã đã bị bỏ khỏi Priority.")
-                self._priority_allocations[symbol] = {"limit_vnd": cap, "use_pct": pct}
+                self._priority_allocations[symbol] = allocation
                 self._refresh_priority_summary()
                 self.priority_status.configure(
-                    text=f"BẢN NHÁP · {symbol}: {cap / 1_000_000:g} triệu × {pct:g}% · cần LƯU", text_color=self.WARN,
+                    text=f"BẢN NHÁP · {symbol}: {cap / 1_000_000:g} triệu × {pct:g}% / lần · MAX {allocation['max_orders']} · cần LƯU", text_color=self.WARN,
                 )
                 top.destroy()
             except (ValueError, TypeError) as exc:
                 status.configure(text=str(exc), text_color=self.RED)
         ctk.CTkButton(top, text="ÁP DỤNG BẢN NHÁP", command=apply).pack(pady=5)
+
+    @staticmethod
+    def _priority_allocation_inputs(limit: str, use: str, maximum: str) -> dict:
+        cap, pct, count = float(limit) * 1_000_000, float(use), float(maximum)
+        if not all(math.isfinite(value) for value in (cap, pct, count)) or cap < 0 or not 0 <= pct <= 100 or not count.is_integer() or not 1 <= count <= 100:
+            raise ValueError("Hạn mức ≥ 0; mỗi lần 0–100%; MAX LỆNH nguyên 1–100.")
+        return {"limit_vnd": cap, "use_pct": pct, "max_orders": int(count)}
 
     def _save_priority(self) -> None:
         priority = self.priority_picker.get()

@@ -174,12 +174,17 @@ class TradeStateStore:
             self.store.write(raw)
         return cycle
 
-    def record_buy_fill(self, trade_id: str, quantity: int, price: float, fee: float = 0.0) -> TradeCycle | None:
+    def record_buy_fill(self, trade_id: str, quantity: int, price: float, fee: float = 0.0,
+                        *, order_id: str = "") -> TradeCycle | None:
         with self._lock:
             cycle = self.get(trade_id)
             if not cycle:
                 return None
+            if order_id and cycle.entry_quantity > 0 and not cycle.entry_order_ids:
+                cycle.entry_order_ids = [f"legacy:{cycle.id}"]
             cycle.record_buy_fill(quantity, price, fee)
+            if order_id and quantity > 0 and price > 0 and order_id not in cycle.entry_order_ids:
+                cycle.entry_order_ids.append(order_id)
             return self.save(cycle)
 
     def record_sell_fill(

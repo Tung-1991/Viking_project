@@ -127,7 +127,7 @@ def coordinate_buy_decisions(
     """
     output: list[CoordinatedBuy] = []
     for candidate in rank_buy_decisions(decisions, watchlist, priority_symbols):
-        if candidate.symbol in allocator.occupied_symbols:
+        if candidate.symbol in allocator.occupied_symbols and candidate.symbol not in allocator.scale_in_symbols:
             continue
         if not bot_enabled:
             output.append(CoordinatedBuy(
@@ -166,6 +166,7 @@ class BuySlotAllocator:
         max_positions: int,
         occupied_symbols: Iterable[str] = (),
         priority_symbols: Iterable[str] = (),
+        scale_in_symbols: Iterable[str] = (),
     ):
         self.max_positions = max(1, int(max_positions or 1))
         self.occupied_symbols = {
@@ -178,6 +179,8 @@ class BuySlotAllocator:
             for symbol in priority_symbols
             if str(symbol or "").strip()
         }
+        self.scale_in_symbols = {str(value).strip().upper() for value in scale_in_symbols} & self.priority_symbols & self.occupied_symbols
+        self._reservations: dict[str, bool] = {}
 
     @classmethod
     def from_runtime(
@@ -189,6 +192,7 @@ class BuySlotAllocator:
         *,
         bot_symbols: Iterable[str] | None = None,
         priority_symbols: Iterable[str] = (),
+        scale_in_symbols: Iterable[str] = (),
     ) -> "BuySlotAllocator":
         mode = str(execution_mode or "PAPER").strip().upper()
         occupied = (
@@ -218,7 +222,7 @@ class BuySlotAllocator:
             for symbol in priority_symbols
             if str(symbol or "").strip()
         }
-        return cls(max_positions, occupied, priority)
+        return cls(max_positions, occupied, priority, scale_in_symbols)
 
     @property
     def used(self) -> int:
@@ -230,6 +234,10 @@ class BuySlotAllocator:
 
     def reserve(self, symbol: str) -> bool:
         normalized = str(symbol or "").strip().upper()
+        if normalized in self.scale_in_symbols and len(self.occupied_symbols) <= self.max_positions:
+            self.scale_in_symbols.remove(normalized)
+            self._reservations[normalized] = False
+            return True
         if (
             not normalized
             or normalized in self.occupied_symbols
@@ -237,8 +245,12 @@ class BuySlotAllocator:
         ):
             return False
         self.occupied_symbols.add(normalized)
+        self._reservations[normalized] = True
         return True
 
     def release(self, symbol: str) -> None:
         normalized = str(symbol or "").strip().upper()
-        self.occupied_symbols.discard(normalized)
+        if self._reservations.pop(normalized, True):
+            self.occupied_symbols.discard(normalized)
+        else:
+            self.scale_in_symbols.add(normalized)

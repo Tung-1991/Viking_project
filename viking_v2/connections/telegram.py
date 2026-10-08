@@ -114,7 +114,7 @@ class SignalTelegramService:
         if self.buy_batch_seconds <= 0:
             return self._send(self._format_buys([item]))
         with self._buy_lock:
-            self._pending_buys[symbol] = item
+            self._pending_buys[self._buy_key(item)] = item
             if self._buy_timer is None:
                 self._buy_window_started = datetime.now()
                 self._buy_timer = threading.Timer(self.buy_batch_seconds, self.flush_buys)
@@ -140,8 +140,9 @@ class SignalTelegramService:
                 )
             )
         started = started or self._buy_window_started or datetime.now()
+        codes = len({item["symbol"] for item in items})
         lines = [
-            f"🟢 BUY SIGNAL · {len(items)} MÃ",
+            f"🟢 BUY SIGNAL · {len(items)} MÃ" if codes == len(items) else f"🟢 BUY SIGNAL · {len(items)} LỆNH · {codes} MÃ",
             f"{started:%H:%M}–{datetime.now():%H:%M}",
             "",
         ]
@@ -152,6 +153,10 @@ class SignalTelegramService:
             for item in sorted(items, key=lambda value: str(value.get("symbol", "")))
         )
         return "\n".join(lines)
+
+    @staticmethod
+    def _buy_key(item: dict[str, Any]) -> str:
+        return f"{item.get('execution_mode', '')}|{item['symbol']}|{item['signal_id']}"
 
     def flush_buys(self) -> bool:
         """Send one BUY digest for the current fixed batching window."""
@@ -170,7 +175,7 @@ class SignalTelegramService:
         with self._buy_lock:
             if not sent:
                 for item in items:
-                    self._pending_buys[str(item["symbol"])] = item
+                    self._pending_buys.setdefault(self._buy_key(item), item)
                 if self._buy_timer is None:
                     self._buy_window_started = started or datetime.now()
                     self._buy_timer = threading.Timer(self.buy_batch_seconds, self.flush_buys)

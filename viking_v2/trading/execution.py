@@ -716,6 +716,12 @@ class ExecutionService:
         fee = broker_fee + broker_tax
         if intent.side == "BUY":
             previous = self.trade_state.get(intent.trade_id)
+            if intent.source == "BOT" and previous and previous.entry_quantity > 0 and not previous.entry_order_ids:
+                previous.entry_order_ids = list(dict.fromkeys(
+                    item.id for item in self.queue.list_all() if item.id != intent.id
+                    and item.side == "BUY" and item.source == "BOT" and item.trade_id == previous.id and item.filled_quantity > 0
+                )) or [f"legacy:{previous.id}"]
+                self.trade_state.save(previous)
             if not previous:
                 created_cycle = self.trade_state.create(
                     intent.symbol,
@@ -746,7 +752,8 @@ class ExecutionService:
                         created_cycle.external_progress = dict(baseline.get("progress") or {})
                         created_cycle.record_buy_fill(int(baseline["quantity"]), float(baseline["cost"]))
                         self.trade_state.save(created_cycle)
-            cycle = self.trade_state.record_buy_fill(intent.trade_id, filled, price, fee)
+            cycle = self.trade_state.record_buy_fill(intent.trade_id, filled, price, fee,
+                                                     order_id=intent.id if intent.source == "BOT" else "")
             if cycle and (not previous or previous.entry_quantity == 0):
                 self._emit_trade_event("OPEN", cycle, intent)
         else:

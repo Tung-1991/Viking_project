@@ -48,8 +48,12 @@ KẾT NỐI → MÃ CK → VỐN RIÊNG ON, tổng **50 triệu**, ⚙ từng m�
 | IDC | 15 triệu | 50% | 7,5 triệu | 7,5 triệu |
 
 **LƯU PRIORITY**. P1 100% không ép mua hết tiền; % từng mã vẫn giữ tiền riêng.
-Tổng 4 mã: **50 triệu = được mua 25 triệu + để dành 25 triệu** (cả nhóm, không phải mỗi mã).
-PAPER 100 triệu cũng chịu cap này: MSN 15 triệu × 50% vẫn chỉ dùng 7,5 triệu.
+Mặc định MAX LỆNH **1**: tổng 4 mã **50 triệu = được mua 25 triệu + để dành 25 triệu** (cả nhóm).
+Muốn mua hai lần: ⚙ mã → MAX LỆNH **2** → ÁP DỤNG BẢN NHÁP → LƯU PRIORITY.
+Ví dụ MSN 15 triệu, mỗi lần 50%, MAX 2: mỗi BUY ≤ 7,5 triệu, tổng ≤ 15 triệu gồm phí.
+Cần tín hiệu BUY mới; không tự mua bù. Cộng vào cùng vị thế/giá vốn; không mua khi đang thoát/đã bán một phần.
+Bán hết mới đếm lại; khớp nhiều đợt vẫn 1 lần. Chỉ số lần BOT, không hạn chế MANUAL. Backtest hiện dùng MAX=1.
+Với MAX=1, PAPER 100 triệu cũng chịu cap này: MSN 15 triệu × 50% vẫn chỉ dùng 7,5 triệu.
 Nếu 100 CP theo giá trần + phí vượt cap, MARKET AUTO không mua; xem hint KL để biết số tiền cần.
 Có thêm 10 triệu: đổi tổng thành 60, cap HDB thành 15 rồi lưu; không tự mua bù.
 CHIA HẠN MỨC thay các cap nháp bằng Tổng / số mã, không mua lệnh. Khối lượng thực tế

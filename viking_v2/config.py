@@ -289,8 +289,25 @@ def normalize_priority_allocations(raw: Any, symbols: Any) -> dict[str, dict[str
         result[symbol] = {
             "limit_vnd": finite_nonnegative(row.get("limit_vnd")),
             "use_pct": min(100.0, finite_nonnegative(row.get("use_pct", 100.0))),
+            "max_orders": priority_max_orders(row.get("max_orders", 1)),
         }
     return result
+
+
+def priority_max_orders(value: Any) -> int:
+    """Invalid persisted values fail closed to the old one-entry policy."""
+    try:
+        number = float(value)
+        return int(number) if math.isfinite(number) and number.is_integer() and 1 <= number <= 100 else 1
+    except (TypeError, ValueError, OverflowError):
+        return 1
+
+
+def priority_buy_limit(row: dict[str, Any]) -> float:
+    """Total purchasable envelope, distinct from the ceiling of one BUY."""
+    limit = finite_nonnegative(row.get("limit_vnd"))
+    pct = min(100.0, finite_nonnegative(row.get("use_pct", 100.0)))
+    return min(limit, limit * pct / 100.0 * priority_max_orders(row.get("max_orders", 1)))
 
 
 def validate_priority_capital(total: float, symbols: Any, allocations: Any) -> None:

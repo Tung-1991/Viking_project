@@ -453,6 +453,7 @@ class RuleStateStore:
         t2_dynamic_enabled: bool = False,
         sellable: bool = False,
         normal_arm_pct: float = 7.0,
+        entry_avg_price: float = 0.0,
     ) -> dict[str, Any]:
         symbol = str(symbol or "").upper()
         trade_id = str(trade_id or "")
@@ -464,6 +465,20 @@ class RuleStateStore:
                 legacy = raw["symbols"].get(symbol)
                 current = legacy if isinstance(legacy, dict) and str(legacy.get("trade_id", "")) == trade_id else None
             current = current if isinstance(current, dict) and str(current.get("trade_id", "")) == trade_id else {"trade_id": trade_id}
+            if entry_avg_price > 0:
+                old_basis = float(current.get("entry_avg_price", 0.0) or 0.0)
+                if old_basis <= 0 and float(current.get("market_price", 0.0) or 0.0) > 0:
+                    ratio = 1 + float(current.get("current_profit_pct", 0.0) or 0.0) / 100
+                    old_basis = float(current["market_price"]) / ratio if ratio > 0 else 0.0
+                if old_basis > 0 and abs(old_basis - entry_avg_price) > 1e-9:
+                    # Scale-in changes the cost basis, not the historical market
+                    # high. Never erase/lower the persisted absolute SELL floor.
+                    for field in ("peak_profit_pct", "mfe_pct", "mae_pct", "normal_sellable_peak_profit_pct",
+                                  "normal_last_trigger_peak_pct", "normal_last_alert_peak_pct"):
+                        if field in current:
+                            absolute = old_basis * (1 + float(current[field]) / 100)
+                            current[field] = (absolute / entry_avg_price - 1) * 100
+                current["entry_avg_price"] = entry_avg_price
             current["peak_profit_pct"] = max(float(current.get("peak_profit_pct", profit_pct) or profit_pct), float(profit_pct))
             current["current_profit_pct"] = float(profit_pct)
             current["mae_pct"] = min(0.0, float(current.get("mae_pct", 0.0) or 0.0), float(profit_pct))
@@ -775,8 +790,9 @@ class RuleStateStore:
         price: float,
         market_state: str,
         signal_id: str = "",
+        stream: str = "",
     ) -> dict[str, Any] | None:
-        """Create one persistent Telegram BUY signal per symbol."""
+        """Create one persistent Telegram position record per book/symbol."""
         symbol = str(symbol or "").strip().upper()
         candle_key = str(candle_key or "").strip()
         price = float(price or 0.0)
@@ -784,11 +800,18 @@ class RuleStateStore:
             return None
         with self._lock:
             raw = self._read()
-            active = raw["telegram_signals"].get(symbol)
+            key = f"{str(stream).upper()}|{symbol}" if stream else symbol
+            active = raw["telegram_signals"].get(key)
             if isinstance(active, dict):
                 return None
+            legacy = raw["telegram_signals"].get(symbol) if stream else None
+            if isinstance(legacy, dict) and signal_id and legacy.get("id") == signal_id:
+                raw["telegram_signals"][key] = {**legacy, "execution_mode": str(stream).upper()}
+                raw["telegram_signals"].pop(symbol)
+                self.store.write(raw)
+                return None
             signal_id = str(signal_id or "").strip() or hashlib.sha256(
-                f"{symbol}|{candle_key}".encode("utf-8")
+                (f"{str(stream).upper()}|{symbol}|{candle_key}" if stream else f"{symbol}|{candle_key}").encode("utf-8")
             ).hexdigest()[:10].upper()
             record = {
                 "id": signal_id,
@@ -797,30 +820,40 @@ class RuleStateStore:
                 "buy_price": price,
                 "market_state": str(market_state or "UNKNOWN").upper(),
                 "opened_at": time.time(),
+                "execution_mode": str(stream).upper(),
             }
-            raw["telegram_signals"][symbol] = record
+            raw["telegram_signals"][key] = record
             self.store.write(raw)
             return dict(record)
 
-    def active_telegram_signal(self, symbol: str) -> dict[str, Any] | None:
+    def active_telegram_signal(self, symbol: str, stream: str = "") -> dict[str, Any] | None:
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return None
         with self._lock:
             raw = self._read()
-            active = raw["telegram_signals"].get(symbol)
+            key = f"{str(stream).upper()}|{symbol}" if stream else symbol
+            active = raw["telegram_signals"].get(key)
             return dict(active) if isinstance(active, dict) else None
 
-    def discard_telegram_signal(self, symbol: str) -> dict[str, Any] | None:
+    def discard_telegram_signal(self, symbol: str, stream: str = "", *, signal_id: str = "") -> dict[str, Any] | None:
         """Forget an alerted BUY that never became an actual position."""
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return None
         with self._lock:
             raw = self._read()
-            active = raw["telegram_signals"].pop(symbol, None)
+            key = f"{str(stream).upper()}|{symbol}" if stream else symbol
+            active = raw["telegram_signals"].get(key)
+            if active is None and stream and signal_id:
+                legacy = raw["telegram_signals"].get(symbol)
+                if isinstance(legacy, dict) and legacy.get("id") == signal_id:
+                    key, active = symbol, legacy
+            if signal_id and isinstance(active, dict) and active.get("id") != signal_id:
+                return None
             if not isinstance(active, dict):
                 return None
+            raw["telegram_signals"].pop(key)
             self.store.write(raw)
             return dict(active)
 
@@ -828,6 +861,7 @@ class RuleStateStore:
         self,
         symbol: str,
         signal_id: str,
+        stream: str = "",
     ) -> dict[str, Any] | None:
         """Take the matching BUY record only when its actual trade closes."""
         symbol = str(symbol or "").strip().upper()
@@ -836,9 +870,14 @@ class RuleStateStore:
             return None
         with self._lock:
             raw = self._read()
-            active = raw["telegram_signals"].get(symbol)
+            key = f"{str(stream).upper()}|{symbol}" if stream else symbol
+            active = raw["telegram_signals"].get(key)
+            if (not isinstance(active, dict) or active.get("id") != signal_id) and stream:
+                legacy = raw["telegram_signals"].get(symbol)
+                if isinstance(legacy, dict) and legacy.get("id") == signal_id:
+                    key, active = symbol, legacy
             if not isinstance(active, dict) or str(active.get("id", "")) != signal_id:
                 return None
-            raw["telegram_signals"].pop(symbol, None)
+            raw["telegram_signals"].pop(key, None)
             self.store.write(raw)
             return dict(active)
