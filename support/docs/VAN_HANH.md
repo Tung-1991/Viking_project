@@ -48,6 +48,8 @@ KẾT NỐI → MÃ CK → VỐN RIÊNG ON, tổng **50 triệu**, ⚙ từng m�
 | IDC | 15 triệu | 50% | 7,5 triệu | 7,5 triệu |
 
 **LƯU PRIORITY**. P1 100% không ép mua hết tiền; % từng mã vẫn giữ tiền riêng.
+PAPER 100 triệu cũng chịu cap này: MSN 15 triệu × 50% vẫn chỉ dùng 7,5 triệu.
+Nếu 100 CP theo giá trần + phí vượt cap, MARKET AUTO không mua; xem hint KL để biết số tiền cần.
 Có thêm 10 triệu: đổi tổng thành 60, cap HDB thành 15 rồi lưu; không tự mua bù.
 CHIA HẠN MỨC thay các cap nháp bằng Tổng / số mã, không mua lệnh. Khối lượng thực tế
 làm tròn lô/dự phòng giá trần nên tiền dùng thấp hơn trần. IDC không mượn cap mã khác.
@@ -74,6 +76,8 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 ## Khi có bất thường
 
 Giá cũ / HEALTH lỗi: kiểm tra mạng, daemon, DNSE và đồng hồ; không dùng giá cũ đặt tay.
+CHỜ TIỀN TÀI KHOẢN = chưa có số dư, khác TIỀN KHẢ DỤNG = 0. Hint KL ghi tiền/cap/giá tính lô.
+Lỗi làm mới REAL không làm mất số dư PAPER; sổ lỗi giữ snapshot trước, không tạo số dư 0 giả.
 LỊCH CHỜ lúc mở app = đang tải; LỊCH LỖI = chưa có lịch dùng được, không gửi lệnh mới.
 Token hết hạn: nhập OTP lại. UNKNOWN / RECONCILE_REQUIRED: đối chiếu lệnh DNSE trước,
 không đặt lại vì nghĩ chưa gửi. Giữ runtime/logs; không reset/xóa dữ liệu để chữa lỗi.

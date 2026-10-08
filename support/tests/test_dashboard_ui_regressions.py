@@ -398,6 +398,68 @@ def test_recent_previous_process_heartbeat_is_still_sync_after_restart():
     assert subject.preview_health_title.options["text"] == "HEALTH CẢNH BÁO"
 
 
+@pytest.mark.parametrize("phase", ["OPEN", "ATO", "ATC"])
+@pytest.mark.parametrize("quote", [
+    {"timestamp": 1.0}, {"stale": True}, {"frozen": True},
+    {"symbol": "MSN"}, {"health": "ERROR"}, {"timestamp": "bad"},
+])
+def test_health_never_marks_unusable_quote_green(phase, quote):
+    subject = DashboardPanelsMixin()
+    subject.real, subject.mode, subject.symbol = _Real(), _Value("REAL"), _Value("AAA")
+    for name in ("title", "daemon", "core", "ws", "rest", "token", "trade"):
+        setattr(subject, f"preview_health_{name}", _Label())
+    subject._refresh_api_health_panel({
+        "heartbeat_at": time.time(), "daemon_status": "RUNNING", "market_status": phase,
+        "api_health": {"websocket": {"connected": True, "authenticated": True}},
+        "ticks": {"AAA": {"timestamp": time.time(), "price": 7.15, **quote}},
+    })
+    assert subject.preview_health_title.options["text"] == "HEALTH LỖI"
+    assert subject.preview_health_trade.options["text"] == "GIÁ CHẬM"
+    assert subject.preview_health_trade.options["text_color"] != COL_GREEN
+
+
+def test_health_uses_received_quote_time_not_last_match_time():
+    subject = DashboardPanelsMixin()
+    subject.real, subject.mode, subject.symbol = _Real(), _Value("REAL"), _Value("AAA")
+    for name in ("title", "daemon", "core", "ws", "rest", "token", "trade"):
+        setattr(subject, f"preview_health_{name}", _Label())
+    subject._refresh_api_health_panel({
+        "heartbeat_at": time.time(), "daemon_status": "RUNNING", "market_status": "OPEN",
+        "api_health": {"websocket": {"connected": True, "authenticated": True}},
+        "ticks": {"AAA": {"timestamp": 1.0, "received_at": time.time(), "price": 7.15}},
+    })
+    assert subject.preview_health_title.options["text"] == "HEALTH OK"
+    assert subject.preview_health_trade.options["text"] == "GIÁ MỞ"
+
+
+@pytest.mark.parametrize("ui,daemon,label", [
+    ({"total_requests": 1, "last_status": 500}, {"total_requests": 1000, "last_status": 200}, "API LỖI"),
+    ({"total_requests": 1000, "last_status": 200}, {"total_requests": 1, "last_status": 500}, "API LỖI"),
+    ({"total_requests": 1, "last_status": 0, "last_error": "timeout"}, {"total_requests": 1000, "last_status": 200}, "API LỖI"),
+    ({"total_requests": 0, "last_status": None}, {"total_requests": 1, "last_status": 200}, "API OK"),
+    ({"total_requests": 0, "last_status": None}, {"total_requests": 0, "last_status": None}, "API CHỜ"),
+])
+def test_health_checks_rest_clients_independently(ui, daemon, label):
+    subject = DashboardPanelsMixin()
+    subject.real = SimpleNamespace(api_health=lambda: ui, configured=lambda: True,
+                                   has_trading_token=lambda: True)
+    subject.mode, subject.symbol = _Value("REAL"), _Value("AAA")
+    for name in ("title", "daemon", "core", "ws", "rest", "token", "trade"):
+        setattr(subject, f"preview_health_{name}", _Label())
+    status = {"heartbeat_at": time.time(), "daemon_status": "RUNNING", "market_status": "OPEN",
+              "api_health": {"rest": daemon, "websocket": {"connected": True, "authenticated": True}},
+              "ticks": {"AAA": {"timestamp": time.time(), "price": 7.15}}}
+    subject._refresh_api_health_panel(status)
+    assert subject.preview_health_rest.options["text"] == label
+    if label == "API LỖI":
+        assert subject.preview_health_title.options["text"] == "HEALTH LỖI"
+        # A successful request in that same client clears the current failure.
+        ui.update(total_requests=1001, last_status=200, last_error="")
+        daemon.update(total_requests=1001, last_status=200, last_error="")
+        subject._refresh_api_health_panel(status)
+        assert subject.preview_health_title.options["text"] == "HEALTH OK"
+
+
 class _Tree:
     def __init__(self) -> None:
         self.columns: tuple[str, ...] = ()

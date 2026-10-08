@@ -3270,38 +3270,49 @@ class DashboardActionsMixin:
         def work() -> tuple[
             dict[str, tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]],
             list[dict[str, Any]],
+            dict[str, str],
         ]:
-            values = {"PAPER": self.execution.account_snapshot("PAPER")}
+            values = {}
+            errors: dict[str, str] = {}
+            try:
+                values["PAPER"] = self.execution.account_snapshot("PAPER")
+            except Exception as exc:
+                errors["PAPER"] = str(exc)
             external_sells: list[dict[str, Any]] = []
             if self.real.configured():
-                values["REAL"] = self.execution.account_snapshot("REAL")
-                external_sells = self.execution.reconcile_external_sells(
-                    values["REAL"][1], values["REAL"][2],
-                )
-            return values, external_sells
+                try:
+                    snapshot = self.execution.account_snapshot("REAL")
+                    external_sells = self.execution.reconcile_external_sells(snapshot[1], snapshot[2])
+                    values["REAL"] = snapshot
+                except Exception as exc:
+                    errors["REAL"] = str(exc)
+            # A failed REAL refresh/reconciliation must not throw away PAPER's
+            # successful balance (and vice versa). Failed books keep their
+            # previous snapshot; we never fabricate a zero balance.
+            return values, external_sells, errors
 
         future = self._io_executor.submit(work)
 
         def completed(result: Any) -> None:
             try:
-                values, external_sells = result.result()
-                error = ""
+                values, external_sells, errors = result.result()
             except Exception as exc:
                 values = {}
                 external_sells = []
-                error = str(exc)
+                errors = {"": str(exc)}
 
             def apply() -> None:
                 self._snapshot_busy = False
                 if not self.running:
                     return
-                if error:
-                    self.logger.warning("Account refresh failed: %s", error)
+                for failed_book, error in errors.items():
+                    failed_book = failed_book or str(self.mode.get() or "").upper()
+                    self.logger.warning("[%s] Account refresh failed: %s", failed_book, error)
                     DashboardActionsMixin._notify_system_event(
                         self,
                         "ACCOUNT_REFRESH",
-                        "Không làm mới được tài khoản/vị thế DNSE.",
-                        str(self.mode.get() or "").upper(),
+                        f"Không làm mới được tài khoản/vị thế {failed_book}.",
+                        failed_book,
                     )
                 self.snapshots.update(values)
                 if "PAPER" in values:
@@ -3345,7 +3356,7 @@ class DashboardActionsMixin:
     def _paint_account(self) -> None:
         mode = self.mode.get()
         balance = self.snapshots.get(mode, ({}, [], []))[0]
-        self.lbl_equity.configure(text=f"{_equity(balance):,.0f} ₫")
+        self.lbl_equity.configure(text=f"{_equity(balance):,.0f} ₫" if balance else "CHỜ TÀI KHOẢN")
         stats_mode = str(getattr(self.settings, "daily_stats_mode", "DAILY") or "DAILY").upper()
         summary = self.daily_fees.summary(
             mode,
@@ -3370,7 +3381,8 @@ class DashboardActionsMixin:
             text=f"FEE {period}: -{fees:,.0f}" if fees > 0 else f"FEE {period}: 0",
             text_color=COL_WARN,
         )
-        self.lbl_account.configure(text=f"ID: {self.account_id}  ·  {mode}  ·  CASH {_cash(balance):,.0f}")
+        cash_text = f"{_cash(balance):,.0f}" if balance else "—"
+        self.lbl_account.configure(text=f"ID: {self.account_id}  ·  {mode}  ·  CASH {cash_text}")
 
     def _reset_daily_stats(self) -> None:
         mode = self.mode.get()

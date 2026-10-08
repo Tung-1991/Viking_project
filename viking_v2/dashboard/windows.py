@@ -82,6 +82,33 @@ def fit_entry_text(
     return selected
 
 
+def fit_label_text(
+    label: ctk.CTkLabel,
+    *,
+    base_font: tuple[Any, ...],
+    minimum_size: int = 10,
+) -> None:
+    """Fit a compact, single-line value using its actual scaled Tk font."""
+    if not isinstance(label, ctk.CTkLabel) or label.winfo_width() <= 1:
+        return
+    text = str(label.cget("text") or "")
+    available = max(0, label.winfo_width() - 4 * label._get_widget_scaling())
+    signature = (text, available, base_font, minimum_size, label._get_widget_scaling())
+    if getattr(label, "_viking_fit_label_signature", None) == signature:
+        return
+    label._viking_fit_label_signature = signature
+    family, base_size, *styles = base_font
+    selected = minimum_size
+    for size in range(int(base_size), minimum_size - 1, -1):
+        font = tkfont.Font(root=label, font=label._apply_font_scaling((family, size, *styles)))
+        if font.measure(text) <= available:
+            selected = size
+            break
+    if getattr(label, "_viking_fit_font_size", None) != selected:
+        label.configure(font=(family, selected, *styles))
+        label._viking_fit_font_size = selected
+
+
 _SIGNAL_REASONS = {
     "WHIPSAW_LOCK": "EMA nhiễu, khóa mua",
     "MAX_POSITIONS": "Đã đủ số vị thế",

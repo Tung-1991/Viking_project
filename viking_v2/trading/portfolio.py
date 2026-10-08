@@ -400,8 +400,11 @@ class PortfolioContextBuilder:
             )
             budget = priority_capital["budget"]
             minimum_order_room = priority_capital["minimum_room"]
+        no_compound_limited = False
         if no_compound_enabled:
+            before_no_compound = budget
             budget = self.trades.capital_available(symbol, mode, budget)
+            no_compound_limited = budget < before_no_compound
             minimum_order_room = min(
                 minimum_order_room,
                 self.trades.capital_available(symbol, mode, float("inf"))
@@ -412,6 +415,9 @@ class PortfolioContextBuilder:
             # settlement/protection state or evaluating a trading signal.
             return {
                 "nav": nav, "available_cash": cash,
+                "exposure": exposure, "exposure_room": exposure_room,
+                "current_stock_value": current_value, "pending_buy_value": pending_value,
+                "pending_buy_cash": pending_cash, "no_compound_limited": no_compound_limited,
                 "order_budget": budget, "available_capital": budget,
                 "minimum_order_room": minimum_order_room, "buy_fee_rate": fee_rate,
                 "priority_capital": priority_capital,

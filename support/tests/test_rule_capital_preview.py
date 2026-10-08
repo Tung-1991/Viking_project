@@ -129,13 +129,20 @@ def test_rule_preview_keeps_current_money_in_hint_not_an_extra_row(budget):
     assert "MANUAL" in view._entry_capital_hint()
 
 
-def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root):
+@pytest.mark.parametrize("state,pct", [("UPTREND", 90), ("ACCUMULATION", 100), ("DISTRIBUTION", 10)])
+@pytest.mark.parametrize("scaling", [1.0, 1.5])
+@pytest.mark.parametrize("width", [720, 1100])
+def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state, pct, scaling, width):
     import customtkinter as ctk
     import tkinter as tk
     top = ctk.CTkToplevel(ui_root)
-    top.geometry("1100x640+0+0")
+    top.geometry(f"{width}x640+0+0")
     top.title("VIKING · OFFLINE PREVIEW")
     view = subject()
+    ctk.set_widget_scaling(scaling)
+    view.settings.market_phase_override_enabled = state != "UPTREND"
+    view.settings.market_phase_override = state
+    view.settings.market_phase_override_exposure_pct = pct
     try:
         view._build_order_preview_tab(top)
         view._em_states = {}
@@ -176,6 +183,13 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root):
         ui_root.wait_variable(settled)
         ui_root.update_idletasks()
         card = view.preview_rule_market.master
+        from tkinter import font as tkfont
+        for label in (view.preview_rule_market, view.preview_rule_phase3):
+            rendered_font = tkfont.Font(root=ui_root, font=label._label.cget("font"))
+            assert rendered_font.measure(label.cget("text")) <= label.winfo_width(), (
+                label.cget("text"), label.cget("font"), rendered_font.actual(), label.winfo_width())
+            assert label.cget("wraplength") == 0
+        assert "TIỀN" in view.preview_rule_market.cget("text")
         assert not hasattr(view, "preview_rule_market_money")
         assert int(view.preview_focus_panel.cget("height")) == 300
         assert int(view.preview_rule_market_detail.grid_info()["row"]) == 1
@@ -202,3 +216,4 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root):
             hint._hide()
     finally:
         top.destroy()
+        ctk.set_widget_scaling(1.0)

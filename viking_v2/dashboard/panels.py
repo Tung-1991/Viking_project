@@ -23,7 +23,67 @@ from .windows import (
     FONT_VALUE,
     _HoverHint,
     fit_entry_text,
+    fit_label_text,
 )
+
+
+def _auto_quantity_feedback(
+    checks: dict[str, Any], price: float, budget: float, quantity: int,
+    *, missing_bound: bool = False,
+) -> dict[str, Any]:
+    """Explain existing sizing limits; this never changes the money or quantity."""
+    money_ready = "order_budget" in checks or "available_capital" in checks
+    priority = checks.get("priority_capital") or {}
+    cash = _number(checks.get("available_cash"))
+    waiting, reason = False, ""
+    if not money_ready:
+        waiting, reason = True, "CHỜ TIỀN TÀI KHOẢN"
+    elif quantity <= 0:
+        if priority.get("reason") == "INVALID_PRIORITY_CAPITAL":
+            reason = "KIỂM TRA VỐN PRIORITY"
+        elif "available_cash" in checks and cash <= 0:
+            reason = "TIỀN KHẢ DỤNG = 0"
+        elif "exposure" in checks and _number(checks.get("exposure")) <= 0:
+            reason = "P1 CHƯA CHO PHÉP MUA"
+        elif "exposure_room" in checks and _number(checks.get("exposure_room")) <= 0:
+            reason = "HẾT ROOM P1"
+        elif budget <= 0 and priority.get("reason") == "PRIORITY_CAPITAL_LIMIT":
+            reason = (
+                "HẾT HẠN MỨC MÃ"
+                if _number(priority.get("committed_vnd")) >= _number(priority.get("buy_limit_vnd"))
+                and _number(priority.get("limit_vnd")) > 0
+                else "VỐN ĐÃ GIỮ CHO PRIORITY"
+            )
+        elif budget <= 0:
+            reason = "HẾT VỐN NO-COMPOUND" if checks.get("no_compound_limited") else "NGÂN SÁCH MUA = 0"
+        elif missing_bound:
+            waiting, reason = True, "CHỜ GIÁ TRẦN TÍNH KL"
+        elif price <= 0:
+            waiting, reason = True, "CHỜ GIÁ TÍNH KL"
+        elif cash < price * 100_000 * (1 + _number(checks.get("buy_fee_rate"))):
+            reason = "THIẾU TIỀN CHO 100 CP"
+        else:
+            reason = "HẠN MỨC CHƯA ĐỦ 100 CP" if checks.get("priority_capital_enabled") else "VỐN AUTO CHƯA ĐỦ 100 CP"
+    lines = [reason] if reason else []
+    if money_ready:
+        lines.extend((f"Tiền khả dụng: {_compact_vnd(cash)}.",
+                      f"Vốn AUTO: {_compact_vnd(budget)} trước phí."))
+        if price > 0 and not missing_bound:
+            minimum = price * 100_000 * (1 + _number(checks.get("buy_fee_rate")))
+            lines.append(f"Giá tính KL: {_display_price(price)}; 100 CP + phí: {_compact_vnd(minimum)}.")
+        if priority.get("limit_vnd"):
+            lines.append(
+                f"Priority: hạn mức {_compact_vnd(priority['limit_vnd'])} × {_number(priority.get('use_pct')):g}%"
+                f" = {_compact_vnd(priority.get('buy_limit_vnd'))} gồm phí;"
+                f" đã dùng {_compact_vnd(priority.get('committed_vnd'))}."
+            )
+        if priority:
+            lines.append(f"Tiền giữ cho mã khác/phần tiết kiệm: {_compact_vnd(priority.get('reserved_cash'))}.")
+        if checks.get("priority_capital_enabled"):
+            lines.append("MARKET dự trù KL theo giá trần để không vượt hạn mức; LO dùng giá nhập.")
+    else:
+        lines.append("Chưa nhận được số dư của sổ đang xem; không có nghĩa tài khoản hết tiền.")
+    return {"waiting": waiting, "reason": reason, "hint": "\n".join(lines)}
 
 
 def _dynamic_atr_preview_text(
@@ -738,6 +798,7 @@ class DashboardPanelsMixin:
         self.preview_status_reason.grid(
             row=0, column=1, sticky="ew", padx=5
         )
+        _HoverHint(self.preview_status_reason, self._auto_quantity_hint, placement="inside")
         self.preview_status_badge = ctk.CTkLabel(
             order_header, text="CHỜ", width=82, height=24,
             font=("Segoe UI", 10, "bold"), fg_color="#4A3B16",
@@ -782,7 +843,7 @@ class DashboardPanelsMixin:
 
         self.preview_live_value = metric_card(0, "GIÁ TT", hint="Giá gần nhất bot nhận được; màu vàng là giá đang đứng hoặc ngoài phiên. Không bảo đảm đây là giá khớp.")
         self.preview_entry_value = metric_card(1, "GIÁ VÀO", hint="Giá dùng để ước tính lệnh. LO dùng giá nhập; MARKET dùng giá hiện tại, giá khớp do sàn quyết định.")
-        self.preview_qty_value = metric_card(2, "KL", hint="AUTO tính từ vốn của đúng sổ REAL/PAPER, làm tròn lô 100. Nhập số lượng để đặt tay.\nVí dụ đủ tiền 450 CP → AUTO 400 CP.")
+        self.preview_qty_value = metric_card(2, "KL", hint=self._auto_quantity_hint)
         self.preview_cash_value = metric_card(3, "TIỀN CK", hint="Giá vào × khối lượng, chưa gồm phí mua; không phải tiền khả dụng tài khoản.\n100 CP × 32.150 đồng = 3.215.000 đồng.")
         self.preview_fee_value = metric_card(4, "FEE", COL_WARN, "Phí mua ước tính, không gồm phí/thuế bán. Thiếu giá hoặc số lượng → —, không phải miễn phí.")
         self.preview_route_value = metric_card(
@@ -893,6 +954,15 @@ class DashboardPanelsMixin:
                 text_color="#60A5FA", anchor="w",
             )
             title_widget.grid(row=0, column=0, sticky="w", padx=(8, 6), pady=4)
+            card._viking_title_widget = title_widget
+            compact_title = {"P1 · VNINDEX": "P1 · VNI", "P3 · VỐN & KHÓA": "P3 · VỐN"}.get(title)
+            if compact_title:
+                def resize_title(_event):
+                    logical_width = card.winfo_width() / card._get_widget_scaling()
+                    shown = f"{title.split(' · ')[0] if logical_width < 250 else compact_title if logical_width < 350 else title}  ⓘ"
+                    if title_widget.cget("text") != shown:
+                        title_widget.configure(text=shown)
+                card.bind("<Configure>", resize_title, add="+")
             if hint:
                 _HoverHint(title_widget, hint, placement="inside")
             return card
@@ -900,10 +970,12 @@ class DashboardPanelsMixin:
         phase1 = phase_card(1, "P1 · VNINDEX", self._market_confirmation_hint)
         self.preview_rule_market = ctk.CTkLabel(
             phase1, text="VNINDEX --", width=1, height=16,
-            font=("Cascadia Mono", 12), text_color=COL_PREVIEW_TEXT,
-            anchor="w", justify="left", wraplength=300,
+            font=("Segoe UI", 12), text_color=COL_PREVIEW_TEXT,
+            anchor="w", justify="left", wraplength=0,
         )
         self.preview_rule_market.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=4)
+        self.preview_rule_market.bind("<Configure>", lambda _event: fit_label_text(
+            self.preview_rule_market, base_font=("Segoe UI", 12)), add="+")
         _HoverHint(self.preview_rule_market, self._market_confirmation_hint, placement="inside")
         self.preview_rule_market_detail = ctk.CTkLabel(
             phase1, text="CHỜ PHÂN LOẠI", height=14, font=("Segoe UI", 10),
@@ -912,6 +984,23 @@ class DashboardPanelsMixin:
         self.preview_rule_market_detail.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 4))
         self.preview_rule_market_detail.grid_remove()
         _HoverHint(self.preview_rule_market_detail, self._market_confirmation_hint, placement="inside")
+
+        def fit_p1_row(_event):
+            # Very narrow/DPI-scaled cards use the existing second line for
+            # the P1 caption, leaving the percentages a full-width first line.
+            narrow = phase1.winfo_width() / phase1._get_widget_scaling() < 250
+            if getattr(phase1, "_viking_narrow", None) != narrow:
+                phase1._viking_narrow = narrow
+                if narrow:
+                    phase1._viking_title_widget.grid_remove()
+                else:
+                    phase1._viking_title_widget.grid()
+                self.preview_rule_market.grid(column=0 if narrow else 1, columnspan=2 if narrow else 1,
+                                              padx=8 if narrow else (0, 8))
+                note = self.preview_rule_market_detail.cget("text").removeprefix("P1 · ")
+                self.preview_rule_market_detail.configure(text=f"P1 · {note}" if narrow else note)
+            fit_label_text(self.preview_rule_market, base_font=("Segoe UI", 12))
+        phase1.bind("<Configure>", fit_p1_row, add="+")
 
         phase2 = phase_card(
             2,
@@ -949,12 +1038,14 @@ class DashboardPanelsMixin:
             self._entry_capital_hint,
         )
         self.preview_rule_phase3 = ctk.CTkLabel(
-            phase3, text="--/-- · --/MÃ", width=1, height=18, font=("Cascadia Mono", 11),
+            phase3, text="--/-- · --/MÃ", width=1, height=18, font=("Segoe UI", 11),
             text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_phase3.grid(
             row=0, column=1, sticky="ew", padx=(0, 8), pady=4
         )
+        self.preview_rule_phase3.bind("<Configure>", lambda _event: fit_label_text(
+            self.preview_rule_phase3, base_font=("Segoe UI", 11)), add="+")
         _HoverHint(self.preview_rule_phase3, self._entry_capital_hint, placement="inside")
         self.preview_rule_phase3_detail = ctk.CTkLabel(
             phase3, text="AUTO --", height=16, font=("Segoe UI", 12),
@@ -1085,17 +1176,17 @@ class DashboardPanelsMixin:
         available_cash = _number(checks.get("available_cash"))
         nav = _number(checks.get("nav"))
         minimum_room = _number(checks.get("minimum_order_room"))
+        missing_bound = False
         if checks.get("priority_capital_enabled"):
             minimum_room = min(minimum_room, budget)
             order_type = self.order_type.get() if hasattr(self, "order_type") else "MARKET"
             if str(order_type).upper() != "LO":
                 bound = _number(checks.get("buy_budget_price"))
-                if bound <= 0:
-                    return 0, budget, False
+                missing_bound = bound <= 0
                 entry_price = max(entry_price, bound)
         sizing = size_buy_order(
             budget_vnd=budget,
-            price_board=entry_price,
+            price_board=0.0 if missing_bound else entry_price,
             available_cash=available_cash,
             nav=nav,
             force_min_lot_enabled=bool(checks.get("force_min_lot_enabled", False)),
@@ -1104,6 +1195,9 @@ class DashboardPanelsMixin:
         )
         quantity = sizing.quantity
         forced_minimum = sizing.used_minimum
+        self._preview_auto_feedback = _auto_quantity_feedback(
+            checks, entry_price, budget, quantity, missing_bound=missing_bound,
+        )
         if hasattr(self, "quantity") and not self.quantity.get().strip():
             quantity_text = f"{quantity:,} CP" if quantity > 0 else "AUTO"
             self.quantity.configure(
@@ -1113,6 +1207,13 @@ class DashboardPanelsMixin:
             if callable(fit_callback):
                 fit_callback()
         return quantity, budget, forced_minimum
+
+    def _auto_quantity_hint(self) -> str:
+        return (
+            "AUTO tính từ vốn của đúng sổ REAL/PAPER, làm tròn lô 100; nhập KL để đặt tay.\n"
+            "Ví dụ đủ tiền 450 CP → AUTO 400 CP. Không ép 100 CP khi thiếu tiền/room/hạn mức.\n"
+            + str(getattr(self, "_preview_auto_feedback", {}).get("hint", "Chờ tính AUTO."))
+        )
 
     def _book_preview_status(self, status: dict[str, Any] | None = None) -> dict[str, Any]:
         """Select the viewed book, never borrow a decision from the other book."""
@@ -1274,6 +1375,7 @@ class DashboardPanelsMixin:
             "AUTO 100 khi bật chỉ nâng lên 1 lô nếu còn đủ tiền và room; không vượt cap Priority.\n"
             "BOT = số mã đang giữ/BUY chờ trên tối đa; Priority giữ slot bên trong tổng. "
             "Chống nhiễu và LOSS/BLOCK chỉ chặn BUY BOT mới, không chặn SELL hay lưu tín hiệu mua lại.\n"
+            f"{getattr(self, '_preview_auto_feedback', {}).get('hint', '')}\n"
             f"Hiện tại: {getattr(self, '_preview_entry_summary', 'chờ dữ liệu')}."
         )
 
@@ -1334,8 +1436,11 @@ class DashboardPanelsMixin:
         auto_quantity = not raw_quantity
         budget = 0.0
         forced_minimum = False
+        # Keep the AUTO hint current even when the operator types a MANUAL
+        # quantity or switches books; never show the previous book's money.
+        suggested_quantity, suggested_budget, suggested_minimum = self._suggested_order_quantity(entry_price, status, symbol)
         if auto_quantity:
-            quantity, budget, forced_minimum = self._suggested_order_quantity(entry_price, status, symbol)
+            quantity, budget, forced_minimum = suggested_quantity, suggested_budget, suggested_minimum
             quantity_error = ""
         else:
             try:
@@ -1346,11 +1451,11 @@ class DashboardPanelsMixin:
                 quantity_error = "KHỐI LƯỢNG KHÔNG HỢP LỆ"
         valid_quantity, quantity_reason, _normalized = validate_quantity(quantity)
         auto_block_reason = ""
+        auto_waiting = False
         if auto_quantity and quantity <= 0:
-            auto_block_reason = (
-                "KHÔNG ĐỦ VỐN MUA 1 LÔ"
-                if budget > 0 and entry_price > 0 else "CHỜ TÍNH KHỐI LƯỢNG"
-            )
+            feedback = getattr(self, "_preview_auto_feedback", {})
+            auto_waiting = bool(feedback.get("waiting"))
+            auto_block_reason = str(feedback.get("reason") or "CHỜ TÍNH KHỐI LƯỢNG")
         gross = entry_price * max(0, quantity) * 1000.0
         preview_capital = gross
         estimated_fee = self._preview_buy_fee(gross, symbol, mode) if gross > 0 else None
@@ -1372,11 +1477,15 @@ class DashboardPanelsMixin:
             quantity_reason if not auto_quantity and not valid_quantity else ""
         ) or price_error
         if auto_quantity and quantity <= 0:
-            invalid_reason = auto_block_reason
+            invalid_reason = price_error or auto_block_reason
         if not symbol:
             invalid_reason = "Chưa chọn mã chứng khoán"
+        auto_waiting = auto_waiting and bool(symbol) and not price_error
 
-        if invalid_reason:
+        if auto_waiting:
+            badge, badge_bg, badge_fg = "CHỜ", "#4A3B16", "#FFF3B0"
+            reason, route = invalid_reason, "CHỜ"
+        elif invalid_reason:
             badge, badge_bg, badge_fg = "LỖI", "#5A1E1E", "#FFCDD2"
             reason = invalid_reason
             route = "CHẶN"
@@ -1406,6 +1515,8 @@ class DashboardPanelsMixin:
         button_text, button_bg, button_hover, button_border = self._buy_button_presentation(
             invalid_reason, due, token_ready,
         )
+        if auto_waiting:
+            button_text, button_bg, button_hover, button_border = "CHỜ DỮ LIỆU", "#4A3B16", "#605020", COL_WARN
         self.execute_button.configure(
             text=button_text,
             fg_color=button_bg,
@@ -1456,7 +1567,7 @@ class DashboardPanelsMixin:
             text_color=COL_WARN if auto_quantity else COL_PREVIEW_TEXT,
         )
         self.preview_qty_value.configure(
-            text=f"{quantity:,}" if quantity > 0 else "< 100" if auto_quantity else "0",
+            text=f"{quantity:,}" if quantity > 0 else "—" if auto_waiting else "< 100" if auto_quantity else "0",
             text_color=COL_WARN if auto_quantity else COL_TEXT,
         )
         self.preview_cash_value.configure(
@@ -1659,6 +1770,7 @@ class DashboardPanelsMixin:
             text=f"{state_label} · CP {exposure_pct:g}% · TIỀN {cash_pct:g}%",
             text_color=market_color,
         )
+        fit_label_text(self.preview_rule_market, base_font=("Segoe UI", 12))
         market_notes: list[str] = []
         override_enabled = bool(market_details.get("override_enabled", False))
         if override_enabled:
@@ -1682,7 +1794,8 @@ class DashboardPanelsMixin:
         if len(updated_at) >= 16:
             market_notes.append(updated_at[11:16])
         self.preview_rule_market_detail.configure(
-            text=" · ".join(market_notes),
+            text=("P1 · " if getattr(getattr(self.preview_rule_market, "master", None), "_viking_narrow", False) else "")
+                 + " · ".join(market_notes),
             text_color=COL_WARN if pending_confirmation or override_enabled else COL_PREVIEW_TEXT,
         )
         if market_notes:
@@ -1794,6 +1907,7 @@ class DashboardPanelsMixin:
             text=f"BOT {slot_used}/{slot_max or '--'} · {phase3_parts[-1].replace('VỐN AUTO', 'AUTO')}",
             text_color=COL_WARN if guard_warn else COL_TEXT,
         )
+        fit_label_text(self.preview_rule_phase3, base_font=("Segoe UI", 11))
         symbol_tick = (status.get("ticks") or {}).get(symbol) or {}
         phase3_price = _number(
             symbol_tick.get("price")
@@ -1986,8 +2100,15 @@ class DashboardPanelsMixin:
         daemon_rest = daemon_health.get("rest") if isinstance(daemon_health.get("rest"), dict) else {}
         ui_rest = self.real.api_health()
         rest_rows = [row for row in (ui_rest, daemon_rest) if isinstance(row, dict)]
-        latest = max(rest_rows, key=lambda row: int(row.get("total_requests", 0) or 0), default={})
-        last_status = latest.get("last_status")
+        # Each process has its own request counter. A busy healthy daemon must
+        # not conceal an account/API failure in the UI client, or vice versa.
+        observed_rest = [row for row in rest_rows if int(row.get("total_requests", 0) or 0) > 0]
+        rest_error = any(
+            not isinstance(row.get("last_status"), (int, float))
+            or not 200 <= row["last_status"] < 300
+            or bool(row.get("last_error"))
+            for row in observed_rest
+        )
 
         heartbeat_age = max(0.0, time.time() - _number(status.get("heartbeat_at")))
         daemon_state = str(status.get("daemon_status") or "STARTING").upper()
@@ -2009,9 +2130,8 @@ class DashboardPanelsMixin:
         )
 
         configured = self.real.configured()
-        total_requests = sum(int(row.get("total_requests", 0) or 0) for row in rest_rows)
-        rest_ok = total_requests > 0 and isinstance(last_status, (int, float)) and 200 <= int(last_status) < 300
-        rest_state = "OK" if rest_ok else "WAIT" if total_requests == 0 else "ERROR"
+        rest_ok = bool(observed_rest) and not rest_error
+        rest_state = "ERROR" if rest_error else "OK" if rest_ok else "WAIT"
         dnse_ok = configured and rest_state != "ERROR"
         dnse_text = "OK" if dnse_ok else "CHỜ" if not configured else "LỖI"
         ws_online = bool(ws.get("connected") and ws.get("authenticated"))
@@ -2053,27 +2173,19 @@ class DashboardPanelsMixin:
 
         symbol = self.symbol.get().strip().upper()
         tick = (status.get("ticks") or {}).get(symbol) or {}
-        tick_ts = float(tick.get("timestamp", 0.0) or 0.0)
-        tick_age = max(0.0, time.time() - tick_ts) if tick_ts else None
-        data_frozen = bool(tick) and (
-            bool(tick.get("frozen"))
-            or bool(tick.get("price_frozen"))
-            or not market_active
-            or bool(tick_age is not None and tick_age > 10.0)
-        )
-        data_ok = bool(tick and market_active)
-        if market_status == "ATO":
+        data_ok = market_active and quote_is_fresh(tick, symbol)
+        if market_active and not data_ok:
+            price_state = "CHẬM" if tick else "CHỜ"
+        elif market_status == "ATO":
             price_state = "ATO"
         elif market_status == "ATC":
             price_state = "ATC"
         elif market_status in {"OPEN", "CONTINUOUS"}:
             price_state = "MỞ"
-        elif data_frozen:
+        elif tick and not market_active:
             price_state = "ĐÓNG"
-        elif tick_age is None:
-            price_state = "CHỜ"
         else:
-            price_state = "CHẬM"
+            price_state = "CHỜ"
         calendar_loading = market_status == "CALENDAR_LOADING"
         calendar_error = market_status == "CALENDAR_UNKNOWN"
         self.preview_health_trade.configure(

@@ -53,6 +53,8 @@ danh sách/hạn mức/P1/max mã, giữ kết nối/rule khác/runtime; yêu c�
   P1/OVERRIDE qua `PortfolioContextBuilder.build(budget_only=True)`, không cần decision
   BUY, không đổi cooldown/vị thế. Thiếu dữ liệu không đoán vốn. CHƯA LƯU chưa áp dụng.
   Priority preview dùng bản sao setting nháp và cùng bộ tính vốn; không gọi DNSE.
+- Refresh tài khoản xử lý lỗi riêng REAL/PAPER; không bỏ kết quả sổ đã đọc được.
+  HEALTH kiểm tra cả hai REST client và dùng `quote_is_fresh`, không lấy số request làm mốc mới nhất.
 - XÓA API bỏ Key/Secret/token ở RAM và .env, nạp lại daemon cùng workspace;
   giữ account/runtime/settings và lệnh DNSE. XÓA TOKEN không xóa API.
 - Chỉ quản lý Deal đã chọn của đúng account/mã/gói. Giao dịch ngoài app đối soát được
