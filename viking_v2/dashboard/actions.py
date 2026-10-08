@@ -1508,7 +1508,7 @@ class DashboardActionsMixin:
                     feedback.get("hint") or feedback.get("reason") or "Chưa tính được khối lượng AUTO. Xem PREVIEW.",
                 )
                 return
-        if mode == "REAL" and self.settings.confirm_real_orders:
+        if mode == "REAL" and not self.settings.skip_real_order_confirmation:
             answer = messagebox.askyesno(
                 "Xác nhận lệnh REAL",
                 f"{side} {quantity} {symbol} • {kind}" + (f" @ {_display_price(limit_price)}" if kind == "LO" else ""),

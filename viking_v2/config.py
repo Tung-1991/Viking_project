@@ -335,7 +335,9 @@ class AppSettings:
     # accumulate until the operator resets their shared display cutoff.
     daily_stats_mode: str = "DAILY"
     daily_stats_reset_time: str = "00:00"
-    confirm_real_orders: bool = True
+    # UI convenience only: skips the MANUAL REAL Yes/No dialog, never broker
+    # validation, cash/quantity checks, token requirements or session rules.
+    skip_real_order_confirmation: bool = True
     telegram_enabled: bool = False
     telegram_chat_id: str = ""
     telegram_token_env: str = "TELE_BOT_KEY"
@@ -421,6 +423,8 @@ class AppSettings:
             ).strftime("%H:%M")
         except ValueError:
             self.daily_stats_reset_time = "00:00"
+        # Malformed values must not silently enable confirmation bypass.
+        self.skip_real_order_confirmation = self.skip_real_order_confirmation is True
         self.telegram_chat_id = str(self.telegram_chat_id or "").strip()
         self.telegram_token_env = str(self.telegram_token_env or "TELE_BOT_KEY").strip()
         try:
@@ -524,6 +528,9 @@ class AppSettings:
                 "indicator_exit": legacy,
                 "blocked_buy": legacy,
             }
+        # The old positive confirm_real_orders flag is retired. Files without
+        # the new flag use the requested skip-by-default behaviour; an explicit
+        # new False survives updates and asks for confirmation again.
         allowed = {name for name in cls.__dataclass_fields__}
         return cls(**{key: value for key, value in raw.items() if key in allowed}).normalize()
 

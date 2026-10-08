@@ -161,7 +161,7 @@ def test_tp_status_matches_actual_target_not_global_percentage_or_net_pnl(
 
 def manual_subject(status):
     subject = DashboardActionsMixin()
-    subject.settings = AppSettings(confirm_real_orders=False, watchlist=["MSN"])
+    subject.settings = AppSettings(watchlist=["MSN"])
     subject.symbol = SimpleNamespace(get=lambda: "MSN")
     subject.mode = SimpleNamespace(get=lambda: "PAPER")
     subject.order_type = SimpleNamespace(get=lambda: "LO")
@@ -191,6 +191,56 @@ def test_manual_order_records_current_book_entry_context():
     subject._submit("BUY")
     assert len(sent) == 1
     assert sent[0].entry_exposure == 0.5 and sent[0].entry_budget == 5e6
+
+
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+@pytest.mark.parametrize("side", ["BUY", "SELL"])
+@pytest.mark.parametrize("skip", [True, False])
+@pytest.mark.parametrize("answer", [True, False])
+def test_manual_confirmation_bypass_only_skips_yes_no(monkeypatch, mode, side, skip, answer):
+    import viking_v2.dashboard.actions as module
+    confirmations = []
+    monkeypatch.setattr(module.messagebox, "askyesno", lambda *args, **kwargs: confirmations.append(args) or answer)
+    subject, sent = manual_subject({})
+    subject.mode = SimpleNamespace(get=lambda: mode)
+    subject.settings.skip_real_order_confirmation = skip
+    subject._submit(side)
+    asking = mode == "REAL" and not skip
+    assert len(confirmations) == int(asking)
+    assert len(sent) == int(not asking or answer)
+    if sent:
+        assert sent[0].execution_mode == mode
+        assert sent[0].source == "MANUAL"
+        assert sent[0].side == side
+
+
+@pytest.mark.parametrize("field,value", [("quantity", "bad"), ("price", "nan"), ("sl", "nan%"), ("tp", "0%")])
+def test_real_confirmation_bypass_does_not_bypass_invalid_inputs(monkeypatch, field, value):
+    import viking_v2.dashboard.actions as module
+    errors, confirmations = [], []
+    monkeypatch.setattr(module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(module.messagebox, "askyesno", lambda *args, **kwargs: confirmations.append(args) or True)
+    subject, sent = manual_subject({})
+    subject.mode = SimpleNamespace(get=lambda: "REAL")
+    assert subject.settings.skip_real_order_confirmation is True
+    setattr(subject, field, SimpleNamespace(get=lambda: value))
+    subject._submit("BUY")
+    assert not sent and errors
+    assert not confirmations
+
+
+def test_confirmation_bypass_keeps_closed_phase_and_deferred_processing(monkeypatch):
+    import viking_v2.dashboard.actions as module
+    confirmations, handoffs = [], []
+    monkeypatch.setattr(module.messagebox, "askyesno", lambda *args, **kwargs: confirmations.append(args) or True)
+    subject, _ = manual_subject({})
+    subject.mode = SimpleNamespace(get=lambda: "REAL")
+    subject._current_market_phase = lambda: "CLOSED"
+    subject.execution.submit = lambda intent, **kwargs: handoffs.append((intent, kwargs)) or intent
+    subject._submit("BUY")
+    assert not confirmations
+    assert len(handoffs) == 1
+    assert handoffs[0][1] == {"phase": "CLOSED", "process_immediately": False}
 
 
 @pytest.mark.parametrize("field,value", [

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import pytest
 
 from viking_v2 import config
 from viking_v2.config import AppSettings
@@ -20,6 +21,7 @@ def test_execution_defaults_are_explicit_and_minimal():
     settings = AppSettings().normalize()
     assert settings.daily_stats_mode == "DAILY"
     assert settings.daily_stats_reset_time == "00:00"
+    assert settings.skip_real_order_confirmation is True
     assert settings.bot_sl_enabled is True
     assert settings.bot_em_modes == ["NORMAL", "IND_EXIT"]
     assert settings.sell_wait_policy == "RECHECK"
@@ -34,6 +36,55 @@ def test_execution_defaults_are_explicit_and_minimal():
     assert StaticRuleParameters().reentry_sl_pct == -2.5
     assert settings.rule_parameters == config.DEFAULT_RULE_PARAMETERS
     assert settings.rule_parameters is not config.DEFAULT_RULE_PARAMETERS
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_old_confirmation_setting_uses_new_skip_default_without_changing_other_settings(legacy):
+    raw = AppSettings(telegram_enabled=True, telegram_chat_id="123", watchlist=["MSN"]).to_dict()
+    raw.pop("skip_real_order_confirmation")
+    raw["confirm_real_orders"] = legacy
+    settings = AppSettings.from_dict(raw)
+    assert settings.skip_real_order_confirmation is True
+    assert settings.telegram_enabled is True and settings.telegram_chat_id == "123"
+    assert settings.watchlist == ["MSN"]
+    assert "confirm_real_orders" not in settings.to_dict()
+
+
+@pytest.mark.parametrize("skip", [True, False])
+def test_confirmation_preference_survives_save_and_reload(monkeypatch, tmp_path, skip):
+    monkeypatch.setattr(config, "ACCOUNTS_ROOT", tmp_path / "accounts")
+    settings = AppSettings(skip_real_order_confirmation=skip, watchlist=["MSN"])
+    config.save_settings(settings, "CONFIRM_TEST")
+    assert config.load_settings("CONFIRM_TEST").skip_real_order_confirmation is skip
+    assert AppSettings.from_dict({"skip_real_order_confirmation": skip, "confirm_real_orders": True}).skip_real_order_confirmation is skip
+
+
+@pytest.mark.parametrize("malformed", ["false", "true", 1, 0, None, [], {}])
+def test_malformed_confirmation_flag_keeps_confirmation_required(malformed):
+    assert AppSettings.from_dict({"skip_real_order_confirmation": malformed}).skip_real_order_confirmation is False
+
+
+@pytest.mark.parametrize("skip", [True, False])
+def test_rule_ui_confirmation_switch_has_clear_label_and_saves(ui_root, monkeypatch, tmp_path, skip):
+    import customtkinter as ctk
+    from viking_v2.rules.window import RuleSettingsPopup
+
+    monkeypatch.setattr(config, "ACCOUNTS_ROOT", tmp_path / "accounts")
+    popup = RuleSettingsPopup(
+        ui_root, AppSettings(skip_real_order_confirmation=skip), "CONFIRM_UI", lambda: None,
+    )
+    try:
+        variable = popup.skip_real_order_confirmation
+        assert variable.get() is skip
+        switches = [child for child in variable._viking_row.winfo_children() if isinstance(child, ctk.CTkSwitch)]
+        assert len(switches) == 1
+        assert switches[0].cget("text") == "BỎ POPUP XÁC NHẬN"
+        variable.set(not skip)
+        popup.save()
+        assert "ĐÃ LƯU" in popup.status.cget("text"), popup.status.cget("text")
+        assert config.load_settings("CONFIRM_UI").skip_real_order_confirmation is (not skip)
+    finally:
+        popup._close()
 
 
 def test_dashboard_stats_mode_is_normalized():

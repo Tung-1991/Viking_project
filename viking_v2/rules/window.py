@@ -886,10 +886,12 @@ class RuleSettingsPopup:
             "TẮT: không gửi trong ATC. Yêu cầu local vẫn theo hạn/điều kiện của lệnh; "
             "không có nghĩa tín hiệu BUY cũ tự được mua phiên sau."
         )
-        self.confirm_real_orders = self._switch(
-            orders, "XÁC NHẬN LỆNH REAL", self.settings.confirm_real_orders,
-            "ON: lệnh đặt tay ở tài khoản REAL phải xác nhận thêm một lần trước khi gửi. "
-            "Không áp dụng cho PAPER và không làm dừng quyết định tự động của daemon.",
+        self.skip_real_order_confirmation = self._switch(
+            orders, "BỎ POPUP XÁC NHẬN", self.settings.skip_real_order_confirmation,
+            "BẬT (mặc định): bấm BUY/SELL tay ở REAL không phải trả lời Yes/No.\n"
+            "TẮT: hỏi xác nhận trước khi tạo lệnh REAL. PAPER và BOT không hỏi.\n"
+            "Chỉ bỏ popup xác nhận; vẫn kiểm tra tiền, khối lượng, OTP và phiên. "
+            "Ngoài phiên, lệnh đặt tay vẫn chờ trên app; không gửi ngay DNSE.",
         )
 
         bot_em = self._card(
@@ -1333,7 +1335,7 @@ class RuleSettingsPopup:
             )
             self.settings.allow_ato = bool(self.execution_allow_ato.get())
             self.settings.allow_atc = bool(self.execution_allow_atc.get())
-            self.settings.confirm_real_orders = bool(self.confirm_real_orders.get())
+            self.settings.skip_real_order_confirmation = bool(self.skip_real_order_confirmation.get())
             self.settings.bot_sl_enabled = bool(self.bot_sl_enabled.get())
             self.settings.bot_em_modes = [
                 name for name, variable in self.bot_em_vars.items() if bool(variable.get())
