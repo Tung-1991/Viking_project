@@ -1451,7 +1451,7 @@ class DashboardPanelsMixin:
             f"{example}"
             "Đỉnh cao hơn → mốc bán tăng theo; đây không phải giá khớp được bảo đảm.\n"
             f"ARM {preview.get('arm_pct', 7):g}% · TRAIL {preview.get('trail_pct', 2.5):g}% · "
-            f"BÁN {preview.get('sell_pct', 100):g}% phần còn lại. AUTO tự bán; ALERT chỉ báo."
+            f"BÁN {preview.get('sell_pct', 100):g}% phần còn lại. Khi bật PROTECT: AUTO tự bán; ALERT chỉ báo."
             " Dynamic có thể bảo vệ trước ARM."
         )
 
@@ -1473,14 +1473,16 @@ class DashboardPanelsMixin:
         enabled = bool(preview.get("enabled"))
         quantity = int(preview.get("quantity", 0))
         policy = preview.get("policy", "ALERT")
-        status = ("ĐANG TẮT" if not enabled else "CHƯA CÓ VỊ THẾ" if quantity <= 0 else
+        status = ("CHƯA CÓ VỊ THẾ" if quantity <= 0 else
                   "CÓ TÍN HIỆU THOÁT" if signal == "SELL" else "CHỜ TÍN HIỆU THOÁT")
         behavior = ("tự gửi bán 100% phần còn lại khi có tín hiệu và đủ điều kiện lệnh."
                     if policy == "AUTO" else "chỉ báo tín hiệu, không đặt lệnh.")
+        behavior = (f"{policy}: {behavior}" if enabled else
+                    f"OFF: chỉ preview. Khi bật {policy}: {behavior}")
         return (
             "E thoát theo EMA SELL/RSI, không có một giá kích hoạt cố định như SL.\n"
             f"Giá thị trường: {price_text} · {status}.\n"
-            f"{policy}: {behavior}\n"
+            f"{behavior}\n"
             "Giá hiển thị để tham khảo, không bảo đảm giá khớp. Chưa có vị thế thì không gửi SELL."
         )
 
@@ -1889,7 +1891,7 @@ class DashboardPanelsMixin:
         self._render_exit_sell_preview(
             signal, exit_enabled, position_quantity, indicator_exit_policy,
         )
-        if current_profit is not None and self._em_states.get("normal_protection", False):
+        if current_profit is not None and _number(decision_details.get("normal_trigger_price")) > 0:
             protected = decision_details.get("normal_trigger_price")
             protect_state = str(decision_details.get("normal_state", "WAIT") or "WAIT").upper()
             effective_trail = decision_details.get("normal_effective_trail_pct")
@@ -2207,9 +2209,8 @@ class DashboardPanelsMixin:
         self._preview_exit_state = {"price": price, "signal": signal, "enabled": enabled,
                                     "quantity": position_quantity, "policy": policy}
         market_price = f"TT: {_display_price(price)}" if price > 0 else "CHỜ GIÁ TT"
-        if not enabled:
-            value, detail, color = "CHƯA ÁP DỤNG", "ĐANG TẮT", COL_MUTED
-        elif position_quantity <= 0:
+        # Enable switches control execution, not read-only preview data.
+        if position_quantity <= 0:
             value, detail, color = market_price, "CHƯA VỊ THẾ", COL_PREVIEW_TEXT
         elif signal == "SELL":
             if policy == "ALERT":
@@ -2219,6 +2220,8 @@ class DashboardPanelsMixin:
         else:
             detail = "CHỜ · CHỈ BÁO" if policy == "ALERT" else "CHỜ SELL · 100%"
             value, color = market_price, COL_PREVIEW_TEXT
+        if not enabled:
+            color = COL_MUTED
         self.preview_exit_value.configure(text=value, text_color=color)
         self.preview_exit_detail.configure(
             text=detail,

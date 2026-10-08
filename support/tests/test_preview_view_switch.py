@@ -99,10 +99,11 @@ def test_auto_view_reads_confirmed_state_not_override_display_state():
 @pytest.mark.parametrize("policy", ["AUTO", "ALERT"])
 @pytest.mark.parametrize("quantity", [0, 200])
 @pytest.mark.parametrize("signal", ["--", "BUY", "SELL"])
-def test_e_shows_market_price_and_signal_without_fabricating_a_fixed_exit(policy, quantity, signal):
+@pytest.mark.parametrize("enabled", [False, True])
+def test_e_shows_market_price_and_signal_without_fabricating_a_fixed_exit(policy, quantity, signal, enabled):
     view = preview()
     view._current_tick_price = 74.2
-    view._render_exit_sell_preview(signal, True, quantity, policy)
+    view._render_exit_sell_preview(signal, enabled, quantity, policy)
     assert view.preview_exit_value.options["text"] == "TT: 74,200"
     detail = view.preview_exit_detail.options["text"]
     if quantity == 0:
@@ -110,31 +111,36 @@ def test_e_shows_market_price_and_signal_without_fabricating_a_fixed_exit(policy
         assert view.preview_exit_value.options["text_color"] != COL_RED
     elif policy == "ALERT":
         assert "CHỈ BÁO" in detail and "100%" not in detail
-        if signal == "SELL":
+        if signal == "SELL" and enabled:
             assert view.preview_exit_value.options["text_color"] == COL_WARN
     else:
         assert detail == ("SELL · 100%" if signal == "SELL" else "CHỜ SELL · 100%")
     hint = view._exit_preview_hint()
     assert "không có một giá kích hoạt cố định" in hint
     assert "74,200 đ" in hint and "không bảo đảm giá khớp" in hint
+    if not enabled:
+        assert view.preview_exit_value.options["text_color"] == COL_MUTED
+        assert "OFF: chỉ preview" in hint
 
 
 @pytest.mark.parametrize("price", [0, None, float("nan"), float("inf")])
-def test_e_missing_price_stays_unknown(price):
+@pytest.mark.parametrize("enabled", [False, True])
+def test_e_missing_price_stays_unknown(price, enabled):
     view = preview()
     view._current_tick_price = price
-    view._render_exit_sell_preview("SELL", True, 100, "AUTO")
+    view._render_exit_sell_preview("SELL", enabled, 100, "AUTO")
     assert view.preview_exit_value.options["text"] == "CHỜ GIÁ TT"
     assert "chưa có giá" in view._exit_preview_hint()
 
 
-def test_e_off_never_looks_like_an_executable_sell():
+def test_e_off_keeps_price_and_signal_but_never_enables_execution():
     view = preview()
     view._current_tick_price = 74.2
     view._render_exit_sell_preview("SELL", False, 200, "AUTO")
-    assert view.preview_exit_value.options["text"] == "CHƯA ÁP DỤNG"
+    assert view.preview_exit_value.options["text"] == "TT: 74,200"
     assert view.preview_exit_value.options["text_color"] == COL_MUTED
-    assert view.preview_exit_detail.options["text"] == "ĐANG TẮT"
+    assert view.preview_exit_detail.options["text"] == "SELL · 100%"
+    assert "OFF: chỉ preview" in view._exit_preview_hint()
 
 
 def test_e_holdings_are_from_selected_book_not_old_bot_decision():

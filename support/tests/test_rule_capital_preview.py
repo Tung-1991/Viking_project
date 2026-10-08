@@ -207,14 +207,15 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
         view._buy_button_presentation = DashboardActionsMixin._buy_button_presentation
         view.real = SimpleNamespace(has_trading_token=lambda: False)
         view.execute_button = Label()
-        view._refresh_full_order_preview({"execution_mode": "REAL", "decisions": {"AAA": {
+        status = {"execution_mode": "REAL", "decisions": {"AAA": {
             "market_state": "UPTREND", "details": {"exposure": .9,
                 "market": {"confirmation_pending": True, "candidate_state": "DOWNTREND",
                            "confirmation_count": 1, "confirmation_required": 3},
                 "indicators": {"buy_ema_fast": 7.159, "buy_ema_slow": 7.156,
                                "sell_ema_fast": 7.159, "sell_ema_slow": 7.156,
                                "rsi": 48.7, "rsi_previous": 49.2},
-            }}}})
+            }}}}
+        view._refresh_full_order_preview(status)
         assert view.preview_atr.cget("text") != "--"
         assert "START --" not in view.preview_atr_detail.cget("text")
         assert "--/--" not in view.preview_rule_ema.cget("text")
@@ -254,6 +255,17 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
         assert view.preview_normal_value.cget("text").startswith("ARM:")
         assert "BÁN:" in view.preview_normal_value.cget("text")
         assert view.preview_exit_value.cget("text") == "TT: 7,250"
+        content = (view.preview_normal_value, view.preview_normal_detail,
+                   view.preview_exit_value, view.preview_exit_detail)
+        preview_on = tuple(label.cget("text") for label in content)
+        settings_before = view.settings.to_dict()
+        view._em_states = {"normal_protection": False, "indicator_exit": False}
+        view._refresh_full_order_preview(status)
+        ui_root.update_idletasks()
+        assert tuple(label.cget("text") for label in content) == preview_on
+        assert view.preview_em_normal.cget("text") == "PROTECT · OFF"
+        assert view.preview_em_exit.cget("text") == "E · OFF"
+        assert view.settings.to_dict() == settings_before
         for alternate in (True, False):
             view.preview_p1_swap.invoke()
             ui_root.update_idletasks()
@@ -266,6 +278,18 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
                     label.cget("text"), label.winfo_width())
             assert view.preview_p1_swap.winfo_x() + view.preview_p1_swap.winfo_width() <= card.winfo_width()
             assert int(view.preview_focus_panel.cget("height")) == 300
+        # OFF must not hide the available threshold of an existing position.
+        status["decisions"]["AAA"]["details"].update(
+            current_profit_pct=8, normal_trigger_price=7.7, normal_state="ARM",
+        )
+        view._refresh_full_order_preview(status)
+        assert view.preview_normal_value.cget("text") == "ĐÃ ARM · BÁN: 7,700"
+        assert view.preview_em_normal.cget("text") == "PROTECT · OFF"
+        assert "Mốc bán của vị thế: 7,700 đ" in view._protect_preview_hint()
+        status["decisions"]["AAA"]["details"]["normal_trigger_price"] = 0
+        view._refresh_full_order_preview(status)
+        assert view.preview_normal_value.cget("text").startswith("ARM:")
+        assert "BÁN:" in view.preview_normal_value.cget("text")
         import os
         if os.getenv("VIKING_CAPTURE_UI") == "1":
             import ctypes
