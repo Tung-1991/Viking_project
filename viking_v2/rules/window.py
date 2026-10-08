@@ -581,36 +581,58 @@ class RuleSettingsPopup:
         )
 
         # Hai mức SL nằm ở tab E/M để đứng cùng các cách thoát vị thế.
-        stops = self._card(body, "KHÓA SAU LỖ", "Bộ chặn entry sau chuỗi lệnh thua. Hai mức cắt lỗ nằm ở tab E/M.", 1, 1)
-        self.loss_lock = self._field(stops, "Khóa sau LOSS", self.params.loss_lock_count,
-            "Mặc định 3 chu kỳ đóng lỗ liên tiếp sau phí thì khóa BUY BOT theo mã/sổ.\n"
-            "WIN reset chuỗi đếm nhưng không mở BLOCK đã khóa. TIMED tự mở sau số giờ đã đặt.")
+        stops = self._card(body, "KHÓA SAU LỖ",
+            "Chỉ khóa BOT mua thêm mã vừa lỗ liên tiếp; REAL/PAPER tính riêng.\n"
+            "Mua tay và các cách bán vẫn hoạt động. Không phải nút bật/tắt BOT.", 1, 1)
+        self.loss_lock = self._field(stops, "Lỗ liên tiếp", self.params.loss_lock_count,
+            "Ví dụ 3: đóng 3 vị thế lỗ liên tiếp sau phí của cùng mã thì khóa BOT mua mã đó.\n"
+            "Một vị thế có nhiều lần khớp vẫn chỉ tính một lần lỗ. Có lãi thì reset chuỗi đếm, không mở khóa tay.")
         self.loss_lock_hours = self._field(
             stops,
-            "Mở lại sau (giờ)",
+            "Tự mở (giờ)",
             self.params.loss_lock_hours,
-            "Tính theo giờ đồng hồ kể từ lúc đóng lệnh lỗ đủ ngưỡng; có tính đêm, cuối tuần và ngày nghỉ.",
+            "Chế độ TỰ MỞ: BOT được mua lại sau số giờ này, tính từ lần đóng lỗ đủ ngưỡng.\n"
+            "Có tính đêm và ngày nghỉ. Chọn MỞ TAY thì không dùng thời gian này.",
         )
-        self.loss_block = self._switch(
-            stops, "BLOCK", self.params.loss_lock_mode == "BLOCK",
-            "ON: đủ số LOSS thì chặn BUY BOT của mã đó đến khi MỞ BLOCK. Restart và reset thống kê không mở khóa. "
-            "OFF: khóa mới dùng số giờ bên trên; BLOCK đã khóa vẫn phải MỞ BLOCK. "
-            "SL/TP/E/PROTECT và SELL vẫn chạy; REAL/PAPER khóa riêng.",
+        lock_mode_row = ctk.CTkFrame(stops, fg_color="transparent")
+        lock_mode_row.pack(fill="x", padx=12, pady=6)
+        lock_mode_row.grid_columnconfigure(0, weight=1)
+        self.loss_block = tk.BooleanVar(value=self.params.loss_lock_mode == "BLOCK")
+        self.loss_lock_mode_selector = ctk.CTkSegmentedButton(
+            lock_mode_row, values=["TỰ MỞ", "MỞ TAY"], height=28,
+            font=("Segoe UI", 12, "bold"), selected_color=self.BLUE,
+            selected_hover_color="#245C92", unselected_color="#3A3F47",
+            unselected_hover_color="#4B515B",
+            command=lambda value: self.loss_block.set(value == "MỞ TAY"),
         )
-        refresh_lock_hours = lambda *_args: self.loss_lock_hours.configure(state="disabled" if self.loss_block.get() else "normal")
+        self.loss_lock_mode_selector.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        self._hint_icon(lock_mode_row,
+            "TỰ MỞ: hết số giờ đã đặt thì BOT được mua lại.\n"
+            "MỞ TAY: khóa đến khi chọn mã và bấm MỞ KHÓA, kể cả sau khi khởi động lại.\n"
+            "Chọn TỰ MỞ không xóa khóa tay đã có; các mã đó vẫn phải mở tay."
+        ).grid(row=0, column=1)
+
+        def refresh_lock_hours(*_args: Any) -> None:
+            blocked = self.loss_block.get()
+            self.loss_lock_hours.configure(state="disabled" if blocked else "normal")
+            self.loss_lock_mode_selector.set("MỞ TAY" if blocked else "TỰ MỞ")
+
         self._setting_traces.append((self.loss_block, self.loss_block.trace_add("write", refresh_lock_hours)))
         refresh_lock_hours()
         if self.trade_state:
             row = ctk.CTkFrame(stops, fg_color="transparent")
             row.pack(fill="x", padx=12, pady=6)
-            row.grid_columnconfigure((0, 1), weight=1, uniform="block_controls")
+            row.grid_columnconfigure(1, weight=1)
             self.block_book = tk.StringVar(value="PAPER" if self.settings.paper_mode else "REAL")
-            ctk.CTkOptionMenu(row, values=["REAL", "PAPER"], variable=self.block_book, width=65,
+            ctk.CTkOptionMenu(row, values=["REAL", "PAPER"], variable=self.block_book, width=82,
                               command=lambda _value: self._refresh_blocks()).grid(row=0, column=0, sticky="ew", padx=(0, 4))
-            self.block_symbol = ctk.CTkOptionMenu(row, values=["—"], width=60)
+            self.block_symbol = ctk.CTkOptionMenu(row, values=["Không có mã"], width=110)
             self.block_symbol.grid(row=0, column=1, sticky="ew", padx=(4, 0))
-            self.block_unlock = ctk.CTkButton(row, text="MỞ BLOCK", width=90, command=self._unlock_block)
+            self.block_unlock = ctk.CTkButton(row, text="MỞ KHÓA MÃ", width=90, command=self._unlock_block)
             self.block_unlock.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+            _HoverHint(self.block_unlock,
+                "Chọn sổ REAL/PAPER rồi chọn mã cần mở khóa tay.\n"
+                "Không có mã: sổ này chưa có khóa tay. Khóa theo giờ tự hết, không hiện ở đây.")
             self._refresh_blocks()
 
         whip = self._card(body, "WHIPSAW", "Bộ chống nhiễu trước entry. Không thuộc E/M và không can thiệp position đang giữ.", 1, 2)
@@ -1135,21 +1157,30 @@ class RuleSettingsPopup:
 
     def _refresh_blocks(self) -> None:
         values = self.trade_state.loss_blocks(self.block_book.get())
-        self.block_symbol.configure(values=values or ["—"])
+        self.block_symbol.configure(values=values or ["Không có mã"], state="normal" if values else "disabled")
         if self.block_symbol.get() not in values:
-            self.block_symbol.set(values[0] if values else "—")
-        self.block_unlock.configure(state="normal" if values else "disabled")
+            self.block_symbol.set(values[0] if values else "Không có mã")
+        self.block_unlock.configure(
+            state="normal" if values else "disabled",
+            text="MỞ KHÓA MÃ" if values else "CHƯA CÓ MÃ KHÓA TAY",
+        )
 
     def _unlock_block(self) -> None:
         mode, symbol = self.block_book.get(), self.block_symbol.get()
-        if symbol == "—" or not messagebox.askyesno(
-            "Mở BLOCK", f"Mở BLOCK cho {symbol} · {mode} và reset chuỗi LOSS về 0?\n"
-            "Không mua lại tín hiệu đã bỏ qua.", parent=self.top,
+        if symbol not in self.trade_state.loss_blocks(mode):
+            self._refresh_blocks()
+            return
+        if not messagebox.askyesno(
+            "Mở khóa BOT mua", f"Cho phép BOT mua lại {symbol} · {mode}?\n"
+            "Chuỗi lỗ của mã này sẽ về 0. BOT vẫn cần tín hiệu mua mới.", parent=self.top,
         ):
             return
-        self.trade_state.unlock_loss_block(symbol, mode)
+        unlocked = self.trade_state.unlock_loss_block(symbol, mode)
         self._refresh_blocks()
-        self.status.configure(text=f"ĐÃ MỞ BLOCK · {symbol} · {mode}", text_color=self.GREEN)
+        self.status.configure(
+            text=f"{'ĐÃ MỞ KHÓA' if unlocked else 'KHÓA ĐÃ THAY ĐỔI'} · {symbol} · {mode}",
+            text_color=self.GREEN if unlocked else self.WARN,
+        )
 
     def save(self) -> None:
         try:
@@ -1178,8 +1209,8 @@ class RuleSettingsPopup:
             max_positions = int(self._number(self.max_positions, "Tối đa position"))
             if max_positions < len(set(self.settings.priority_symbols)):
                 raise ValueError("Tối đa mã BOT phải đủ số mã Priority đã lưu")
-            loss_lock = int(self._number(self.loss_lock, "Khóa sau LOSS"))
-            loss_lock_hours = int(self._number(self.loss_lock_hours, "Mở lại sau"))
+            loss_lock = int(self._number(self.loss_lock, "Lỗ liên tiếp"))
+            loss_lock_hours = int(self._number(self.loss_lock_hours, "Tự mở (giờ)"))
             manual_sell_pause = int(self._number(
                 self.manual_sell_pause, "Dừng BUY sau bán tay",
             ))

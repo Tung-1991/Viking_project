@@ -422,7 +422,7 @@ def test_minimal_setting_controls_construct_save_and_unlock_offline(tmp_path, ui
         monkeypatch.setattr("viking_v2.rules.window.messagebox.askyesno", lambda *_a, **_kw: True)
         rule._unlock_block()
         assert trades.loss_blocks("PAPER") == []
-        assert "ĐÃ MỞ BLOCK" in rule.status.cget("text")
+        assert "ĐÃ MỞ KHÓA" in rule.status.cget("text")
         client = SimpleNamespace(account_no="", otp_type="email_otp", has_trading_token=lambda: False)
         connection = ConnectionPopup(root, settings, "CONTROL_TEST", client, lambda: None)
         connection._divide_priority_capital()
