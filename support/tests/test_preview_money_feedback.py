@@ -393,3 +393,126 @@ def test_account_cash_display_does_not_claim_zero_when_snapshot_is_missing(balan
     view._paint_account()
     assert view.lbl_account.options["text"].endswith(f"CASH {expected}")
     assert view.lbl_equity.options["text"] == ("0 ₫" if balance else "CHỜ TÀI KHOẢN")
+
+
+def money_ticket(tmp_path, mode="REAL", quantity="200", kind="MARKET"):
+    view = ticket(tmp_path, mode)
+    view.settings.priority_allocations = {
+        symbol: {"limit_vnd": (5 if symbol == "IDC" else 15) * 1_000_000, "use_pct": 100}
+        for symbol in ("MSN", "CTS", "HDB", "IDC")
+    }
+    view._fee_rates = {("MSN", "BUY"): 0.0012}
+    view._cached_fee_rate = lambda symbol, side: view._fee_rates.get((symbol, side))
+    view.quantity.get = lambda: quantity
+    view.order_type, view.price = value(kind), value("74,200")
+    view.tp, view.sl = value("7%"), value("-3.5%")
+    view._current_tick_price = 74.2
+    view._symbol_exchange = lambda *_args: "HOSE"
+    view._preview_indicator_details = lambda *_args: {}
+    view._refresh_rule_preview = view._refresh_main_quote_display = lambda *_args: None
+    view._em_states = {}
+    view.real = SimpleNamespace(has_trading_token=lambda: True)
+    view.execute_button = Label()
+    for name in ("order_title", "status_badge", "status_reason", "live_value", "entry_value",
+                 "qty_title", "qty_value", "cash_value", "fee_value", "tp_value", "tp_detail",
+                 "sl_value", "sl_detail", "route_value", "normal_value", "normal_detail",
+                 "em_normal", "em_exit", "exit_value", "exit_detail", "atr", "atr_detail"):
+        setattr(view, f"preview_{name}", Label())
+    for name in ("order_value", "quote_symbol", "fee_preview", "tp_title", "sl_title", "tp_preview", "sl_preview"):
+        setattr(view, f"lbl_{name}", Label())
+    status = {"market_status": "CLOSED", "ticks": {"MSN": {
+        "symbol": "MSN", "price": 74.2, "ceiling_price": 79.3,
+    }}}
+    view.bridge = SimpleNamespace(read_status=lambda: status)
+    return view, status
+
+
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+@pytest.mark.parametrize("kind", ["MARKET", "LO", "ATO", "ATC"])
+@pytest.mark.parametrize("quantity", ["", "100", "200"])
+def test_money_and_fee_use_same_basis_as_priority_guard_in_both_ticket_views(tmp_path, mode, kind, quantity):
+    from viking_v2.dashboard.view import _compact_vnd
+
+    view, _status = money_ticket(tmp_path, mode, quantity, kind)
+    settings_before = view.settings.to_dict()
+    view._update_order_preview()
+    actual_quantity = int(quantity) if quantity else (200 if kind == "LO" else 100)
+    price = 74.2 if kind == "LO" else 79.3
+    rate = .0012 if mode == "REAL" else .00045
+    gross = actual_quantity * price * 1000
+    fee, total = gross * rate, gross * (1 + rate)
+    assert view._preview_ticket_money["total"] == pytest.approx(total)
+    assert view.lbl_order_value.options["text"] == f"{total:,.0f} ₫"
+    assert view.preview_cash_value.options["text"] == _compact_vnd(total)
+    assert view.lbl_fee_preview.options["text"] == view.preview_fee_value.options["text"] == _compact_vnd(fee)
+    fee_text = f"{fee:,.2f}".rstrip("0").rstrip(".")
+    total_text = f"{total:,.2f}".rstrip("0").rstrip(".")
+    assert f"{gross:,.0f} đ + phí {fee_text} đ = {total_text} đ" in view._ticket_money_hint()
+    assert f"Lệnh cần {total:,.0f} đ gồm phí" in view._preview_manual_feedback["hint"]
+    assert ("giá LO" if kind == "LO" else "giá trần") in view._ticket_money_hint()
+    assert len(view._ticket_money_hint().splitlines()) <= 3
+    assert "không cộng lần nữa" in view._ticket_fee_hint()
+    if kind != "LO":
+        assert f"{actual_quantity * 74200 * (1 + rate):,.0f} đ gồm phí" in view._ticket_money_hint()
+    assert view.preview_tp_detail.options["text"] == "+" + _compact_vnd(actual_quantity * 74200 * .07)
+    assert view.preview_status_badge.options["text"] == ("CHẶN" if actual_quantity == 200 and kind != "LO" else "THEO VỐN" if not quantity else "CACHE")
+    assert view.settings.to_dict() == settings_before
+    assert not view.queue.list_all() and not view.trade_state.list_cycles()
+
+
+@pytest.mark.parametrize("bound", [None, 0, "bad", float("nan"), float("inf")])
+def test_missing_price_bound_clears_money_and_fee_not_fallback_to_market_price(tmp_path, bound):
+    view, status = money_ticket(tmp_path)
+    view._update_order_preview()
+    status["ticks"]["MSN"]["ceiling_price"] = bound
+    view._update_order_preview()
+    assert view.lbl_order_value.options["text"] == view.preview_cash_value.options["text"] == "CHỜ GIÁ"
+    assert view.lbl_fee_preview.options["text"] == view.preview_fee_value.options["text"] == "—"
+    assert view._preview_ticket_money["total"] is None
+    assert "Chờ giá trần" in view._ticket_money_hint()
+
+
+def test_unknown_real_fee_does_not_look_like_zero_or_reuse_paper_fee(tmp_path):
+    view, _status = money_ticket(tmp_path, "PAPER")
+    view._update_order_preview()
+    view.mode = value("REAL")
+    view.snapshots["REAL"] = view.snapshots["PAPER"]
+    view._fee_rates.clear()
+    view._update_order_preview()
+    assert view.lbl_order_value.options["text"] == view.preview_cash_value.options["text"] == "CHỜ PHÍ"
+    assert view.lbl_fee_preview.options["text"] == view.preview_fee_value.options["text"] == "—"
+    assert "đang chờ phí DNSE" in view._ticket_money_hint()
+    assert view._preview_ticket_money["fee"] is None
+
+
+def test_switch_book_ticker_and_order_kind_recomputes_current_money_hint(tmp_path):
+    view, status = money_ticket(tmp_path)
+    view._update_order_preview()
+    assert view.lbl_order_value.options["text"] == "15,879,032 ₫"
+    view.mode = value("PAPER")
+    view.snapshots["PAPER"] = view.snapshots["REAL"]
+    view._update_order_preview()
+    assert view.lbl_order_value.options["text"] == "15,867,137 ₫"
+    view.order_type = value("LO")
+    view._update_order_preview()
+    assert view.lbl_order_value.options["text"] == "14,846,678 ₫"
+    assert "giá trần" not in view._ticket_money_hint()
+    view.symbol, view.order_type = value("CTS"), value("MARKET")
+    view._current_tick_price = 19.65
+    status["ticks"]["CTS"] = {"symbol": "CTS", "price": 19.65, "ceiling_price": 21.25}
+    view._update_order_preview()
+    assert view.lbl_order_value.options["text"] == "4,251,912 ₫"
+    assert "79,300" not in view._ticket_money_hint()
+    # A quote indexed under the new symbol must not borrow another symbol's bound.
+    status["ticks"]["CTS"]["symbol"] = "MSN"
+    view._update_order_preview()
+    assert view.lbl_order_value.options["text"] == "CHỜ GIÁ"
+
+
+def test_fee_zero_is_known_but_invalid_fee_is_missing(tmp_path):
+    view, status = money_ticket(tmp_path)
+    for rate in [0, float("nan"), float("inf"), -1]:
+        view._preview_buy_fee = lambda gross, *_args: gross * rate
+        money = view._ticket_money_preview("MSN", "REAL", "MARKET", 200, 74.2, status["ticks"]["MSN"])
+        assert money["fee"] == 0 if rate == 0 else money["fee"] is None
+        assert money["total"] == 15_860_000 if rate == 0 else money["total"] is None

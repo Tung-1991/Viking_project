@@ -228,6 +228,47 @@ class DashboardActionsMixin:
         rate = self._cached_fee_rate(symbol, "BUY")
         return gross * rate if rate is not None else None
 
+    def _ticket_money_preview(
+        self, symbol: str, mode: str, order_type: str, quantity: int,
+        entry_price: float, tick: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Both ticket views show the capital-check basis, not a promised fill."""
+        kind = str(order_type).upper()
+        quoted_symbol = str(tick.get("symbol") or symbol).strip().upper()
+        bound = _price_unit(tick.get("ceiling_price", 0)) if quoted_symbol == symbol else 0.0
+        settings = getattr(self, "settings", None)
+        reserved = bool(getattr(settings, "priority_capital_enabled", False) or getattr(settings, "priority_symbols", []))
+        use_bound = kind != "LO" and reserved
+        price = bound if use_bound else entry_price
+        valid_price = math.isfinite(price) and price > 0
+        gross = price * quantity * 1000.0 if valid_price and quantity > 0 else 0.0
+        fee = self._preview_buy_fee(gross, symbol, mode) if gross > 0 else None
+        if fee is not None and (not math.isfinite(fee) or fee < 0):
+            fee = None
+        # Match the guard's multiplication order, including half-dong rounding.
+        total = gross * (1.0 + fee / gross) if gross > 0 and fee is not None else None
+        estimate_gross = entry_price * quantity * 1000.0 if math.isfinite(entry_price) and entry_price > 0 and quantity > 0 else 0.0
+        estimate_total = estimate_gross * (1.0 + fee / gross) if estimate_gross > 0 and fee is not None else None
+        if quantity <= 0:
+            hint = "Chưa có khối lượng hợp lệ để tính vốn và phí."
+        elif not valid_price:
+            hint = ("Chờ giá trần của đúng mã để dự trù vốn; không dùng giá thị trường thay thế."
+                    if use_bound else "Chờ giá LO hợp lệ." if kind == "LO" else "Chờ giá ước tính của lệnh.")
+        else:
+            basis = "giá trần" if use_bound else "giá LO" if kind == "LO" else "giá ước tính"
+            hint = f"{kind}: {quantity:,} CP × {price * 1000:,.0f} đ ({basis}).\n"
+            fee_text = f"{fee:,.2f}".rstrip("0").rstrip(".") if fee is not None else "—"
+            total_text = f"{total:,.2f}".rstrip("0").rstrip(".") if total is not None else "—"
+            hint += (f"{gross:,.0f} đ + phí {fee_text} đ = {total_text} đ."
+                     if total is not None else f"Tiền cổ phiếu {gross:,.0f} đ; đang chờ phí DNSE, chưa có tổng.")
+            if kind != "LO" and estimate_total is not None and abs(entry_price - price) > 0.000001:
+                hint += f"\nGiá ước tính {entry_price * 1000:,.0f} đ → {estimate_total:,.0f} đ gồm phí; khớp thực tế sẽ tính lại."
+        result = {"price": price if valid_price else 0.0, "gross": gross, "fee": fee,
+                  "total": total, "estimate_total": estimate_total, "hint": hint,
+                  "waiting_price": quantity > 0 and not valid_price}
+        self._preview_ticket_money = result
+        return result
+
     def _cached_fee_rate(self, symbol: str, side: str) -> float | None:
         """Return cached broker fee and refresh it without blocking Tk."""
         key = (str(symbol or "").strip().upper(), str(side or "BUY").upper())
@@ -444,6 +485,8 @@ class DashboardActionsMixin:
         self._refresh_main_quote_display()
         symbol = self.symbol.get().strip().upper() or "---"
         self.lbl_quote_symbol.configure(text=symbol)
+        status = self.bridge.read_status() if hasattr(self, "bridge") else {}
+        tick = (status.get("ticks") or {}).get(symbol) or {}
         order_type = self.order_type.get().upper()
         live_price = float(getattr(self, "_current_tick_price", 0.0) or 0.0)
         entry_price = live_price
@@ -456,8 +499,8 @@ class DashboardActionsMixin:
             entry_price, _detail = self._auction_preview_price(
                 order_type,
                 live_price,
-                getattr(self, "_current_tick", {}),
-                getattr(self, "_current_market_status", ""),
+                tick,
+                str(status.get("market_status", getattr(self, "_current_market_status", "")) or ""),
             )
         raw_quantity = self.quantity.get().strip().replace(",", "")
         if raw_quantity:
@@ -466,13 +509,15 @@ class DashboardActionsMixin:
             except ValueError:
                 quantity = 0
         else:
-            quantity, budget, _forced_minimum = self._suggested_order_quantity(entry_price)
-        gross = entry_price * quantity * 1000.0
-        preview_capital = gross
+            quantity, budget, _forced_minimum = self._suggested_order_quantity(entry_price, status, symbol)
+        # Reuse one quote snapshot for sizing and both money/fee views.
+        money = self._ticket_money_preview(symbol, self.mode.get(), order_type, quantity, entry_price, tick)
+        preview_capital = entry_price * quantity * 1000.0
         self.lbl_order_value.configure(
-            text=f"{preview_capital:,.0f} ₫" if preview_capital > 0 else "--"
+            text=(f"{money['total']:,.0f} ₫" if money["total"] is not None else
+                  "CHỜ GIÁ" if money["waiting_price"] else "CHỜ PHÍ" if money["gross"] > 0 else "--")
         )
-        fee = self._preview_buy_fee(preview_capital, symbol, self.mode.get()) if gross > 0 else None
+        fee = money["fee"]
         fee_text = _compact_vnd(fee) if fee is not None else "—"
         self.lbl_fee_preview.configure(
             text=fee_text,
@@ -494,7 +539,7 @@ class DashboardActionsMixin:
             text=sl_text,
             text_color=COL_RED if sl_pnl is not None and sl_pnl <= 0 else COL_PREVIEW_TEXT,
         )
-        self._refresh_full_order_preview()
+        self._refresh_full_order_preview(status)
 
     def _show_data_popup(
         self,

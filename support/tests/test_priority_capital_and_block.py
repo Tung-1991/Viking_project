@@ -248,7 +248,7 @@ def test_ticket_auto_preview_uses_own_book_and_p1_without_any_bot_decision(tmp_p
     ticket.tp, ticket.sl = SimpleNamespace(get=lambda: "7%"), SimpleNamespace(get=lambda: "-3.5%")
     ticket.bridge = SimpleNamespace(read_status=lambda: status)
     ticket._current_tick_price = 7.25
-    ticket._refresh_main_quote_display = ticket._refresh_full_order_preview = lambda: None
+    ticket._refresh_main_quote_display = ticket._refresh_full_order_preview = lambda *_args: None
     ticket._cached_fee_rate = lambda *_args: 0.00045
     for name in ("lbl_order_value", "lbl_quote_symbol", "lbl_fee_preview", "lbl_tp_title", "lbl_sl_title", "lbl_tp_preview", "lbl_sl_preview"):
         setattr(ticket, name, label())

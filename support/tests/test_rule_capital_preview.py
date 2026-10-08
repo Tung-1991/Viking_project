@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from viking_v2.config import AppSettings
+from viking_v2.dashboard.actions import DashboardActionsMixin
 from viking_v2.dashboard.panels import DashboardPanelsMixin
 
 
@@ -31,6 +32,7 @@ class Label:
 
 def subject(mode="REAL"):
     view = DashboardPanelsMixin()
+    view._ticket_money_preview = lambda *args: DashboardActionsMixin._ticket_money_preview(view, *args)
     view.settings = AppSettings()
     view.mode = Value(mode)
     view.rule_state = SimpleNamespace(confirmed_market_state=lambda: "UPTREND")

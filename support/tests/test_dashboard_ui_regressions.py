@@ -149,7 +149,7 @@ def test_main_preview_unknown_amount_is_dash_not_zero(quantity, missing):
     for key in ("lbl_order_value", "lbl_quote_symbol", "lbl_fee_preview", "lbl_tp_title", "lbl_sl_title", "lbl_tp_preview", "lbl_sl_preview"):
         setattr(subject, key, _Label())
     subject._refresh_main_quote_display = lambda: None
-    subject._refresh_full_order_preview = lambda: None
+    subject._refresh_full_order_preview = lambda *_args: None
     subject.symbol, subject.mode, subject.order_type = _Value("DGC"), _Value("PAPER"), _Value("MARKET")
     subject.quantity, subject.tp, subject.sl = _Value(str(quantity) if quantity else ""), _Value("7%"), _Value("-3.5%")
     subject._current_tick_price = 32.15

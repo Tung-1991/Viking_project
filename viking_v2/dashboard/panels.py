@@ -386,8 +386,6 @@ class DashboardPanelsMixin:
                   "100 CP × 20.000 đồng, TP +7% → +140.000 đồng. Chỉ preview, không phải lãi chắc chắn.",
             "SL": "Lỗ ước tính trước phí/thuế theo giá vào và khối lượng đang nhập hoặc AUTO.\n"
                   "100 CP × 20.000 đồng, SL −3,5% → −70.000 đồng; không bảo đảm khớp đúng giá SL.",
-            "FEE": "Phí mua ước tính của khối lượng đang nhập hoặc AUTO, không gồm phí/thuế bán.\n"
-                   "AUTO tính từ tiền/danh mục đúng sổ REAL/PAPER và P1/OVERRIDE; không cần có tín hiệu BUY.",
         }
         for column, (title, title_attr, value_attr, title_color) in enumerate(pnl_specs):
             box = ctk.CTkFrame(pnl_panel, fg_color="transparent")
@@ -397,7 +395,7 @@ class DashboardPanelsMixin:
                 text_color=title_color, anchor="center",
             )
             title_label.pack(fill="x")
-            _HoverHint(title_label, pnl_hints[title])
+            _HoverHint(title_label, self._ticket_fee_hint if title == "FEE" else pnl_hints[title])
             label = ctk.CTkLabel(
                 box, text="NA", font=FONT_PREVIEW_VALUE,
                 text_color=COL_PREVIEW_TEXT, anchor="center", height=28,
@@ -409,15 +407,18 @@ class DashboardPanelsMixin:
         money_panel = ctk.CTkFrame(preview, fg_color="#1B1F25", corner_radius=7)
         money_panel.grid(row=1, column=0, sticky="ew", pady=(5, 0))
         money_panel.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(
-            money_panel, text="TIỀN CK", font=FONT_PREVIEW_TITLE, height=28,
+        self.lbl_order_value_title = ctk.CTkLabel(
+            money_panel, text="VỐN + PHÍ", font=FONT_PREVIEW_TITLE, height=28,
             text_color=COL_PREVIEW_TEXT, anchor="w",
-        ).grid(row=0, column=0, sticky="w", padx=(12, 6), pady=2)
+        )
+        self.lbl_order_value_title.grid(row=0, column=0, sticky="w", padx=(12, 6), pady=2)
+        _HoverHint(self.lbl_order_value_title, self._ticket_money_hint)
         self.lbl_order_value = ctk.CTkLabel(
             money_panel, text="NA", font=FONT_PREVIEW_VALUE, height=28,
             text_color=COL_PREVIEW_TEXT, anchor="e",
         )
         self.lbl_order_value.grid(row=0, column=1, sticky="e", padx=(6, 12), pady=2)
+        _HoverHint(self.lbl_order_value, self._ticket_money_hint)
 
         action = ctk.CTkFrame(order, width=1, height=38, fg_color="transparent")
         action.pack(fill="x", padx=9, pady=(1, 4))
@@ -887,7 +888,7 @@ class DashboardPanelsMixin:
             column: int,
             title: str,
             title_color: str = COL_TITLE,
-            hint: str = "",
+            hint: Any = "",
         ):
             card = ctk.CTkFrame(metrics, width=1, fg_color=COL_SURFACE_2, corner_radius=6)
             card.grid(row=0, column=column, sticky="nsew", padx=3, pady=3)
@@ -902,19 +903,25 @@ class DashboardPanelsMixin:
                 self.preview_qty_title = title_widget
             if hint:
                 _HoverHint(title_widget, hint, placement="inside")
+            title_widget.bind("<Configure>", lambda _event, widget=title_widget: fit_label_text(
+                widget, base_font=("Segoe UI", 12, "bold", "italic"), minimum_size=7), add="+")
             value = ctk.CTkLabel(
                 card, text="NA", width=1, height=30,
                 font=("Cascadia Mono", 13), text_color=COL_TEXT,
-                anchor="w", justify="left", wraplength=190,
+                anchor="w", justify="left", wraplength=0,
             )
             value.grid(row=1, column=0, sticky="ew", padx=9, pady=(1, 6))
+            value.bind("<Configure>", lambda _event, widget=value: fit_label_text(
+                widget, base_font=("Cascadia Mono", 13), minimum_size=7), add="+")
+            if hint:
+                _HoverHint(value, hint, placement="inside")
             return value
 
         self.preview_live_value = metric_card(0, "GIÁ TT", hint="Giá gần nhất bot nhận được; màu vàng là giá đang đứng hoặc ngoài phiên. Không bảo đảm đây là giá khớp.")
-        self.preview_entry_value = metric_card(1, "GIÁ VÀO", hint="Giá dùng để ước tính lệnh. LO dùng giá nhập; MARKET dùng giá hiện tại, giá khớp do sàn quyết định.")
+        self.preview_entry_value = metric_card(1, "GIÁ VÀO", hint="Giá ước tính khớp để preview TP/SL; LO dùng giá nhập.\nKhi giữ vốn Priority, VỐN + PHÍ dự trù theo giá trần, không phải giá khớp chắc chắn.")
         self.preview_qty_value = metric_card(2, "KL", hint=self._auto_quantity_hint)
-        self.preview_cash_value = metric_card(3, "TIỀN CK", hint="Giá vào × khối lượng, chưa gồm phí mua; không phải tiền khả dụng tài khoản.\n100 CP × 32.150 đồng = 3.215.000 đồng.")
-        self.preview_fee_value = metric_card(4, "FEE", COL_WARN, "Phí mua ước tính, không gồm phí/thuế bán. Thiếu giá hoặc số lượng → —, không phải miễn phí.")
+        self.preview_cash_value = metric_card(3, "VỐN + PHÍ", hint=self._ticket_money_hint)
+        self.preview_fee_value = metric_card(4, "FEE", COL_WARN, self._ticket_fee_hint)
         self.preview_route_value = metric_card(
             5,
             "LỆNH",
@@ -1331,6 +1338,15 @@ class DashboardPanelsMixin:
             return str(feedback.get("hint") or reason)
         return reason or "Chờ tính preview; chưa gửi lệnh."
 
+    def _ticket_money_hint(self) -> str:
+        return str(getattr(self, "_preview_ticket_money", {}).get("hint") or "Chờ tính vốn và phí của lệnh đang xem.")
+
+    def _ticket_fee_hint(self) -> str:
+        money = getattr(self, "_preview_ticket_money", {})
+        if money.get("fee") is None:
+            return "Chưa có giá/khối lượng hoặc phí DNSE; dấu — không phải miễn phí."
+        return f"Phí mua {money['fee']:,.0f} đ đã nằm trong VỐN + PHÍ; không cộng lần nữa. Không gồm phí/thuế bán."
+
     def _auto_quantity_hint(self) -> str:
         return (
             "KL AUTO: ô trống; số CP hiện mờ là gợi ý theo ngân sách, chưa phải lệnh đã mua.\n"
@@ -1726,7 +1742,8 @@ class DashboardPanelsMixin:
             auto_block_reason = str(feedback.get("reason") or "CHỜ TÍNH KHỐI LƯỢNG")
         gross = entry_price * max(0, quantity) * 1000.0
         preview_capital = gross
-        estimated_fee = self._preview_buy_fee(gross, symbol, mode) if gross > 0 else None
+        money = self._ticket_money_preview(symbol, mode, order_type, quantity, entry_price, tick)
+        estimated_fee = money["fee"]
         fee_value = _compact_vnd(estimated_fee) if estimated_fee is not None else "—"
         working_dates = status.get("working_dates") or None
         phase, phase_label = market_phase(
@@ -1845,13 +1862,16 @@ class DashboardPanelsMixin:
         )
         self.preview_cash_value.configure(
             text=(
-                _compact_vnd(gross) if gross > 0 else "--"
+                _compact_vnd(money["total"]) if money["total"] is not None else
+                "CHỜ GIÁ" if money["waiting_price"] else "CHỜ PHÍ" if money["gross"] > 0 else "--"
             )
         )
+        fit_label_text(self.preview_cash_value, base_font=("Cascadia Mono", 13), minimum_size=7)
         self.preview_fee_value.configure(
             text=fee_value,
             text_color=COL_WARN,
         )
+        fit_label_text(self.preview_fee_value, base_font=("Cascadia Mono", 13), minimum_size=7)
         self.preview_tp_value.configure(
             text=(
                 tp_value.split('·')[-1].strip()

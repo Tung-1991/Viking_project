@@ -106,6 +106,72 @@ with tempfile.TemporaryDirectory(prefix="money-hunter-startup-") as directory:
             assert app.quantity.get() == ""
             assert app.quantity._viking_title_widget.cget("text") == "KL · AUTO"
         app._preview_entry_checks = old_preview_checks
+        # The visible money/fee must match the capital guard, not the last-price
+        # estimate, including native labels and both book-specific fee sources.
+        from viking_v2.dashboard.view import _compact_vnd
+        saved_settings = app.settings.to_dict()
+        saved_read_status = app.bridge.read_status
+        saved_cached_fee = app._cached_fee_rate
+        app.settings.priority_symbols = ["MSN", "CTS", "HDB", "IDC"]
+        app.settings.priority_capital_enabled = True
+        app.settings.priority_total_capital = 50_000_000
+        app.settings.priority_allocations = {symbol: {
+            "limit_vnd": (5 if symbol == "IDC" else 15) * 1_000_000, "use_pct": 100,
+        } for symbol in app.settings.priority_symbols}
+        status = {"market_status": "CLOSED", "ticks": {"MSN": {
+            "symbol": "MSN", "price": 74.2, "ceiling_price": 79.3,
+        }}}
+        app.bridge.read_status = lambda: status
+        app._cached_fee_rate = lambda *_args: .0012
+        app._fee_rates[("MSN", "BUY")] = .0012
+        app.symbol.set("MSN")
+        app._current_tick_price = 74.2
+        app.quantity.delete(0, tk.END)
+        app.quantity.insert(0, "200")
+        app._select_info_tab("PREVIEW")
+        app.update()
+        settled_money = tk.BooleanVar(master=app, value=False)
+        app.after(250, lambda: settled_money.set(True))
+        app.wait_variable(settled_money)
+        for book in ("REAL", "PAPER"):
+            app.mode.set(book)
+            app.order_type.set("MARKET")
+            app.snapshots[book] = ({"equity": 50_000_000, "availableCash": 50_000_000}, [], [])
+            app._update_order_preview()
+            total = 15_860_000 * (1 + (.0012 if book == "REAL" else app.settings.buy_fee_pct / 100))
+            assert app.lbl_order_value.cget("text") == f"{total:,.0f} ₫"
+            assert app.preview_cash_value.cget("text") == _compact_vnd(total)
+            assert app.lbl_fee_preview.cget("text") == app.preview_fee_value.cget("text")
+            assert "79,300" in app._ticket_money_hint()
+            assert " + phí " in app._ticket_money_hint()
+            assert "không cộng lần nữa" in app._ticket_fee_hint()
+            app.update_idletasks()
+            if os.environ.get("VIKING_CAPTURE_UI") == "1":
+                from PIL import ImageGrab
+                import ctypes
+                capture_dir = Path.cwd() / ".artifacts" / "ui-review"
+                capture_dir.mkdir(parents=True, exist_ok=True)
+                hwnd = ctypes.windll.user32.GetParent(app.winfo_id())
+                ImageGrab.grab(window=hwnd).save(capture_dir / f"money-{book}-{os.environ['STARTUP_SMOKE_SCALING']}.png")
+            # Check native money labels fit without extra rows/wrapping.
+            from tkinter import font as tkfont
+            for label in (app.lbl_order_value, app.preview_cash_value, app.preview_fee_value):
+                font = tkfont.Font(root=app, font=label._label.cget("font"))
+                assert font.measure(label.cget("text")) <= label.winfo_width(), (
+                    label.cget("text"), font.measure(label.cget("text")), label.winfo_width(),
+                    [(ancestor.winfo_class(), ancestor.winfo_width(), ancestor.winfo_height(), ancestor.winfo_ismapped())
+                     for ancestor in (label.master, label.master.master, app.preview_scroll, app.log_tabview, app)])
+            app.order_type.set("LO")
+            app.price.delete(0, tk.END)
+            app.price.insert(0, "74,200")
+            app._update_order_preview()
+            assert "giá LO" in app._ticket_money_hint()
+        app.settings = config.AppSettings.from_dict(saved_settings)
+        app.bridge.read_status = saved_read_status
+        app._cached_fee_rate = saved_cached_fee
+        app.snapshots = {}
+        app.quantity.delete(0, tk.END)
+        app.order_type.set("MARKET")
         app.mode.set(os.environ.get("STARTUP_SMOKE_MODE", "PAPER"))
         for tab in ("Manual", "Bot", "PREVIEW"):
             app._select_info_tab(tab)
