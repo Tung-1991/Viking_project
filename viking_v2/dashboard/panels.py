@@ -1323,6 +1323,9 @@ class DashboardPanelsMixin:
         if notice:
             return str(notice["hint"])
         reason = str(self.preview_status_reason.cget("text") or "")
+        manual_feedback = getattr(self, "_preview_manual_feedback", {})
+        if reason and reason == manual_feedback.get("reason"):
+            return str(manual_feedback.get("hint") or reason)
         feedback = getattr(self, "_preview_auto_feedback", {})
         if reason == feedback.get("reason"):
             return str(feedback.get("hint") or reason)
@@ -1331,8 +1334,9 @@ class DashboardPanelsMixin:
     def _auto_quantity_hint(self) -> str:
         return (
             "KL AUTO: ô trống; số CP hiện mờ là gợi ý theo ngân sách, chưa phải lệnh đã mua.\n"
-            "KL TAY: bấm ô rồi nhập số CP, ví dụ 200; xóa hết để trở lại AUTO.\n"
-            + str(getattr(self, "_preview_auto_feedback", {}).get("hint", "Chờ tính AUTO."))
+            "KL TAY: nhập 100, 200… CP; vẫn giữ vốn Priority, không tự chia lại hạn mức. Xóa hết để trở lại AUTO.\n"
+            + str((getattr(self, "_preview_manual_feedback", {}) if self.quantity.get().strip()
+                   else getattr(self, "_preview_auto_feedback", {})).get("hint", "Chờ tính vốn."))
         )
 
     def _book_preview_status(self, status: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1704,6 +1708,14 @@ class DashboardPanelsMixin:
                 quantity = 0
                 quantity_error = "KHỐI LƯỢNG KHÔNG HỢP LỆ"
         valid_quantity, quantity_reason, _normalized = validate_quantity(quantity)
+        self._preview_manual_feedback = (
+            self._manual_buy_capital_feedback(
+                symbol, mode, quantity, order_type, entry_price,
+                tick=tick,
+            ) if valid_quantity and not price_error and hasattr(self, "_manual_buy_capital_feedback") else {}
+        )
+        manual_capital_reason = str(self._preview_manual_feedback.get("reason") or "")
+        manual_waiting = bool(self._preview_manual_feedback.get("waiting"))
         auto_block_reason = ""
         auto_waiting = False
         pending_block = False
@@ -1731,21 +1743,21 @@ class DashboardPanelsMixin:
         token_ready = mode == "PAPER" or self.real.has_trading_token()
         invalid_reason = quantity_error or (
             quantity_reason if not auto_quantity and not valid_quantity else ""
-        ) or price_error
+        ) or price_error or manual_capital_reason
         if auto_quantity and quantity <= 0:
             invalid_reason = price_error or auto_block_reason
         if not symbol:
             invalid_reason = "Chưa chọn mã chứng khoán"
         auto_waiting = auto_waiting and bool(symbol) and not price_error
 
-        if auto_waiting:
+        if auto_waiting or manual_waiting:
             badge, badge_bg, badge_fg = "CHỜ", "#4A3B16", "#FFF3B0"
             reason, route = invalid_reason, "CHỜ"
         elif pending_block and not price_error and not quantity_error and bool(symbol):
             badge, badge_bg, badge_fg = "BUY CHỜ", "#4A3B16", "#FFF3B0"
             reason, route = auto_block_reason, "CHỜ"
         elif invalid_reason:
-            badge, badge_bg, badge_fg = "LỖI", "#5A1E1E", "#FFCDD2"
+            badge, badge_bg, badge_fg = "CHẶN" if manual_capital_reason else "LỖI", "#5A1E1E", "#FFCDD2"
             reason = invalid_reason
             route = "CHẶN"
         elif auto_quantity:
@@ -1774,7 +1786,7 @@ class DashboardPanelsMixin:
         button_text, button_bg, button_hover, button_border = self._buy_button_presentation(
             invalid_reason, due, token_ready,
         )
-        if auto_waiting:
+        if auto_waiting or manual_waiting:
             button_text, button_bg, button_hover, button_border = "CHỜ DỮ LIỆU", "#4A3B16", "#605020", COL_WARN
         elif pending_block and not price_error and bool(symbol):
             button_text, button_bg, button_hover, button_border = "BUY ĐANG CHỜ", "#4A3B16", "#605020", COL_WARN

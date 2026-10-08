@@ -95,6 +95,7 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
                 and mode == ("PAPER" if self.bridge.read_config().paper_mode else "REAL")
             ),
             bot_entry_guard=self._check_bot_entry_limits,
+            manual_buy_guard=self._check_manual_buy_capital,
         )
         self.daily_fees = DailyFeeTracker(
             self.bridge.history_csv_path,

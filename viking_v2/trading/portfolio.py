@@ -366,6 +366,7 @@ class PortfolioContextBuilder:
         normal_t2_reset_enabled: bool = False,
         normal_arm_pct: float = 7.0,
         budget_only: bool = False,
+        manual_buy: bool = False,
     ) -> dict[str, Any]:
         symbol = str(symbol or "").upper()
         priority_symbols = tuple(priority_symbols)
@@ -426,6 +427,11 @@ class PortfolioContextBuilder:
             exposure_room,
             cash / (1.0 + max(0.0, float(self.buy_fee_rate() or 0.0))),
         )
+        if manual_buy:
+            # A typed MANUAL ticket keeps Priority envelopes, but does not
+            # inherit BOT position quotas, P1 exposure or signal/loss locks.
+            budget = max(0.0, cash - pending_cash) / (1.0 + fee_rate)
+            minimum_order_room = budget
         priority_capital = {}
         if priority_capital_enabled or priority_symbols:
             holding_costs: dict[str, float] = {}
@@ -433,12 +439,25 @@ class PortfolioContextBuilder:
                 value = str(row.get("symbol", "")).upper()
                 cost = position_quantity(row) * (position_cost(row) or position_price(row)) * 1000.0 * (1.0 + fee_rate)
                 holding_costs[value] = holding_costs.get(value, 0.0) + cost
+            durable_costs: dict[str, float] = {}
             for cycle in self.trades.list_cycles():
+                if cycle.execution_mode == mode and cycle.status == "OPEN" and cycle.open_quantity > 0:
+                    durable_costs[cycle.symbol] = durable_costs.get(cycle.symbol, 0.0) + (
+                        cycle.avg_entry_price * cycle.open_quantity * 1000.0 * (1.0 + fee_rate)
+                        + (max(0.0, cycle.fees_paid - cycle.buy_notional * fee_rate)
+                           if cycle.sold_quantity == 0 else 0.0)
+                    )
                 if (cycle.execution_mode == mode and cycle.status == "OPEN"
                         and cycle.open_quantity > 0 and cycle.sold_quantity == 0):
                     # Lowering today's fee must not erase fees already paid.
                     extra_fee = max(0.0, cycle.fees_paid - cycle.buy_notional * fee_rate)
                     holding_costs[cycle.symbol] = holding_costs.get(cycle.symbol, 0.0) + extra_fee
+            if manual_buy:
+                # A lagging broker position snapshot must not free capital
+                # already spent by a confirmed local fill. Never add the same
+                # holding twice when both snapshots contain it.
+                for value, cost in durable_costs.items():
+                    holding_costs[value] = max(holding_costs.get(value, 0.0), cost)
             envelope = stock_exposure_limit(nav, exposure) / max(1, max_positions) * (1.0 + fee_rate)
             allocations = (priority_allocations or {}) if priority_capital_enabled else {
                 value: {"limit_vnd": envelope, "use_pct": 100.0} for value in priority_symbols}
@@ -452,7 +471,7 @@ class PortfolioContextBuilder:
             budget = priority_capital["budget"]
             minimum_order_room = priority_capital["minimum_room"]
         no_compound_limited = False
-        if no_compound_enabled:
+        if no_compound_enabled and not manual_buy:
             before_no_compound = budget
             budget = self.trades.capital_available(symbol, mode, budget)
             no_compound_limited = budget < before_no_compound

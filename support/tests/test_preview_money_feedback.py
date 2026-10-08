@@ -23,6 +23,9 @@ class Label:
     def configure(self, **options):
         self.options.update(options)
 
+    def cget(self, key):
+        return self.options.get(key)
+
 
 def value(text):
     return SimpleNamespace(get=lambda: text)
@@ -328,7 +331,12 @@ def test_full_preview_zero_cash_is_blocked_but_missing_snapshot_is_waiting(tmp_p
     assert "WRONG BOOK" not in view._auto_quantity_hint()
     if manual:
         assert view.preview_qty_value.options["text"] == "100"
-        assert view.preview_status_badge.options["text"] == "CACHE"
+        assert view.preview_status_badge.options["text"] == ("CHỜ" if missing else "CHẶN")
+        assert view.preview_status_reason.options["text"] == (
+            "CHỜ DỮ LIỆU VỐN" if missing else "THIẾU VỐN SAU KHI GIỮ PRIORITY")
+        assert view.preview_route_value.options["text"] == ("CHỜ" if missing else "CHẶN")
+        assert view.execute_button.options["text"] == ("CHỜ DỮ LIỆU" if missing else "KIỂM TRA")
+        assert view._order_status_hint() == view._preview_manual_feedback["hint"]
         assert view.queue.list_all() == []
         return
     assert view.preview_status_badge.options["text"] == ("CHỜ" if missing else "LỖI")

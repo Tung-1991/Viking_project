@@ -46,6 +46,7 @@ class ExecutionService:
         manual_sell_pause_seconds_provider: Callable[[], float] | None = None,
         bot_buy_allowed_provider: Callable[[str], bool] | None = None,
         bot_entry_guard: Callable[[OrderIntent, dict[str, Any]], str] | None = None,
+        manual_buy_guard: Callable[[OrderIntent, dict[str, Any]], str] | None = None,
     ):
         self.real = real
         self.paper = paper
@@ -60,6 +61,7 @@ class ExecutionService:
         self.manual_sell_pause_seconds_provider = manual_sell_pause_seconds_provider
         self.bot_buy_allowed_provider = bot_buy_allowed_provider
         self.bot_entry_guard = bot_entry_guard
+        self.manual_buy_guard = manual_buy_guard
         self.database = queue.store.database
         self._blocked_rechecks: set[str] = set()
         self._deferred_events: list[tuple[str, TradeCycle, OrderIntent]] | None = None
@@ -468,6 +470,19 @@ class ExecutionService:
                     result = BrokerOrderResult(False, "REJECTED", error="SEND_VALIDATION_FAILED", message=str(exc))
                     self.queue.finish(intent, result, submitted_quantity=send_quantity)
                     self._append_local_event({"ts": time.time(), "intent": (self.queue.get(intent.id) or intent).to_dict(), "queue_status": "REJECTED", "result": asdict(result)})
+                    completed.append((intent, result))
+                    continue
+            if intent.side == "BUY" and intent.source == "MANUAL" and self.manual_buy_guard:
+                try:
+                    blocked = self.manual_buy_guard(intent, quote or {})
+                except Exception:
+                    blocked = "Chờ dữ liệu vốn Priority hợp lệ; chưa gửi lệnh."
+                if blocked:
+                    result = BrokerOrderResult(False, "REJECTED", message=blocked, error="MANUAL_CAPITAL_LIMIT")
+                    self.queue.finish(intent, result, submitted_quantity=send_quantity)
+                    rejected = self.queue.get(intent.id) or intent
+                    self._append_local_event({"ts": time.time(), "intent": rejected.to_dict(),
+                                              "queue_status": rejected.status, "result": asdict(result)})
                     completed.append((intent, result))
                     continue
             if intent.side == "BUY" and intent.source == "BOT" and self.bot_entry_guard:

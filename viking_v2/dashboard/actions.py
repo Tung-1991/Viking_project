@@ -1526,6 +1526,14 @@ class DashboardActionsMixin:
                     feedback.get("hint") or feedback.get("reason") or "Chưa tính được khối lượng AUTO. Xem PREVIEW.",
                 )
                 return
+        if side == "BUY":
+            feedback = self._manual_buy_capital_feedback(
+                symbol, mode, quantity, kind, limit_price,
+                tick=self._shared_tick(symbol) or {},
+            )
+            if feedback.get("reason"):
+                blocked("Đặt lệnh", feedback["hint"])
+                return
         if mode == "REAL" and not self.settings.skip_order_popups:
             answer = messagebox.askyesno(
                 "Xác nhận lệnh REAL",
@@ -2723,6 +2731,90 @@ class DashboardActionsMixin:
         )
         checks["force_min_lot_enabled"] = params.force_min_lot_enabled
         return checks
+
+    def _manual_buy_capital_feedback(
+        self, symbol: str, mode: str, quantity: int, order_type: str,
+        limit_price: float, *, tick: dict[str, Any],
+        balance: dict[str, Any] | None = None,
+        positions: list[dict[str, Any]] | None = None,
+        exclude_intent_id: str = "", fee_rate: float | None = None,
+    ) -> dict[str, Any]:
+        """MANUAL can edit quantity, never borrow unspent Priority capital."""
+        settings = self.settings
+        if not settings.priority_capital_enabled and not settings.priority_symbols:
+            return {}
+        valid, _reason, _quantity = validate_quantity(quantity)
+        if not valid:
+            return {}  # The normal quantity validator reports this separately.
+        if balance is None:
+            balance, positions, _orders = getattr(self, "snapshots", {}).get(mode, ({}, [], []))
+        waiting = {"reason": "CHỜ DỮ LIỆU VỐN", "hint": "Chưa có dữ liệu vốn của sổ " + mode + "; chưa gửi lệnh.", "waiting": True}
+        if not balance:
+            return waiting
+        price = limit_price if str(order_type).upper() == "LO" else _price_unit(tick.get("ceiling_price", 0))
+        if not math.isfinite(price) or price <= 0:
+            return {"reason": "CHỜ GIÁ TÍNH VỐN", "hint": "Cần giá LO hợp lệ hoặc giá trần của đúng mã để kiểm tra hạn mức; chưa gửi lệnh.", "waiting": True}
+        from ..rules.business import StaticRuleParameters
+        params = StaticRuleParameters.from_dict(settings.rule_parameters)
+        exposure = (settings.market_phase_override_exposure_pct / 100.0
+                    if settings.market_phase_override_enabled
+                    else params.exposure.get(self.rule_state.confirmed_market_state(), 0.0))
+        if fee_rate is None:
+            fee_rate = (getattr(self, "_fee_rates", {}).get((symbol, "BUY"), settings.buy_fee_pct / 100.0)
+                        if mode == "REAL" else settings.buy_fee_pct / 100.0)
+        checks = PortfolioContextBuilder(
+            self.queue, self.trade_state, self.rule_state, buy_fee_rate=lambda: fee_rate,
+        ).build(
+            symbol, execution_mode=mode, balance=balance, positions=positions or [],
+            tick=tick, exposure=exposure, max_positions=params.max_positions,
+            priority_symbols=settings.priority_symbols,
+            priority_capital_enabled=settings.priority_capital_enabled,
+            priority_total_capital=settings.priority_total_capital,
+            priority_allocations=settings.priority_allocations,
+            exclude_intent_id=exclude_intent_id, budget_only=True, manual_buy=True,
+        )
+        capital = checks.get("priority_capital") or {}
+        budget = float(checks.get("order_budget", 0) or 0)
+        fee_factor = 1.0 + max(0.0, float(fee_rate))
+        allowed = budget * fee_factor
+        needed = quantity * price * 1000.0 * fee_factor
+        if not all(math.isfinite(value) for value in (budget, needed, allowed)):
+            return waiting
+        reason = ""
+        if capital.get("reason") == "INVALID_PRIORITY_CAPITAL":
+            reason = "HẠN MỨC PRIORITY CHƯA HỢP LỆ"
+        elif needed > allowed + 0.01:
+            reason = "THIẾU VỐN SAU KHI GIỮ PRIORITY"
+        hint = (
+            f"{reason or 'Vốn đủ cho lệnh này.'}\n"
+            f"Lệnh cần {needed:,.0f} đ gồm phí · Được dùng {allowed:,.0f} đ.\n"
+            f"Giá tính vốn {price * 1000:,.0f} đ ({'LO' if order_type == 'LO' else 'dự trù giá trần'}).\n"
+            f"Tiền khả dụng {checks['available_cash']:,.0f} đ · Giữ cho Priority khác/phần để dành {capital.get('reserved_cash', 0):,.0f} đ."
+        )
+        if symbol in settings.priority_symbols:
+            hint += f"\n{symbol}: hạn mức {capital.get('limit_vnd', 0):,.0f} đ · Đã dùng/giữ lệnh chờ {capital.get('committed_vnd', 0):,.0f} đ."
+        if reason:
+            hint += "\nChưa gửi lệnh; không tự chia lại hạn mức."
+        return {"reason": reason, "hint": hint, "budget": budget}
+
+    def _check_manual_buy_capital(self, intent: OrderIntent, quote: dict[str, Any]) -> str:
+        """Recheck the current book/settings just before a MANUAL hand-off."""
+        if not self.settings.priority_capital_enabled and not self.settings.priority_symbols:
+            return ""
+        mode = intent.execution_mode
+        broker = self.paper if mode == "PAPER" else self.real
+        balance = broker.get_balance() if mode == "PAPER" else broker.get_balance(force=True)
+        positions = broker.get_positions() if mode == "PAPER" else broker.get_positions(force=True)
+        tick = dict(quote or {})
+        if intent.order_type != "LO":
+            tick["ceiling_price"] = (self.real.get_secdef(intent.symbol) or {}).get("ceilingPrice", 0)
+        feedback = self._manual_buy_capital_feedback(
+            intent.symbol, mode, intent.remaining_quantity or intent.quantity,
+            intent.order_type, intent.limit_price, tick=tick,
+            balance=balance, positions=positions, exclude_intent_id=intent.id,
+            fee_rate=quote.get("buy_fee_rate"),
+        )
+        return str(feedback.get("hint", "")) if feedback.get("reason") else ""
 
     def _check_bot_entry_limits(self, intent: OrderIntent, quote: dict[str, Any]) -> str:
         """Final check of the new policies, without changing MANUAL or exits."""
