@@ -10,7 +10,7 @@ echo ========================================
 echo               VIKING V2
 echo ========================================
 echo   1. Ra soat / cai moi truong
-echo   2. Kiem tra / cap nhat code Git (ghi de source)
+echo   2. Kiem tra / cap nhat GitHub (clone / ZIP, ghi de source)
 echo   3. Khoi dong
 echo   0. Thoat
 echo.

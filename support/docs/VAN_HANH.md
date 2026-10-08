@@ -6,6 +6,7 @@
   (Python x64/Tk, Git, VC++ x64, venv, package đúng phiên bản). Cài phần mềm hệ thống
   cần **Run as administrator**. Nếu yêu cầu reboot, reboot rồi kiểm tra lại.
 - **2** kiểm tra GitHub; có bản mới thì backup và ghi đè source. Đóng app trước.
+  Bản ZIP thiếu `.git` được tự nối repo; mất mạng lúc nối thì chọn 2 lại để tiếp tục.
   `.env`, runtime và venv giữ tại máy; backup ở `.artifacts/update-backups/`, không lên Git.
 - **3** khởi động, giữ console xem log. Đóng app hoặc Ctrl+C để dừng.
   Giữ PC/VM bật, không sleep/logoff. Ngắt RDP không phải đăng xuất.

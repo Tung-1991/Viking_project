@@ -447,7 +447,7 @@ function Invoke-Native {{
         'rev-parse|--show-toplevel' {{ $ProjectRoot }}
         'rev-parse|--abbrev-ref|--symbolic-full-name|@{{u}}' {{ 'origin/main' }}
         'fetch' {{}}
-        'rev-parse|HEAD' {{ 'old-sha' }}
+        'rev-parse|--verify|--quiet|HEAD' {{ 'old-sha' }}
         'rev-parse|@{{u}}' {{ '{'new-sha' if behind else 'old-sha'}' }}
         'ls-tree|-r|--name-only|new-sha' {{ {_ps_quote(incoming)} }}
         'ls-files' {{ {_ps_quote(tracked)} }}
@@ -464,6 +464,7 @@ Write-Output ('CALLS=' + (ConvertTo-Json -Compress -InputObject $script:calls))
 
 
 def _mock_update_result(tmp_path, **kwargs):
+    (tmp_path / '.git').mkdir()
     result = _run_ps(_update_mock(**kwargs), tmp_path)
     _assert_ok(result)
     calls = json.loads(result.stdout.split("CALLS=", 1)[1].splitlines()[0])
@@ -599,3 +600,125 @@ def test_local_git_remote_update_integration(tmp_path, local_changes):
     assert git("status", "--porcelain", cwd=deployed) == "?? keep-untracked.txt"
     assert env.read_text() == "FAKE_KEY=VPS-only"
     assert (runtime / "settings.json").read_text() == '{"machine": "VPS"}'
+
+
+@pytest.fixture
+def zip_repository(tmp_path):
+    git_exe = shutil.which("git.exe")
+    if not git_exe:
+        pytest.skip("Git not installed")
+    author = tmp_path / "author"
+    author.mkdir()
+    remote = tmp_path / "remote.git"
+    deployed = tmp_path / "Viking ZIP with spaces"
+    deployed.mkdir()
+
+    def git(*arguments, cwd=author):
+        result = subprocess.run(
+            [git_exe, "-c", "user.name=Launcher Test", "-c", "user.email=launcher@example.invalid", *map(str, arguments)],
+            cwd=cwd, capture_output=True, text=True, timeout=30,
+        )
+        _assert_ok(result)
+        return result.stdout.strip()
+
+    git("init", "--bare", "--initial-branch=main", remote)
+    git("init", "--initial-branch=main")
+    (author / ".gitignore").write_text("viking_v2/runtime/\nviking_v2/.env\nckvnvenv/\n.artifacts/\n", encoding="utf-8")
+    (author / "code.txt").write_text("new GitHub source", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-m", "source")
+    git("remote", "add", "origin", remote)
+    git("push", "-u", "origin", "main")
+
+    runtime = deployed / "viking_v2" / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "settings.json").write_text('{"machine":"ZIP"}', encoding="utf-8")
+    (deployed / "viking_v2" / ".env").write_text("FAKE_KEY=ZIP-only", encoding="utf-8")
+    (deployed / "ckvnvenv").mkdir()
+    (deployed / "ckvnvenv" / "keep.txt").write_text("venv data", encoding="utf-8")
+    (deployed / "code.txt").write_text("old ZIP source", encoding="utf-8")
+    return git, remote, deployed, author
+
+
+@pytest.mark.parametrize("retry_fetch", [False, True])
+def test_zip_update_connects_and_preserves_data_even_after_interrupted_fetch(zip_repository, retry_fetch):
+    git, remote, deployed, _author = zip_repository
+    retry = ""
+    if retry_fetch:
+        retry = """
+$script:realNative = ${function:Invoke-Native}
+$script:failFetch = $true
+function Invoke-Native {
+    param($Command, $Arguments)
+    if ($script:failFetch -and $Arguments[0] -eq 'fetch') {
+        $script:failFetch = $false
+        throw 'FETCH_INTERRUPTED'
+    }
+    & $script:realNative $Command $Arguments
+}
+try { Update-Code; throw 'MISSED_FETCH_FAILURE' }
+catch { if ($_.Exception.Message -ne 'FETCH_INTERRUPTED') { throw } }
+"""
+    result = _run_ps(
+        f"$RepositoryUrl={_ps_quote(remote)}\n"
+        "$script:packages=0\nfunction Install-Packages { $script:packages++; 'PACKAGE_CHECK_MOCKED' }\n"
+        + retry + "\nUpdate-Code\nUpdate-Code\n"
+        "if ($script:packages -ne 1) { throw 'WRONG_PACKAGE_COUNT' }; 'ZIP_OK'", deployed,
+    )
+    _assert_ok(result)
+    assert "ZIP_OK" in result.stdout
+    assert git("rev-parse", "HEAD", cwd=deployed) == git("rev-parse", "HEAD")
+    assert git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", cwd=deployed) == "origin/main"
+    assert (deployed / "code.txt").read_text() == "new GitHub source"
+    assert (deployed / "viking_v2" / ".env").read_text() == "FAKE_KEY=ZIP-only"
+    assert (deployed / "viking_v2" / "runtime" / "settings.json").read_text() == '{"machine":"ZIP"}'
+    assert (deployed / "ckvnvenv" / "keep.txt").read_text() == "venv data"
+    backups = list((deployed / ".artifacts" / "update-backups").iterdir())
+    assert len(backups) == (2 if retry_fetch else 1)
+    assert all((backup / ".env").read_text() == "FAKE_KEY=ZIP-only" for backup in backups)
+    assert git("status", "--porcelain", cwd=deployed) == ""
+
+
+@pytest.mark.parametrize("failure", ["running", "backup"])
+def test_zip_update_refuses_to_initialize_before_stop_and_backup(tmp_path, failure):
+    override = (
+        "function Assert-AppStopped { throw 'RUNNING_APP' }\n" if failure == "running"
+        else "function Backup-LocalData { throw 'BACKUP_FAILED' }\n"
+    )
+    result = _run_ps(override + "Update-Code", tmp_path)
+    assert result.returncode != 0
+    assert ("RUNNING_APP" if failure == "running" else "BACKUP_FAILED") in result.stderr
+    assert not (tmp_path / ".git").exists()
+
+
+@pytest.mark.parametrize("private_path", ["viking_v2/runtime/private.txt", "ckvnvenv/private.txt", "viking_v2/.env"])
+def test_zip_update_rejects_remote_private_paths_before_overwrite(zip_repository, private_path):
+    git, remote, deployed, author = zip_repository
+    incoming = author / private_path
+    incoming.parent.mkdir(parents=True, exist_ok=True)
+    incoming.write_text("fake private data", encoding="utf-8")
+    git("add", "-f", private_path)
+    git("commit", "-m", "unsafe remote")
+    git("push")
+    result = _run_ps(
+        f"$RepositoryUrl={_ps_quote(remote)}\n"
+        "function Install-Packages { throw 'UNEXPECTED_INSTALL' }\nUpdate-Code", deployed,
+    )
+    assert result.returncode != 0
+    assert "Git chua runtime/.env/venv/backup" in result.stderr
+    assert "UNEXPECTED_INSTALL" not in result.stderr
+    assert (deployed / "code.txt").read_text() == "old ZIP source"
+    assert (deployed / "viking_v2" / ".env").read_text() == "FAKE_KEY=ZIP-only"
+    if private_path != "viking_v2/.env":
+        assert not (deployed / private_path).exists()
+
+
+def test_unborn_repository_with_another_origin_is_not_retargeted(zip_repository):
+    git, _remote, deployed, _author = zip_repository
+    git("init", "--initial-branch=main", cwd=deployed)
+    git("remote", "add", "origin", "https://example.invalid/not-viking.git", cwd=deployed)
+    result = _run_ps("Update-Code", deployed)
+    assert result.returncode != 0
+    assert "origin khong dung Viking" in result.stderr
+    assert git("remote", "get-url", "origin", cwd=deployed) == "https://example.invalid/not-viking.git"
+    assert (deployed / "code.txt").read_text() == "old ZIP source"

@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $PythonExe = Join-Path $ProjectRoot 'ckvnvenv\Scripts\python.exe'
 $PythonVersion = '3.13.16'
+$RepositoryUrl = 'https://github.com/Tung-1991/Viking_project.git'
 
 function Invoke-Native {
     param([string]$Command, [string[]]$Arguments)
@@ -293,31 +294,73 @@ function Backup-LocalData {
     Write-Host "[BACKUP] $backup"
 }
 
+function Assert-UpdatePaths {
+    param([string]$GitExe, [string]$Revision)
+    $incoming = @(Invoke-Native $GitExe @('ls-tree', '-r', '--name-only', $Revision))
+    $tracked = @(Invoke-Native $GitExe @('ls-files'))
+    foreach ($name in ($incoming + $tracked)) {
+        if ($name -match '^viking_v2$|^(viking_v2/runtime|ckvnvenv|venv|env|\.venv|\.artifacts|support/output)(/|$)|(^|/)\.env($|\.|/)' -and $name -ne 'viking_v2/.env.example') {
+            throw 'Git chua runtime/.env/venv/backup. Tu choi ghi de de bao ve du lieu local.'
+        }
+    }
+}
+
+function Connect-ZipRepository {
+    param([string]$GitExe)
+    Assert-AppStopped
+    $hasMetadata = Test-Path -LiteralPath (Join-Path $ProjectRoot '.git')
+    if ($hasMetadata) {
+        # Resume a first connection interrupted during fetch; never retarget another remote.
+        $origin = Invoke-Native $GitExe @('remote', 'get-url', 'origin')
+        if ([string]$origin -ne $RepositoryUrl) {
+            throw 'Repo chua co revision va origin khong dung Viking. Khong tu thay remote.'
+        }
+    }
+    Write-Host '[GIT] Ban ZIP / ket noi chua hoan tat. Backup va tu noi GitHub...'
+    Backup-LocalData 'ZIP-before-git'
+    if (-not $hasMetadata) {
+        Invoke-Native $GitExe @('init', '--initial-branch=main')
+        Invoke-Native $GitExe @('remote', 'add', 'origin', $RepositoryUrl)
+    }
+    Invoke-Native $GitExe @('fetch', 'origin')
+    $target = Invoke-Native $GitExe @('rev-parse', 'origin/main')
+    Assert-UpdatePaths $GitExe $target
+    Assert-AppStopped
+    # Only the source paths checked above are overwritten; no git clean or local-data restore.
+    Invoke-Native $GitExe @('symbolic-ref', 'HEAD', 'refs/heads/main')
+    Invoke-Native $GitExe @('reset', '--hard', $target)
+    Invoke-Native $GitExe @('branch', '--set-upstream-to=origin/main', 'main')
+    Install-Packages
+    Write-Host '[OK] Da noi Git va cap nhat. Lan sau dung muc 2; chon muc 3 de khoi dong.'
+}
+
 function Update-Code {
     $git = Get-GitExe
     Set-Location -LiteralPath $ProjectRoot
+    if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot '.git'))) {
+        Connect-ZipRepository $git
+        return
+    }
     $inside = Invoke-Native $git @('rev-parse', '--is-inside-work-tree')
     if ([string]$inside -ne 'true') { throw 'Thu muc nay khong phai Git worktree.' }
     $gitRoot = Invoke-Native $git @('rev-parse', '--show-toplevel')
     if ([IO.Path]::GetFullPath([string]$gitRoot).TrimEnd('\', '/') -ine $ProjectRoot.TrimEnd('\', '/')) {
         throw 'Git root khong trung thu muc Viking. Khong ghi de.'
     }
+    try { $current = Invoke-Native $git @('rev-parse', '--verify', '--quiet', 'HEAD') }
+    catch {
+        Connect-ZipRepository $git
+        return
+    }
     $upstream = Invoke-Native $git @('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}')
     Write-Host "[GIT] Kiem tra $upstream..."
     Invoke-Native $git @('fetch')
-    $current = Invoke-Native $git @('rev-parse', 'HEAD')
     $target = Invoke-Native $git @('rev-parse', '@{u}')
     if ([string]$current -eq [string]$target) {
         Write-Host '[OK] Khong co ban cap nhat moi.'
         return
     }
-    $incoming = @(Invoke-Native $git @('ls-tree', '-r', '--name-only', $target))
-    $tracked = @(Invoke-Native $git @('ls-files'))
-    foreach ($name in ($incoming + $tracked)) {
-        if ($name -match '^viking_v2$|^(viking_v2/runtime|ckvnvenv|venv|env|\.venv|\.artifacts|support/output)(/|$)|(^|/)\.env($|\.|/)' -and $name -ne 'viking_v2/.env.example') {
-            throw 'Git chua runtime/.env/venv/backup. Tu choi ghi de de bao ve du lieu local.'
-        }
-    }
+    Assert-UpdatePaths $git $target
     Assert-AppStopped
     Write-Host '[GIT] Co phien ban khac tren GitHub. Se ghi de source local; giu .env, runtime, venv va backup.'
     Backup-LocalData $current
