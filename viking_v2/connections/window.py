@@ -461,9 +461,10 @@ class ConnectionPopup:
         parent.update_idletasks()
         screen_w = max(1100, int(parent.winfo_screenwidth() or 1100))
         screen_h = max(700, int(parent.winfo_screenheight() or 700))
-        width, height = min(860, screen_w - 60), min(560, screen_h - 70)
+        width, height = min(1080, screen_w - 60), min(720, screen_h - 70)
         x, y = max(0, (screen_w - width) // 2), max(0, (screen_h - height) // 3)
         self.top = _window(parent, "VIKING · KẾT NỐI", f"{width}x{height}+{x}+{y}")
+        self.top.withdraw()
         try:
             self.top.grab_release()
         except tk.TclError:
@@ -633,8 +634,16 @@ class ConnectionPopup:
         )
         self.connection_summary.grid(row=1, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 3))
         self.dnse_key = self._field(
-            credentials, 2, "API KEY", os.getenv("DNSE_API_KEY", ""),
+            credentials, 2, "API KEY", os.getenv("DNSE_API_KEY", ""), True,
         )
+        self.dnse_key.grid_configure(columnspan=1, padx=(0, 8))
+        def toggle_key() -> None:
+            hidden = bool(self.dnse_key.cget("show"))
+            self.dnse_key.configure(show="" if hidden else "•")
+            self.key_visibility.configure(text="ẨN" if hidden else "HIỆN")
+        self.key_visibility = ctk.CTkButton(credentials, text="HIỆN", width=60, height=30,
+                                           fg_color=self.BLUE, command=toggle_key)
+        self.key_visibility.grid(row=2, column=2, padx=(0, 12))
         self.dnse_secret = self._field(
             credentials, 3, "API SECRET", os.getenv("DNSE_API_SECRET", ""), True,
         )
@@ -816,8 +825,9 @@ class ConnectionPopup:
 
         self.stats_card = self._card(
             self.dnse_compact_row, "THỐNG KÊ",
-            "PNL và phí dùng chung một mốc. THEO NGÀY chốt, lưu và mở kỳ mới đúng giờ đã đặt; "
-            "TỪ LẦN RESET cộng dồn đến khi bấm ↻. Restart app không làm mất bộ đếm.",
+            "PNL là lãi/lỗ chu kỳ đã đóng, không phải lãi tạm tính. REAL/PAPER có sổ riêng.\n"
+            "THEO NGÀY: chốt kỳ theo giờ GMT+7. CỘNG DỒN: tính từ lần ↻ gần nhất. Restart vẫn giữ.\n"
+            "↻ reset bộ đếm và khóa chờ/cooldown, không mở BLOCK, không xóa vị thế.",
         )
         self.stats_card.grid(row=0, column=2, sticky="nsew", padx=(3, 0))
         self.stats_card.grid_columnconfigure((0, 1, 2), weight=1, uniform="stats_columns")
@@ -826,13 +836,13 @@ class ConnectionPopup:
             font=FONT_KEY, text_color=self.TITLE,
         ).grid(row=1, column=0, columnspan=3, sticky="w", padx=12, pady=(3, 1))
         stats_value = (
-            "TỪ LẦN RESET"
+            "CỘNG DỒN"
             if self.settings.daily_stats_mode == "SINCE_RESET"
             else "THEO NGÀY"
         )
         self.daily_stats_choice = tk.StringVar(value=stats_value)
         self.daily_stats_segment = ctk.CTkSegmentedButton(
-            self.stats_card, values=["THEO NGÀY", "TỪ LẦN RESET"],
+            self.stats_card, values=["THEO NGÀY", "CỘNG DỒN"],
             variable=self.daily_stats_choice,
             height=32,
             selected_color=self.BLUE,
@@ -840,6 +850,7 @@ class ConnectionPopup:
             unselected_color="#3A3F47",
             unselected_hover_color="#4B515B",
             font=("Segoe UI", 11, "bold"),
+            command=lambda _value: self._refresh_stats_time_state(),
         )
         self.daily_stats_segment.grid(
             row=2, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 7),
@@ -877,6 +888,10 @@ class ConnectionPopup:
         self.daily_stats_status.grid(
             row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 9),
         )
+        self._refresh_stats_time_state()
+
+    def _refresh_stats_time_state(self) -> None:
+        self.daily_stats_time.configure(state="normal" if self.daily_stats_choice.get() == "THEO NGÀY" else "disabled")
 
     @staticmethod
     def _parse_paper_balance(raw: str) -> float:
@@ -922,7 +937,7 @@ class ConnectionPopup:
             return
         value = self.daily_stats_choice.get()
         self.settings.daily_stats_mode = (
-            "SINCE_RESET" if str(value or "").upper() == "TỪ LẦN RESET" else "DAILY"
+            "SINCE_RESET" if str(value or "").upper() in {"CỘNG DỒN", "TỪ LẦN RESET"} else "DAILY"
         )
         self.settings.daily_stats_reset_time = reset_time
         save_settings(self.settings, self.account_id)
@@ -1040,7 +1055,9 @@ class ConnectionPopup:
         self.priority_card = self._card(
             body,
             "MÃ PRIORITY",
-            "Các mã này được xét BUY trước và chỉ bỏ qua MAX_POSITIONS. Mọi rule, khóa và giới hạn vốn khác giữ nguyên.",
+            "Mỗi mã Priority giữ 1 slot trong tổng số mã BOT, không vượt hạn mức.\n"
+            "Ví dụ tối đa 5, có 2 Priority → mã thường dùng tối đa 3 slot. "
+            "Slot giữ chỗ không tự tạo BUY; vẫn cần tín hiệu, tiền và room P1.",
         )
         self.priority_card.configure(fg_color="#27231A", border_color="#7A5A18")
         self.priority_card.grid(row=1, column=0, sticky="ew", padx=6, pady=6)
@@ -1048,7 +1065,7 @@ class ConnectionPopup:
         self.priority_picker = SymbolPicker(
             self.priority_card, self._priority_draft,
             columns=6, compact=True, placeholder="FPT, SSI",
-            on_change=lambda values: setattr(self, "_priority_draft", list(values)),
+            on_change=self._priority_changed,
             on_configure=self._configure_priority_symbol,
         )
         self.priority_picker.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(2, 9))
@@ -1057,27 +1074,31 @@ class ConnectionPopup:
             font=("Segoe UI", 12, "bold"), fg_color=self.WARN,
             hover_color="#D97706", text_color="#111318", command=self._save_priority,
         )
-        self.btn_save_priority.grid(row=3, column=1, sticky="e", padx=12, pady=(0, 10))
+        self.btn_save_priority.grid(row=4, column=1, sticky="e", padx=12, pady=(0, 10))
         self.priority_status = ctk.CTkLabel(
             self.priority_card, text="", font=("Segoe UI", 11),
             text_color=self.MUTED, anchor="w",
         )
-        self.priority_status.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 10))
+        self.priority_status.grid(row=4, column=0, sticky="ew", padx=12, pady=(0, 10))
         capital = ctk.CTkFrame(self.priority_card, fg_color="transparent")
         capital.grid(row=2, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 10))
         self.priority_capital_enabled = tk.BooleanVar(value=self.settings.priority_capital_enabled)
-        ctk.CTkSwitch(capital, text="VỐN RIÊNG", variable=self.priority_capital_enabled).pack(side="left", padx=(0, 10))
+        ctk.CTkSwitch(capital, text="VỐN RIÊNG", variable=self.priority_capital_enabled,
+                      command=self._refresh_priority_summary).pack(side="left", padx=(0, 10))
         ctk.CTkLabel(capital, text="TỔNG (triệu)").pack(side="left")
         self.priority_total = ctk.CTkEntry(capital, width=95)
         self.priority_total.insert(0, f"{self.settings.priority_total_capital / 1_000_000:g}")
         self.priority_total.pack(side="left", padx=8)
-        ctk.CTkButton(capital, text="CHIA ĐỀU", width=100, command=self._divide_priority_capital).pack(side="left")
+        ctk.CTkButton(capital, text="CHIA HẠN MỨC", width=120, command=self._divide_priority_capital).pack(side="left")
         self._hint_icon(capital,
-            "OFF: giữ cách tính vốn theo RULE. ON: tổng vốn riêng cho Priority, gồm phí mua. "
-            "CHIA ĐỀU chỉ sửa bản nháp; ⚙ chỉnh hạn mức và % sử dụng từng mã. Mã chưa có hạn mức không được mua. "
-            "Tiền để dành/tiền chưa phân bổ không chuyển cho mã khác. Vẫn chịu tiền khả dụng và room Phase 1. "
-            "Bấm LƯU PRIORITY để áp dụng; không tự mua/bán vị thế đang giữ."
+            "OFF: mỗi Priority giữ ngân sách NAV × P1 / số mã BOT tối đa.\n"
+            "ON: dùng hạn mức riêng gồm phí; 15 triệu × 50% → mua tối đa 7,5 triệu, giữ 7,5 triệu.\n"
+            "CHIA HẠN MỨC thay các hạn mức nháp bằng Tổng / số Priority, giữ % sử dụng. "
+            "Phải LƯU mới áp dụng, không tạo lệnh. Tiền giữ lại không cho mã khác mượn; vẫn chịu tiền thật và room P1."
         ).pack(side="left", padx=8)
+        self.priority_summary = ctk.CTkFrame(self.priority_card, fg_color=self.SURFACE_2, corner_radius=7)
+        self.priority_summary.grid(row=3, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 10))
+        self._refresh_priority_summary()
 
         holiday = self._card(
             body,
@@ -1678,6 +1699,29 @@ class ConnectionPopup:
             raise ValueError("Tổng vốn phải lớn hơn 0.")
         return value
 
+    def _priority_changed(self, values: list[str]) -> None:
+        self._priority_draft = list(values)
+        if hasattr(self, "priority_summary"):
+            self._refresh_priority_summary()
+
+    def _refresh_priority_summary(self) -> None:
+        if not hasattr(self, "priority_summary"):
+            return
+        for child in self.priority_summary.winfo_children():
+            child.destroy()
+        for column, title in enumerate(("MÃ", "HẠN MỨC", "DÙNG", "MUA TỐI ĐA", "GIỮ TIỀN")):
+            self.priority_summary.grid_columnconfigure(column, weight=1, uniform="priority-money")
+            ctk.CTkLabel(self.priority_summary, text=title, font=("Segoe UI", 11, "bold"),
+                         text_color=self.MUTED).grid(row=0, column=column, padx=5, pady=3)
+        enabled = self.priority_capital_enabled.get()
+        for index, symbol in enumerate(self.priority_picker.get(), 1):
+            row = self._priority_allocations.get(symbol, {"limit_vnd": 0.0, "use_pct": 100.0})
+            cap, pct = row["limit_vnd"] / 1_000_000, row["use_pct"]
+            values = (symbol, f"{cap:g} tr", f"{pct:g}%", f"{cap * pct / 100:g} tr", f"{cap * (1 - pct / 100):g} tr") if enabled else (symbol, "THEO RULE", "100%", "THEO P1", "—")
+            for column, value in enumerate(values):
+                ctk.CTkLabel(self.priority_summary, text=value, font=("Segoe UI", 12),
+                             text_color=self.TEXT).grid(row=index, column=column, padx=5, pady=2)
+
     def _divide_priority_capital(self) -> None:
         try:
             symbols = self.priority_picker.get()
@@ -1689,6 +1733,7 @@ class ConnectionPopup:
                 for symbol in symbols
             }
             self.priority_status.configure(text=f"BẢN NHÁP · {limit / 1_000_000:g} triệu/mã · cần LƯU", text_color=self.WARN)
+            self._refresh_priority_summary()
         except (ValueError, TypeError) as exc:
             self.priority_status.configure(text=str(exc), text_color=self.RED)
 
@@ -1715,6 +1760,7 @@ class ConnectionPopup:
                 if symbol not in self.priority_picker.get():
                     raise ValueError("Mã đã bị bỏ khỏi Priority.")
                 self._priority_allocations[symbol] = {"limit_vnd": cap, "use_pct": pct}
+                self._refresh_priority_summary()
                 self.priority_status.configure(
                     text=f"BẢN NHÁP · {symbol}: {cap / 1_000_000:g} triệu × {pct:g}% · cần LƯU", text_color=self.WARN,
                 )
@@ -1727,6 +1773,9 @@ class ConnectionPopup:
         priority = self.priority_picker.get()
         symbols = list(dict.fromkeys(self.watchlist_picker.get() + priority))
         try:
+            from ..rules.business import StaticRuleParameters
+            if len(priority) > StaticRuleParameters.from_dict(self.settings.rule_parameters).max_positions:
+                raise ValueError("Số mã Priority vượt số mã BOT tối đa trong RULE.")
             enabled = bool(self.priority_capital_enabled.get())
             total = self._priority_total_vnd() if enabled else config.finite_nonnegative(self.priority_total.get()) * 1_000_000
             allocations = config.normalize_priority_allocations(self._priority_allocations, priority)
@@ -1740,7 +1789,7 @@ class ConnectionPopup:
             self.priority_status.configure(text=f"LƯU THẤT BẠI · {exc}", text_color=self.RED)
             return
         self.priority_status.configure(
-            text=f"ĐÃ LƯU {len(priority)} MÃ · ƯU TIÊN BUY, BYPASS MAX_POSITIONS",
+            text=f"ĐÃ LƯU {len(priority)} MÃ · GIỮ {len(priority)} SLOT TRONG HẠN MỨC BOT",
             text_color=self.GREEN,
         )
 

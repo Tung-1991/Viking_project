@@ -305,7 +305,7 @@ def validate_priority_capital(total: float, symbols: Any, allocations: Any) -> N
 class AppSettings:
     watchlist: list[str] = field(default_factory=_watchlist_from_env)
     # Symbols promoted inside the watchlist. They keep every normal entry
-    # guard, but are ranked first and may bypass only the BOT slot quota.
+    # guard, are ranked first and own slots inside the total BOT quota.
     priority_symbols: list[str] = field(default_factory=list)
     priority_capital_enabled: bool = False
     priority_total_capital: float = 0.0

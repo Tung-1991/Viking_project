@@ -73,12 +73,12 @@ def test_equal_signal_times_use_fa_watchlist_priority() -> None:
     assert [row.symbol for row in rank_buy_decisions(decisions, watchlist)] == watchlist
 
 
-def test_priority_buy_ranks_first_and_does_not_consume_regular_slot() -> None:
+def test_priority_buy_ranks_first_and_uses_reserved_slot_inside_total() -> None:
     decisions = {
         "FPT": _buy("FPT", "2026-09-09T10:00:00+07:00"),
         "MBB": _buy("MBB", "2026-09-09T09:00:00+07:00"),
     }
-    allocator = BuySlotAllocator(1, ["TCB"])
+    allocator = BuySlotAllocator(2, ["TCB"], ["FPT"])
 
     outcomes = coordinate_buy_decisions(
         decisions,
@@ -93,8 +93,8 @@ def test_priority_buy_ranks_first_and_does_not_consume_regular_slot() -> None:
         ("FPT", "FPT", ""),
         ("MBB", None, "MAX_POSITIONS"),
     ]
-    assert allocator.used == 1
-    assert allocator.bypass_symbols == {"FPT"}
+    assert allocator.used == 2
+    assert allocator.priority_symbols == {"FPT"}
     assert allocator.occupied_symbols == {"TCB", "FPT"}
 
 
@@ -104,6 +104,34 @@ def test_only_deliberate_buy_waits_can_mature_without_a_new_signal() -> None:
     assert is_terminal_buy_block("BOT_OFF")
     assert is_terminal_buy_block("INSUFFICIENT_BUDGET_FOR_ROUND_LOT")
     assert is_terminal_buy_block("NO_LIVE_EXECUTION_PRICE")
+
+
+def test_unoccupied_priority_reserves_slot_and_can_use_it_after_regular_fill():
+    allocator = BuySlotAllocator(2, priority_symbols=["FPT"])
+    assert allocator.available == 1
+    assert allocator.reserve("MBB")
+    assert not allocator.reserve("VCB")
+    assert allocator.reserve("FPT")
+    assert allocator.used == 2
+    assert not allocator.reserve("SSI")
+    allocator.release("FPT")
+    assert not allocator.reserve("SSI")
+    assert allocator.reserve("FPT")
+
+
+def test_priority_does_not_force_sell_or_overfill_existing_full_book():
+    allocator = BuySlotAllocator(2, ["MBB", "VCB"], ["FPT"])
+    assert not allocator.reserve("FPT")
+    assert allocator.occupied_symbols == {"MBB", "VCB"}
+    allocator.release("MBB")
+    assert allocator.reserve("FPT")
+    assert allocator.used == 2
+
+
+def test_invalid_priority_count_blocks_all_new_entries():
+    allocator = BuySlotAllocator(1, priority_symbols=["FPT", "SSI"])
+    assert not allocator.reserve("FPT")
+    assert not allocator.reserve("MBB")
 
 
 def test_open_positions_pending_and_unknown_buys_all_own_slots() -> None:

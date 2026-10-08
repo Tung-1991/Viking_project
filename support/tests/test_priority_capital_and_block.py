@@ -87,6 +87,33 @@ def test_priority_off_preserves_original_slot_budget(tmp_path):
     assert _context(_builder(tmp_path), priority_capital_enabled=False)["order_budget"] == 12_000_000
 
 
+def test_default_priority_reserves_money_even_without_private_pool(tmp_path):
+    builder = _builder(tmp_path)
+    values = dict(priority_capital_enabled=False, priority_symbols=["FPT"],
+                  balance={"equity": 1_000_000_000, "availableCash": 100_000_000},
+                  exposure=0.9, max_positions=5)
+    normal = _context(builder, "MBB", **values)
+    priority = _context(builder, "FPT", **values)
+    assert normal["order_budget"] == 0
+    assert normal["priority_capital"]["reserved_cash"] == 180_000_000
+    assert priority["order_budget"] == 100_000_000
+    assert normal["priority_reserved"] == 1
+
+
+def test_va_four_caps_protect_savings_and_do_not_lend_them_to_idc(tmp_path):
+    symbols = ["MSN", "CTS", "HDB", "IDC"]
+    allocations = {value: {"limit_vnd": (5 if value == "HDB" else 15) * 1_000_000, "use_pct": 50.0}
+                   for value in symbols}
+    for symbol, expected in zip(symbols, [7_500_000, 7_500_000, 2_500_000, 7_500_000]):
+        result = _context(_builder(tmp_path), symbol, priority_symbols=symbols,
+                          priority_allocations=allocations, priority_total_capital=50_000_000,
+                          balance={"equity": 50_000_000, "availableCash": 50_000_000})
+        assert result["order_budget"] == expected
+    assert _context(_builder(tmp_path), "MBB", priority_symbols=symbols,
+                    priority_allocations=allocations, priority_total_capital=50_000_000,
+                    balance={"equity": 50_000_000, "availableCash": 50_000_000})["order_budget"] == 0
+
+
 def test_regular_symbols_only_spend_money_outside_priority_pool(tmp_path):
     context = _context(_builder(tmp_path), "MBB", balance={"equity": 100_000_000, "availableCash": 100_000_000})
     assert context["order_budget"] == 20_000_000

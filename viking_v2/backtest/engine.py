@@ -18,6 +18,7 @@ from ..rules.business import (
 )
 from ..rules.entry_filters import apply_buy_filters
 from ..trading.portfolio import (
+    bot_slot_state,
     order_budget,
     priority_capital_budget,
     round_lot_down,
@@ -37,15 +38,19 @@ from .models import BacktestConfig, BacktestEvent, BacktestResult, BacktestScena
 from .replay import ReplayDataStore
 
 
-def _priority_budget(settings, symbol, positions, budget, minimum_room, cash):
-    if not settings.priority_capital_enabled:
+def _priority_budget(settings, symbol, positions, budget, minimum_room, cash, *, envelope=0.0):
+    if not settings.priority_capital_enabled and not settings.priority_symbols:
         return budget, minimum_room
     costs = {value: item.quantity * item.avg_price * 1000.0
              + item.buy_fee * item.quantity / max(1, item.entry_quantity)
              for value, item in positions.items()}
+    envelope *= 1.0 + settings.buy_fee_rate
+    allocations = settings.priority_allocations if settings.priority_capital_enabled else {
+        value: {"limit_vnd": envelope, "use_pct": 100.0} for value in settings.priority_symbols}
+    total = settings.priority_total_capital if settings.priority_capital_enabled else envelope * len(settings.priority_symbols)
     limits = priority_capital_budget(
-        symbol, total=settings.priority_total_capital, symbols=settings.priority_symbols,
-        allocations=settings.priority_allocations, budget=budget, account_room=minimum_room,
+        symbol, total=total, symbols=settings.priority_symbols,
+        allocations=allocations, budget=budget, account_room=minimum_room,
         cash=cash, fee_rate=settings.buy_fee_rate, holding_costs=costs, pending_costs={},
     )
     return limits["budget"], limits["minimum_room"]
@@ -1159,7 +1164,7 @@ class BacktestEngine:
                         continue
                     open_price = opening_price(symbol, day)
                     if order.side == "BUY":
-                        if symbol in positions or (symbol not in settings.priority_symbols and len(set(positions) - set(settings.priority_symbols)) >= params.max_positions):
+                        if not bot_slot_state(params.max_positions, settings.priority_symbols, positions, symbol)["entry_available"]:
                             pending.pop(symbol, None)
                             continue
                         nav, stock_value = portfolio_value(day)
@@ -1182,7 +1187,8 @@ class BacktestEngine:
                                 minimum_room,
                                 capital_ledgers[symbol]["available"] / (1.0 + settings.buy_fee_rate),
                             )
-                        budget, minimum_room = _priority_budget(settings, symbol, positions, budget, minimum_room, cash)
+                        budget, minimum_room = _priority_budget(settings, symbol, positions, budget, minimum_room, cash,
+                                                              envelope=nav * exposure / params.max_positions)
                         if params.no_compound_enabled and symbol in capital_ledgers:
                             budget = min(budget, capital_ledgers[symbol]["available"])
                             minimum_room = min(minimum_room, capital_ledgers[symbol]["available"] / (1.0 + settings.buy_fee_rate))
@@ -1522,9 +1528,8 @@ class BacktestEngine:
                 # symbols reached first take the free slots and the rest are
                 # told the book is full, instead of queueing an order that
                 # would be silently dropped at tomorrow's open.
-                open_positions = len(set(positions) - set(settings.priority_symbols)) + sum(
-                    1 for order in pending.values() if order.side == "BUY" and order.symbol not in settings.priority_symbols
-                )
+                slots = bot_slot_state(params.max_positions, settings.priority_symbols,
+                                       set(positions) | {order.symbol for order in pending.values() if order.side == "BUY"}, symbol)
                 row = rows_by_symbol.get(symbol, {}).get(day)
                 if not row or not history[symbol]:
                     continue
@@ -1553,7 +1558,8 @@ class BacktestEngine:
                     current_stock_value=stock_value, pending_buy_value=0.0, available_cash=cash,
                 )
                 budget, _ = _priority_budget(settings, symbol, positions, budget,
-                                              max(0.0, nav * exposure - stock_value), cash)
+                                              max(0.0, nav * exposure - stock_value), cash,
+                                              envelope=nav * exposure / params.max_positions)
                 if params.no_compound_enabled and symbol in capital_ledgers:
                     budget = min(budget, capital_ledgers[symbol]["available"])
                 portfolio = {
@@ -1561,7 +1567,8 @@ class BacktestEngine:
                     "available_cash": cash,
                     "available_capital": max(0.0, budget),
                     "order_budget": max(0.0, budget),
-                    "open_positions": open_positions,
+                    "open_positions": slots["used"],
+                    "entry_slot_available": slots["entry_available"],
                     "pending_buy": symbol in pending and pending[symbol].side == "BUY",
                     "loss_streak": params.loss_lock_count if locked else loss_streaks[symbol],
                     "position_quantity": position.quantity if position else 0,
@@ -2201,7 +2208,7 @@ class BacktestEngine:
             if not order or not fill_is_eligible(order, stamp, fallback_open=fallback_open):
                 return
             if order.side == "BUY":
-                if symbol in positions or (symbol not in settings.priority_symbols and len(set(positions) - set(settings.priority_symbols)) >= params.max_positions):
+                if not bot_slot_state(params.max_positions, settings.priority_symbols, positions, symbol)["entry_available"]:
                     pending.pop(symbol, None)
                     return
                 nav, stock_value = portfolio_value()
@@ -2219,7 +2226,8 @@ class BacktestEngine:
                         minimum_room,
                         capital_ledgers[symbol]["available"] / (1.0 + settings.buy_fee_rate),
                     )
-                budget, minimum_room = _priority_budget(settings, symbol, positions, budget, minimum_room, cash)
+                budget, minimum_room = _priority_budget(settings, symbol, positions, budget, minimum_room, cash,
+                                                      envelope=nav * exposure / params.max_positions)
                 if params.no_compound_enabled and symbol in capital_ledgers:
                     budget = min(budget, capital_ledgers[symbol]["available"])
                     minimum_room = min(minimum_room, capital_ledgers[symbol]["available"] / (1.0 + settings.buy_fee_rate))
@@ -2667,14 +2675,16 @@ class BacktestEngine:
                     if until and not locked:
                         loss_streaks[symbol] = 0
                         loss_locked_until[symbol] = None
-                    open_positions = len(set(positions) - set(settings.priority_symbols)) + sum(1 for item in pending.values() if item.side == "BUY" and item.symbol not in settings.priority_symbols)
+                    slots = bot_slot_state(params.max_positions, settings.priority_symbols,
+                                           set(positions) | {item.symbol for item in pending.values() if item.side == "BUY"}, symbol)
                     exposure = params.exposure.get(current_phase, 0.0)
                     budget = order_budget(
                         nav=nav, exposure=exposure, max_positions=params.max_positions,
                         current_stock_value=stock_value, pending_buy_value=0.0, available_cash=cash,
                     )
                     budget, _ = _priority_budget(settings, symbol, positions, budget,
-                                                  max(0.0, nav * exposure - stock_value), cash)
+                                                  max(0.0, nav * exposure - stock_value), cash,
+                                                  envelope=nav * exposure / params.max_positions)
                     if params.no_compound_enabled and symbol in capital_ledgers:
                         budget = min(budget, capital_ledgers[symbol]["available"])
                     rule_context = {
@@ -2692,7 +2702,8 @@ class BacktestEngine:
                     portfolio_context = {
                         "nav": nav, "available_cash": cash,
                         "available_capital": max(0.0, budget), "order_budget": max(0.0, budget),
-                        "open_positions": open_positions,
+                        "open_positions": slots["used"],
+                        "entry_slot_available": slots["entry_available"],
                         "pending_buy": symbol in pending and pending[symbol].side == "BUY",
                         "loss_streak": params.loss_lock_count if locked else loss_streaks[symbol],
                         "position_quantity": position.quantity if position else 0,

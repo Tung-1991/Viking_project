@@ -10,6 +10,7 @@ import customtkinter as ctk
 from ..rules.business import protect_level
 from ..trading.market import market_phase
 from ..trading.portfolio import size_buy_order, validate_quantity
+from ..trading.validation import decision_is_fresh
 from .view import (
     COL_BORDER, COL_GRAY, COL_GREEN, COL_MUTED, COL_SETTLEMENT_BG, COL_SETTLEMENT_TEXT,
     COL_PREVIEW_TEXT, COL_RED, COL_SURFACE, COL_SURFACE_2, COL_TEXT, COL_WARN, FONT_BOLD,
@@ -772,11 +773,11 @@ class DashboardPanelsMixin:
             value.grid(row=1, column=0, sticky="ew", padx=9, pady=(1, 6))
             return value
 
-        self.preview_live_value = metric_card(0, "GIÁ TT")
-        self.preview_entry_value = metric_card(1, "GIÁ VÀO")
-        self.preview_qty_value = metric_card(2, "KL")
-        self.preview_cash_value = metric_card(3, "TIỀN CK")
-        self.preview_fee_value = metric_card(4, "FEE", COL_WARN)
+        self.preview_live_value = metric_card(0, "GIÁ TT", hint="Giá gần nhất bot nhận được; màu vàng là giá đang đứng hoặc ngoài phiên. Không bảo đảm đây là giá khớp.")
+        self.preview_entry_value = metric_card(1, "GIÁ VÀO", hint="Giá dùng để ước tính lệnh. LO dùng giá nhập; MARKET dùng giá hiện tại, giá khớp do sàn quyết định.")
+        self.preview_qty_value = metric_card(2, "KL", hint="AUTO tính từ vốn của đúng sổ REAL/PAPER, làm tròn lô 100. Nhập số lượng để đặt tay.\nVí dụ đủ tiền 450 CP → AUTO 400 CP.")
+        self.preview_cash_value = metric_card(3, "TIỀN CK", hint="Giá vào × khối lượng, chưa gồm phí mua; không phải tiền khả dụng tài khoản.\n100 CP × 32.150 đồng = 3.215.000 đồng.")
+        self.preview_fee_value = metric_card(4, "FEE", COL_WARN, "Phí mua ước tính, không gồm phí/thuế bán. Thiếu giá hoặc số lượng → —, không phải miễn phí.")
         self.preview_route_value = metric_card(
             5,
             "LỆNH",
@@ -825,6 +826,8 @@ class DashboardPanelsMixin:
 
         _tp_title, self.preview_tp_value, self.preview_tp_detail = level_card(0, 0, "TP MANUAL", COL_GREEN)
         _sl_title, self.preview_sl_value, self.preview_sl_detail = level_card(0, 1, "STOP LOSS", COL_RED)
+        _HoverHint(_tp_title, "Mốc TP của lệnh MANUAL đang nhập, không phải số tiền lãi chắc chắn.\nVí dụ mua 100, TP +7% → giá kích hoạt 107; khớp thực tế và phí quyết định lãi ròng.")
+        _HoverHint(_sl_title, "SL tính từ giá vốn khi vị thế có bật SL; kích hoạt bán 100% phần còn lại.\nMua 100, SL −3,5% → giá kích hoạt 96,5; không bảo đảm khớp đúng giá đó.")
         atr_title, self.preview_atr, self.preview_atr_detail = level_card(
             0, 2, "ATR14 · 1D", "#60A5FA",
         )
@@ -840,6 +843,9 @@ class DashboardPanelsMixin:
         self.preview_em_exit, self.preview_exit_value, self.preview_exit_detail = level_card(
             1, 2, "E · OFF", COL_RED,
         )
+        _HoverHint(self.preview_em_normal, "PROTECT theo đỉnh, không phải TP cố định. Dynamic là bảo vệ trước ARM.\nAUTO bán theo % đã đặt; ALERT chỉ ghi nhận. Các con số ở đây là preview, chưa có vị thế thì chưa có đỉnh thật.")
+        _HoverHint(self.preview_em_exit, "E dùng EMA SELL/RSI để thoát. AUTO bán 100% phần còn lại; ALERT không đặt lệnh.\nE độc lập với ARM/PROTECT; OFF là chưa gắn E cho lệnh MANUAL này.")
+        _HoverHint(self.preview_status_reason, lambda: self.preview_status_reason.cget("text"), placement="inside")
 
         rule_group.grid_columnconfigure(0, weight=1)
         for row in (1, 2, 3, 4):
@@ -862,7 +868,7 @@ class DashboardPanelsMixin:
             "P1: trạng thái VNINDEX từ dữ liệu 1D DNSE.\n"
             "P2: tín hiệu BUY/SELL từ các chỉ báo EMA/RSI đang bật.\n"
             "P3: vốn, số position và khóa bảo vệ.\n"
-            "SL luôn bật; TP, PROTECT và E gắn theo từng vị thế.",
+            "SL, TP, PROTECT và E bật/tắt theo từng vị thế; OFF chỉ chặn BUY BOT mới, vẫn quản lý vị thế.",
         )
         self.preview_rule_title = ctk.CTkLabel(
             rule_header, text="MUA · OFF", width=72, height=16,
@@ -885,7 +891,7 @@ class DashboardPanelsMixin:
                 _HoverHint(title_widget, hint, placement="inside")
             return card
 
-        phase1 = phase_card(1, "P1 · VNINDEX")
+        phase1 = phase_card(1, "P1 · VNINDEX", self._market_confirmation_hint)
         self.preview_rule_market = ctk.CTkLabel(
             phase1, text="VNINDEX --", width=1, height=16,
             font=("Cascadia Mono", 12), text_color=COL_PREVIEW_TEXT,
@@ -933,13 +939,9 @@ class DashboardPanelsMixin:
         phase3 = phase_card(
             3,
             "P3 · VỐN & KHÓA",
-            "VỊ THẾ: số mã đang giữ / số mã tối đa. VỐN/MÃ là mức vốn mục tiêu do Phase 1 chia.\n"
-            "AUTO 100 CP: hệ thống luôn tính theo vốn Phase 1 trước. Nếu vốn/mã không mua đủ "
-            "một lô, hệ thống chỉ fallback sang 100 CP khi room Phase 1, vốn no-compound và cash gồm phí đều còn đủ.\n"
-            "WHIPSAW GUARD: đếm số lần EMA cắt qua lại trong cửa sổ thời gian đã cấu hình. "
-            "Ví dụ 1 lần; khóa từ 3 lần trong 7 phiên. Chỉ khóa BUY mới, "
-            "không ảnh hưởng position đang giữ.\n"
-            "LỖ: số lệnh lỗ liên tiếp / mức khóa mã.",
+            "BOT: số mã đang giữ hoặc BUY chờ / tối đa. Priority giữ slot bên trong tổng.\n"
+            "Vốn/mã thường = NAV × P1 / tối đa; Priority vốn riêng dùng hạn mức × % sử dụng.\n"
+            "Whipsaw và LOSS/BLOCK chỉ chặn BUY BOT mới, không chặn SELL và không giữ tín hiệu để mua lại.",
         )
         self.preview_rule_phase3 = ctk.CTkLabel(
             phase3, text="--/-- · --/MÃ", width=1, font=("Cascadia Mono", 12),
@@ -1060,13 +1062,15 @@ class DashboardPanelsMixin:
         symbol: str | None = None,
     ) -> tuple[int, float, bool]:
         """Return quantity, target budget and whether the minimum-lot fallback was used."""
-        status = status if isinstance(status, dict) else self.bridge.read_status()
+        status = self._book_preview_status(status)
         target = str(symbol or self.symbol.get() or "").strip().upper()
         decisions = status.get("decisions") if isinstance(status.get("decisions"), dict) else {}
         decision = decisions.get(target) if isinstance(decisions.get(target), dict) else {}
         details = decision.get("details") if isinstance(decision.get("details"), dict) else {}
+        if details.get("updated_at") and not decision_is_fresh(decision, target, self.mode.get()):
+            details = {}
         checks = details.get("entry_checks") if isinstance(details.get("entry_checks"), dict) else {}
-        budget = _number(checks.get("order_budget") or checks.get("available_capital"))
+        budget = _number(checks.get("order_budget", checks.get("available_capital")))
         available_cash = _number(checks.get("available_cash"))
         nav = _number(checks.get("nav"))
         minimum_room = _number(checks.get("minimum_order_room"))
@@ -1099,10 +1103,46 @@ class DashboardPanelsMixin:
                 fit_callback()
         return quantity, budget, forced_minimum
 
+    def _book_preview_status(self, status: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Select the viewed book, never borrow a decision from the other book."""
+        status = status if isinstance(status, dict) else self.bridge.read_status()
+        mode = str(self.mode.get()).upper() if hasattr(self, "mode") else "PAPER"
+        books = status.get("decisions_by_mode")
+        if isinstance(books, dict):
+            decisions = books.get(mode) or {}
+        else:
+            default_paper = getattr(getattr(self, "settings", None), "paper_mode", True)
+            active = str(status.get("execution_mode") or ("PAPER" if status.get("paper_mode", default_paper) else "REAL")).upper()
+            decisions = status.get("decisions", {}) if active == mode else {}
+        selected = {}
+        for symbol, decision in decisions.items():
+            if not isinstance(decision, dict):
+                continue
+            details = decision.get("details") or {}
+            if str(details.get("execution_mode", mode)).upper() == mode:
+                selected[symbol] = decision
+        return {**status, "decisions": selected}
+
+    def _market_confirmation_hint(self) -> str:
+        current = getattr(self, "_preview_market_confirmation", {})
+        count, required = current.get("confirmation_count", 0), current.get("confirmation_required", 3)
+        state = str(current.get("candidate_state", "UNKNOWN"))
+        labels = {"UPTREND": "TĂNG", "DOWNTREND": "GIẢM", "ACCUMULATION": "TÍCH LŨY", "DISTRIBUTION": "PHÂN PHỐI"}
+        if current.get("override_enabled"):
+            headline = "OVERRIDE: đang dùng trạng thái và tỷ trọng nhập tay, không chờ xác nhận."
+        elif current.get("confirmation_pending"):
+            headline = f"Chờ đổi sang {labels.get(state, 'CHƯA CÓ')} · đã ghi nhận {count}/{required} phiên."
+        else:
+            headline = "Hiện không có trạng thái mới đang chờ xác nhận."
+        return (f"{headline}\n"
+                "1/3 = đã đạt 1 trong 3 phiên liên tiếp, không phải số lần bot quét hay xác nhận mua.\n"
+                "3 là setting RULE → P1 → Xác nhận (phiên), đổi được; ứng viên đổi thì đếm lại. "
+                "Trong lúc chờ vẫn dùng trạng thái đã xác nhận. OVERRIDE dùng tỷ trọng nhập tay.")
+
     def _refresh_full_order_preview(self, status: dict[str, Any] | None = None) -> None:
         if not hasattr(self, "preview_order_title"):
             return
-        status = status if isinstance(status, dict) else self.bridge.read_status()
+        status = self._book_preview_status(status)
         symbol = self.symbol.get().strip().upper()
         mode = self.mode.get()
         order_type = self.order_type.get().upper()
@@ -1150,8 +1190,8 @@ class DashboardPanelsMixin:
             )
         gross = entry_price * max(0, quantity) * 1000.0
         preview_capital = gross
-        estimated_fee = self._preview_buy_fee(gross, symbol, mode)
-        fee_value = _compact_vnd(estimated_fee) if estimated_fee is not None else "--"
+        estimated_fee = self._preview_buy_fee(gross, symbol, mode) if gross > 0 else None
+        fee_value = _compact_vnd(estimated_fee) if estimated_fee is not None else "—"
         working_dates = status.get("working_dates") or None
         phase, phase_label = market_phase(
             working_dates=working_dates,
@@ -1176,7 +1216,7 @@ class DashboardPanelsMixin:
         if invalid_reason:
             badge, badge_bg, badge_fg = "LỖI", "#5A1E1E", "#FFCDD2"
             reason = invalid_reason
-            route = "KHÔNG ĐẶT"
+            route = "CHẶN"
         elif auto_quantity:
             if forced_minimum:
                 badge, badge_bg, badge_fg = "AUTO 100", "#6B4A0B", "#FFF3B0"
@@ -1390,6 +1430,7 @@ class DashboardPanelsMixin:
     def _refresh_rule_preview(self, status: dict[str, Any], symbol: str) -> None:
         if not hasattr(self, "preview_rule_market"):
             return
+        status = self._book_preview_status(status)
         decisions = status.get("decisions") if isinstance(status.get("decisions"), dict) else {}
         decision = decisions.get(symbol) if isinstance(decisions.get(symbol), dict) else {}
         details = decision.get("details") if isinstance(decision.get("details"), dict) else {}
@@ -1416,10 +1457,9 @@ class DashboardPanelsMixin:
             text_color=COL_GREEN if bot_enabled else COL_RED,
         )
         market_details = details.get("market") if isinstance(details.get("market"), dict) else {}
+        self._preview_market_confirmation = market_details
         display_state = str(
-            market_details.get("display_state")
-            or market_details.get("candidate_state")
-            or market_state
+            market_state
             or "UNKNOWN"
         ).upper()
         state_labels = {
@@ -1455,7 +1495,7 @@ class DashboardPanelsMixin:
                 1, int(market_details.get("confirmation_required", 1) or 1),
             )
             market_notes.append(
-                f"XÁC NHẬN {confirmation_count}/{confirmation_required}"
+                f"CHỜ {state_labels.get(str(market_details.get('candidate_state', '')).upper(), '?')} {confirmation_count}/{confirmation_required}"
             )
         volume_confidence = str(market_details.get("volume_confidence") or "OFF").upper()
         if volume_confidence != "OFF":
@@ -1540,6 +1580,8 @@ class DashboardPanelsMixin:
         loss_locked = bool(checks.get("loss_blocked")) or bool(loss_limit and losses >= loss_limit)
         guard_warn = whipsaw_locked or loss_locked
         slot_summary = getattr(self, "_slot_summary", {})
+        if slot_summary.get("mode", self.mode.get()) != self.mode.get():
+            slot_summary = {}
         slot_used = int(slot_summary.get("used", open_positions) or 0)
         slot_max = int(slot_summary.get("max", max_positions) or max_positions)
         pending_buys = int(slot_summary.get("pending", 0) or 0)
@@ -1551,7 +1593,7 @@ class DashboardPanelsMixin:
         )
         phase3_parts = [f"BOT {slot_used}/{slot_max or '--'}"]
         if priority_positions:
-            phase3_parts.append(f"PRIORITY {priority_positions}")
+            phase3_parts.append(f"GIỮ {int(slot_summary.get('reserved', checks.get('priority_reserved', 0)) or 0)} SLOT")
         if manual_positions:
             phase3_parts.append(f"MANUAL {manual_positions}")
             phase3_parts.append(f"TỔNG {total_positions}")

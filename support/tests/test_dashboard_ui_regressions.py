@@ -114,6 +114,154 @@ class _EntryPauseState:
         return {"active": self.active}
 
 
+@pytest.mark.parametrize("mode,budget", [("REAL", 3_000_000), ("PAPER", 8_000_000)])
+def test_preview_selects_book_and_rejects_other_book(mode, budget):
+    subject = DashboardPanelsMixin()
+    subject.mode = _Value(mode)
+    subject.settings = SimpleNamespace(paper_mode=mode == "PAPER")
+    decision = lambda value, book: {"symbol": "FPT", "details": {"execution_mode": book,
+        "updated_at": time.time(), "entry_checks": {"order_budget": value, "available_cash": 100_000_000}}}
+    status = {"decisions": {"FPT": decision(3_000_000, "REAL")}, "decisions_by_mode": {
+        "REAL": {"FPT": decision(3_000_000, "REAL")}, "PAPER": {"FPT": decision(8_000_000, "PAPER")}}}
+    assert subject._suggested_order_quantity(10, status, "FPT")[1] == budget
+    status["decisions_by_mode"][mode] = {}
+    assert subject._suggested_order_quantity(10, status, "FPT")[0] == 0
+    status["decisions_by_mode"][mode] = {"FPT": decision(10_000_000, "PAPER" if mode == "REAL" else "REAL")}
+    assert subject._suggested_order_quantity(10, status, "FPT")[0] == 0
+
+
+def test_stale_preview_budget_and_explicit_zero_never_fall_back():
+    subject = DashboardPanelsMixin()
+    subject.mode = _Value("PAPER")
+    subject.settings = SimpleNamespace(paper_mode=True)
+    details = {"updated_at": time.time() - 60, "execution_mode": "PAPER", "entry_checks": {
+        "order_budget": 10_000_000, "available_cash": 100_000_000}}
+    status = {"decisions_by_mode": {"PAPER": {"FPT": {"details": details}}}}
+    assert subject._suggested_order_quantity(10, status, "FPT")[0] == 0
+    details["updated_at"] = time.time()
+    details["entry_checks"].update(order_budget=0, available_capital=10_000_000)
+    assert subject._suggested_order_quantity(10, status, "FPT")[0] == 0
+
+
+@pytest.mark.parametrize("quantity,missing", [(0, True), (100, False)])
+def test_main_preview_unknown_amount_is_dash_not_zero(quantity, missing):
+    subject = DashboardActionsMixin()
+    for key in ("lbl_order_value", "lbl_quote_symbol", "lbl_fee_preview", "lbl_tp_title", "lbl_sl_title", "lbl_tp_preview", "lbl_sl_preview"):
+        setattr(subject, key, _Label())
+    subject._refresh_main_quote_display = lambda: None
+    subject._refresh_full_order_preview = lambda: None
+    subject.symbol, subject.mode, subject.order_type = _Value("DGC"), _Value("PAPER"), _Value("MARKET")
+    subject.quantity, subject.tp, subject.sl = _Value(str(quantity) if quantity else ""), _Value("7%"), _Value("-3.5%")
+    subject._current_tick_price = 32.15
+    subject._suggested_order_quantity = lambda *_: (quantity, 0, False)
+    subject._preview_buy_fee = lambda value, *_: value * 0.00045
+    subject._preview_trigger = lambda key, raw: raw
+    subject._update_order_preview()
+    for key in ("lbl_fee_preview", "lbl_tp_preview", "lbl_sl_preview"):
+        assert (getattr(subject, key).options["text"] == "—") is missing
+
+
+@pytest.mark.parametrize("scaling", [1.0, 1.25])
+def test_compact_rules_priority_draft_and_read_only_previews(ui_root, monkeypatch, scaling):
+    import os
+    from pathlib import Path
+    import customtkinter as ctk
+    from viking_v2.config import AppSettings
+    from viking_v2.connections.dnse.client import DNSEClient
+    from viking_v2.connections import window as connection_window
+    from viking_v2.rules import window as rule_window
+    from viking_v2.trading.state import TradeStateStore
+
+    settings = AppSettings.from_dict({"watchlist": ["MSN", "CTS", "HDB", "IDC"],
+        "priority_symbols": ["MSN", "CTS", "HDB", "IDC"], "priority_capital_enabled": True,
+        "priority_total_capital": 50_000_000, "priority_allocations": {
+            value: {"limit_vnd": (5 if value == "HDB" else 15) * 1_000_000, "use_pct": 50}
+            for value in ["MSN", "CTS", "HDB", "IDC"]}})
+    monkeypatch.setattr(rule_window, "save_settings", lambda *_: None)
+    monkeypatch.setattr(connection_window, "save_settings", lambda *_: None)
+    client = DNSEClient(account_no="OFFLINE_UI")
+    ctk.set_appearance_mode("dark")
+    ctk.set_widget_scaling(scaling)
+    rule = connection = None
+    captures = os.getenv("VIKING_CAPTURE_UI") == "1"
+
+    def capture(top, name):
+        ui_root.update_idletasks()
+        ui_root.update()
+        if captures:
+            import ctypes
+            import tkinter as tk
+            from PIL import ImageGrab
+            settled = tk.BooleanVar(master=ui_root, value=False)
+            ui_root.after(180, lambda: settled.set(True))
+            ui_root.wait_variable(settled)
+            directory = Path(__file__).resolve().parents[2] / ".artifacts" / "ui-review"
+            directory.mkdir(parents=True, exist_ok=True)
+            hwnd = ctypes.windll.user32.GetParent(top.winfo_id())
+            ImageGrab.grab(window=hwnd).save(directory / f"{name}-{scaling}.png")
+
+    try:
+        rule = rule_window.RuleSettingsPopup(ui_root, settings, "OFFLINE_UI", lambda: None,
+            trade_state=TradeStateStore(Path(connection_window.config.RUNTIME_ROOT) / f"layout-{scaling}.json"))
+        rule.top.geometry("1080x720+0+0")
+        for name in rule.phase_tabs._tab_dict:
+            rule.phase_tabs.set(name)
+            capture(rule.top, name.split(" · ")[0].replace(" ", "-"))
+            body = rule.ma_period.master.master.master if name.startswith("PHASE 1") else (
+                rule.max_positions.master.master.master if name.startswith("PHASE 3") else rule.phase2_signal_card.master)
+            cards = [child for child in body.winfo_children() if isinstance(child, ctk.CTkFrame) and int(child.grid_info().get("row", -1)) == 1]
+            assert max(card.winfo_width() for card in cards) - min(card.winfo_width() for card in cards) <= 2
+            assert max(card.winfo_height() for card in cards) - min(card.winfo_height() for card in cards) <= 2
+        rule.tabs.set("E/M")
+        capture(rule.top, "exit")
+        assert abs(rule.exit_card.winfo_height() - rule.protect_card.winfo_height()) <= 2
+        rule.normal_sell.delete(0, "end")
+        rule.normal_sell.insert(0, "50")
+        rule._refresh_execution_preview()
+        assert "CHƯA LƯU" in rule.execution_preview["NORMAL"].cget("text")
+        assert "bán 50%" in rule.execution_preview["NORMAL"].cget("text")
+        assert settings.rule_parameters["normal_sell_pct"] == 100
+        rule.normal_dynamic.set(True)
+        assert "ATR ×" in rule.execution_preview["NORMAL"].cget("text")
+        rule.tabs.set("THỰC THI")
+        capture(rule.top, "execution")
+        rule.save()
+        assert "CHƯA LƯU" not in rule.execution_preview["NORMAL"].cget("text")
+        assert settings.rule_parameters["normal_sell_pct"] == 50
+        rule.loss_block.set(True)
+        assert rule.loss_lock_hours.cget("state") == "disabled"
+        rule._close()
+        rule = None
+
+        connection = connection_window.ConnectionPopup(ui_root, settings, "OFFLINE_UI", client, lambda: None)
+        connection.top.geometry("1080x720+0+0")
+        assert connection.dnse_key.cget("show") == "•"
+        connection.tabs.set("DNSE")
+        capture(connection.top, "connection")
+        connection.daily_stats_choice.set("CỘNG DỒN")
+        connection._refresh_stats_time_state()
+        assert connection.daily_stats_time.cget("state") == "disabled"
+        connection._save_daily_stats_settings()
+        assert settings.daily_stats_mode == "SINCE_RESET"
+        connection.tabs.set("MÃ CK")
+        capture(connection.top, "priority")
+        connection.priority_total.delete(0, "end")
+        connection.priority_total.insert(0, "60")
+        connection._divide_priority_capital()
+        assert connection._priority_allocations["HDB"]["limit_vnd"] == 15_000_000
+        assert connection._priority_allocations["HDB"]["use_pct"] == 50
+        assert settings.priority_allocations["HDB"]["limit_vnd"] == 5_000_000
+        connection._save_priority()
+        assert settings.priority_allocations["HDB"]["limit_vnd"] == 15_000_000
+    finally:
+        if rule and rule.top.winfo_exists():
+            rule._close()
+        if connection and connection.top.winfo_exists():
+            connection._close()
+        client.close()
+        ctk.set_widget_scaling(1.0)
+
+
 def test_bot_button_has_clear_on_pause_and_off_states() -> None:
     subject = DashboardActionsMixin()
     subject.bot_button = _Label()
@@ -572,9 +720,10 @@ def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> 
 
         assert not clashes, "control bị đè lên nhau: " + ", ".join(clashes)
         rule_popup = popups[0][1]
-        assert int(rule_popup.phase2_right_column.grid_info()["column"]) == 1
-        assert int(rule_popup.phase2_mode_card.grid_info()["row"]) == 0
-        assert int(rule_popup.phase2_confirmation_card.grid_info()["row"]) == 1
+        assert rule_popup.phase2_signal_card.master is rule_popup.phase2_mode_card.master
+        assert int(rule_popup.phase2_mode_card.grid_info()["row"]) == 1
+        assert int(rule_popup.phase2_mode_card.grid_info()["column"]) == 1
+        assert int(rule_popup.phase2_confirmation_card.grid_info()["row"]) == 2
         connection_popup = popups[1][1]
         assert connection_popup.otp_card.master is connection_popup.dnse_compact_row
         assert connection_popup.paper_card.master is connection_popup.dnse_compact_row
@@ -591,7 +740,7 @@ def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> 
         assert connection_popup.save_token_switch.cget("text") == "LƯU TOKEN"
         assert connection_popup.daily_stats_choice.get() == "THEO NGÀY"
         assert connection_popup.daily_stats_segment.cget("values") == [
-            "THEO NGÀY", "TỪ LẦN RESET",
+            "THEO NGÀY", "CỘNG DỒN",
         ]
         assert connection_popup.daily_stats_time.get() == "00:00"
         assert connection_popup.btn_save_daily_stats.cget("text") == "LƯU"

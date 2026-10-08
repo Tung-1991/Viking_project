@@ -473,7 +473,7 @@ def run(account_id: str | None = None) -> int:
                                     )
                                 bars = bars_by_symbol.get(symbol, [])
                                 portfolio_tick = dict(tick)
-                                if settings.priority_capital_enabled:
+                                if settings.priority_capital_enabled or settings.priority_symbols:
                                     portfolio_tick["ceiling_price"] = float((client.get_secdef(symbol) or {}).get("ceilingPrice", 0.0) or 0.0)
                                 if bars:
                                     portfolio_tick["daily_close"] = float(bars[-1].get("close", 0.0) or 0.0)

@@ -302,7 +302,7 @@ def test_exit_sell_controls_are_in_em_card_and_save_separately(ui_root, monkeypa
     rules = rule_window.RuleSettingsPopup(ui_root, settings, "PAPER", lambda: None)
     try:
         assert rules.exit_card.master is rules.exit_left_column
-        assert int(rules.exit_card.grid_info()["row"]) == 1
+        assert int(rules.exit_card.grid_info()["row"]) == 2
         assert rules.sell_ema_fast.master.master is rules.exit_card
         assert rules.sell_ema_slow.master.master is rules.exit_card
         assert rules.buy_rsi_period.get() == rules.rsi_period.get()

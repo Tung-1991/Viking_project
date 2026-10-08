@@ -81,6 +81,9 @@ class BacktestConfig:
             raise ValueError("Phase cố định không hợp lệ.")
         self.loss_lock_hours = max(0, int(self.loss_lock_hours or 0))
         self.priority_symbols = list(dict.fromkeys(str(x).strip().upper() for x in self.priority_symbols if str(x).strip()))
+        from ..rules.business import StaticRuleParameters
+        if len(self.priority_symbols) > StaticRuleParameters.from_dict(self.rule_parameters).max_positions:
+            raise ValueError("Số mã Priority vượt số vị thế BOT tối đa.")
         self.priority_allocations = config.normalize_priority_allocations(self.priority_allocations, self.priority_symbols)
         self.priority_total_capital = config.finite_nonnegative(self.priority_total_capital)
         if self.priority_capital_enabled:

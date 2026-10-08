@@ -6,6 +6,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 from ..models import OrderIntent, StrategyDecision
 from ..trading.orders import FINAL_STATUSES
+from ..trading.portfolio import bot_slot_state
 
 
 RETRYABLE_BUY_WAITS = frozenset({"BUY_CONFIRMATION_WAIT", "BUY_WINDOW_WAIT"})
@@ -134,7 +135,7 @@ def coordinate_buy_decisions(
                 blocked_by=str(disabled_reason or "BOT_OFF").upper(),
             ))
             continue
-        if not allocator.reserve(candidate.symbol, bypass_limit=candidate.is_priority):
+        if not allocator.reserve(candidate.symbol):
             output.append(CoordinatedBuy(candidate, blocked_by="MAX_POSITIONS"))
             continue
         attempt = plan(candidate)
@@ -164,7 +165,7 @@ class BuySlotAllocator:
         self,
         max_positions: int,
         occupied_symbols: Iterable[str] = (),
-        bypass_symbols: Iterable[str] = (),
+        priority_symbols: Iterable[str] = (),
     ):
         self.max_positions = max(1, int(max_positions or 1))
         self.occupied_symbols = {
@@ -172,10 +173,10 @@ class BuySlotAllocator:
             for symbol in occupied_symbols
             if str(symbol or "").strip()
         }
-        self.bypass_symbols = {
+        self.priority_symbols = {
             str(symbol or "").strip().upper()
-            for symbol in bypass_symbols
-            if str(symbol or "").strip().upper() in self.occupied_symbols
+            for symbol in priority_symbols
+            if str(symbol or "").strip()
         }
 
     @classmethod
@@ -217,30 +218,27 @@ class BuySlotAllocator:
             for symbol in priority_symbols
             if str(symbol or "").strip()
         }
-        return cls(max_positions, occupied, occupied & priority)
+        return cls(max_positions, occupied, priority)
 
     @property
     def used(self) -> int:
-        return len(self.occupied_symbols - self.bypass_symbols)
+        return len(self.occupied_symbols)
 
     @property
     def available(self) -> int:
-        return max(0, self.max_positions - self.used)
+        return max(0, self.max_positions - len(self.occupied_symbols | self.priority_symbols))
 
-    def reserve(self, symbol: str, *, bypass_limit: bool = False) -> bool:
+    def reserve(self, symbol: str) -> bool:
         normalized = str(symbol or "").strip().upper()
         if (
             not normalized
             or normalized in self.occupied_symbols
-            or (self.available <= 0 and not bypass_limit)
+            or not bot_slot_state(self.max_positions, self.priority_symbols, self.occupied_symbols, normalized)["entry_available"]
         ):
             return False
         self.occupied_symbols.add(normalized)
-        if bypass_limit:
-            self.bypass_symbols.add(normalized)
         return True
 
     def release(self, symbol: str) -> None:
         normalized = str(symbol or "").strip().upper()
         self.occupied_symbols.discard(normalized)
-        self.bypass_symbols.discard(normalized)

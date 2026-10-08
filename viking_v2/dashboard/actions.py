@@ -403,8 +403,8 @@ class DashboardActionsMixin:
         self.lbl_order_value.configure(
             text=f"{preview_capital:,.0f} ₫" if preview_capital > 0 else "--"
         )
-        fee = self._preview_buy_fee(preview_capital, symbol, self.mode.get())
-        fee_text = _compact_vnd(fee) if fee is not None else "--"
+        fee = self._preview_buy_fee(preview_capital, symbol, self.mode.get()) if gross > 0 else None
+        fee_text = _compact_vnd(fee) if fee is not None else "—"
         self.lbl_fee_preview.configure(
             text=fee_text,
             text_color=COL_WARN,
@@ -415,8 +415,8 @@ class DashboardActionsMixin:
         self.lbl_sl_title.configure(text=self._preview_trigger("SL", sl_raw))
         tp_pnl = self._projected_pnl(tp_raw, entry_price, quantity, preview_capital)
         sl_pnl = self._projected_pnl(sl_raw, entry_price, quantity, preview_capital)
-        tp_text = f"+{_compact_vnd(abs(tp_pnl))}" if tp_pnl is not None and tp_pnl >= 0 else "0"
-        sl_text = f"-{_compact_vnd(abs(sl_pnl))}" if sl_pnl is not None and sl_pnl <= 0 else "0"
+        tp_text = f"{ '+' if tp_pnl >= 0 else '-' }{_compact_vnd(abs(tp_pnl))}" if tp_pnl is not None else "—"
+        sl_text = f"{ '+' if sl_pnl > 0 else '-' }{_compact_vnd(abs(sl_pnl))}" if sl_pnl is not None else "—"
         self.lbl_tp_preview.configure(
             text=tp_text,
             text_color=COL_GREEN if tp_pnl is not None and tp_pnl >= 0 else COL_PREVIEW_TEXT,
@@ -887,6 +887,7 @@ class DashboardActionsMixin:
         )
 
     def _mode_changed(self, value: str) -> None:
+        self._slot_summary = {}
         self.settings.paper_mode = value == "PAPER"
         save_settings(self.settings, self.account_id)
         current = self.bridge.read_config()
@@ -2437,7 +2438,7 @@ class DashboardActionsMixin:
         details = decision.details if isinstance(decision.details, dict) else {}
         checks = details.get("entry_checks") if isinstance(details.get("entry_checks"), dict) else {}
         if decision.action == "BUY" and (
-            getattr(self.settings, "priority_capital_enabled", False)
+            getattr(self.settings, "priority_capital_enabled", False) or self.settings.priority_symbols
             or self.settings.rule_parameters.get("loss_lock_mode") == "BLOCK"
             or self.trade_state.loss_blocks(mode)
         ):
@@ -2447,9 +2448,13 @@ class DashboardActionsMixin:
             if fresh["loss_blocked"] or fresh["loss_streak"] >= int(self.settings.rule_parameters.get("loss_lock_count", 3)):
                 from ..rules.planner import PlanResult
                 return PlanResult(None, "LOCKED_AFTER_LOSSES")
+            if not fresh["entry_slot_available"]:
+                from ..rules.planner import PlanResult
+                return PlanResult(None, "MAX_POSITIONS")
             details["order_budget"] = min(float(details.get("order_budget", 0.0) or 0.0), fresh["order_budget"])
             checks.update(minimum_order_room=fresh["minimum_order_room"], priority_capital=fresh["priority_capital"])
-            checks["priority_capital_enabled"] = self.settings.priority_capital_enabled
+            checks["priority_capital_enabled"] = bool(fresh["priority_capital"])
+            checks["buy_budget_price"] = fresh["buy_budget_price"] or checks.get("buy_budget_price", 0.0)
         portfolio = {
             "order_budget": details.get("order_budget", 0.0),
             "trade_id": details.get("trade_id", ""),
@@ -2508,7 +2513,7 @@ class DashboardActionsMixin:
             lock_mode=str(params.get("loss_lock_mode", "TIMED")),
         ):
             return "LOCKED_AFTER_LOSSES"
-        if not self.settings.priority_capital_enabled:
+        if not self.settings.priority_capital_enabled and not self.settings.priority_symbols:
             return ""
         broker = self.paper if intent.execution_mode == "PAPER" else self.real
         if intent.execution_mode == "REAL":
@@ -2521,6 +2526,8 @@ class DashboardActionsMixin:
         context = self._build_entry_limits(intent.symbol, intent.execution_mode, quote,
                                          balance, positions, exposure, intent.id,
                                          fee_rate=quote.get("buy_fee_rate"))
+        if not context["entry_slot_available"]:
+            return "MAX_POSITIONS"
         price = intent.limit_price if intent.order_type == "LO" else _price_unit(
             (self.real.get_secdef(intent.symbol) or {}).get("ceilingPrice", 0.0)
         )
@@ -2745,8 +2752,10 @@ class DashboardActionsMixin:
             priority_symbols=getattr(self.settings, "priority_symbols", ()),
         )
         self._slot_summary = {
+            "mode": mode,
             "used": allocator.used, "max": allocator.max_positions,
-            "priority": len(allocator.bypass_symbols),
+            "priority": len(allocator.priority_symbols),
+            "reserved": len(allocator.priority_symbols - allocator.occupied_symbols),
             "bot_open": len(bot_symbols),
             "pending": sum(
                 1 for item in current_intents

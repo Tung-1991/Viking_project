@@ -1028,6 +1028,8 @@ class StaticRule:
                 "loss_blocked": bool(portfolio.get("loss_blocked", False)),
                 "priority_capital": portfolio.get("priority_capital", {}),
                 "priority_capital_enabled": bool(portfolio.get("priority_capital")),
+                "priority_reserved": int(portfolio.get("priority_reserved", 0) or 0),
+                "entry_slot_available": bool(portfolio.get("entry_slot_available", int(portfolio.get("open_positions", 0) or 0) < self.params.max_positions)),
                 "buy_budget_price": float(portfolio.get("buy_budget_price", 0.0) or 0.0),
                 "whipsaw_enabled": self.params.whipsaw_enabled,
                 "whipsaw_crossovers": crosses,
@@ -1081,10 +1083,8 @@ class StaticRule:
         details["whipsaw_crossovers"] = crosses
         if self.params.whipsaw_enabled and crosses >= self.params.whipsaw_n:
             return StrategyDecision("WAIT", symbol, "WHIPSAW_LOCK", signal=signal, market_state=market_state, details=details)
-        if (
-            int(portfolio.get("open_positions", 0) or 0) >= self.params.max_positions
-            and not bool(context.get("priority_entry", False))
-        ):
+        if not bool(portfolio.get("entry_slot_available",
+                                   int(portfolio.get("open_positions", 0) or 0) < self.params.max_positions)):
             return StrategyDecision("WAIT", symbol, "MAX_POSITIONS", signal=signal, market_state=market_state, details=details)
         if float(portfolio.get("available_capital", 0.0) or 0.0) <= 0:
             return StrategyDecision("WAIT", symbol, "NO_AVAILABLE_CAPITAL", signal=signal, market_state=market_state, details=details)

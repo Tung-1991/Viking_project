@@ -154,6 +154,20 @@ def affordable_quantity(budget_vnd: float, price_board: float) -> int:
     return round_lot_down(max(0.0, float(budget_vnd or 0.0)) / price_vnd)
 
 
+def bot_slot_state(max_positions: int, priority_symbols: Iterable[str], occupied_symbols: Iterable[str], symbol: str = "") -> dict[str, Any]:
+    """Priority owns slots inside the total quota, including while unoccupied."""
+    maximum = max(1, int(max_positions))
+    priority = {str(value).strip().upper() for value in priority_symbols if str(value).strip()}
+    occupied = {str(value).strip().upper() for value in occupied_symbols if str(value).strip()}
+    target = str(symbol).strip().upper()
+    regular_used = len(occupied - priority)
+    regular_limit = max(0, maximum - len(priority))
+    allowed = (len(priority) <= maximum and len(occupied) < maximum and target not in occupied
+               and (target in priority or regular_used < regular_limit))
+    return {"used": len(occupied), "reserved": len(priority - occupied),
+            "regular_used": regular_used, "regular_limit": regular_limit, "entry_available": allowed}
+
+
 def priority_capital_budget(
     symbol: str, *, total: float, symbols: Iterable[str], allocations: dict[str, Any],
     budget: float, account_room: float, cash: float, fee_rate: float,
@@ -367,15 +381,19 @@ class PortfolioContextBuilder:
             cash / (1.0 + max(0.0, float(self.buy_fee_rate() or 0.0))),
         )
         priority_capital = {}
-        if priority_capital_enabled:
+        if priority_capital_enabled or priority_symbols:
             holding_costs: dict[str, float] = {}
             for row in rows:
                 value = str(row.get("symbol", "")).upper()
                 cost = position_quantity(row) * (position_cost(row) or position_price(row)) * 1000.0 * (1.0 + fee_rate)
                 holding_costs[value] = holding_costs.get(value, 0.0) + cost
+            envelope = stock_exposure_limit(nav, exposure) / max(1, max_positions) * (1.0 + fee_rate)
+            allocations = (priority_allocations or {}) if priority_capital_enabled else {
+                value: {"limit_vnd": envelope, "use_pct": 100.0} for value in priority_symbols}
+            total = priority_total_capital if priority_capital_enabled else envelope * len(priority_symbols)
             priority_capital = priority_capital_budget(
-                symbol, total=priority_total_capital, symbols=priority_symbols,
-                allocations=priority_allocations or {}, budget=budget,
+                symbol, total=total, symbols=priority_symbols,
+                allocations=allocations, budget=budget,
                 account_room=minimum_order_room, cash=cash, fee_rate=fee_rate,
                 holding_costs=holding_costs, pending_costs=pending_costs, pending_cash=pending_cash,
             )
@@ -418,6 +436,8 @@ class PortfolioContextBuilder:
             lock_mode=loss_lock_mode,
             now=now,
         )
+        slots = bot_slot_state(max_positions, priority_set,
+                               bot_open_symbols | {item.symbol for item in bot_pending_buys}, symbol)
         context: dict[str, Any] = {
             "nav": nav,
             "available_cash": cash,
@@ -429,17 +449,14 @@ class PortfolioContextBuilder:
             "buy_fee_rate": max(0.0, float(self.buy_fee_rate() or 0.0)),
             # max_positions is a BOT quota. MANUAL/EXTERNAL holdings still
             # consume cash/exposure above, but never consume a BOT slot.
-            "open_positions": len(
-                (
-                    bot_open_symbols
-                    | {str(item.symbol or "").upper() for item in bot_pending_buys}
-                ) - priority_set
-            ),
+            "open_positions": slots["used"],
+            "entry_slot_available": slots["entry_available"],
+            "priority_reserved": slots["reserved"],
             "pending_buy": bool(self.queue.find_active(symbol, side="BUY", execution_mode=mode)),
             "loss_streak": active_loss_streak,
             "loss_blocked": symbol in self.trades.loss_blocks(mode),
             "priority_capital": priority_capital,
-            "buy_budget_price": board_price(tick.get("ceiling_price", 0.0)) if priority_capital_enabled else 0.0,
+            "buy_budget_price": board_price(tick.get("ceiling_price", 0.0)) if priority_capital else 0.0,
         }
         action = action_for_symbol(
             corporate_actions or [],

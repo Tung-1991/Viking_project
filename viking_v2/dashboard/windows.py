@@ -380,21 +380,22 @@ def minimize_popup(popup: Any) -> bool:
 
 
 class _HoverHint:
-    def __init__(self, widget: Any, text: str, placement: str = "side"):
+    def __init__(self, widget: Any, text: str | Callable[[], str], placement: str = "side"):
         self.widget, self.text, self.popup = widget, text, None
         self.placement = placement
         widget.bind("<Enter>", self._show, add="+")
         widget.bind("<Leave>", self._hide, add="+")
 
     def _show(self, _event: Any = None) -> None:
-        if self.popup or not self.text:
+        text = self.text() if callable(self.text) else self.text
+        if self.popup or not text:
             return
         # Keep the hint inside the same Tk window. On Windows with DPI scaling,
         # mixing winfo_root* coordinates with a new Toplevel can place the hint
         # hundreds of pixels away from its icon.
         host = self.widget.winfo_toplevel()
         self.popup = tk.Label(
-            host, text=self.text, justify="left", wraplength=780,
+            host, text=text, justify="left", wraplength=min(780, max(240, host.winfo_width() - 56)),
             bg="#252A31", fg="#F5F7FA", padx=16, pady=14,
             font=HINT_FONT, relief="solid", borderwidth=2,
         )
