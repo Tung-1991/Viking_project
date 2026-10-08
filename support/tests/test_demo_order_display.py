@@ -8,6 +8,7 @@ import pytest
 from viking_v2.config import AppSettings
 from viking_v2.dashboard.actions import DashboardActionsMixin
 from viking_v2.dashboard.tables import DashboardTablesMixin
+from viking_v2.dashboard.view import _active_order_notice
 from viking_v2.models import OrderIntent, TradeCycle
 
 
@@ -203,7 +204,7 @@ def test_manual_confirmation_bypass_only_skips_yes_no(monkeypatch, mode, side, s
     monkeypatch.setattr(module.messagebox, "askyesno", lambda *args, **kwargs: confirmations.append(args) or answer)
     subject, sent = manual_subject({})
     subject.mode = SimpleNamespace(get=lambda: mode)
-    subject.settings.skip_real_order_confirmation = skip
+    subject.settings.skip_order_popups = skip
     subject._submit(side)
     asking = mode == "REAL" and not skip
     assert len(confirmations) == int(asking)
@@ -222,11 +223,12 @@ def test_real_confirmation_bypass_does_not_bypass_invalid_inputs(monkeypatch, fi
     monkeypatch.setattr(module.messagebox, "askyesno", lambda *args, **kwargs: confirmations.append(args) or True)
     subject, sent = manual_subject({})
     subject.mode = SimpleNamespace(get=lambda: "REAL")
-    assert subject.settings.skip_real_order_confirmation is True
+    assert subject.settings.skip_order_popups is True
     setattr(subject, field, SimpleNamespace(get=lambda: value))
     subject._submit("BUY")
-    assert not sent and errors
+    assert not sent and not errors
     assert not confirmations
+    assert subject._manual_order_notice["hint"]
 
 
 def test_confirmation_bypass_keeps_closed_phase_and_deferred_processing(monkeypatch):
@@ -243,6 +245,59 @@ def test_confirmation_bypass_keeps_closed_phase_and_deferred_processing(monkeypa
     assert handoffs[0][1] == {"phase": "CLOSED", "process_immediately": False}
 
 
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+@pytest.mark.parametrize("status", ["WAITING_TOKEN", "REJECTED", "FAILED"])
+@pytest.mark.parametrize("skip", [True, False])
+def test_manual_order_messages_follow_popup_option_and_remain_visible_inline(monkeypatch, mode, status, skip):
+    import viking_v2.dashboard.actions as module
+    dialogs = []
+    monkeypatch.setattr(module.messagebox, "askyesno", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(module.messagebox, "showerror", lambda *args, **kwargs: dialogs.append(args))
+    monkeypatch.setattr(module.messagebox, "showwarning", lambda *args, **kwargs: dialogs.append(args))
+    subject, _ = manual_subject({})
+    subject.mode = SimpleNamespace(get=lambda: mode)
+    subject.settings.skip_order_popups = skip
+
+    class Label:
+        def __init__(self): self.options = {}
+        def configure(self, **kwargs): self.options.update(kwargs)
+
+    subject.preview_status_reason, subject.preview_status_badge = Label(), Label()
+    subject._refresh_local = lambda: subject.preview_status_reason.configure(text="preview refreshed")
+
+    def submit(intent, **kwargs):
+        intent.status = status
+        intent.result = "TỪ CHỐI · Không đủ tiền" if status != "WAITING_TOKEN" else ""
+        return intent
+
+    subject.execution.submit = submit
+    subject._submit("BUY")
+    assert len(dialogs) == int(not skip)
+    assert subject.preview_status_reason.options["text"] != "preview refreshed"
+    assert _active_order_notice(subject)["hint"]
+    assert subject.preview_status_badge.options["text"] == ("CHỜ" if status == "WAITING_TOKEN" else "CHẶN")
+
+
+@pytest.mark.parametrize("changed_field", ["mode", "symbol", "order_type", "quantity", "price", "sl", "tp"])
+def test_inline_order_notice_does_not_follow_another_ticket(changed_field):
+    subject, _ = manual_subject({})
+    subject._show_order_notice("Đặt lệnh", "Hạn mức không đủ")
+    assert _active_order_notice(subject)
+    setattr(subject, changed_field, SimpleNamespace(get=lambda: "changed"))
+    assert _active_order_notice(subject) == {}
+
+
+def test_inline_order_notice_expires_after_fifteen_seconds(monkeypatch):
+    import viking_v2.dashboard.view as view_module
+    clock = [100.0]
+    monkeypatch.setattr(view_module.time, "monotonic", lambda: clock[0])
+    subject, _ = manual_subject({})
+    subject._show_order_notice("Đặt lệnh", "Hạn mức không đủ")
+    assert _active_order_notice(subject)
+    clock[0] += 15
+    assert _active_order_notice(subject) == {}
+
+
 @pytest.mark.parametrize("field,value", [
     ("price", "nan"), ("price", "inf"), ("sl", "nan%"), ("tp", "inf%"),
     ("sl", "nan"), ("tp", "0%"),
@@ -252,6 +307,7 @@ def test_invalid_manual_numeric_input_is_reported_without_queuing(monkeypatch, f
     errors = []
     monkeypatch.setattr(module.messagebox, "showerror", lambda *args, **_kw: errors.append(args))
     subject, sent = manual_subject({})
+    subject.settings.skip_order_popups = False  # Explicit opt-in to modal errors.
     messages = []
     subject._log = lambda *args: messages.append(args)
     setattr(subject, field, SimpleNamespace(get=lambda: value))
@@ -270,7 +326,8 @@ def test_manual_auto_block_is_logged_without_creating_or_submitting_order(monkey
     subject._preview_auto_feedback = {"hint": "THIẾU TIỀN CHO 100 CP\nTiền khả dụng: 2,192 đ."}
     subject._log = lambda *args: messages.append(args)
     subject._submit("BUY")
-    assert not sent and len(errors) == len(messages) == 1
+    assert not sent and errors == [] and len(messages) == 1
+    assert "2,192 đ" in subject._manual_order_notice["hint"]
     assert "PAPER BUY MSN" in messages[0][0] and "2,192 đ" in messages[0][0]
     assert messages[0][1] == "manual"
 

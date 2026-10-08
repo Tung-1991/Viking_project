@@ -389,12 +389,14 @@ def test_failed_additional_buy_keeps_existing_closed_notification_record(tmp_pat
 
 
 @pytest.mark.parametrize("reason,waiting", [("CHỜ GIÁ TRẦN TÍNH KL", True), ("HẠN MỨC CHƯA ĐỦ 100 CP", False)])
-def test_manual_zero_quantity_reports_actual_preview_reason(monkeypatch, reason, waiting):
+@pytest.mark.parametrize("skip", [True, False])
+def test_manual_zero_quantity_reports_actual_preview_reason(monkeypatch, reason, waiting, skip):
     import viking_v2.dashboard.actions as module
     view = DashboardActionsMixin()
     field = lambda value: SimpleNamespace(get=lambda: value)
     view.symbol, view.order_type, view.quantity = field("MSN"), field("MARKET"), field("")
     view.mode = field("PAPER")
+    view.settings = config.AppSettings(skip_order_popups=skip)
     logs = []
     view._log = lambda *args: logs.append(args)
     view._current_tick_price = 70
@@ -403,5 +405,6 @@ def test_manual_zero_quantity_reports_actual_preview_reason(monkeypatch, reason,
     errors = []
     monkeypatch.setattr(module.messagebox, "showerror", lambda _title, text, **_kwargs: errors.append(text))
     view._submit("BUY")
-    assert errors == [view._preview_auto_feedback["hint"]]
+    assert errors == ([] if skip else [view._preview_auto_feedback["hint"]])
+    assert view._manual_order_notice["hint"] == view._preview_auto_feedback["hint"]
     assert len(logs) == 1 and reason in logs[0][0] and logs[0][1] == "manual"

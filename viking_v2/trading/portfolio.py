@@ -210,6 +210,8 @@ def priority_capital_budget(
         "limit_vnd": limit, "use_pct": use_pct, "buy_limit_vnd": buy_limit,
         "per_order_limit_vnd": per_order_limit, "max_orders": max_orders,
         "committed_vnd": committed.get(symbol, 0.0), "reserved_cash": reserved,
+        "holding_cost_vnd": max(0.0, holding_costs.get(symbol, 0.0)),
+        "pending_cost_vnd": max(0.0, pending_costs.get(symbol, 0.0)),
         "reason": "" if allowed > 0 else "PRIORITY_CAPITAL_LIMIT",
     }
 
@@ -384,6 +386,11 @@ class PortfolioContextBuilder:
         pending_value = 0.0
         pending_costs: dict[str, float] = {}
         pending_cash = 0.0
+        symbol_pending_buys = [item for item in pending_buys if item.symbol == symbol and item.remaining_quantity > 0]
+        pending_summary = {
+            "symbol_pending_buy_count": len(symbol_pending_buys),
+            "symbol_pending_buy_quantity": sum(item.remaining_quantity for item in symbol_pending_buys),
+        }
         fee_rate = max(0.0, float(self.buy_fee_rate() or 0.0))
         for item in pending_buys:
             price = item.limit_price or float(item.details.get("reservation_price", 0) or 0)
@@ -466,6 +473,7 @@ class PortfolioContextBuilder:
                 "exposure": exposure, "exposure_room": exposure_room,
                 "current_stock_value": current_value, "pending_buy_value": pending_value,
                 "pending_buy_cash": pending_cash, "no_compound_limited": no_compound_limited,
+                **pending_summary,
                 "order_budget": budget, "available_capital": budget,
                 "minimum_order_room": minimum_order_room, "buy_fee_rate": fee_rate,
                 "priority_capital": priority_capital,
@@ -519,6 +527,7 @@ class PortfolioContextBuilder:
             "pending_buy_value": pending_value,
             "available_capital": budget,
             "order_budget": budget,
+            **pending_summary,
             "minimum_order_room": minimum_order_room,
             "buy_fee_rate": max(0.0, float(self.buy_fee_rate() or 0.0)),
             # max_positions is a BOT quota. MANUAL/EXTERNAL holdings still

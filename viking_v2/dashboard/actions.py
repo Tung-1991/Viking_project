@@ -41,7 +41,7 @@ from ..trading.validation import decision_is_fresh, decisions_for_mode, quote_is
 from .view import (
     COL_GRAY, COL_GREEN, COL_MUTED, COL_PREVIEW_TEXT, COL_RED, COL_SURFACE_2,
     COL_TEXT, COL_TITLE, COL_WARN, _cash, _compact_vnd, _display_price, _equity, _number,
-    _price_unit,
+    _price_unit, _order_form_key, _render_order_notice,
 )
 from .info import InfoPopup
 from .windows import (
@@ -1462,14 +1462,32 @@ class DashboardActionsMixin:
             daemon=True,
         ).start()
 
+    def _show_order_notice(self, title: str, explanation: str, *, warning: bool = False) -> None:
+        """Report manual order failures inline; popup preference changes no guard."""
+        explanation = str(explanation or title)
+        self._manual_order_notice = {
+            "form": _order_form_key(self), "until": time.monotonic() + 15.0,
+            "summary": explanation.splitlines()[0], "hint": explanation,
+            "level": "WARNING" if warning else "ERROR",
+        }
+        _render_order_notice(self)
+        if not self.settings.skip_order_popups:
+            show = messagebox.showwarning if warning else messagebox.showerror
+            show(title, explanation, parent=self)
+
     def _submit(self, side: str) -> None:
+        self._manual_order_notice = {}
         symbol = self.symbol.get().strip().upper()
         kind = self.order_type.get()
         mode = self.mode.get()
 
         def blocked(title: str, explanation: str) -> None:
             self._log(f"{mode} {side} {symbol} · {kind} · CHƯA GỬI: {explanation}", "manual")
-            messagebox.showerror(title, explanation, parent=self)
+            feedback = getattr(self, "_preview_auto_feedback", {})
+            DashboardActionsMixin._show_order_notice(
+                self, title, explanation,
+                warning=bool(feedback.get("pending") and explanation == feedback.get("hint")),
+            )
 
         limit_price = 0.0
         if kind == "LO":
@@ -1508,7 +1526,7 @@ class DashboardActionsMixin:
                     feedback.get("hint") or feedback.get("reason") or "Chưa tính được khối lượng AUTO. Xem PREVIEW.",
                 )
                 return
-        if mode == "REAL" and not self.settings.skip_real_order_confirmation:
+        if mode == "REAL" and not self.settings.skip_order_popups:
             answer = messagebox.askyesno(
                 "Xác nhận lệnh REAL",
                 f"{side} {quantity} {symbol} • {kind}" + (f" @ {_display_price(limit_price)}" if kind == "LO" else ""),
@@ -1617,10 +1635,13 @@ class DashboardActionsMixin:
             self.bridge.write_config(RuntimeConfig(self.settings.watchlist, current.paper_mode, current.bot_enabled))
         DashboardActionsMixin._log_order_progress(self, result)
         if result.status == "WAITING_TOKEN":
-            messagebox.showwarning("Trading token", "Lệnh chưa gửi; chờ OTP và chỉ có hiệu lực trong phiên đủ điều kiện đầu tiên.", parent=self)
+            DashboardActionsMixin._show_order_notice(
+                self, "Trading token", "CHỜ OTP · Lệnh chưa gửi DNSE; chỉ xử lý trong phiên đủ điều kiện.", warning=True,
+            )
         elif result.status in {"REJECTED", "FAILED"}:
-            messagebox.showerror("Order", result.result or result.status, parent=self)
+            DashboardActionsMixin._show_order_notice(self, "Order", result.result or result.status)
         self._refresh_local()
+        _render_order_notice(self)
 
     def _cancel_selected(self) -> None:
         mode = "REAL" if self.tabs.get() == "CKCS REAL" else "PAPER"

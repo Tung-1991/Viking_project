@@ -9,6 +9,7 @@ from viking_v2.dashboard.actions import DashboardActionsMixin
 from viking_v2.dashboard.panels import DashboardPanelsMixin, _auto_quantity_feedback
 from viking_v2.connections.dnse.client import DNSEClient
 from viking_v2.rules.state import RuleStateStore
+from viking_v2.models import OrderIntent
 from viking_v2.services.daemon import tick_with_price_bound
 from viking_v2.trading.market import VN_TZ
 from viking_v2.trading.orders import OrderQueue
@@ -92,6 +93,62 @@ def test_msn_zero_budget_explains_reserved_cap_not_empty_account(tmp_path):
     assert view._suggested_order_quantity(74.2, {"ticks": {"MSN": {"ceiling_price": 80.4}}}, "MSN") == (0, 0, False)
     assert view._preview_auto_feedback["reason"] == "VỐN ĐÃ GIỮ CHO PRIORITY"
     assert "40,000,000 đ" in view._preview_auto_feedback["hint"]
+
+
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+@pytest.mark.parametrize("pending_status", ["PENDING", "WAITING_TOKEN", "WORKING"])
+def test_vps_pending_msn_buy_uses_remaining_cap_and_recovers_after_cancel(tmp_path, mode, pending_status):
+    view = ticket(tmp_path, mode)
+    view.settings.buy_fee_pct = 0.12
+    view._fee_rates = {("MSN", "BUY"): 0.0012}
+    view.settings.priority_allocations = {
+        symbol: {"limit_vnd": (5 if symbol == "IDC" else 15) * 1_000_000, "use_pct": 100}
+        for symbol in ("MSN", "CTS", "HDB", "IDC")
+    }
+    status = {"ticks": {"MSN": {"price": 74.2, "ceiling_price": 79.3}}}
+    assert view._suggested_order_quantity(74.2, status, "MSN")[0] == 100
+    intent = OrderIntent.create("MSN", "BUY", 100, "MARKET", execution_mode=mode, source="MANUAL")
+    intent.details["reservation_price"] = 74.2
+    intent.status = pending_status
+    view.queue.add(intent)
+    checks = view._preview_entry_checks("MSN", status)
+    assert checks["available_cash"] == 50_000_000
+    assert checks["symbol_pending_buy_count"] == 1
+    assert checks["symbol_pending_buy_quantity"] == 100
+    assert checks["priority_capital"]["pending_cost_vnd"] == pytest.approx(7_428_904)
+    assert checks["priority_capital"]["holding_cost_vnd"] == 0
+    quantity, budget, forced = view._suggested_order_quantity(74.2, status, "MSN")
+    assert (quantity, forced) == (0, False)
+    assert budget == pytest.approx((15_000_000 - 7_428_904) / 1.0012)
+    feedback = view._preview_auto_feedback
+    assert feedback["reason"] == "BUY ĐANG CHỜ"
+    assert feedback["pending"] is True
+    assert "100 CP chưa khớp" in feedback["hint"]
+    assert "7.43 tr" in feedback["hint"] and "7.57 tr" in feedback["hint"] and "7.94 tr" in feedback["hint"]
+    assert "hủy yêu cầu cũ" in feedback["hint"]
+    assert len(feedback["hint"].splitlines()) == 5
+    assert len(view.queue.list_all()) == 1
+    if pending_status == "WORKING":
+        # A real in-flight order is released only by a confirmed broker outcome.
+        view.queue._update(intent.id, status="CANCELLED")
+    else:
+        assert view.queue.cancel_local(intent.id)
+    assert view._suggested_order_quantity(74.2, status, "MSN")[0] == 100
+    assert view._preview_auto_feedback["pending"] is False
+    assert view._preview_entry_checks("MSN", status)["symbol_pending_buy_count"] == 0
+
+
+def test_pending_real_buy_does_not_reserve_paper_money(tmp_path):
+    view = ticket(tmp_path, "PAPER")
+    view.settings.priority_allocations["MSN"]["use_pct"] = 100
+    intent = OrderIntent.create("MSN", "BUY", 100, "MARKET", execution_mode="REAL")
+    intent.details["reservation_price"] = 74.2
+    view.queue.add(intent)
+    status = {"ticks": {"MSN": {"ceiling_price": 79.3}}}
+    checks = view._preview_entry_checks("MSN", status)
+    assert checks["symbol_pending_buy_count"] == 0
+    assert checks["priority_capital"]["pending_cost_vnd"] == 0
+    assert view._suggested_order_quantity(74.2, status, "MSN")[0] == 100
 
 
 @pytest.mark.parametrize("mode", ["REAL", "PAPER"])
@@ -280,6 +337,39 @@ def test_full_preview_zero_cash_is_blocked_but_missing_snapshot_is_waiting(tmp_p
     assert view.execute_button.options["text"] == ("CHỜ DỮ LIỆU" if missing else "KIỂM TRA")
     assert view.preview_qty_value.options["text"] == ("—" if missing else "< 100")
     assert view.queue.list_all() == []
+
+
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+def test_full_preview_pending_buy_is_a_compact_warning_not_a_system_error(tmp_path, mode):
+    view = ticket(tmp_path, mode)
+    view.settings.priority_allocations["MSN"]["use_pct"] = 100
+    intent = OrderIntent.create("MSN", "BUY", 100, "MARKET", execution_mode=mode)
+    intent.details["reservation_price"] = 74.2
+    view.queue.add(intent)
+    view.tp, view.sl = value("7%"), value("-3.5%")
+    view._current_tick_price = 74.2
+    view._symbol_exchange = lambda *_args: "HOSE"
+    view._preview_buy_fee = lambda *_args: 0.0
+    view._preview_indicator_details = lambda *_args: {}
+    view._refresh_rule_preview = lambda *_args: None
+    view._em_states = {}
+    view.real = SimpleNamespace(has_trading_token=lambda: True)
+    for name in ("order_title", "status_badge", "status_reason", "live_value", "entry_value",
+                 "qty_title", "qty_value", "cash_value", "fee_value", "tp_value", "tp_detail",
+                 "sl_value", "sl_detail", "route_value", "normal_value", "normal_detail",
+                 "em_normal", "em_exit", "exit_value", "exit_detail", "atr", "atr_detail"):
+        setattr(view, f"preview_{name}", Label())
+    view.preview_status_reason.cget = lambda key: view.preview_status_reason.options[key]
+    view.execute_button = Label()
+    view._refresh_full_order_preview({"market_status": "CLOSED", "ticks": {"MSN": {"ceiling_price": 79.3}}})
+    assert view.preview_status_badge.options["text"] == "BUY CHỜ"
+    assert view.preview_status_reason.options["text"] == "BUY ĐANG CHỜ"
+    assert view.preview_route_value.options["text"] == "CHỜ"
+    assert view.execute_button.options["text"] == "BUY ĐANG CHỜ"
+    assert view.execute_button.options["fg_color"] == "#4A3B16"
+    assert "100 CP chưa khớp" in view._order_status_hint()
+    assert "100 CP chưa khớp" in view._auto_quantity_hint()
+    assert len(view.queue.list_all()) == 1
 
 
 @pytest.mark.parametrize("balance,expected", [({}, "—"), ({"availableCash": 0}, "0")])

@@ -20,7 +20,7 @@ from .view import (
     COL_BORDER, COL_GRAY, COL_GREEN, COL_MUTED, COL_SETTLEMENT_BG, COL_SETTLEMENT_TEXT,
     COL_PREVIEW_TEXT, COL_RED, COL_SURFACE, COL_SURFACE_2, COL_TEXT, COL_WARN, FONT_BOLD,
     COL_TITLE, FONT_PREVIEW_TITLE, FONT_PREVIEW_VALUE, _compact_vnd, _display_price,
-    _number, _price_unit,
+    _number, _price_unit, _active_order_notice, _render_order_notice,
 )
 from .windows import (
     FONT_KEY,
@@ -58,6 +58,9 @@ def _auto_quantity_feedback(
             # An account short of even one reserved lot is not primarily
             # blocked by another symbol's configured Priority allowance.
             reason = "THIẾU TIỀN CHO 100 CP"
+        elif (_number(checks.get("symbol_pending_buy_count")) > 0
+              and price > 0 and not missing_bound):
+            reason = "BUY ĐANG CHỜ"
         elif budget <= 0 and priority.get("reason") == "PRIORITY_CAPITAL_LIMIT":
             reason = (
                 "HẾT HẠN MỨC MÃ"
@@ -73,6 +76,22 @@ def _auto_quantity_feedback(
             waiting, reason = True, "CHỜ GIÁ TÍNH KL"
         else:
             reason = "HẠN MỨC CHƯA ĐỦ 100 CP" if checks.get("priority_capital_enabled") else "VỐN AUTO CHƯA ĐỦ 100 CP"
+    if reason == "BUY ĐANG CHỜ":
+        remaining = max(0.0, _number(priority.get("buy_limit_vnd")) - _number(priority.get("committed_vnd")))
+        quantity_waiting = int(_number(checks.get("symbol_pending_buy_quantity")))
+        limits = (
+            f"Hạn mức mã: {_compact_vnd(priority.get('buy_limit_vnd'))} · "
+            f"đã mua {_compact_vnd(priority.get('holding_cost_vnd'))} · "
+            f"BUY chờ giữ {_compact_vnd(priority.get('pending_cost_vnd'))} · còn {_compact_vnd(remaining)} (gồm phí)."
+            if priority else f"Vốn đặt thêm: {_compact_vnd(budget)} chưa phí."
+        )
+        return {"waiting": False, "pending": True, "reason": reason, "hint": "\n".join([
+            f"BUY ĐANG CHỜ · {quantity_waiting:,} CP chưa khớp",
+            limits,
+            f"100 CP mới cần {_compact_vnd(minimum)} gồm phí, tính tại {_display_price(price)} đ.",
+            f"Tiền tài khoản: {_compact_vnd(cash)}; MARKET dự trù giá trần, LO theo giá nhập.",
+            "Muốn đặt lại: hủy yêu cầu cũ ở bảng lệnh, chờ xác nhận hủy thành công.",
+        ])}
     lines = [reason] if reason else []
     if money_ready:
         lines.append(f"Tiền khả dụng: {cash:,.0f} đ · AUTO: {_compact_vnd(budget)} chưa phí.")
@@ -83,6 +102,18 @@ def _auto_quantity_feedback(
                 f"Priority: {_compact_vnd(priority['limit_vnd'])} × {_number(priority.get('use_pct')):g}%"
                 f" → {_compact_vnd(priority.get('per_order_limit_vnd', priority.get('buy_limit_vnd')))} / lệnh, gồm phí."
             )
+            if _number(priority.get("committed_vnd")) > 0:
+                remaining = max(0.0, _number(priority.get("buy_limit_vnd")) - _number(priority.get("committed_vnd")))
+                lines.append(
+                    f"Đã mua: {_compact_vnd(priority.get('holding_cost_vnd'))} · "
+                    f"BUY đang chờ giữ: {_compact_vnd(priority.get('pending_cost_vnd'))} · "
+                    f"Còn hạn mức: {_compact_vnd(remaining)} (gồm phí)."
+                )
+        if _number(checks.get("symbol_pending_buy_count")) > 0:
+            lines.append(
+                f"Có {int(_number(checks['symbol_pending_buy_count']))} yêu cầu BUY đang chờ, "
+                f"còn {int(_number(checks.get('symbol_pending_buy_quantity'))):,} CP chưa khớp."
+            )
         if reason in {"THIẾU TIỀN CHO 100 CP", "TIỀN KHẢ DỤNG = 0"}:
             lines.append("Cần tăng tiền khả dụng; hạn mức không phải tiền sẵn có.")
         elif priority and quantity <= 0:
@@ -91,7 +122,8 @@ def _auto_quantity_feedback(
             lines.append("MARKET tính theo giá trần; LO theo giá nhập.")
     else:
         lines.append("Chưa nhận được số dư của sổ đang xem; không có nghĩa tài khoản hết tiền.")
-    return {"waiting": waiting, "reason": reason, "hint": "\n".join(lines)}
+    return {"waiting": waiting, "reason": reason, "hint": "\n".join(lines),
+            "pending": reason == "BUY ĐANG CHỜ"}
 
 
 def _dynamic_atr_preview_text(
@@ -1267,6 +1299,9 @@ class DashboardPanelsMixin:
         return quantity, budget, forced_minimum
 
     def _order_status_hint(self) -> str:
+        notice = _active_order_notice(self)
+        if notice:
+            return str(notice["hint"])
         reason = str(self.preview_status_reason.cget("text") or "")
         feedback = getattr(self, "_preview_auto_feedback", {})
         if reason == feedback.get("reason"):
@@ -1650,9 +1685,11 @@ class DashboardPanelsMixin:
         valid_quantity, quantity_reason, _normalized = validate_quantity(quantity)
         auto_block_reason = ""
         auto_waiting = False
+        pending_block = False
         if auto_quantity and quantity <= 0:
             feedback = getattr(self, "_preview_auto_feedback", {})
             auto_waiting = bool(feedback.get("waiting"))
+            pending_block = bool(feedback.get("pending"))
             auto_block_reason = str(feedback.get("reason") or "CHỜ TÍNH KHỐI LƯỢNG")
         gross = entry_price * max(0, quantity) * 1000.0
         preview_capital = gross
@@ -1683,6 +1720,9 @@ class DashboardPanelsMixin:
         if auto_waiting:
             badge, badge_bg, badge_fg = "CHỜ", "#4A3B16", "#FFF3B0"
             reason, route = invalid_reason, "CHỜ"
+        elif pending_block and not price_error and not quantity_error and bool(symbol):
+            badge, badge_bg, badge_fg = "BUY CHỜ", "#4A3B16", "#FFF3B0"
+            reason, route = auto_block_reason, "CHỜ"
         elif invalid_reason:
             badge, badge_bg, badge_fg = "LỖI", "#5A1E1E", "#FFCDD2"
             reason = invalid_reason
@@ -1715,6 +1755,8 @@ class DashboardPanelsMixin:
         )
         if auto_waiting:
             button_text, button_bg, button_hover, button_border = "CHỜ DỮ LIỆU", "#4A3B16", "#605020", COL_WARN
+        elif pending_block and not price_error and bool(symbol):
+            button_text, button_bg, button_hover, button_border = "BUY ĐANG CHỜ", "#4A3B16", "#605020", COL_WARN
         self.execute_button.configure(
             text=button_text,
             fg_color=button_bg,
@@ -1918,6 +1960,7 @@ class DashboardPanelsMixin:
         fit_label_text(self.preview_normal_detail, base_font=("Segoe UI", 10))
         self._fit_protect_preview()
         self._refresh_rule_preview(status, symbol)
+        _render_order_notice(self)
 
     def _refresh_rule_preview(self, status: dict[str, Any], symbol: str) -> None:
         if not hasattr(self, "preview_rule_market"):

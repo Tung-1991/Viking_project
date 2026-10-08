@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 from typing import Any
 
 COL_GREEN = "#22C55E"
@@ -21,6 +22,41 @@ COL_TITLE = "#BABEC5"
 FONT_BOLD = ("Segoe UI", 14)
 FONT_PREVIEW_TITLE = ("Segoe UI", 14, "bold", "italic")
 FONT_PREVIEW_VALUE = ("Cascadia Mono", 14)
+
+
+def _order_form_key(subject: Any) -> tuple[str, ...]:
+    """Scope a short-lived receipt/error to the form that produced it."""
+    return tuple(
+        str(getattr(subject, name).get()) if hasattr(subject, name) else ""
+        for name in ("mode", "symbol", "order_type", "quantity", "price", "sl", "tp")
+    )
+
+
+def _active_order_notice(subject: Any) -> dict[str, Any]:
+    notice = getattr(subject, "_manual_order_notice", None)
+    if not isinstance(notice, dict):
+        return {}
+    if notice.get("form") != _order_form_key(subject) or time.monotonic() >= notice.get("until", 0):
+        subject._manual_order_notice = {}
+        return {}
+    return notice
+
+
+def _render_order_notice(subject: Any) -> None:
+    """Reuse the existing PREVIEW status row; never grow the panel or trade."""
+    notice = _active_order_notice(subject)
+    if not notice:
+        return
+    badge, background, foreground = (
+        ("CHỜ", "#4A3B16", "#FFF3B0") if notice.get("level") == "WARNING"
+        else ("CHẶN", "#5A1E1E", "#FFCDD2")
+    )
+    label = getattr(subject, "preview_status_reason", None)
+    if label is not None:
+        label.configure(text=notice["summary"], text_color=foreground)
+    label = getattr(subject, "preview_status_badge", None)
+    if label is not None:
+        label.configure(text=badge, fg_color=background, text_color=foreground)
 
 
 
