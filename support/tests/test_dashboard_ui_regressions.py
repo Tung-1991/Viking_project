@@ -214,12 +214,20 @@ def test_compact_rules_priority_draft_and_read_only_previews(ui_root, monkeypatc
             assert max(card.winfo_height() for card in cards) - min(card.winfo_height() for card in cards) <= 2
         rule.tabs.set("E/M")
         capture(rule.top, "exit")
-        assert abs(rule.exit_card.winfo_height() - rule.protect_card.winfo_height()) <= 2
+        protection_groups = (rule.exit_card, rule.protect_trail_card, rule.dynamic_settings_card)
+        assert all(card.master.master is rule.protect_card for card in protection_groups)
+        assert max(card.winfo_height() for card in protection_groups) - min(card.winfo_height() for card in protection_groups) <= 2
+        assert max(card.winfo_width() for card in protection_groups) - min(card.winfo_width() for card in protection_groups) <= 2
+        rule.normal_repeat.set(True)
+        assert rule.repeat_switch.cget("state") == "disabled"
+        assert "REPEAT OFF" in rule.execution_preview["NORMAL"].cget("text")
         rule.normal_sell.delete(0, "end")
         rule.normal_sell.insert(0, "50")
         rule._refresh_execution_preview()
         assert "CHƯA LƯU" in rule.execution_preview["NORMAL"].cget("text")
         assert "bán 50%" in rule.execution_preview["NORMAL"].cget("text")
+        assert rule.repeat_switch.cget("state") == "normal"
+        assert "REPEAT ON" in rule.execution_preview["NORMAL"].cget("text")
         assert settings.rule_parameters["normal_sell_pct"] == 100
         rule.normal_dynamic.set(True)
         assert "ATR ×" in rule.execution_preview["NORMAL"].cget("text")

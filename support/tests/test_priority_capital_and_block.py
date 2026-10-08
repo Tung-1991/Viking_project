@@ -213,6 +213,78 @@ def test_default_preview_matches_priority_sizing(order_type, quantity):
     assert preview._suggested_order_quantity(20, status, "VIX")[0] == quantity
 
 
+@pytest.mark.parametrize("mode,nav", [("REAL", 50_000_000), ("PAPER", 100_000_000)])
+@pytest.mark.parametrize("override", [False, True])
+def test_ticket_auto_preview_uses_own_book_and_p1_without_any_bot_decision(tmp_path, monkeypatch, mode, nav, override):
+    class Ticket(DashboardPanelsMixin, DashboardActionsMixin):
+        pass
+
+    builder = _builder(tmp_path)
+    ticket = Ticket()
+    ticket.settings = config.AppSettings.from_dict({"market_phase_override_enabled": override,
+        "market_phase_override_exposure_pct": 100, "priority_symbols": [], "buy_fee_pct": 0.045})
+    ticket.mode = SimpleNamespace(get=lambda: mode)
+    ticket.symbol = SimpleNamespace(get=lambda: "AAA")
+    ticket.order_type = SimpleNamespace(get=lambda: "MARKET")
+    ticket.queue, ticket.trade_state, ticket.rule_state = builder.queue, builder.trades, builder.rule_state
+    ticket.snapshots = {book: ({"equity": money, "availableCash": money}, [], [])
+                        for book, money in [("REAL", 50_000_000), ("PAPER", 100_000_000)]}
+    monkeypatch.setattr(ticket.rule_state, "confirmed_market_state", lambda: "UPTREND")
+    monkeypatch.setattr(ticket.trade_state, "active_loss_streak",
+                        lambda *_args, **_kwargs: pytest.fail("Preview must not alter a cooldown"))
+    status = {"decisions_by_mode": {"REAL": {}, "PAPER": {}}, "ticks": {"AAA": {"price": 7.25}}}
+    quantity, budget, _forced = ticket._suggested_order_quantity(7.25, status, "AAA")
+    exposure = 1.0 if override else 0.9
+    assert budget == pytest.approx(nav * exposure / 5)
+    assert quantity == int(budget / 7250) // 100 * 100
+    assert quantity > 0
+    assert ticket._projected_pnl("7%", 7.25, quantity) == pytest.approx(quantity * 7250 * 0.07)
+    assert ticket._projected_pnl("-3.5%", 7.25, quantity) == pytest.approx(-quantity * 7250 * 0.035)
+    from viking_v2.dashboard.view import _compact_vnd
+    def label():
+        values = {}
+        return SimpleNamespace(options=values, configure=lambda **updates: values.update(updates))
+    ticket.quantity = SimpleNamespace(get=lambda: "", configure=lambda **_updates: None)
+    ticket.tp, ticket.sl = SimpleNamespace(get=lambda: "7%"), SimpleNamespace(get=lambda: "-3.5%")
+    ticket.bridge = SimpleNamespace(read_status=lambda: status)
+    ticket._current_tick_price = 7.25
+    ticket._refresh_main_quote_display = ticket._refresh_full_order_preview = lambda: None
+    ticket._cached_fee_rate = lambda *_args: 0.00045
+    for name in ("lbl_order_value", "lbl_quote_symbol", "lbl_fee_preview", "lbl_tp_title", "lbl_sl_title", "lbl_tp_preview", "lbl_sl_preview"):
+        setattr(ticket, name, label())
+    ticket._update_order_preview()
+    assert ticket.lbl_tp_preview.options["text"] == "+" + _compact_vnd(quantity * 7250 * 0.07)
+    assert ticket.lbl_sl_preview.options["text"] == "-" + _compact_vnd(quantity * 7250 * 0.035)
+    assert ticket.lbl_fee_preview.options["text"] == _compact_vnd(quantity * 7250 * 0.00045)
+    assert ticket.queue.list_all() == []
+
+
+def test_preview_rebuilds_priority_cap_without_stale_or_other_book_budget(tmp_path, monkeypatch):
+    class Ticket(DashboardPanelsMixin, DashboardActionsMixin):
+        pass
+
+    builder = _builder(tmp_path)
+    ticket = Ticket()
+    ticket.settings = config.AppSettings.from_dict({"priority_symbols": PRIORITY,
+        "priority_capital_enabled": True, "priority_total_capital": 60_000_000,
+        "priority_allocations": ALLOCATIONS, "market_phase_override_enabled": True,
+        "market_phase_override_exposure_pct": 100})
+    ticket.mode = SimpleNamespace(get=lambda: "PAPER")
+    ticket.order_type = SimpleNamespace(get=lambda: "MARKET")
+    ticket._fee_rates = {("VIX", "BUY"): 0.01}  # REAL fee must not leak into PAPER.
+    ticket.queue, ticket.trade_state, ticket.rule_state = builder.queue, builder.trades, builder.rule_state
+    ticket.snapshots = {"PAPER": ({"equity": 60_000_000, "availableCash": 60_000_000}, [], [])}
+    status = {"ticks": {"VIX": {"ceiling_price": 21.4}}, "decisions_by_mode": {
+        "PAPER": {}, "REAL": {"VIX": {"details": {"entry_checks": {"order_budget": 100_000_000}}}}}}
+    quantity, budget, _forced = ticket._suggested_order_quantity(20, status, "VIX")
+    assert budget == pytest.approx(10_000_000 / 1.00045)
+    assert quantity == 400
+    ticket.settings.priority_allocations["VIX"]["use_pct"] = 0
+    assert ticket._suggested_order_quantity(20, status, "VIX")[0] == 0
+    ticket.snapshots["PAPER"] = ({}, [], [])
+    assert ticket._suggested_order_quantity(20, status, "VIX")[0] == 0
+
+
 @pytest.mark.parametrize("mode", ["REAL", "PAPER"])
 def test_dashboard_rechecks_batch_and_changes_before_submission(tmp_path, mode):
     builder = _builder(tmp_path)

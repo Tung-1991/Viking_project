@@ -215,6 +215,7 @@ class RuleSettingsPopup:
         card.grid_columnconfigure(0, weight=1)
         header = ctk.CTkFrame(card, fg_color="transparent")
         header.pack(fill="x", padx=12, pady=(8, 3))
+        card._viking_header = header
         ctk.CTkLabel(
             header, text=title, font=("Segoe UI", 15, "bold"),
             text_color=self.TITLE, anchor="w",
@@ -259,7 +260,7 @@ class RuleSettingsPopup:
     ) -> tuple[ctk.CTkEntry, tk.BooleanVar]:
         """Keep each pre-ARM switch, value and explanation on one compact row."""
         row = ctk.CTkFrame(card, fg_color="transparent")
-        row.pack(fill="x", padx=6, pady=4)
+        row.pack(fill="x", padx=6, pady=3)
         row.grid_columnconfigure(1, weight=1)
         toggle = tk.BooleanVar(value=enabled)
         ctk.CTkSwitch(
@@ -623,16 +624,8 @@ class RuleSettingsPopup:
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(0, weight=1)
         body = self._content(frame, columns=2)
-        self._summary(
-            body,
-            "BẢO VỆ VỊ THẾ",
-            "",
-            "SL / TP / E bán 100%. PROTECT và Dynamic dùng chung tỷ lệ bán.\n"
-            "E thuộc nhóm bảo vệ nhưng chạy độc lập: không đợi ARM của PROTECT.",
-            columns=2,
-        )
-        self.exit_left_column = body
-
+        # The SL/TP and PROTECT headers already describe the page.
+        # Avoid a third banner that pushes the useful controls below the fold.
         take = self._card(
             body, "SL / TP · BÁN 100%",
             "Cả hai đều bán sạch vị thế. SL của BOT có thể bật/tắt ở tab THỰC THI và được lưu theo từng trade; TP chỉ chạy khi trade có gắn TP.",
@@ -659,12 +652,28 @@ class RuleSettingsPopup:
             "Mặc định +7% tính từ giá vốn. Đặt 0 để tắt hẳn.",
         )
 
-        normal = self._card(
-            body, "PROTECT",
-            "AUTO tự bán; ALERT chỉ ghi nhận, không bán. Việc gửi Telegram cấu hình tập trung trong tab KẾT NỐI → TELEGRAM.",
-            2, 1,
+        self.protect_card = self._card(
+            body, "PROTECT · BẢO VỆ & THOÁT",
+            "Ba cách bảo vệ nằm cùng khung: sau ARM, Dynamic trước ARM, và tín hiệu E.\n"
+            "PROTECT/Dynamic dùng chung MODE và KL bán. E có MODE riêng, AUTO bán 100% và không đợi ARM.\n"
+            "Công tắc E/M của từng vị thế quyết định có dùng PROTECT/E hay không.",
+            2, 0, span=2,
         )
-        self.protect_card = normal
+        groups = ctk.CTkFrame(self.protect_card, fg_color="transparent")
+        groups.pack(fill="x", padx=4, pady=(0, 6))
+        groups.grid_columnconfigure((0, 1, 2), weight=1, uniform="protect-groups")
+        self.exit_left_column = groups
+        normal = self._card(
+            groups, "SAU ARM",
+            "Đạt mức lãi ARM → theo dõi đỉnh → giá lùi TRAIL% từ đỉnh thì chạm PROTECT.\n"
+            "Mua 100; ARM 7%; đỉnh 110; TRAIL 2,5% → chạm mức 107,25. MFE là lãi đỉnh từng đạt.",
+            0, 0,
+        )
+        self.protect_trail_card = normal
+        self.normal_arm = self._field(normal, "ARM (%)", self.params.normal_arm_pct,
+            "MFE ≥ ARM mới bật bảo vệ sau ARM. Mua 100, ARM 7% → từng lên ít nhất 107; không bán ngay tại 107.")
+        self.normal_giveback = self._field(normal, "Lùi đỉnh (%)", self.params.normal_giveback_pct,
+            "TRAIL: giảm X% từ giá đỉnh → chạm PROTECT.\nĐỉnh 110, lùi 2,5% → 107,25; không trừ từ giá mua.")
         policy_row = ctk.CTkFrame(normal, fg_color="transparent")
         policy_row.pack(fill="x", padx=12, pady=4)
         ctk.CTkLabel(
@@ -673,67 +682,72 @@ class RuleSettingsPopup:
         self.normal_policy = tk.StringVar(value=self.params.normal_policy)
         ctk.CTkOptionMenu(
             policy_row, values=["AUTO", "ALERT"],
-            variable=self.normal_policy, width=140, height=34,
+            variable=self.normal_policy, width=95, height=34,
             font=FONT_VALUE, fg_color=self.BLUE,
             button_color="#245C92", button_hover_color="#1D4D7B",
             command=self._select_normal_policy,
         ).pack(side="right")
         self._hint_icon(
             policy_row,
-            "AUTO đặt lệnh khi chạm PROTECT. ALERT dùng cùng rule nhưng không đặt lệnh. "
-            "Bật PROTECT CHẠM MỨC trong TELEGRAM nếu muốn nhận tin ở một trong hai mode.",
+            "Dùng chung cho PROTECT sau ARM và Dynamic trước ARM.\n"
+            "AUTO: chạm mức thì tạo SELL theo KL bán bên dưới. ALERT: chỉ ghi nhận, không bán.\n"
+            "Telegram bật riêng tại KẾT NỐI → TELEGRAM; không bảo đảm khớp đúng giá chạm.",
         ).pack(side="right", padx=(0, 6))
         self.normal_sell = self._field(
-            normal, "Bán khi chạm (%)", self.params.normal_sell_pct,
-            "Phần trăm khối lượng đang giữ sẽ bán khi PROTECT chạm mức. "
-            "Áp dụng cả Dynamic.\n100% = bán hết; 50% của 1.000 CP = 500 CP. Làm tròn lô, tối thiểu 100 CP.",
+            normal, "KL bán (%)", self.params.normal_sell_pct,
+            "Phần trăm số cổ còn được bot quản lý, không phải % lãi hoặc % giá. Áp dụng PROTECT và Dynamic ở MODE AUTO.\n"
+            "1.000 CP: 100% → bán hết 1.000; 50% → bán 500. Làm tròn lô, tối thiểu 100 CP.\n"
+            "Chưa đủ cổ được phép bán thì xử lý theo SELL CHỜ T+; E/SL/TP vẫn bán 100%, không dùng tỷ lệ này.",
         )
-        self.normal_arm = self._field(normal, "ARM (%)", self.params.normal_arm_pct,
-            "Mức lãi cao nhất từng đạt (MFE) ≥ ARM → bật trail sau ARM.\nMua 100, ARM 7% → từng lên ít nhất 107.")
-        self.normal_giveback = self._field(normal, "TRAIL (%)", self.params.normal_giveback_pct,
-            "Sau ARM, giảm X% từ đỉnh → kích hoạt PROTECT.\nĐỉnh 110, TRAIL 2,5% → mức bán 107,25; không trừ từ giá mua.")
+        self.normal_repeat = self._switch(
+            normal, "LẶP BÁN", self.params.normal_repeat_enabled,
+            "REPEAT chỉ có tác dụng khi KL bán dưới 100%. OFF: PROTECT/Dynamic tác động một lần trong chu kỳ.\n"
+            "ON: phần còn lại được bảo vệ tiếp khi có đỉnh mới đủ cao theo TRAIL.\n"
+            "KL bán 100% đã bán hết → không còn cổ để lặp. E/SL/TP không dùng REPEAT.",
+        )
+        self.repeat_switch = next(child for child in self.normal_repeat._viking_row.winfo_children()
+                                  if isinstance(child, ctk.CTkSwitch))
+        ctk.CTkLabel(normal, text="Đạt ARM → theo đỉnh → chạm mức.\nMODE / KL bán dùng cả Dynamic.",
+                    font=("Segoe UI", 11), text_color=self.MUTED, justify="left", anchor="w",
+                    wraplength=230).pack(fill="x", padx=12, pady=(0, 4))
 
-        dynamic_box = ctk.CTkFrame(
-            normal, fg_color="#1A1E24", corner_radius=7,
-            border_width=1, border_color=self.BORDER,
+        dynamic_box = self._card(
+            groups, "DYNAMIC",
+            "TRƯỚC ARM: ON bảo vệ bằng ATR và/hoặc phần lãi giữ lại; OFF chỉ đợi ARM.\n"
+            "Chạm mức → dùng CHẠM MỨC và KL bán ở nhóm SAU ARM. Không thay SL, E hoặc trail sau ARM.",
+            0, 1,
         )
-        dynamic_box.pack(fill="x", padx=12, pady=(8, 4))
         self.dynamic_settings_card = dynamic_box
-        dynamic_header = ctk.CTkFrame(dynamic_box, fg_color="transparent")
-        dynamic_header.pack(fill="x", padx=10, pady=(9, 4))
+        dynamic_header = dynamic_box._viking_header
         self.normal_dynamic = tk.BooleanVar(value=self.params.normal_dynamic_enabled)
         ctk.CTkSwitch(
-            dynamic_header, text="DYNAMIC · DƯỚI ARM", variable=self.normal_dynamic,
+            dynamic_header, text="", width=36, variable=self.normal_dynamic,
             font=("Segoe UI", 12, "bold"), progress_color=self.GREEN,
             button_color=self.TEXT, text_color=self.TEXT,
-        ).pack(side="left")
-        self._hint_icon(
-            dynamic_header,
-            "OFF: PROTECT chỉ đợi ARM. ON: có thể bảo vệ trước ARM bằng ATR và sàn giữ lãi; "
-            "không thay SL, E hay trail sau ARM.",
-        ).pack(side="right")
+        ).pack(side="left", before=next(child for child in dynamic_header.winfo_children()
+                                        if isinstance(child, ctk.CTkLabel)), padx=(0, 6))
         dynamic_groups = ctk.CTkFrame(dynamic_box, fg_color="transparent")
         dynamic_groups.pack(fill="x", padx=8, pady=(4, 2))
-        dynamic_groups.grid_columnconfigure((0, 1), weight=1, uniform="dynamic-groups")
+        dynamic_groups.grid_columnconfigure(0, weight=1)
 
         atr_box = ctk.CTkFrame(
             dynamic_groups, fg_color="#20252C", corner_radius=7,
             border_width=1, border_color=self.BORDER,
         )
-        atr_box.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        atr_box.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         self.dynamic_atr_card = atr_box
         ctk.CTkLabel(
             atr_box, text="ATR14 · PHIÊN TRƯỚC",
             font=("Segoe UI", 11, "bold"), text_color="#60A5FA", anchor="w",
-        ).pack(fill="x", padx=12, pady=(8, 2))
+        ).pack(fill="x", padx=12, pady=(6, 2))
         self.normal_atr_activation_multiplier, self.normal_atr_activation_enabled = self._dynamic_field(
-            atr_box, "START ×", self.params.normal_atr_activation_multiplier,
+            atr_box, "BẮT ĐẦU ×", self.params.normal_atr_activation_multiplier,
             self.params.normal_atr_activation_enabled,
             "ON: bắt đầu Dynamic khi MFE ≥ ATR% × hệ số. ATR14 lấy phiên ngày đã đóng gần nhất.\n"
             "ATR 4%, START ×0,55 → từng lãi 2,2%. OFF: bỏ ngưỡng ATR, vẫn cần từng có lãi.",
         )
         self.normal_atr_multiplier, self.normal_atr_trail_enabled = self._dynamic_field(
-            atr_box, "TRAIL ×", self.params.normal_atr_multiplier,
+            atr_box, "LÙI ĐỈNH ×", self.params.normal_atr_multiplier,
             self.params.normal_atr_trail_enabled,
             "ON: khoảng lùi từ đỉnh = ATR% × hệ số.\nATR 4%, TRAIL ×0,8 → lùi 3,2% từ đỉnh. "
             "OFF: bỏ trail ATR; GIỮ LÃI vẫn dùng nếu bật.",
@@ -743,35 +757,30 @@ class RuleSettingsPopup:
             dynamic_groups, fg_color="#20252C", corner_radius=7,
             border_width=1, border_color=self.BORDER,
         )
-        retention_box.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        retention_box.grid(row=1, column=0, sticky="ew")
         self.dynamic_retention_card = retention_box
         ctk.CTkLabel(
             retention_box, text="GIỮ LÃI THEO ĐỈNH",
             font=("Segoe UI", 11, "bold"), text_color="#60A5FA", anchor="w",
-        ).pack(fill="x", padx=12, pady=(8, 2))
+        ).pack(fill="x", padx=12, pady=(6, 2))
         self.normal_retention_pct, self.normal_retention_enabled = self._dynamic_field(
-            retention_box, "GIỮ LÃI %", self.params.normal_retention_pct,
+            retention_box, "GIỮ LÃI (%)", self.params.normal_retention_pct,
             self.params.normal_retention_enabled,
             "ON: giữ X% phần lãi tại đỉnh, không phải X% giá cổ phiếu.\n"
             "Mua 100, đỉnh 104, giữ 90% → mức bảo vệ 103,6. Nếu trail ATR cũng bật, dùng mức cao hơn.",
         )
         self.normal_retention_until_pct, self.normal_retention_until_enabled = self._dynamic_field(
-            retention_box, "TỚI MFE %", self.params.normal_retention_until_pct,
+            retention_box, "TỚI MFE (%)", self.params.normal_retention_until_pct,
             self.params.normal_retention_until_enabled,
             "ON: chỉ nâng mức GIỮ LÃI khi MFE dưới ngưỡng này; mức đã lưu không hạ.\n"
             "MFE 5% = mua 100, từng lên 105. OFF: nâng GIỮ LÃI tới trước ARM. Không tác dụng khi GIỮ LÃI tắt.",
         )
-        self.normal_repeat = self._switch(
-            normal, "REPEAT", self.params.normal_repeat_enabled,
-            "Chỉ dùng khi SELL dưới 100%. Peak mới phải vượt peak lần bán trước thêm ít nhất TRAIL%.",
-        )
-
         indicator = self._card(
-            body, "E · TÍN HIỆU THOÁT · BÁN 100%",
+            groups, "E · BÁN 100%",
             "OFF nằm ở công tắc E/M của từng trade. Khi E được bật: ALERT chỉ ghi nhận; AUTO bán toàn bộ phần còn lại. "
             "EMA SELL chỉnh riêng tại đây; chu kỳ RSI hiện dùng chung với BUY. "
-            "Lưu áp dụng cho tài khoản đang chọn, kể cả vị thế đang mở.",
-            2, 0,
+            "E độc lập với ARM và KL bán của PROTECT. Lưu áp dụng cho tài khoản đang chọn, kể cả vị thế đang mở.",
+            0, 2,
         )
         self.exit_card = indicator
         indicator_policy_row = ctk.CTkFrame(indicator, fg_color="transparent")
@@ -784,7 +793,7 @@ class RuleSettingsPopup:
         )
         ctk.CTkOptionMenu(
             indicator_policy_row, values=["ALERT", "AUTO"],
-            variable=self.indicator_exit_policy, width=140, height=34,
+            variable=self.indicator_exit_policy, width=95, height=34,
             font=FONT_VALUE, fg_color=self.BLUE,
             button_color="#245C92", button_hover_color="#1D4D7B",
         ).pack(side="right")
@@ -795,11 +804,11 @@ class RuleSettingsPopup:
             "Công tắc THỰC THI chỉ chọn E mặc định cho trade BOT mới; trade đang giữ chỉnh E/M riêng.",
         ).pack(side="right", padx=(0, 6))
         self.sell_ema_fast = self._field(
-            indicator, "EMA SELL nhanh", self.params.sell_ema_fast,
+            indicator, "EMA nhanh", self.params.sell_ema_fast,
             "E chính: EMA nhanh cắt xuống EMA chậm. Tách biệt EMA BUY ở Phase 2.",
         )
         self.sell_ema_slow = self._field(
-            indicator, "EMA SELL chậm", self.params.sell_ema_slow,
+            indicator, "EMA chậm", self.params.sell_ema_slow,
             "E chính: phải lớn hơn EMA SELL nhanh.",
         )
         self.rsi_period = self._field(
@@ -811,12 +820,16 @@ class RuleSettingsPopup:
         self.sell_signal_rsi = tk.BooleanVar(value=self.params.sell_signal_use_rsi)
         sell_conditions = ctk.CTkFrame(indicator, fg_color="transparent")
         sell_conditions.pack(fill="x", padx=12, pady=(3, 7))
-        for label, variable in (("DÙNG EMA", self.sell_signal_ema), ("DÙNG RSI", self.sell_signal_rsi)):
+        for label, variable in (("EMA", self.sell_signal_ema), ("RSI", self.sell_signal_rsi)):
             ctk.CTkCheckBox(
-                sell_conditions, text=label, variable=variable, width=105,
+                sell_conditions, text=label, variable=variable, width=80,
                 font=("Segoe UI", 11, "bold"), fg_color="#EF4444",
                 text_color=self.TEXT,
             ).pack(side="left", padx=(0, 12))
+
+        ctk.CTkLabel(indicator, text="AUTO bán 100% · ALERT chỉ báo.\nE không chờ ARM của PROTECT.",
+                    font=("Segoe UI", 11), text_color=self.MUTED, justify="left", anchor="w",
+                    wraplength=230).pack(fill="x", padx=12, pady=(0, 4))
 
 
     def _refresh_realtime_interval_state(self) -> None:
@@ -1005,13 +1018,24 @@ class RuleSettingsPopup:
             "SL": f"SL {get(self.initial_sl)}% / vào lại {get(self.reentry_sl)}% · bán 100%",
             "TP": f"TP +{get(self.take_profit)}% · bán 100%",
             "NORMAL": (f"PROTECT {self.normal_policy.get()} · ARM {get(self.normal_arm)}% · lùi {get(self.normal_giveback)}%"
-                       f"\nDYN {'ON' if self.normal_dynamic.get() else 'OFF'} · bán {get(self.normal_sell)}% · REPEAT {'ON' if self.normal_repeat.get() else 'OFF'}{dynamic}"),
+                       f"\nDYN {'ON' if self.normal_dynamic.get() else 'OFF'} · bán {get(self.normal_sell)}% · REPEAT {'ON' if self._protect_repeat_enabled() else 'OFF'}{dynamic}"),
             "IND_EXIT": (f"E {self.indicator_exit_policy.get()} · {'bán 100%' if self.indicator_exit_policy.get() == 'AUTO' else 'chỉ báo'}\n"
                          f"{f'EMA {get(self.sell_ema_fast)}/{get(self.sell_ema_slow)}' if self.sell_signal_ema.get() else 'EMA OFF'} · "
                          f"{f'RSI{get(self.rsi_period)}' if self.sell_signal_rsi.get() else 'RSI OFF'}"),
         }
 
+    def _protect_repeat_enabled(self) -> bool:
+        try:
+            return self.normal_repeat.get() and 0 < float(self.normal_sell.get()) < 100.0
+        except ValueError:
+            return False
+
     def _refresh_execution_preview(self, *_args: Any) -> None:
+        try:
+            partial = 0 < float(self.normal_sell.get()) < 100.0
+        except ValueError:
+            partial = False
+        self.repeat_switch.configure(state="normal" if partial else "disabled")
         values = self._execution_preview_values()
         flags = {"SL": self.bot_sl_enabled.get(), **{key: value.get() for key, value in self.bot_em_vars.items()}}
         for key, label in self.execution_preview.items():

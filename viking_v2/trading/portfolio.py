@@ -325,6 +325,7 @@ class PortfolioContextBuilder:
         today: date | None = None,
         normal_t2_reset_enabled: bool = False,
         normal_arm_pct: float = 7.0,
+        budget_only: bool = False,
     ) -> dict[str, Any]:
         symbol = str(symbol or "").upper()
         priority_symbols = tuple(priority_symbols)
@@ -406,6 +407,17 @@ class PortfolioContextBuilder:
                 self.trades.capital_available(symbol, mode, float("inf"))
                 / (1.0 + max(0.0, float(self.buy_fee_rate() or 0.0))),
             )
+        if budget_only:
+            # UI sizing reads the same money rules without updating cooldowns,
+            # settlement/protection state or evaluating a trading signal.
+            return {
+                "nav": nav, "available_cash": cash,
+                "order_budget": budget, "available_capital": budget,
+                "minimum_order_room": minimum_order_room, "buy_fee_rate": fee_rate,
+                "priority_capital": priority_capital,
+                "priority_capital_enabled": bool(priority_capital),
+                "buy_budget_price": board_price(tick.get("ceiling_price", 0.0)) if priority_capital else 0.0,
+            }
         matching_rows = [
             row for row in rows
             if str(row.get("symbol", "") or "").upper() == symbol

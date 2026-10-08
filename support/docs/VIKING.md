@@ -47,8 +47,9 @@ UI/Telegram không thay rule.
   gồm phí × sử dụng%; tiền để dành/chưa phân bổ không cho mã khác mượn. Cash/room P1,
   no-compound vẫn chặn; FORCE 100 không phá cap. MARKET/ATO/ATC dự phòng giá trần,
   LO giá giới hạn. Giảm cap không tự bán/top-up.
-- Preview chọn `decisions_by_mode`; budget cũ không dùng AUTO. Thiếu giá/khối lượng
-  hiện `—`, không đổi SL/TP/fee thành 0. PREVIEW CHƯA LƯU không áp dụng giao dịch.
+- Preview chỉ báo chọn `decisions_by_mode`; AUTO tính lại từ snapshot đúng sổ và
+  P1/OVERRIDE qua `PortfolioContextBuilder.build(budget_only=True)`, không cần decision
+  BUY, không đổi cooldown/vị thế. Thiếu dữ liệu không đoán vốn. CHƯA LƯU chưa áp dụng.
 - Chỉ quản lý Deal đã chọn của đúng account/mã/gói. Giao dịch ngoài app đối soát được
   thì cập nhật; dữ liệu mơ hồ giữ `RECONCILE_REQUIRED`, không đoán giá khớp.
 

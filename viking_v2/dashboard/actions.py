@@ -2504,6 +2504,43 @@ class DashboardActionsMixin:
             exclude_intent_id=exclude_intent_id,
         )
 
+    def _preview_entry_checks(self, symbol: str, status: dict[str, Any]) -> dict[str, Any] | None:
+        """Size the selected ticket from its book, independently of bot signals."""
+        snapshots = getattr(self, "snapshots", None)
+        if snapshots is None:
+            return None
+        mode = self.mode.get()
+        balance, positions, _orders = snapshots.get(mode, ({}, [], []))
+        if not balance:
+            return {}
+        from ..rules.business import StaticRuleParameters
+        params = StaticRuleParameters.from_dict(self.settings.rule_parameters)
+        exposure = (self.settings.market_phase_override_exposure_pct / 100.0
+                    if self.settings.market_phase_override_enabled
+                    else params.exposure.get(self.rule_state.confirmed_market_state(), 0.0))
+        tick = dict((status.get("ticks") or {}).get(symbol) or {})
+        decision = (status.get("decisions") or {}).get(symbol) or {}
+        if decision_is_fresh(decision, symbol, mode):
+            checks = (decision.get("details") or {}).get("entry_checks") or {}
+            tick.setdefault("ceiling_price", checks.get("buy_budget_price", 0.0))
+        fee_rate = self.settings.buy_fee_pct / 100.0
+        if mode == "REAL":
+            fee_rate = getattr(self, "_fee_rates", {}).get((symbol, "BUY"), fee_rate)
+        checks = PortfolioContextBuilder(
+            self.queue, self.trade_state, self.rule_state,
+            buy_fee_rate=lambda: fee_rate,
+        ).build(
+            symbol, execution_mode=mode, balance=balance, positions=positions,
+            tick=tick, exposure=exposure, max_positions=params.max_positions,
+            priority_symbols=self.settings.priority_symbols,
+            priority_capital_enabled=self.settings.priority_capital_enabled,
+            priority_total_capital=self.settings.priority_total_capital,
+            priority_allocations=self.settings.priority_allocations,
+            no_compound_enabled=params.no_compound_enabled, budget_only=True,
+        )
+        checks["force_min_lot_enabled"] = params.force_min_lot_enabled
+        return checks
+
     def _check_bot_entry_limits(self, intent: OrderIntent, quote: dict[str, Any]) -> str:
         """Final check of the new policies, without changing MANUAL or exits."""
         params = self.settings.rule_parameters

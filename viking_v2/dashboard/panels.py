@@ -281,6 +281,14 @@ class DashboardPanelsMixin:
             ("SL", "lbl_sl_title", "lbl_sl_preview", COL_RED),
             ("FEE", "lbl_fee_title", "lbl_fee_preview", COL_WARN),
         )
+        pnl_hints = {
+            "TP": "Lãi ước tính trước phí/thuế theo giá vào và khối lượng đang nhập hoặc AUTO.\n"
+                  "100 CP × 20.000 đồng, TP +7% → +140.000 đồng. Chỉ preview, không phải lãi chắc chắn.",
+            "SL": "Lỗ ước tính trước phí/thuế theo giá vào và khối lượng đang nhập hoặc AUTO.\n"
+                  "100 CP × 20.000 đồng, SL −3,5% → −70.000 đồng; không bảo đảm khớp đúng giá SL.",
+            "FEE": "Phí mua ước tính của khối lượng đang nhập hoặc AUTO, không gồm phí/thuế bán.\n"
+                   "AUTO tính từ tiền/danh mục đúng sổ REAL/PAPER và P1/OVERRIDE; không cần có tín hiệu BUY.",
+        }
         for column, (title, title_attr, value_attr, title_color) in enumerate(pnl_specs):
             box = ctk.CTkFrame(pnl_panel, fg_color="transparent")
             box.grid(row=0, column=column, sticky="nsew", padx=5, pady=5)
@@ -289,6 +297,7 @@ class DashboardPanelsMixin:
                 text_color=title_color, anchor="center",
             )
             title_label.pack(fill="x")
+            _HoverHint(title_label, pnl_hints[title])
             label = ctk.CTkLabel(
                 box, text="NA", font=FONT_PREVIEW_VALUE,
                 text_color=COL_PREVIEW_TEXT, anchor="center", height=28,
@@ -1070,6 +1079,10 @@ class DashboardPanelsMixin:
         if details.get("updated_at") and not decision_is_fresh(decision, target, self.mode.get()):
             details = {}
         checks = details.get("entry_checks") if isinstance(details.get("entry_checks"), dict) else {}
+        if hasattr(self, "_preview_entry_checks"):
+            current = self._preview_entry_checks(target, status)
+            if current is not None:
+                checks = current
         budget = _number(checks.get("order_budget", checks.get("available_capital")))
         available_cash = _number(checks.get("available_cash"))
         nav = _number(checks.get("nav"))
