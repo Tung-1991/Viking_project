@@ -6,10 +6,11 @@ import tkinter as tk
 import customtkinter as ctk
 
 from .dashboard.window import VikingApp
+from .branding import APP_NAME
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Viking V2 CKCS")
+    parser = argparse.ArgumentParser(description=f"{APP_NAME} CKCS")
     parser.add_argument("--account", default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     ctk.set_appearance_mode("Dark")

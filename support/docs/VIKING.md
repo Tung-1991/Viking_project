@@ -1,7 +1,8 @@
-# Viking — ghi chú repo cho AI/dev
+# Money Hunter — ghi chú repo cho AI/dev
 
 Hướng dẫn gửi đối tác: [VAN_HANH.md](VAN_HANH.md). Code là nguồn sự thật;
 setting đang chạy nằm riêng theo tài khoản, không suy ra từ ảnh/backtest cũ.
+Tên hiển thị chung ở `viking_v2/branding.py`; giữ package/repo/runtime cũ để tương thích.
 Tài liệu dài/nghiên cứu trước đây còn trong lịch sử Git trước bản cập nhật này.
 
 ## Đường đi chính

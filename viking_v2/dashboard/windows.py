@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 import customtkinter as ctk
 
+from ..branding import window_title
 
 # One palette for every popup, so the app cannot drift into four colour schemes.
 PALETTE = {
@@ -496,7 +497,7 @@ class DataTablePopup:
         height = min(screen_h - 80, max(650, parent_h - 52))
         x = max(16, int(parent.winfo_rootx()) + max(0, (parent_w - width) // 2))
         y = max(16, int(parent.winfo_rooty()) + max(0, (parent_h - height) // 2))
-        self.top = _window(parent, f"VIKING · {title.upper()}", f"{width}x{height}+{x}+{y}")
+        self.top = _window(parent, window_title(title.upper()), f"{width}x{height}+{x}+{y}")
         try:
             self.top.grab_release()
         except tk.TclError:
@@ -719,7 +720,7 @@ class HistoryPopup:
         height = min(screen_h - 80, max(680, int(parent.winfo_height() or 0) - 52))
         x = max(16, int(parent.winfo_rootx()) + max(0, (int(parent.winfo_width() or 0) - width) // 2))
         y = max(16, int(parent.winfo_rooty()) + max(0, (int(parent.winfo_height() or 0) - height) // 2))
-        self.top = _window(parent, "VIKING · LỊCH SỬ", f"{width}x{height}+{x}+{y}")
+        self.top = _window(parent, window_title("LỊCH SỬ"), f"{width}x{height}+{x}+{y}")
         try:
             self.top.grab_release()
         except tk.TclError:

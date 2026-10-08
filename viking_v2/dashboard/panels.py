@@ -7,6 +7,7 @@ from typing import Any
 
 import customtkinter as ctk
 
+from ..branding import APP_NAME
 from ..rules.business import average_true_range_pct, indicator_snapshot, protect_level
 from ..trading.market import VN_TZ, market_now, market_phase, merge_tick_into_daily_bars
 from ..trading.portfolio import nav_from_balance, size_buy_order, stock_exposure_limit, validate_quantity
@@ -468,7 +469,7 @@ class DashboardPanelsMixin:
         brand = ctk.CTkFrame(self.left, fg_color="transparent")
         brand.pack(fill="x", padx=6, pady=(1, 0))
         ctk.CTkLabel(
-            brand, text="VIKING-beta", font=("Segoe UI", 19, "bold"),
+            brand, text=APP_NAME, font=("Segoe UI", 19, "bold"),
             text_color="#A78BFA",
         ).pack()
 

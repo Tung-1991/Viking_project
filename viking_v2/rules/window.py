@@ -8,6 +8,7 @@ from typing import Any, Callable
 import customtkinter as ctk
 
 from ..config import AppSettings, save_settings
+from ..branding import APP_NAME, window_title
 from ..dashboard.windows import FONT_KEY, FONT_VALUE, PALETTE, _HoverHint, _window
 from .business import StaticRuleParameters
 from ..trading.market import validate_buy_window
@@ -47,7 +48,7 @@ class RuleSettingsPopup:
         screen_h = max(700, int(parent.winfo_screenheight() or 700))
         width, height = min(1080, screen_w - 60), min(720, screen_h - 90)
         x, y = max(0, (screen_w - width) // 2), max(0, (screen_h - height) // 3)
-        self.top = _window(parent, "VIKING RULE", f"{width}x{height}+{x}+{y}")
+        self.top = _window(parent, window_title("RULE"), f"{width}x{height}+{x}+{y}")
         self.top.withdraw()
         try:
             self.top.grab_release()
@@ -980,7 +981,7 @@ class RuleSettingsPopup:
 
         corporate = self._card(
             body, "CHỐT QUYỀN",
-            "Mã được đánh dấu sẽ bị chặn BOT BUY. Nếu đang giữ position, Viking chỉ gửi cảnh báo Telegram để operator xử lý; hệ thống không tự SELL.",
+            f"Mã được đánh dấu sẽ bị chặn BOT BUY. Nếu đang giữ position, {APP_NAME} chỉ gửi cảnh báo Telegram để operator xử lý; hệ thống không tự SELL.",
             3, 0, span=2,
         )
         self._corporate_draft = [dict(item) for item in self.settings.corporate_actions]

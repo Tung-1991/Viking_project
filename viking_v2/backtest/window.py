@@ -13,6 +13,7 @@ from typing import Any, Callable
 import customtkinter as ctk
 
 from ..config import AppSettings
+from ..branding import window_title
 from ..dashboard.windows import (
     FONT_TABLE_HEADING,
     FONT_TABLE_VALUE,
@@ -220,7 +221,7 @@ class BacktestPopup:
         screen_h = max(700, int(parent.winfo_screenheight() or 700))
         width, height = min(1180, screen_w - 60), min(800, screen_h - 80)
         x, y = max(0, (screen_w - width) // 2), max(0, (screen_h - height) // 3)
-        self.top = _window(parent, "VIKING · BACKTEST", f"{width}x{height}+{x}+{y}")
+        self.top = _window(parent, window_title("BACKTEST"), f"{width}x{height}+{x}+{y}")
         try:
             self.top.grab_release()
         except tk.TclError:

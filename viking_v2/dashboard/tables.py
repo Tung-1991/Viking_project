@@ -276,7 +276,8 @@ class DashboardTablesMixin:
                 if cycle:
                     source = {
                         "BOT": "BOT",
-                        "MANUAL": "MANUAL_VIKING",
+                        "MANUAL": "MANUAL_APP",
+                        "MANUAL_VIKING": "MANUAL_APP",
                         "EXTERNAL": "EXTERNAL_DNSE",
                         "EXTERNAL_DNSE": "EXTERNAL_DNSE",
                     }.get(str(cycle.source).upper(), str(cycle.source).upper())
@@ -284,8 +285,8 @@ class DashboardTablesMixin:
                         source += "+EXTERNAL_DNSE"
                 elif row_source == "BOT":
                     source = "BOT"
-                elif row_source == "MANUAL":
-                    source = "MANUAL_VIKING"
+                elif row_source in {"MANUAL", "MANUAL_VIKING"}:
+                    source = "MANUAL_APP"
                 else:
                     source = "EXTERNAL_DNSE" if mode == "REAL" else (row_source or "PAPER")
                 opened = row.get("openedAt", row.get("createdAt", row.get("time", "")))
@@ -518,7 +519,8 @@ class DashboardTablesMixin:
                 gross = item.limit_price * item.quantity * 1000.0 if item.limit_price > 0 else 0.0
                 cycle = cycles_by_id.get(item.trade_id) if item.trade_id else None
                 display_source = {
-                    "MANUAL": "MANUAL_VIKING",
+                    "MANUAL": "MANUAL_APP",
+                    "MANUAL_VIKING": "MANUAL_APP",
                     "EXTERNAL": "EXTERNAL_DNSE",
                     "EXTERNAL_DNSE": "EXTERNAL_DNSE",
                 }.get(str(item.source).upper(), str(item.source).upper())

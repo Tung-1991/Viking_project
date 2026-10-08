@@ -14,6 +14,8 @@ import sqlite3
 import threading
 from typing import Any
 
+from ..branding import APP_NAME
+
 
 class StateCorruptionError(RuntimeError):
     pass
@@ -138,7 +140,7 @@ class AccountLease:
                 fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             self._handle.close()
-            raise RuntimeError("Tài khoản đã có một instance Viking đang chạy") from exc
+            raise RuntimeError(f"Tài khoản đã có một instance {APP_NAME} đang chạy") from exc
 
     def close(self):
         if not self._handle.closed:

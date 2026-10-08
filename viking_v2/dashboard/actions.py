@@ -19,6 +19,7 @@ from ..backtest.window import BacktestPopup
 from ..backtest.data import HistoricalDataStore
 
 from .. import config
+from ..branding import APP_NAME
 from ..config import AppSettings, save_settings
 from ..connections.telegram import SignalTelegramService, TelegramClient
 from ..connections.window import ConnectionPopup
@@ -1038,7 +1039,7 @@ class DashboardActionsMixin:
     def _apply_dnse_account(self, account_id: str) -> None:
         selected = config.normalize_account_id(account_id)
         if selected != config.normalize_account_id(self.account_id):
-            self._log(f"Đổi workspace {self.account_id} → {selected}; đang khởi động lại Viking.")
+            self._log(f"Đổi workspace {self.account_id} → {selected}; đang khởi động lại {APP_NAME}.")
             self.close()
             subprocess.Popen(
                 [sys.executable, "-m", "viking_v2.main", "--account", selected],
@@ -2240,7 +2241,7 @@ class DashboardActionsMixin:
                     return
                 if not messagebox.askyesno(
                     "Bắt đầu quản lý",
-                    f"Đưa vị thế {symbol} vào quản lý của Viking?",
+                    f"Đưa vị thế {symbol} vào quản lý của {APP_NAME}?",
                     parent=top,
                 ):
                     return

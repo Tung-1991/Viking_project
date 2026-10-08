@@ -1,4 +1,4 @@
-# Viking — đọc nhanh để vận hành
+# Money Hunter — đọc nhanh để vận hành
 
 ## Cài / cập nhật / mở
 
@@ -75,7 +75,7 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 - CACHE vàng: chưa gửi ở app. PARTIAL: khớp một phần, phần khớp được quản lý.
   T+ tím: đã mua nhưng chưa đủ cổ được phép bán. PendingCancel: chưa hủy xong.
 - BUY bỏ qua không tự mua lại khi có tiền/slot. Lịch sử tín hiệu để đối chiếu;
-  mua sau là quyết định MANUAL mới. Ưu tiên thao tác qua Viking.
+  mua sau là quyết định MANUAL mới. Ưu tiên thao tác qua Money Hunter.
 - BLOCK phải **MỞ BLOCK** đúng mã/sổ. ↻ reset thống kê/khóa chờ, không mở BLOCK,
   không xóa vị thế. THEO NGÀY chốt đúng giờ GMT+7; CỘNG DỒN từ lần ↻ gần nhất.
 - Telegram: GOM chờ gom tin BUY, không chờ đặt lệnh; GIÃN hạn chế tin mới cùng mã/loại.

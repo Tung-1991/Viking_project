@@ -316,7 +316,7 @@ def test_running_project_blocks_changes(tmp_path, module):
         "function Get-CimInstance { [pscustomobject]@{ExecutablePath=$PythonExe; "
         f"CommandLine=($PythonExe + ' -m {module}')}} }}\n"
         "try { Assert-AppStopped; throw 'MISSED_RUNNING_APP' } catch {\n"
-        "if ($_.Exception.Message -notlike '*Viking dang chay*') { throw }; Write-Output 'BLOCKED' }",
+        "if ($_.Exception.Message -notlike '*Money Hunter dang chay*') { throw }; Write-Output 'BLOCKED' }",
         tmp_path,
     )
     _assert_ok(result)
@@ -747,6 +747,6 @@ def test_unborn_repository_with_another_origin_is_not_retargeted(zip_repository)
     git("remote", "add", "origin", "https://example.invalid/not-viking.git", cwd=deployed)
     result = _run_ps("Update-Code", deployed)
     assert result.returncode != 0
-    assert "origin khong dung Viking" in result.stderr
+    assert "origin khong dung Money Hunter" in result.stderr
     assert git("remote", "get-url", "origin", cwd=deployed) == "https://example.invalid/not-viking.git"
     assert (deployed / "code.txt").read_text() == "old ZIP source"

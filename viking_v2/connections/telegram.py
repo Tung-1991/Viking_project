@@ -8,6 +8,7 @@ from typing import Any
 import requests
 
 from ..models import TradeCycle
+from ..branding import APP_NAME
 
 
 logger = logging.getLogger("VIKING_V2.telegram")
@@ -298,9 +299,9 @@ class SignalTelegramService:
                     f"🟠 EXTERNAL SELL · {symbol}",
                     f"Đã đồng bộ: {int(quantity):,} CP @ {self._price(price)}",
                     (
-                        f"Vị thế Viking còn: {int(remaining_quantity):,} CP"
+                        f"Vị thế {APP_NAME} còn: {int(remaining_quantity):,} CP"
                         if int(remaining_quantity or 0) > 0
-                        else "Vị thế Viking đã đóng hoàn toàn."
+                        else f"Vị thế {APP_NAME} đã đóng hoàn toàn."
                     ),
                 )
             )
@@ -361,7 +362,7 @@ class SignalTelegramService:
                     f"⚠️ CHỐT QUYỀN · {symbol}"
                     + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
                     f"Ngày GDKHQ: {ex_date}",
-                    "Đang có vị thế · Viking không tự bán · operator kiểm tra thủ công.",
+                    f"Đang có vị thế · {APP_NAME} không tự bán · operator kiểm tra thủ công.",
                 )
             )
         )
@@ -395,7 +396,7 @@ class SignalTelegramService:
                     "🔴 HỆ THỐNG CẦN KIỂM TRA"
                     + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
                     summary,
-                    "Xem HEALTH và log Viking để kiểm tra chi tiết.",
+                    f"Xem HEALTH và log {APP_NAME} để kiểm tra chi tiết.",
                 )
             )
         )

@@ -34,7 +34,7 @@ function Assert-AppStopped {
             $commandLine.IndexOf($PythonExe, [StringComparison]::OrdinalIgnoreCase) -ge 0
         )
         if ($sameEnvironment -and $commandLine -match 'viking_v2\.(main|services\.daemon)\b') {
-            throw 'Viking dang chay. Dong app va launcher cu truoc khi cai package/cap nhat.'
+            throw 'Money Hunter dang chay. Dong app va launcher cu truoc khi cai package/cap nhat.'
         }
     }
 }
@@ -313,7 +313,7 @@ function Connect-ZipRepository {
         # Resume a first connection interrupted during fetch; never retarget another remote.
         $origin = Invoke-Native $GitExe @('remote', 'get-url', 'origin')
         if ([string]$origin -ne $RepositoryUrl) {
-            throw 'Repo chua co revision va origin khong dung Viking. Khong tu thay remote.'
+            throw 'Repo chua co revision va origin khong dung Money Hunter. Khong tu thay remote.'
         }
     }
     Write-Host '[GIT] Ban ZIP / ket noi chua hoan tat. Backup va tu noi GitHub...'
@@ -346,7 +346,7 @@ function Update-Code {
     if ([string]$inside -ne 'true') { throw 'Thu muc nay khong phai Git worktree.' }
     $gitRoot = Invoke-Native $git @('rev-parse', '--show-toplevel')
     if ([IO.Path]::GetFullPath([string]$gitRoot).TrimEnd('\', '/') -ine $ProjectRoot.TrimEnd('\', '/')) {
-        throw 'Git root khong trung thu muc Viking. Khong ghi de.'
+        throw 'Git root khong trung thu muc Money Hunter. Khong ghi de.'
     }
     try { $current = Invoke-Native $git @('rev-parse', '--verify', '--quiet', 'HEAD') }
     catch {

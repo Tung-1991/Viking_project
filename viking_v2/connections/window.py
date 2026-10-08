@@ -13,6 +13,7 @@ from typing import Any, Callable
 import customtkinter as ctk
 
 from .. import config
+from ..branding import APP_NAME, window_title
 from ..config import AppSettings, load_settings, save_settings
 from ..dashboard.windows import FONT_KEY, FONT_VALUE, PALETTE, SymbolPicker, _HoverHint, _window
 from ..config import update_env
@@ -72,7 +73,7 @@ class VolumeScannerPopup:
         screen_h = max(700, int(parent.winfo_screenheight() or 700))
         width, height = min(1050, screen_w - 50), min(700, screen_h - 70)
         x, y = max(0, (screen_w - width) // 2), max(0, (screen_h - height) // 3)
-        self.top = _window(parent, "VIKING · LỌC VOLUME VN100", f"{width}x{height}+{x}+{y}")
+        self.top = _window(parent, window_title("LỌC VOLUME VN100"), f"{width}x{height}+{x}+{y}")
         self.top.configure(fg_color=self.BG)
         self.top.minsize(900, 560)
         self.top.resizable(True, True)
@@ -464,7 +465,7 @@ class ConnectionPopup:
         screen_h = max(700, int(parent.winfo_screenheight() or 700))
         width, height = min(1080, screen_w - 60), min(720, screen_h - 70)
         x, y = max(0, (screen_w - width) // 2), max(0, (screen_h - height) // 3)
-        self.top = _window(parent, "VIKING · KẾT NỐI", f"{width}x{height}+{x}+{y}")
+        self.top = _window(parent, window_title("KẾT NỐI"), f"{width}x{height}+{x}+{y}")
         self.top.withdraw()
         try:
             self.top.grab_release()
@@ -624,7 +625,7 @@ class ConnectionPopup:
         self.save_token_env = tk.BooleanVar(value=bool(os.getenv("DNSE_TRADING_TOKEN", "").strip()))
         credentials = self._card(
             body, "KẾT NỐI DNSE",
-            "Nhập API Key/Secret rồi bấm TEST. Viking gọi GET /accounts để kiểm tra và hiển thị "
+            f"Nhập API Key/Secret rồi bấm TEST. {APP_NAME} gọi GET /accounts để kiểm tra và hiển thị "
             "tài khoản CKCS. LƯU ghi API và tài khoản hoạt động vào viking_v2/.env. "
             "XÓA API bỏ Key/Secret và Trading Token trên máy này; giữ tài khoản, settings và vị thế. "
             "Không hủy lệnh đã gửi DNSE; muốn giao dịch REAL tiếp phải nhập API và xác thực OTP lại.",
@@ -1121,7 +1122,7 @@ class ConnectionPopup:
         holiday = self._card(
             body,
             "NGÀY NGHỈ GIAO DỊCH",
-            "Viking dùng lịch DNSE, tự chặn T7/CN và có sẵn lịch nghỉ giao dịch Việt Nam 2026. "
+            f"{APP_NAME} dùng lịch DNSE, tự chặn T7/CN và có sẵn lịch nghỉ giao dịch Việt Nam 2026. "
             "Chỉ thêm tại đây khi Sở công bố ngày nghỉ bổ sung.",
         )
         holiday.grid(row=3, column=0, sticky="ew", padx=6, pady=6)
@@ -1257,7 +1258,7 @@ class ConnectionPopup:
             ("protect", "PROTECT CHẠM MỨC", "OFF ở đây chỉ tắt tin, PROTECT AUTO vẫn bán. ON = AUTO vừa bán vừa báo; PROTECT ALERT chỉ báo, không bán. Phút = giãn các tin mới cùng mã, không trì hoãn SELL.", "cooldown"),
             ("indicator_exit", "E · EXIT ALERT", "Báo khi E phát tín hiệu ALERT; ALERT không đặt lệnh. Phút = giãn các tin mới cùng mã, không phải cứ mỗi khoảng này gửi một tin.", "cooldown"),
             ("closed", "VỊ THẾ BOT ĐÃ ĐÓNG", "Gửi 1 tin tổng kết khi vị thế BOT đã bán hết, không chờ phút. Ví dụ mua 1.000 CP: bán 500 chưa tổng kết; bán nốt 500 gửi 1 tin. Vị thế BOT tiếp theo có tin riêng. Cần bật Telegram + dòng này và LƯU.", "once"),
-            ("external_sell", "SELL TRÊN DNSE APP", "Báo khi Viking phát hiện và đồng bộ một lệnh bán ngoài app Viking. Phút = giãn các thông báo mới; 0 = không giãn thời gian, vẫn chống trùng theo lệnh.", "cooldown"),
+            ("external_sell", "SELL TRÊN DNSE APP", f"Báo khi {APP_NAME} phát hiện và đồng bộ một lệnh bán ngoài app {APP_NAME}. Phút = giãn các thông báo mới; 0 = không giãn thời gian, vẫn chống trùng theo lệnh.", "cooldown"),
             (
                 "corporate_action", "LỊCH NGHỈ & CHỐT QUYỀN",
                 "Báo ngày thị trường nghỉ và cảnh báo mã đang giữ tới ngày giao dịch không hưởng quyền.",
@@ -2167,7 +2168,7 @@ class ConnectionPopup:
             error = ""
             client = TelegramClient(token)
             try:
-                client.send_message(chat_id, "Viking V2 · Telegram BUY/CLOSED hoạt động.")
+                client.send_message(chat_id, f"{APP_NAME} · Telegram BUY/CLOSED hoạt động.")
             except Exception as exc:  # network/API detail is useful to the operator
                 error = client.safe_error(exc)
             self._post_ui(lambda: self._finish_telegram_test(error))

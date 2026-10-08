@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any, Iterable
 
 from .. import config
+from ..branding import APP_NAME
 from ..config import load_settings
 from ..connections.dnse.paper import PaperBroker
 from ..connections.dnse.client import DNSEClient
@@ -225,7 +226,7 @@ def run(account_id: str | None = None) -> int:
         for symbol in active_runtime_symbols(runtime.watchlist, settings.priority_symbols, trades.list_cycles(), queue.list_all(), book)))
     if connected and symbols:
         market.start(symbols)
-    logger.info("Viking V2 daemon started; BOT is OFF.")
+    logger.info("%s daemon started; BOT is OFF.", APP_NAME)
     last_symbols: list[str] = []
     previous_runtime_status = bridge.read_status()
     ticks: dict[str, dict] = {symbol: {**tick, "stale": True} for symbol, tick in (previous_runtime_status.get("ticks") or {}).items() if isinstance(tick, dict)}
@@ -757,7 +758,7 @@ def run(account_id: str | None = None) -> int:
     except Exception as exc:
         exit_code = 1
         error = str(exc)
-        logger.exception("Viking V2 daemon stopped by an unexpected error")
+        logger.exception("%s daemon stopped by an unexpected error", APP_NAME)
     finally:
         heartbeat_stop.set()
         heartbeat_thread.join(timeout=max(1.0, config.HEARTBEAT_SECONDS + 0.5))
@@ -776,13 +777,13 @@ def run(account_id: str | None = None) -> int:
                 working_dates=[],
             )
         )
-        logger.info("Viking V2 daemon stopped.")
+        logger.info("%s daemon stopped.", APP_NAME)
         worker_lease.close()
     return exit_code
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Viking V2 static-rule daemon")
+    parser = argparse.ArgumentParser(description=f"{APP_NAME} static-rule daemon")
     parser.add_argument("--account", default=config.active_account_id())
     args = parser.parse_args(argv)
     return run(args.account)

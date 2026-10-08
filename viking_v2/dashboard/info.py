@@ -4,6 +4,7 @@ from typing import Any, Callable, Iterable
 
 import customtkinter as ctk
 
+from ..branding import window_title
 from ..backtest.data import HistoricalDataStore
 from ..backtest.models import BacktestResult, BacktestScenario, BacktestSettings
 from ..rules.business import StaticRuleParameters
@@ -33,7 +34,7 @@ class InfoPopup:
         sw, sh = int(parent.winfo_screenwidth()), int(parent.winfo_screenheight())
         width, height = min(1240, sw - 60), min(780, sh - 80)
         x, y = max(10, (sw - width) // 2), max(10, (sh - height) // 3)
-        self.top = _window(parent, "VIKING · INFO", f"{width}x{height}+{x}+{y}")
+        self.top = _window(parent, window_title("INFO"), f"{width}x{height}+{x}+{y}")
         try:
             self.top.grab_release()
         except Exception:
@@ -189,6 +190,8 @@ class InfoPopup:
         em_modes: Iterable[str],
         whipsaw_enabled: bool,
         loss_lock: str,
+        sl_enabled: bool = True,
+        manual_sell_pause_minutes: int | None = None,
         compact_layout: bool = False,
     ) -> int:
         exposure = p.exposure
@@ -245,17 +248,17 @@ class InfoPopup:
                 "SL BOT / RE",
                 (
                     f"ON · {p.initial_sl_pct:g}% / {p.reentry_sl_pct:g}%"
-                    if self.settings.bot_sl_enabled else "OFF · LỆNH BOT MỚI"
+                    if sl_enabled else "OFF · LỆNH BOT MỚI"
                 ),
-                PALETTE["RED"] if self.settings.bot_sl_enabled else PALETTE["MUTED"],
+                PALETTE["RED"] if sl_enabled else PALETTE["MUTED"],
             ),
             ("COMPOUND", "OFF" if p.no_compound_enabled else "ON", PALETTE["TEXT"]),
             ("WHIPSAW", f"{self._on_off(whipsaw_enabled)} · {p.whipsaw_n}/{p.whipsaw_x}", PALETTE["WARN"]),
             ("LOSS LOCK", loss_lock, PALETTE["WARN"]),
             (
                 "BÁN TAY → DỪNG BUY",
-                f"{self.settings.manual_sell_pause_minutes} PHÚT"
-                if self.settings.manual_sell_pause_minutes else "OFF",
+                ("KHÔNG ÁP DỤNG" if manual_sell_pause_minutes is None else
+                 f"{manual_sell_pause_minutes} PHÚT" if manual_sell_pause_minutes else "OFF"),
                 PALETTE["WARN"],
             ),
             ("MIN LOT", "100 CP" if p.force_min_lot_enabled else "OFF", PALETTE["TEXT"]),
@@ -314,6 +317,8 @@ class InfoPopup:
             em_modes=settings.bot_em_modes,
             whipsaw_enabled=p.whipsaw_enabled,
             loss_lock=f"{p.loss_lock_count} LOSS · " + ("BLOCK" if p.loss_lock_mode == "BLOCK" else f"{p.loss_lock_hours} GIỜ"),
+            sl_enabled=settings.bot_sl_enabled,
+            manual_sell_pause_minutes=settings.manual_sell_pause_minutes,
             compact_layout=True,
         )
         self._section(body, row, "THỰC THI", [

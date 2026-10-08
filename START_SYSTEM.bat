@@ -1,13 +1,13 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
 cd /d "%~dp0"
-title VIKING V2
+title Money Hunter
 color 0B
 
 :menu
 cls
 echo ========================================
-echo               VIKING V2
+echo              Money Hunter
 echo ========================================
 echo   1. Ra soat / cai moi truong
 echo   2. Kiem tra / cap nhat GitHub (clone / ZIP, ghi de source)

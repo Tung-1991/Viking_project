@@ -8,6 +8,7 @@ from typing import Any
 import customtkinter as ctk
 
 from .. import config
+from ..branding import window_title
 from ..config import AppSettings, load_settings
 from ..connections.dnse.client import DNSEClient
 from ..connections.dnse.paper import PaperBroker
@@ -142,12 +143,12 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         self.after(800, self._refresh_snapshots)
 
     def _build_window(self) -> None:
-        self.title("Viking V2 CKCS — Static Rule")
+        self.title(window_title("CKCS — Static Rule"))
         screen_w = max(1024, int(self.winfo_screenwidth() or 1024))
         screen_h = max(720, int(self.winfo_screenheight() or 720))
         width = min(1650, max(1100, screen_w - 60))
         # Use a little more vertical room on scaled Windows displays so the
-        # compact left panel and VIKING-beta fit without a pointless scrollbar.
+        # compact left panel and brand footer fit without a pointless scrollbar.
         height = min(1000, max(720, screen_h - 40))
         self.geometry(f"{width}x{height}+{max(0, (screen_w-width)//2)}+{max(0, (screen_h-height)//2)}")
         self.minsize(1080, 700)
