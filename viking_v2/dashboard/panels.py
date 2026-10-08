@@ -11,7 +11,10 @@ import customtkinter as ctk
 from ..branding import APP_NAME
 from ..rules.business import average_true_range_pct, indicator_snapshot, protect_level
 from ..trading.market import VN_TZ, market_now, market_phase, merge_tick_into_daily_bars
-from ..trading.portfolio import nav_from_balance, size_buy_order, stock_exposure_limit, validate_quantity
+from ..trading.portfolio import (
+    nav_from_balance, position_quantity as holding_quantity,
+    size_buy_order, stock_exposure_limit, validate_quantity,
+)
 from ..trading.validation import decision_is_fresh, decisions_for_mode, quote_is_fresh
 from .view import (
     COL_BORDER, COL_GRAY, COL_GREEN, COL_MUTED, COL_SETTLEMENT_BG, COL_SETTLEMENT_TEXT,
@@ -934,8 +937,16 @@ class DashboardPanelsMixin:
         self.preview_em_exit, self.preview_exit_value, self.preview_exit_detail = level_card(
             1, 2, "E · OFF", COL_RED,
         )
-        _HoverHint(self.preview_em_normal, "PROTECT theo đỉnh, không phải TP cố định. Dynamic là bảo vệ trước ARM.\nAUTO bán theo % đã đặt; ALERT chỉ ghi nhận. Các con số ở đây là preview, chưa có vị thế thì chưa có đỉnh thật.")
-        _HoverHint(self.preview_em_exit, "E dùng EMA SELL/RSI để thoát. AUTO bán 100% phần còn lại; ALERT không đặt lệnh.\nE độc lập với ARM/PROTECT; OFF là chưa gắn E cho lệnh MANUAL này.")
+        for widget in (self.preview_em_normal, self.preview_normal_value, self.preview_normal_detail):
+            _HoverHint(widget, self._protect_preview_hint, placement="inside")
+        for widget in (self.preview_em_exit, self.preview_exit_value, self.preview_exit_detail):
+            _HoverHint(widget, self._exit_preview_hint, placement="inside")
+        self.preview_normal_detail.bind("<Configure>", lambda _event: self._fit_protect_preview(), add="+")
+        for widget, font in ((self.preview_normal_value, ("Cascadia Mono", 12)),
+                             (self.preview_exit_value, ("Cascadia Mono", 12)),
+                             (self.preview_exit_detail, ("Segoe UI", 10))):
+            widget.bind("<Configure>", lambda _event, label=widget, base=font:
+                        fit_label_text(label, base_font=base), add="+")
 
         rule_group.grid_columnconfigure(0, weight=1)
         for row in (1, 2, 3, 4):
@@ -996,7 +1007,7 @@ class DashboardPanelsMixin:
             font=("Segoe UI", 12), text_color=COL_PREVIEW_TEXT,
             anchor="w", justify="left", wraplength=0,
         )
-        self.preview_rule_market.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=4)
+        self.preview_rule_market.grid(row=0, column=1, sticky="ew", padx=(0, 4), pady=4)
         self.preview_rule_market.bind("<Configure>", lambda _event: fit_label_text(
             self.preview_rule_market, base_font=("Segoe UI", 12)), add="+")
         _HoverHint(self.preview_rule_market, self._market_confirmation_hint, placement="inside")
@@ -1007,6 +1018,16 @@ class DashboardPanelsMixin:
         self.preview_rule_market_detail.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 4))
         self.preview_rule_market_detail.grid_remove()
         _HoverHint(self.preview_rule_market_detail, self._market_confirmation_hint, placement="inside")
+        # This is a display switch, not the trading override control in RULE.
+        self.preview_p1_swap = ctk.CTkButton(
+            phase1, text="⇄", width=24, height=20, corner_radius=5,
+            font=("Segoe UI Symbol", 12), fg_color="#343A43", hover_color="#4B515B",
+            command=self._swap_phase1_preview,
+        )
+        self.preview_p1_swap.grid(row=0, column=2, sticky="e", padx=(0, 6), pady=3)
+        _HoverHint(self.preview_p1_swap,
+                   "Đổi góc xem P1: chọn tay ↔ theo rule VNINDEX.\n"
+                   "Chỉ xem tham khảo; không đổi setting, vốn hoặc đặt lệnh.", placement="inside")
 
         def fit_p1_row(_event):
             # Very narrow/DPI-scaled cards use the existing second line for
@@ -1019,10 +1040,11 @@ class DashboardPanelsMixin:
                 else:
                     phase1._viking_title_widget.grid()
                 self.preview_rule_market.grid(column=0 if narrow else 1, columnspan=2 if narrow else 1,
-                                              padx=8 if narrow else (0, 8))
+                                              padx=(8, 4) if narrow else (0, 4))
                 note = self.preview_rule_market_detail.cget("text").removeprefix("P1 · ")
                 self.preview_rule_market_detail.configure(text=f"P1 · {note}" if narrow else note)
             fit_label_text(self.preview_rule_market, base_font=("Segoe UI", 12))
+            fit_label_text(self.preview_rule_market_detail, base_font=("Segoe UI", 10))
         phase1.bind("<Configure>", fit_p1_row, add="+")
 
         phase2 = phase_card(
@@ -1371,9 +1393,11 @@ class DashboardPanelsMixin:
         active = labels.get(str(allocation.get("state", "UNKNOWN")), "CHƯA XÁC NHẬN")
         active_pct = _number(allocation.get("exposure_pct"))
         headline = f"ĐANG DÙNG: {active} · CP {active_pct:g}% / TIỀN {100 - active_pct:g}%.\n"
-        if current.get("override_enabled"):
+        manual_view = bool(current.get("manual_view", current.get("override_enabled")))
+        alternate = bool(current.get("alternate_view"))
+        if manual_view:
             headline = f"TỶ TRỌNG CHỌN TAY: CP {active_pct:g}% / TIỀN {100 - active_pct:g}%.\n"
-            explanation = "Bỏ qua phân loại VNINDEX và chờ xác nhận; đây không phải trạng thái thị trường thực tế.\n"
+            explanation = "Tỷ trọng nhập trong RULE, không phải xu hướng VNINDEX thực tế.\n"
         elif current.get("confirmation_pending"):
             from ..rules.business import StaticRuleParameters
             candidate_pct = StaticRuleParameters.from_dict(self.settings.rule_parameters).exposure.get(state)
@@ -1384,6 +1408,12 @@ class DashboardPanelsMixin:
             )
         else:
             explanation = "Hiện không có trạng thái mới đang chờ xác nhận.\n"
+        if alternate:
+            headline = headline.replace("ĐANG DÙNG:", "THEO RULE:").rstrip() + " THAM KHẢO.\n"
+        if current.get("override_enabled") and not manual_view:
+            explanation = explanation.rstrip() + " Đang giao dịch theo tỷ trọng chọn tay.\n"
+        elif alternate and manual_view:
+            explanation = explanation.rstrip() + " Đang giao dịch theo rule VNINDEX.\n"
         nav = allocation.get("nav")
         example = (
             f"{allocation.get('mode', '')}: NAV {_compact_vnd(nav)} → CP tối đa "
@@ -1393,7 +1423,7 @@ class DashboardPanelsMixin:
         return (f"{headline}{explanation}"
                 "CP% / TIỀN% tính trên NAV = tiền + giá trị cổ phiếu của sổ đang xem.\n"
                 f"{example}"
-                "Đây là giới hạn vốn, không phải lệnh mua/bán. Đổi tỷ trọng không tự bán cổ phiếu.")
+                "⇄ chỉ đổi góc xem, không đổi setting. Đây là giới hạn vốn, không phải lệnh mua/bán.")
 
     def _entry_capital_hint(self) -> str:
         summary = getattr(self, "_preview_entry_summary", "chờ dữ liệu")
@@ -1406,17 +1436,86 @@ class DashboardPanelsMixin:
             "MANUAL nhập KL tự chọn, vẫn kiểm tra tiền/phí và điều kiện lệnh; không dùng giới hạn số lần BUY BOT."
         )
 
-    def _phase1_capital_preview(self, details: dict[str, Any]) -> dict[str, Any]:
+    def _protect_preview_hint(self) -> str:
+        preview = getattr(self, "_preview_protect_prices", {})
+        arm, sell = preview.get("arm", 0), preview.get("sell", 0)
+        example = (
+            f"Nếu đỉnh chỉ tới ARM {_display_price(arm)} đ → mốc bán {_display_price(sell)} đ.\n"
+            if arm > 0 else "Chưa có giá vào để tính ARM và mốc bán.\n"
+        )
+        actual = preview.get("actual_sell")
+        if actual is not None and actual > 0:
+            example = f"Mốc bán của vị thế: {_display_price(actual)} đ; theo đỉnh đã ghi nhận.\n"
+        return (
+            "ARM: mức lãi bắt đầu bảo vệ theo đỉnh. BÁN: giá lùi khỏi đỉnh kích hoạt PROTECT.\n"
+            f"{example}"
+            "Đỉnh cao hơn → mốc bán tăng theo; đây không phải giá khớp được bảo đảm.\n"
+            f"ARM {preview.get('arm_pct', 7):g}% · TRAIL {preview.get('trail_pct', 2.5):g}% · "
+            f"BÁN {preview.get('sell_pct', 100):g}% phần còn lại. AUTO tự bán; ALERT chỉ báo."
+            " Dynamic có thể bảo vệ trước ARM."
+        )
+
+    def _fit_protect_preview(self) -> None:
+        label = self.preview_normal_detail
+        full, compact = getattr(self, "_preview_protect_detail", ("", ""))
+        if isinstance(label, ctk.CTkLabel) and full:
+            narrow = label.winfo_width() / label._get_widget_scaling() < 300
+            shown = compact if narrow else full
+            if label.cget("text") != shown:
+                label.configure(text=shown)
+            fit_label_text(label, base_font=("Segoe UI", 10))
+
+    def _exit_preview_hint(self) -> str:
+        preview = getattr(self, "_preview_exit_state", {})
+        price = _number(preview.get("price"))
+        price_text = f"{_display_price(price)} đ" if price > 0 else "chưa có giá"
+        signal = preview.get("signal", "--")
+        enabled = bool(preview.get("enabled"))
+        quantity = int(preview.get("quantity", 0))
+        policy = preview.get("policy", "ALERT")
+        status = ("ĐANG TẮT" if not enabled else "CHƯA CÓ VỊ THẾ" if quantity <= 0 else
+                  "CÓ TÍN HIỆU THOÁT" if signal == "SELL" else "CHỜ TÍN HIỆU THOÁT")
+        behavior = ("tự gửi bán 100% phần còn lại khi có tín hiệu và đủ điều kiện lệnh."
+                    if policy == "AUTO" else "chỉ báo tín hiệu, không đặt lệnh.")
+        return (
+            "E thoát theo EMA SELL/RSI, không có một giá kích hoạt cố định như SL.\n"
+            f"Giá thị trường: {price_text} · {status}.\n"
+            f"{policy}: {behavior}\n"
+            "Giá hiển thị để tham khảo, không bảo đảm giá khớp. Chưa có vị thế thì không gửi SELL."
+        )
+
+    def _exit_preview_quantity(self, details: dict[str, Any], symbol: str) -> int:
+        # Account holdings exist even when there is no bot decision yet.
+        snapshot = getattr(self, "snapshots", {}).get(self.mode.get())
+        if snapshot is not None:
+            return sum(holding_quantity(row) for row in snapshot[1]
+                       if isinstance(row, dict) and str(row.get("symbol", "")).upper() == symbol.upper())
+        return max(0, int(_number(details.get("position_quantity"))))
+
+    def _exit_preview_signal(self, decision: dict[str, Any], symbol: str) -> str:
+        details = decision.get("details") if isinstance(decision.get("details"), dict) else {}
+        if (decision.get("timestamp") or details.get("updated_at")) and not decision_is_fresh(decision, symbol, self.mode.get()):
+            return "--"
+        return str(decision.get("signal") or "--").upper()
+
+    def _phase1_capital_preview(self, details: dict[str, Any], *, manual: bool | None = None) -> dict[str, Any]:
         """Display the current book's P1 envelope, not its actual stock/cash mix."""
         from ..rules.business import StaticRuleParameters
         params = StaticRuleParameters.from_dict(self.settings.rule_parameters)
         mode = self.mode.get()
         state_fn = getattr(getattr(self, "rule_state", None), "confirmed_market_state", None)
         state = state_fn() if callable(state_fn) else "UNKNOWN"
-        if self.settings.market_phase_override_enabled:
+        override = self.settings.market_phase_override_enabled if manual is None else manual
+        market = details.get("market") if isinstance(details.get("market"), dict) else {}
+        if override:
             exposure = self.settings.market_phase_override_exposure_pct / 100.0
             state = self.settings.market_phase_override
         elif callable(state_fn):
+            exposure = params.exposure.get(state, 0.0)
+        elif manual is False:
+            # Never reuse an override's exposure or selected state as the
+            # automatic market result when the rule-state reader is absent.
+            state = str(market.get("confirmed_state") or "UNKNOWN").upper()
             exposure = params.exposure.get(state, 0.0)
         else:
             exposure = _number(details.get("exposure"))
@@ -1427,9 +1526,79 @@ class DashboardPanelsMixin:
         stock_limit = stock_exposure_limit(nav, exposure) if nav is not None else None
         return {
             "mode": mode, "nav": nav, "state": state, "exposure_pct": exposure * 100.0,
-            "state_authoritative": bool(callable(state_fn) or self.settings.market_phase_override_enabled),
+            "state_authoritative": bool(callable(state_fn) or override or manual is False),
             "stock_limit": stock_limit, "cash_reserve": nav - stock_limit if nav is not None else None,
         }
+
+    def _swap_phase1_preview(self) -> None:
+        """Switch the P1 view only; never save settings or refresh an order."""
+        self._preview_p1_alternate = not getattr(self, "_preview_p1_alternate", False)
+        details, state = getattr(self, "_preview_p1_data", ({}, "UNKNOWN"))
+        self._render_phase1_preview(details, state)
+
+    def _render_phase1_preview(self, details: dict[str, Any], market_state: str = "UNKNOWN") -> None:
+        self._preview_p1_data = (details, market_state)
+        alternate = bool(getattr(self, "_preview_p1_alternate", False))
+        override = bool(self.settings.market_phase_override_enabled)
+        manual_view = override != alternate
+        market = dict(details.get("market") or {}) if isinstance(details.get("market"), dict) else {}
+        confirmation_fn = getattr(getattr(self, "rule_state", None), "market_confirmation", None)
+        if callable(confirmation_fn):
+            confirmation = confirmation_fn(int(self.settings.rule_parameters.get("confirm_sessions", 3)))
+            market.update(confirmed_state=confirmation["confirmed"], candidate_state=confirmation["candidate"],
+                          confirmation_count=confirmation["count"], confirmation_required=confirmation["required"],
+                          confirmation_pending=confirmation["pending"])
+        elif override and not manual_view:
+            # Older decision payloads hide pending confirmation in override.
+            # Read its explicit automatic state, never its override state.
+            confirmed = str(market.get("confirmed_state") or "UNKNOWN").upper()
+            candidate = str(market.get("candidate_state") or market.get("auto_display_state") or "UNKNOWN").upper()
+            market.update(candidate_state=candidate,
+                          confirmation_pending=confirmed == "UNKNOWN" or candidate != confirmed)
+        market.update(override_enabled=override, manual_view=manual_view, alternate_view=alternate)
+        if manual_view:
+            market["confirmation_pending"] = False
+        self._preview_market_confirmation = market
+        allocation = self._phase1_capital_preview(details, manual=manual_view) if alternate else self._phase1_capital_preview(details)
+        self._preview_market_budget = allocation
+        display_state = str(allocation["state"] if allocation["state_authoritative"] else market_state or "UNKNOWN").upper()
+        labels = {"UPTREND": "TĂNG", "DOWNTREND": "GIẢM", "ACCUMULATION": "TÍCH LŨY",
+                  "DISTRIBUTION": "PHÂN PHỐI", "TRANSITION": "ĐANG TÍNH", "UNKNOWN": "ĐANG TÍNH"}
+        color = (COL_GREEN if display_state in {"UPTREND", "ACCUMULATION"} else
+                 COL_RED if display_state in {"DOWNTREND", "DISTRIBUTION"} else COL_WARN)
+        pct = allocation["exposure_pct"]
+        value = f"CP: {pct:g}% · TIỀN: {max(0.0, 100 - pct):g}%"
+        if not manual_view:
+            value = f"{labels.get(display_state, 'ĐANG TÍNH')} · {value}"
+        self.preview_rule_market.configure(text=value, text_color=COL_PREVIEW_TEXT if manual_view else color)
+        pending = bool(market.get("confirmation_pending"))
+        notes = ["TỶ TRỌNG CHỌN TAY"] if manual_view else []
+        if pending:
+            count = max(0, int(market.get("confirmation_count", 0) or 0))
+            required = max(1, int(market.get("confirmation_required", 3) or 3))
+            candidate = labels.get(str(market.get("candidate_state", "")).upper(), "ĐANG TÍNH")
+            notes.append(f"XÁC NHẬN {candidate} · {count}/{required} PHIÊN")
+        elif not manual_view:
+            notes.append("P1 TỰ ĐỘNG")
+        if alternate:
+            notes = ["CHỌN TAY · THAM KHẢO" if manual_view else "THEO RULE · THAM KHẢO"]
+            if pending:
+                notes = [f"THEO RULE · CHỜ {candidate} {count}/{required}"]
+        else:
+            volume = str(market.get("volume_confidence") or "OFF").upper()
+            if volume != "OFF":
+                notes.append(f"VOLUME {volume}")
+            updated = str(details.get("updated_at") or "")
+            if len(updated) >= 16:
+                notes.append(updated[11:16])
+        narrow = getattr(getattr(self.preview_rule_market, "master", None), "_viking_narrow", False)
+        self.preview_rule_market_detail.configure(
+            text=("P1 · " if narrow else "") + " · ".join(notes),
+            text_color=COL_WARN if pending or manual_view or alternate else COL_PREVIEW_TEXT,
+        )
+        self.preview_rule_market_detail.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=(0, 3))
+        fit_label_text(self.preview_rule_market, base_font=("Segoe UI", 12))
+        fit_label_text(self.preview_rule_market_detail, base_font=("Segoe UI", 10))
 
     def _refresh_full_order_preview(self, status: dict[str, Any] | None = None) -> None:
         if not hasattr(self, "preview_order_title"):
@@ -1642,9 +1811,12 @@ class DashboardPanelsMixin:
             entry_price, normal_arm, normal_arm, normal_giveback,
             dynamic_enabled=normal_dynamic,
         ).trigger_price if entry_price > 0 else 0.0
+        self._preview_protect_prices = {"arm": normal_price, "sell": normal_preview_sell,
+                                        "arm_pct": normal_arm, "trail_pct": normal_giveback,
+                                        "sell_pct": normal_sell}
         self.preview_normal_value.configure(
             text=(
-                f"{_display_price(normal_price)} → {_display_price(normal_preview_sell)}"
+                f"ARM: {_display_price(normal_price)} · BÁN: {_display_price(normal_preview_sell)}"
                 if normal_price > 0 else "CHƯA CÓ GIÁ"
             ),
         )
@@ -1653,6 +1825,12 @@ class DashboardPanelsMixin:
                 f"{normal_policy} · ARM {normal_arm:g}% · TRAIL {normal_giveback:g}% · BÁN {normal_sell:g}%"
                 f"{' · LẶP' if normal_repeat and normal_sell < 100 else ''}"
             ),
+        )
+        self._preview_protect_detail = (
+            f"{normal_policy} · ARM {normal_arm:g}% · TRAIL {normal_giveback:g}% · BÁN {normal_sell:g}%"
+            f"{' · LẶP' if normal_repeat and normal_sell < 100 else ''}",
+            f"{normal_policy} · BÁN {normal_sell:g}% · LÙI {normal_giveback:g}%"
+            f"{' · LẶP' if normal_repeat and normal_sell < 100 else ''}",
         )
         em_labels = {
             "normal_protection": "PROTECT",
@@ -1686,7 +1864,7 @@ class DashboardPanelsMixin:
             ),
         )
         current_profit = decision_details.get("current_profit_pct")
-        signal = str(decision.get("signal") or "--").upper()
+        signal = self._exit_preview_signal(decision, symbol)
         for key, widget in em_widgets.items():
             enabled = bool(self._em_states.get(key, False))
             state_label = (
@@ -1707,7 +1885,7 @@ class DashboardPanelsMixin:
                 )
             )
         exit_enabled = bool(self._em_states.get("indicator_exit", False))
-        position_quantity = max(0, int(decision_details.get("position_quantity", 0) or 0))
+        position_quantity = self._exit_preview_quantity(decision_details, symbol)
         self._render_exit_sell_preview(
             signal, exit_enabled, position_quantity, indicator_exit_policy,
         )
@@ -1715,17 +1893,28 @@ class DashboardPanelsMixin:
             protected = decision_details.get("normal_trigger_price")
             protect_state = str(decision_details.get("normal_state", "WAIT") or "WAIT").upper()
             effective_trail = decision_details.get("normal_effective_trail_pct")
+            self._preview_protect_prices["actual_sell"] = _number(protected)
+            state_label = {"WAIT": "CHỜ", "ARM": "ĐÃ ARM", "DYN": "DYNAMIC",
+                           "ARMED": "ĐÃ ARM", "DYNAMIC": "DYNAMIC", "ALERT": "CHẠM MỐC",
+                           "TRIGGERED": "CHẠM MỐC"}.get(protect_state, protect_state)
             self.preview_normal_value.configure(
                 text=(
-                    f"{protect_state} · PNL {_number(current_profit):+.1f}% · PROTECT {_display_price(protected)}"
-                    if protected is not None else
-                    f"{protect_state} · PNL {_number(current_profit):+.1f}%"
+                    f"{state_label} · BÁN: {_display_price(protected)}"
+                    if _number(protected) > 0 else
+                    f"{state_label} · PNL {_number(current_profit):+.1f}%"
                 )
             )
             if effective_trail is not None:
+                self._preview_protect_detail = (
+                    _dynamic_atr_preview_text(decision_details, params),
+                    f"{normal_policy} · BÁN {normal_sell:g}% · LÙI {_number(effective_trail):g}%",
+                )
                 self.preview_normal_detail.configure(
                     text=_dynamic_atr_preview_text(decision_details, params),
                 )
+        fit_label_text(self.preview_normal_value, base_font=("Cascadia Mono", 12))
+        fit_label_text(self.preview_normal_detail, base_font=("Segoe UI", 10))
+        self._fit_protect_preview()
         self._refresh_rule_preview(status, symbol)
 
     def _refresh_rule_preview(self, status: dict[str, Any], symbol: str) -> None:
@@ -1742,8 +1931,8 @@ class DashboardPanelsMixin:
 
         action = str(decision.get("action") or "WAIT").upper()
         market_state = str(decision.get("market_state") or "UNKNOWN").upper()
-        signal = str(decision.get("signal") or "--").upper()
-        position_quantity = max(0, int(details.get("position_quantity", 0) or 0))
+        signal = self._exit_preview_signal(decision, symbol)
+        position_quantity = self._exit_preview_quantity(details, symbol)
         self._render_exit_sell_preview(
             signal,
             bool(self._em_states.get("indicator_exit", False)),
@@ -1755,82 +1944,7 @@ class DashboardPanelsMixin:
             text=f"MUA · {'ON' if bot_enabled else 'OFF'}",
             text_color=COL_GREEN if bot_enabled else COL_RED,
         )
-        market_details = details.get("market") if isinstance(details.get("market"), dict) else {}
-        confirmation_fn = getattr(getattr(self, "rule_state", None), "market_confirmation", None)
-        if callable(confirmation_fn):
-            confirmation = confirmation_fn(int(rule_params.get("confirm_sessions", 3)))
-            market_details = {
-                **market_details, "confirmed_state": confirmation["confirmed"],
-                "candidate_state": confirmation["candidate"], "confirmation_count": confirmation["count"],
-                "confirmation_required": confirmation["required"], "confirmation_pending": confirmation["pending"],
-            }
-        market_details = {**market_details, "override_enabled": self.settings.market_phase_override_enabled}
-        if self.settings.market_phase_override_enabled:
-            market_details["confirmation_pending"] = False
-        self._preview_market_confirmation = market_details
-        allocation = self._phase1_capital_preview(details)
-        self._preview_market_budget = allocation
-        display_state = str(
-            allocation["state"] if allocation["state_authoritative"] else market_state
-            or "UNKNOWN"
-        ).upper()
-        state_labels = {
-            "UPTREND": "TĂNG",
-            "DOWNTREND": "GIẢM",
-            "ACCUMULATION": "TÍCH LŨY",
-            "DISTRIBUTION": "PHÂN PHỐI",
-            "TRANSITION": "ĐANG TÍNH",
-            "UNKNOWN": "ĐANG TÍNH",
-        }
-        state_label = state_labels.get(display_state, display_state.replace("_", " "))
-        market_color = (
-            COL_GREEN if display_state in {"UPTREND", "ACCUMULATION"}
-            else COL_RED if display_state in {"DOWNTREND", "DISTRIBUTION"}
-            else COL_WARN
-        )
-        pending_confirmation = bool(market_details.get("confirmation_pending", False))
-        exposure_pct = allocation["exposure_pct"]
-        cash_pct = max(0.0, 100.0 - exposure_pct)
-        self.preview_rule_market.configure(
-            text=(f"CP: {exposure_pct:g}% · TIỀN: {cash_pct:g}%"
-                  if market_details.get("override_enabled") else
-                  f"{state_label} · CP: {exposure_pct:g}% · TIỀN: {cash_pct:g}%"),
-            text_color=COL_PREVIEW_TEXT if market_details.get("override_enabled") else market_color,
-        )
-        fit_label_text(self.preview_rule_market, base_font=("Segoe UI", 12))
-        market_notes: list[str] = []
-        override_enabled = bool(market_details.get("override_enabled", False))
-        if override_enabled:
-            market_notes.append("TỶ TRỌNG CHỌN TAY")
-        elif not pending_confirmation:
-            market_notes.append("P1 TỰ ĐỘNG")
-        if pending_confirmation:
-            confirmation_count = max(
-                0, int(market_details.get("confirmation_count", 0) or 0),
-            )
-            confirmation_required = max(
-                1, int(market_details.get("confirmation_required", 1) or 1),
-            )
-            market_notes.append(
-                f"XÁC NHẬN {state_labels.get(str(market_details.get('candidate_state', '')).upper(), '?')} · {confirmation_count}/{confirmation_required} PHIÊN"
-            )
-        volume_confidence = str(market_details.get("volume_confidence") or "OFF").upper()
-        if volume_confidence != "OFF":
-            market_notes.append(f"VOLUME {volume_confidence}")
-        updated_at = str(details.get("updated_at") or "")
-        if len(updated_at) >= 16:
-            market_notes.append(updated_at[11:16])
-        self.preview_rule_market_detail.configure(
-            text=("P1 · " if getattr(getattr(self.preview_rule_market, "master", None), "_viking_narrow", False) else "")
-                 + " · ".join(market_notes),
-            text_color=COL_WARN if pending_confirmation or override_enabled else COL_PREVIEW_TEXT,
-        )
-        if market_notes:
-            self.preview_rule_market_detail.grid(
-                row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 3),
-            )
-        else:
-            self.preview_rule_market_detail.grid_remove()
+        self._render_phase1_preview(details, market_state)
 
         def ema_preview(prefix: str, key_prefix: str) -> tuple[str, str, str]:
             fast_period = int(indicators.get(f"{key_prefix}_ema_fast_period", indicators.get("ema_fast_period", 3)) or 3)
@@ -2088,23 +2202,30 @@ class DashboardPanelsMixin:
         policy: str = "ALERT",
     ) -> None:
         policy = str(policy or "ALERT").upper()
+        price = _number(getattr(self, "_current_tick_price", 0))
+        signal = str(signal or "--").upper()
+        self._preview_exit_state = {"price": price, "signal": signal, "enabled": enabled,
+                                    "quantity": position_quantity, "policy": policy}
+        market_price = f"TT: {_display_price(price)}" if price > 0 else "CHỜ GIÁ TT"
         if not enabled:
             value, detail, color = "CHƯA ÁP DỤNG", "ĐANG TẮT", COL_MUTED
         elif position_quantity <= 0:
-            value, detail, color = "SAU KHI MUA", f"{policy} · CHỜ TÍN HIỆU", COL_PREVIEW_TEXT
-        elif str(signal or "").upper() == "SELL":
+            value, detail, color = market_price, "CHƯA VỊ THẾ", COL_PREVIEW_TEXT
+        elif signal == "SELL":
             if policy == "ALERT":
-                value, detail, color = "E ALERT", "KHÔNG ĐẶT LỆNH", COL_WARN
+                value, detail, color = market_price, "SELL · CHỈ BÁO", COL_WARN
             else:
-                value, detail, color = "SELL", "AUTO · BÁN HẾT", COL_RED
+                value, detail, color = market_price, "SELL · 100%", COL_RED
         else:
-            detail = "ALERT · KHÔNG BÁN" if policy == "ALERT" else "AUTO · BÁN HẾT"
-            value, color = "CHỜ TÍN HIỆU", COL_PREVIEW_TEXT
+            detail = "CHỜ · CHỈ BÁO" if policy == "ALERT" else "CHỜ SELL · 100%"
+            value, color = market_price, COL_PREVIEW_TEXT
         self.preview_exit_value.configure(text=value, text_color=color)
         self.preview_exit_detail.configure(
             text=detail,
             text_color=COL_MUTED if not enabled else COL_TEXT,
         )
+        fit_label_text(self.preview_exit_value, base_font=("Cascadia Mono", 12))
+        fit_label_text(self.preview_exit_detail, base_font=("Segoe UI", 10))
 
     def _on_log_tab_change(self) -> None:
         active = self.log_tabview.get() if hasattr(self, "log_tabview") else ""

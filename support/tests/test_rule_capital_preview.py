@@ -186,8 +186,7 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
     view.settings.market_phase_override_exposure_pct = pct
     try:
         view._build_order_preview_tab(top)
-        view._em_states = {}
-        view._render_exit_sell_preview = lambda *_args: None
+        view._em_states = {"normal_protection": True, "indicator_exit": True}
         view._slot_summary = {"mode": "REAL", "used": 0, "max": 5}
         view._preview_entry_checks = lambda *_args: {"order_budget": 9_000_000,
                                                     "nav": 50_000_000, "available_cash": 40_000_000}
@@ -252,6 +251,21 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
                       view.preview_normal_value, view.preview_exit_value):
             content_bottom = max(child.winfo_y() + child.winfo_height() for child in value.master.winfo_children())
             assert content_bottom <= value.master.winfo_height()
+        assert view.preview_normal_value.cget("text").startswith("ARM:")
+        assert "BÁN:" in view.preview_normal_value.cget("text")
+        assert view.preview_exit_value.cget("text") == "TT: 7,250"
+        for alternate in (True, False):
+            view.preview_p1_swap.invoke()
+            ui_root.update_idletasks()
+            assert view._preview_p1_alternate == alternate
+            for label in (view.preview_rule_market, view.preview_rule_market_detail,
+                          view.preview_normal_value, view.preview_normal_detail,
+                          view.preview_exit_value, view.preview_exit_detail):
+                rendered_font = tkfont.Font(root=ui_root, font=label._label.cget("font"))
+                assert rendered_font.measure(label.cget("text")) <= label.winfo_width(), (
+                    label.cget("text"), label.winfo_width())
+            assert view.preview_p1_swap.winfo_x() + view.preview_p1_swap.winfo_width() <= card.winfo_width()
+            assert int(view.preview_focus_panel.cget("height")) == 300
         import os
         if os.getenv("VIKING_CAPTURE_UI") == "1":
             import ctypes

@@ -77,6 +77,13 @@ with tempfile.TemporaryDirectory(prefix="money-hunter-startup-") as directory:
             app.mode.set(mode)
             app._refresh_full_order_preview({})
             assert f" {mode} " in app.preview_order_title.cget("text")
+            settings_before = app.settings.to_dict()
+            app.preview_p1_swap.invoke()
+            assert app._preview_p1_alternate
+            app.preview_p1_swap.invoke()
+            assert not app._preview_p1_alternate
+            assert app.settings.to_dict() == settings_before
+            assert app.mode.get() == mode
         hint = _HoverHint(app.info_title, "PREVIEW / Manual / Bot", placement="inside")
         hint._show()
         assert hint.popup is not None
