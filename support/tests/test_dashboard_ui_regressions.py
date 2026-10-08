@@ -365,6 +365,39 @@ def test_health_panel_renders_runtime_state_instead_of_staying_on_dashes() -> No
     assert subject.preview_health_trade.options["text"] == "GIÁ MỞ"
 
 
+@pytest.mark.parametrize("market,label,title", [
+    ("CALENDAR_LOADING", "LỊCH CHỜ", "HEALTH CẢNH BÁO"),
+    ("CALENDAR_UNKNOWN", "LỊCH LỖI", "HEALTH LỖI"),
+])
+def test_health_panel_distinguishes_calendar_loading_from_failure(market, label, title):
+    subject = DashboardPanelsMixin()
+    subject.real, subject.mode, subject.symbol = _Real(), _Value("REAL"), _Value("AAA")
+    for name in ("title", "daemon", "core", "ws", "rest", "token", "trade"):
+        setattr(subject, f"preview_health_{name}", _Label())
+    subject._refresh_api_health_panel({
+        "heartbeat_at": time.time(), "daemon_status": "RUNNING", "market_status": market,
+        "api_health": {"rest": {"total_requests": 1, "last_status": 200}},
+        "ticks": {"AAA": {"price": 7.15, "timestamp": time.time(), "stale": True}},
+    })
+    assert subject.preview_health_title.options["text"] == title
+    assert subject.preview_health_trade.options["text"] == label
+
+
+def test_recent_previous_process_heartbeat_is_still_sync_after_restart():
+    subject = DashboardPanelsMixin()
+    subject.real, subject.mode, subject.symbol = _Real(), _Value("REAL"), _Value("AAA")
+    subject.daemon_process = SimpleNamespace(poll=lambda: None)
+    subject._daemon_started_at = time.time()
+    for name in ("title", "daemon", "core", "ws", "rest", "token", "trade"):
+        setattr(subject, f"preview_health_{name}", _Label())
+    subject._refresh_api_health_panel({
+        "heartbeat_at": subject._daemon_started_at - 1,
+        "daemon_status": "RUNNING", "market_status": "CLOSED",
+    })
+    assert subject.preview_health_daemon.options["text"] == "DAEMON SYNC"
+    assert subject.preview_health_title.options["text"] == "HEALTH CẢNH BÁO"
+
+
 class _Tree:
     def __init__(self) -> None:
         self.columns: tuple[str, ...] = ()

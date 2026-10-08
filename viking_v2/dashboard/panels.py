@@ -1007,6 +1007,7 @@ class DashboardPanelsMixin:
         _HoverHint(
             self.preview_health_hint,
             "API OK: DNSE đang trả lời bình thường.\n"
+            "LỊCH CHỜ: đang tải lịch khi mở app, chưa phải lỗi. LỊCH LỖI: không có lịch giao dịch dùng được.\n"
             "OTP: chưa xác thực trading token; chỉ cần khi gửi, sửa hoặc hủy lệnh REAL.\n"
             "PRICE: ATO / OPEN / ATC / CLOSED theo phiên hiện tại.",
             placement="inside",
@@ -1996,6 +1997,7 @@ class DashboardPanelsMixin:
         )
         if daemon_alive and (
             heartbeat_age > 8 or daemon_state in {"STARTING", "STOPPED", "STALE"}
+            or _number(status.get("heartbeat_at")) < float(getattr(self, "_daemon_started_at", 0.0) or 0.0)
         ):
             daemon_state = "SYNC"
         elif heartbeat_age > 8:
@@ -2014,6 +2016,8 @@ class DashboardPanelsMixin:
         dnse_text = "OK" if dnse_ok else "CHỜ" if not configured else "LỖI"
         ws_online = bool(ws.get("connected") and ws.get("authenticated"))
         ws_connecting = bool(ws.get("running")) and not ws_online
+        market_status = str(status.get("market_status", "OFFLINE") or "OFFLINE").upper()
+        market_active = market_status in {"ATO", "OPEN", "CONTINUOUS", "ATC"}
         self.preview_health_core.configure(
             text=f"DNSE {dnse_text}",
             text_color=COL_GREEN if dnse_ok else COL_RED if configured else COL_WARN,
@@ -2023,6 +2027,7 @@ class DashboardPanelsMixin:
             text_color=(
                 COL_GREEN if ws_online
                 else COL_WARN if ws_connecting or not configured
+                else COL_PREVIEW_TEXT if not market_active
                 else COL_RED
             ),
         )
@@ -2050,8 +2055,6 @@ class DashboardPanelsMixin:
         tick = (status.get("ticks") or {}).get(symbol) or {}
         tick_ts = float(tick.get("timestamp", 0.0) or 0.0)
         tick_age = max(0.0, time.time() - tick_ts) if tick_ts else None
-        market_status = str(status.get("market_status", "OFFLINE") or "OFFLINE").upper()
-        market_active = market_status in {"ATO", "OPEN", "CONTINUOUS", "ATC"}
         data_frozen = bool(tick) and (
             bool(tick.get("frozen"))
             or bool(tick.get("price_frozen"))
@@ -2071,10 +2074,14 @@ class DashboardPanelsMixin:
             price_state = "CHỜ"
         else:
             price_state = "CHẬM"
+        calendar_loading = market_status == "CALENDAR_LOADING"
+        calendar_error = market_status == "CALENDAR_UNKNOWN"
         self.preview_health_trade.configure(
-            text=f"GIÁ {price_state}",
+            text="LỊCH CHỜ" if calendar_loading else "LỊCH LỖI" if calendar_error else f"GIÁ {price_state}",
             text_color=(
-                COL_GREEN if data_ok
+                COL_RED if calendar_error
+                else COL_WARN if calendar_loading
+                else COL_GREEN if data_ok
                 else COL_PREVIEW_TEXT if price_state == "ĐÓNG"
                 else COL_WARN if tick
                 else COL_WARN
@@ -2090,10 +2097,12 @@ class DashboardPanelsMixin:
             or ws_error
             or price_error
             or current_cycle_error
+            or calendar_error
         )
         has_warning = bool(
             not has_error and (
                 daemon_state == "SYNC"
+                or calendar_loading
                 or not configured
                 or ws_connecting
                 or rest_state == "WAIT"

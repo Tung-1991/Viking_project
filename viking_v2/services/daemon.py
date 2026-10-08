@@ -215,7 +215,8 @@ def run(account_id: str | None = None) -> int:
     previous_runtime_status = bridge.read_status()
     ticks: dict[str, dict] = {symbol: {**tick, "stale": True} for symbol, tick in (previous_runtime_status.get("ticks") or {}).items() if isinstance(tick, dict)}
     decisions: dict[str, dict] = {}
-    initial_phase = "CALENDAR_UNKNOWN" if connected else "NOT_CONFIGURED"
+    # No calendar request has completed yet: loading is not a failed request.
+    initial_phase = "CALENDAR_LOADING" if connected else "NOT_CONFIGURED"
     publish_status(
         RuntimeStatus(
             heartbeat_at=time.time(),
@@ -338,6 +339,23 @@ def run(account_id: str | None = None) -> int:
                 }
                 active = [value for value in symbol_phases.values() if value in {"ATO", "OPEN", "ATC"}]
                 phase = active[0] if active else next(iter(symbol_phases.values()), "CLOSED")
+            if latest_status and phase == "CALENDAR_UNKNOWN" and latest_status.market_status != phase:
+                logger.warning("Trading calendar unavailable; no usable DNSE/cached calendar. New submissions remain blocked.")
+            elif latest_status and working_dates and latest_status.market_status in {"CALENDAR_LOADING", "CALENDAR_UNKNOWN"}:
+                logger.info("Trading calendar ready (%d dates).", len(working_dates))
+            if latest_status and latest_status.market_status == "CALENDAR_LOADING":
+                # Publish the calendar result before downloading symbol histories.
+                # Missing calendars stay fail-closed; cached startup quotes remain stale.
+                publish_status(
+                    RuntimeStatus(
+                        heartbeat_at=time.time(), daemon_status="RUNNING",
+                        market_status=phase, bot_enabled=bool(runtime.bot_enabled),
+                        active_symbols=symbols, ticks=ticks, api_health=market.health(),
+                        working_dates=working_dates,
+                        symbol_exchanges={symbol: resolved_exchanges.get(symbol, "") for symbol in symbols},
+                        symbol_phases=symbol_phases,
+                    )
+                )
             if connected:
                 live_phase = any(value in {"ATO", "OPEN", "ATC"} for value in symbol_phases.values())
                 now_ts = time.time()

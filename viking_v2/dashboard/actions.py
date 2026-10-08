@@ -2408,7 +2408,10 @@ class DashboardActionsMixin:
         age = max(0.0, now - _number(status.get("heartbeat_at")))
         daemon = str(status.get("daemon_status", "STARTING"))
         daemon_alive = bool(self.daemon_process and self.daemon_process.poll() is None)
-        if daemon_alive and (age > 8 or daemon in {"STARTING", "STOPPED", "STALE"}):
+        if daemon_alive and (
+            age > 8 or daemon in {"STARTING", "STOPPED", "STALE"}
+            or _number(status.get("heartbeat_at")) < self._daemon_started_at
+        ):
             daemon = "SYNC"
         elif age > 8:
             daemon = "STALE"
@@ -2420,8 +2423,9 @@ class DashboardActionsMixin:
         if healthy_daemon and now - self._daemon_started_at >= 60.0:
             self._daemon_crash_times.clear()
             self._daemon_restart_blocked = False
-        if market == "CALENDAR_UNKNOWN":
-            session_text, active_market = "CLOSED", False
+        if market in {"CALENDAR_LOADING", "CALENDAR_UNKNOWN"}:
+            session_text = "ĐANG TẢI LỊCH" if market == "CALENDAR_LOADING" else "LỖI LỊCH"
+            active_market = False
         else:
             session_text, active_market = market_session_clock(
                 working_dates=status.get("working_dates") or None,
@@ -2464,7 +2468,8 @@ class DashboardActionsMixin:
             self._render_tables(status)
         self._refresh_api_health_panel(status)
         mode = str(self.mode.get() or "").upper()
-        DashboardActionsMixin._notify_market_holiday(self, market, mode)
+        if healthy_daemon:
+            DashboardActionsMixin._notify_market_holiday(self, market, mode)
         DashboardActionsMixin._notify_system_health(
             self, status, daemon, market, mode,
         )
@@ -3078,6 +3083,13 @@ class DashboardActionsMixin:
         issues: list[str] = []
         daemon_status = str(daemon_status or "").upper()
         market_status = str(market_status or "").upper()
+        heartbeat_at = _number(status.get("heartbeat_at"))
+        started_at = float(getattr(self, "_daemon_started_at", 0.0) or 0.0)
+        if daemon_status == "STARTING" or (
+            daemon_status == "SYNC" and (not heartbeat_at or heartbeat_at < started_at)
+        ):
+            # The bridge can still contain the previous process's error/calendar.
+            return
         if daemon_status in {"STOPPED", "STALE"}:
             issues.append(f"DAEMON {daemon_status}")
         if market_status == "CALENDAR_UNKNOWN":
@@ -3109,16 +3121,18 @@ class DashboardActionsMixin:
         signature = "|".join(issues)
         if signature == str(getattr(self, "_telegram_system_health_signature", "") or ""):
             return
-        self._telegram_system_health_signature = signature
         if not signature:
+            self._telegram_system_health_signature = ""
             return
-        DashboardActionsMixin._notify_system_event(
+        scheduled = DashboardActionsMixin._notify_system_event(
             self,
             "HEALTH",
             " · ".join(issues),
             execution_mode,
             occurrence=f"{signature}|{int(time.time())}",
         )
+        if scheduled:
+            self._telegram_system_health_signature = signature
 
     def _record_failed_buy_execution(
         self,
