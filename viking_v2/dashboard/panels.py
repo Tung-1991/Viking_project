@@ -536,6 +536,12 @@ class DashboardPanelsMixin:
             corner_radius=8, command=self._show_running_legend,
         )
         self.running_legend_button.pack(side="left", padx=(6, 0))
+        _HoverHint(
+            self.running_legend_button,
+            "Bấm xem chú thích màu và trạng thái lệnh.\n"
+            "Màu chờ xử lý ưu tiên hơn màu lãi/lỗ; CHỜ KHỚP chưa phải đã mua.",
+            placement="inside",
+        )
         self.info_button = ctk.CTkButton(
             header, text="▤ INFO", width=68, height=31, font=("Segoe UI", 11, "bold"),
             fg_color=COL_GRAY, hover_color="#4B515B", corner_radius=8,
@@ -2245,13 +2251,16 @@ class DashboardPanelsMixin:
         body.grid_columnconfigure(1, weight=1)
 
         rows = (
+            ("CACHE", "#42351B", "Chưa gửi: chờ phiên, token hoặc tạm dừng trong app."),
+            ("ĐANG GỬI", "#0B4F5C", "Đang xử lý gửi; chưa được coi là đã khớp."),
+            ("CHỜ KHỚP", "#123F6B", "Chờ khớp hoặc xác nhận sửa/hủy. REAL: DNSE; PAPER: mô phỏng."),
+            ("KHỚP MỘT PHẦN", "#6A3F08", "Mới khớp một phần khối lượng; phần còn lại vẫn chờ."),
+            ("T+2", COL_SETTLEMENT_BG, "Cổ chưa được phép bán hoặc SELL đang chờ cổ về."),
+            ("CHỜ ĐÓNG", "#5A4214", "Vị thế có yêu cầu SELL đang xử lý; đọc trạng thái chữ để biết bước."),
             ("LÃI", "#193524", "Vị thế đang có PnL ròng dương."),
             ("LỖ", "#3A2024", "Vị thế đang có PnL ròng âm."),
-            ("T+2", COL_SETTLEMENT_BG, "Cổ phiếu chưa được phép bán hoặc lệnh bán đang chờ cổ về."),
-            ("CACHE", "#42351B", "Lệnh đang chờ phiên, chờ token hoặc tạm dừng trong app."),
-            ("DNSE ĐANG KHỚP", "#123F6B", "Lệnh đã gửi DNSE và vẫn đang chờ khớp."),
-            ("KHỚP MỘT PHẦN", "#6A3F08", "Mới khớp một phần khối lượng; phần còn lại vẫn chờ."),
-            ("LỖI", "#5A1E1E", "Gửi lệnh lỗi hoặc chưa xác định được trạng thái."),
+            ("HÒA VỐN", COL_SURFACE_2, "Vị thế có PnL ròng bằng 0."),
+            ("UNKNOWN", "#5A1E1E", "Chưa rõ kết quả. Đối chiếu lệnh; không tự gửi lại để tránh trùng."),
         )
         for index, (label, color, explanation) in enumerate(rows):
             chip = ctk.CTkLabel(
@@ -2275,7 +2284,7 @@ class DashboardPanelsMixin:
             body,
             text=(
                 "PROTECT: bảo vệ lợi nhuận theo rule đang chọn\n"
-                "E: thoát phần còn lại khi có tín hiệu SELL\n"
+                "E: AUTO bán 100% phần còn lại; ALERT chỉ báo\n"
                 "WAIT: đang chờ  |  ARM: đã kích hoạt  |  DONE: đã xử lý"
             ),
             font=("Segoe UI", 11), text_color=COL_TEXT,
@@ -2284,7 +2293,7 @@ class DashboardPanelsMixin:
 
         ctk.CTkLabel(
             top,
-            text="Màu chỉ giúp nhận nhanh; tag chữ trên dòng là trạng thái chính xác.",
+            text="Chờ xử lý ưu tiên màu lãi/lỗ. Dòng chọn đổi màu; đọc trạng thái chữ.",
             font=("Segoe UI", 11), text_color=COL_MUTED,
         ).grid(row=2, column=0, sticky="w", padx=18, pady=(0, 14))
 

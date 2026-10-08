@@ -8,7 +8,7 @@ import pytest
 
 from viking_v2.dashboard.panels import DashboardPanelsMixin
 from viking_v2.dashboard.tables import DashboardTablesMixin
-from viking_v2.dashboard.view import COL_SETTLEMENT_BG
+from viking_v2.dashboard.view import COL_SETTLEMENT_BG, COL_SURFACE_2
 from viking_v2.models import OrderIntent
 
 
@@ -36,7 +36,10 @@ def _table_subject(tree, mode, items, positions=()):
     ("WAITING_TOKEN", "pending_order"),
     ("PAUSED", "pending_order"),
     ("WAITING_SETTLEMENT", "settlement_order"),
+    ("SENDING", "sending_order"),
     ("WORKING", "dnse_order"),
+    ("CANCEL_PENDING", "dnse_order"),
+    ("REPLACE_PENDING", "dnse_order"),
     ("PARTIAL", "partial_order"),
     ("UNKNOWN", "error_order"),
 ])
@@ -99,6 +102,39 @@ def test_running_legend_separates_purple_settlement_from_amber_cache(ui_root):
         visit(popup)
         assert chips == {"T+2": COL_SETTLEMENT_BG, "CACHE": "#42351B"}
         assert chips["T+2"] != chips["CACHE"]
+    finally:
+        for popup in set(ui_root.winfo_children()) - existing:
+            popup.destroy()
+
+
+def test_running_legend_explains_all_row_colors_without_claiming_paper_is_dnse(ui_root):
+    existing = set(ui_root.winfo_children())
+    expected = {
+        "CACHE": "#42351B", "ĐANG GỬI": "#0B4F5C", "CHỜ KHỚP": "#123F6B",
+        "KHỚP MỘT PHẦN": "#6A3F08", "T+2": COL_SETTLEMENT_BG,
+        "CHỜ ĐÓNG": "#5A4214", "LÃI": "#193524", "LỖ": "#3A2024",
+        "HÒA VỐN": COL_SURFACE_2, "UNKNOWN": "#5A1E1E",
+    }
+    try:
+        DashboardPanelsMixin._show_running_legend(ui_root)
+        popup, = set(ui_root.winfo_children()) - existing
+        chips, texts = {}, []
+
+        def visit(widget):
+            if isinstance(widget, ctk.CTkLabel):
+                text = widget.cget("text")
+                texts.append(text)
+                if text in expected:
+                    chips[text] = widget.cget("fg_color")
+            for child in widget.winfo_children():
+                visit(child)
+
+        visit(popup)
+        assert chips == expected
+        assert any("REAL: DNSE; PAPER: mô phỏng" in text for text in texts)
+        assert any("không tự gửi lại" in text for text in texts)
+        assert any("ưu tiên màu lãi/lỗ" in text and "Dòng chọn đổi màu" in text for text in texts)
+        assert any("AUTO bán 100%" in text and "ALERT chỉ báo" in text for text in texts)
     finally:
         for popup in set(ui_root.winfo_children()) - existing:
             popup.destroy()

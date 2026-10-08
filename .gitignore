@@ -19,6 +19,19 @@ dist/
 
 # Dữ liệu chạy: giá tải về, lệnh, nhật ký và báo cáo
 viking_v2/runtime/
+# Chan ca database / WAL bi copy ra ngoai runtime (co the chua lenh, tai khoan).
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
 *.xlsx
 *.xls
 
