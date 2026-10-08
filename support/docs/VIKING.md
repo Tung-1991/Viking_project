@@ -23,7 +23,10 @@ UI/Telegram không thay rule.
 
 `support/launcher.ps1`/`START_SYSTEM.bat`: môi trường, update, start Windows.
 BAT 4: `support/presets/VA_4_MA_50M.json` qua `tools/apply_va_preset.py`; chỉ sửa
-danh sách/hạn mức/P1/max mã, giữ kết nối/rule khác/runtime; yêu cầu app/daemon dừng.
+danh sách/hạn mức/P1/max mã và E AUTO, bổ sung IND_EXIT cho trade BOT mới (không bỏ
+mode cũ), giữ kết nối/rule khác/runtime; yêu cầu app/daemon dừng. BAT 2 chỉ update source;
+BAT 4 xác nhận nạp preset trên tài khoản máy đích, không đồng bộ settings.json toàn bộ.
+Preset VA 50 triệu: MSN/CTS/HDB 15 triệu, IDC 5 triệu, 100%, MAX=1; IDC không mượn cap khác.
 `support/tests/`/`support/tools/`: regression offline, preflight, phục hồi có kiểm tra.
 
 ## Bất biến cần giữ

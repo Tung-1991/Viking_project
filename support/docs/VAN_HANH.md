@@ -35,27 +35,27 @@
 
 Thiết lập khi đây đúng là vốn dành cho bộ thử: watchlist/Priority gồm 4 mã;
 **Nạp nhanh:** đóng app → BAT **4** → kiểm tra tài khoản trên máy đó → **y** → **3**.
-Preset đi cùng Git; giữ API/Telegram, EMA/RSI, giờ mua và cấu hình thoát của máy đó.
+VPS chọn **2 → 4 → y → 3** để cập nhật rồi nạp bộ setting này.
+Preset đi cùng Git; không tự đồng bộ mọi chỉnh sửa UI trên máy khác. Giữ API/token/
+Telegram, EMA/RSI, giờ mua, SL/TP/PROTECT của máy đó; bật E mặc định cho BOT và đặt **E AUTO**.
 Backup setting cũ nằm cạnh `settings.json` (`settings.before-va-*.bak`), không lên Git.
 RULE → P1 bật OVERRIDE, CP **100%**; tối đa mã BOT **4**.
 KẾT NỐI → MÃ CK → VỐN RIÊNG ON, tổng **50 triệu**, ⚙ từng mã:
 
 | Mã | Hạn mức | Sử dụng | Mua tối đa gồm phí | Giữ tiền |
 |---|---:|---:|---:|---:|
-| MSN | 15 triệu | 50% | 7,5 triệu | 7,5 triệu |
-| CTS | 15 triệu | 50% | 7,5 triệu | 7,5 triệu |
-| HDB | 5 triệu | 50% | 2,5 triệu | 2,5 triệu |
-| IDC | 15 triệu | 50% | 7,5 triệu | 7,5 triệu |
+| MSN | 15 triệu | 100% | 15 triệu | 0 |
+| CTS | 15 triệu | 100% | 15 triệu | 0 |
+| HDB | 15 triệu | 100% | 15 triệu | 0 |
+| IDC | 5 triệu | 100% | 5 triệu | 0 |
 
-**LƯU PRIORITY**. P1 100% không ép mua hết tiền; % từng mã vẫn giữ tiền riêng.
-Mặc định MAX LỆNH **1**: tổng 4 mã **50 triệu = được mua 25 triệu + để dành 25 triệu** (cả nhóm).
-Muốn mua hai lần: ⚙ mã → MAX LỆNH **2** → ÁP DỤNG BẢN NHÁP → LƯU PRIORITY.
-Ví dụ MSN 15 triệu, mỗi lần 50%, MAX 2: mỗi BUY ≤ 7,5 triệu, tổng ≤ 15 triệu gồm phí.
-Cần tín hiệu BUY mới; không tự mua bù. Cộng vào cùng vị thế/giá vốn; không mua khi đang thoát/đã bán một phần.
-Bán hết mới đếm lại; khớp nhiều đợt vẫn 1 lần. Chỉ số lần BOT, không hạn chế MANUAL. Backtest hiện dùng MAX=1.
-Với MAX=1, PAPER 100 triệu cũng chịu cap này: MSN 15 triệu × 50% vẫn chỉ dùng 7,5 triệu.
+**LƯU PRIORITY**. Tổng được mua **50 triệu**, không giữ lại 25 triệu như bản cũ.
+MAX LỆNH **1** mỗi mã; cần tín hiệu BUY, không ép mua hết tiền ngay.
+MSN/CTS/HDB được dành đủ 15 triệu/mã; IDC dùng **50 − 45 = 5 triệu**, không mượn
+phần ba mã kia chưa dùng. Đây là hạn mức cấu hình, không tự tăng khi nạp tiền.
+PAPER 100 triệu vẫn chịu cap này: MSN tối đa 15 triệu, IDC tối đa 5 triệu gồm phí.
 Nếu 100 CP theo giá trần + phí vượt cap, MARKET AUTO không mua; xem hint KL để biết số tiền cần.
-Có thêm 10 triệu: đổi tổng thành 60, cap HDB thành 15 rồi lưu; không tự mua bù.
+Có thêm 10 triệu: đổi tổng thành 60, cap **IDC** thành 15 rồi lưu; không tự mua bù.
 CHIA HẠN MỨC thay các cap nháp bằng Tổng / số mã, không mua lệnh. Khối lượng thực tế
 làm tròn lô/dự phòng giá trần nên tiền dùng thấp hơn trần. IDC không mượn cap mã khác.
 Hạn mức này áp dụng BUY BOT; số lượng MANUAL do người đặt quyết định.
@@ -67,8 +67,11 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 
 - BOT OFF / đổi PAPER **không dừng quản lý vị thế REAL đã mở**. SELL đang quản lý và
   MANUAL vẫn chạy. Muốn dừng app thì đóng app.
+- BOT ON cho phép BUY tự động ở sổ đang chọn khi đủ tín hiệu, vốn và điều kiện an toàn.
+  OFF vẫn tính chỉ báo/lưu lịch sử; tin BUY không thực hiện chỉ gửi nếu bật TÍN HIỆU.
 - SL/TP/E AUTO bán 100%; PROTECT/Dynamic bán theo % đã đặt. ALERT chỉ ghi nhận.
   E không chờ ARM. E/M mặc định chỉ áp dụng trade BOT mới; vị thế đang giữ chỉnh riêng.
+  Nạp preset không gắn E vào vị thế cũ đang OFF; vị thế đã bật E dùng chính sách AUTO mới.
 - CACHE vàng: chưa gửi ở app. PARTIAL: khớp một phần, phần khớp được quản lý.
   T+ tím: đã mua nhưng chưa đủ cổ được phép bán. PendingCancel: chưa hủy xong.
 - BUY bỏ qua không tự mua lại khi có tiền/slot. Lịch sử tín hiệu để đối chiếu;
@@ -77,6 +80,10 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   không xóa vị thế. THEO NGÀY chốt đúng giờ GMT+7; CỘNG DỒN từ lần ↻ gần nhất.
 - Telegram: GOM chờ gom tin BUY, không chờ đặt lệnh; GIÃN hạn chế tin mới cùng mã/loại.
   0 phút vẫn chống tin trùng. 1 TIN/VỊ THẾ = tổng kết khi BOT bán hết, không phải mỗi lần khớp.
+  Mặc định loại tin ON: BUY đã xếp (gom 30 phút), BOT đã đóng, E ALERT, lịch nghỉ/chốt
+  quyền, bán trên DNSE app, hệ thống. OFF: PROTECT chạm mức và TÍN HIỆU BUY chưa thực hiện.
+  E AUTO không gửi tin E ALERT; khi bán hết có tin BOT đã đóng. Telegram cần bật tổng,
+  token/chat đúng; nạp preset giữ lựa chọn Telegram của VPS, không reset về mặc định.
 
 ## Khi có bất thường
 

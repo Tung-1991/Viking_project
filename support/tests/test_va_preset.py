@@ -32,7 +32,7 @@ def workspace(tmp_path, monkeypatch):
     return root, settings.to_dict(), env
 
 
-def test_preset_changes_only_agreed_allocation_fields_and_backup_is_exact(workspace):
+def test_preset_changes_only_agreed_allocation_and_e_fields_and_backup_is_exact(workspace):
     root, old, env = workspace
     target = root / "settings.json"
     original = target.read_bytes()
@@ -45,11 +45,18 @@ def test_preset_changes_only_agreed_allocation_fields_and_backup_is_exact(worksp
     assert current["priority_total_capital"] == 50_000_000 and current["priority_capital_enabled"]
     assert current["market_phase_override_enabled"] and current["market_phase_override_exposure_pct"] == 100
     assert current["rule_parameters"]["max_positions"] == 4
+    assert current["rule_parameters"]["indicator_exit_policy"] == "AUTO"
+    assert "IND_EXIT" in current["bot_em_modes"]
+    assert current["priority_allocations"] == {
+        symbol: {"limit_vnd": cap, "use_pct": 100, "max_orders": 1}
+        for symbol, cap in (("MSN", 15_000_000), ("CTS", 15_000_000),
+                            ("HDB", 15_000_000), ("IDC", 5_000_000))
+    }
     for key, value in old.items():
         if key not in tool.PRESET_FIELDS:
             assert current[key] == value
     for key, value in old["rule_parameters"].items():
-        if key != "max_positions":
+        if key not in tool.PRESET_RULE_FIELDS:
             assert current["rule_parameters"][key] == value
     assert all(path.read_bytes() == content for path, content in untouched.items())
     # Applying twice is deliberate/idempotent and does not undo old backups.
@@ -92,16 +99,17 @@ def test_canceled_prompt_never_applies_settings(workspace, monkeypatch):
 
 
 @pytest.mark.parametrize("mode", ["PAPER", "REAL"])
-@pytest.mark.parametrize("symbol,envelope", [("MSN", 7_500_000), ("CTS", 7_500_000),
-                                              ("HDB", 2_500_000), ("IDC", 7_500_000)])
-def test_preset_budgets_use_existing_real_and_paper_calculator(workspace, mode, symbol, envelope):
+@pytest.mark.parametrize("capital", [50_000_000, 100_000_000])
+@pytest.mark.parametrize("symbol,envelope", [("MSN", 15_000_000), ("CTS", 15_000_000),
+                                              ("HDB", 15_000_000), ("IDC", 5_000_000)])
+def test_preset_budgets_use_existing_real_and_paper_calculator(workspace, mode, capital, symbol, envelope):
     root, _old, _env = workspace
     settings = tool.prepared_settings("PARTNER")
     builder = PortfolioContextBuilder(OrderQueue(root / "test_orders.json"),
                                       TradeStateStore(root / "test_trades.json"),
                                       RuleStateStore(root / "test_rule.json"), lambda: .00045)
     result = builder.build(symbol, execution_mode=mode,
-                           balance={"equity": 50_000_000, "availableCash": 50_000_000},
+                           balance={"equity": capital, "availableCash": capital},
                            positions=[], tick={"ask": 20, "ceiling_price": 21.4},
                            exposure=settings.market_phase_override_exposure_pct / 100,
                            max_positions=settings.rule_parameters["max_positions"],
@@ -112,6 +120,59 @@ def test_preset_budgets_use_existing_real_and_paper_calculator(workspace, mode, 
                            budget_only=True)
     assert result["order_budget"] == pytest.approx(envelope / 1.00045)
     assert result["minimum_order_room"] <= envelope
+
+
+@pytest.mark.parametrize("cash,expected", [(50_000_000, 5_000_000), (47_000_000, 2_000_000),
+                                         (40_000_000, 0)])
+def test_idc_only_uses_cash_left_after_reserving_first_three_symbols(workspace, cash, expected):
+    root, _old, _env = workspace
+    settings = tool.prepared_settings("PARTNER")
+    builder = PortfolioContextBuilder(OrderQueue(root / "idc_orders.json"),
+                                      TradeStateStore(root / "idc_trades.json"),
+                                      RuleStateStore(root / "idc_rules.json"), lambda: .00045)
+    result = builder.build("IDC", execution_mode="PAPER",
+                           balance={"equity": 50_000_000, "availableCash": cash},
+                           positions=[], tick={"ask": 20, "ceiling_price": 21.4},
+                           exposure=1, max_positions=4,
+                           priority_symbols=settings.priority_symbols,
+                           priority_capital_enabled=True, priority_total_capital=50_000_000,
+                           priority_allocations=settings.priority_allocations, budget_only=True)
+    assert result["order_budget"] == pytest.approx(expected / 1.00045)
+
+
+@pytest.mark.parametrize("old_modes", [[], ["TP"], ["NORMAL"], ["TP", "NORMAL", "IND_EXIT"]])
+def test_preset_enables_e_without_disabling_other_exit_flags(workspace, old_modes):
+    _root, _old, _env = workspace
+    current = config.load_settings("PARTNER")
+    current.bot_em_modes = old_modes.copy()
+    current.bot_sl_enabled = False
+    config.save_settings(current, "PARTNER")
+    tool.apply_preset("PARTNER")
+    saved = config.load_settings("PARTNER")
+    assert saved.bot_em_modes == list(dict.fromkeys([*old_modes, "IND_EXIT"]))
+    assert saved.bot_sl_enabled is False
+    assert saved.rule_parameters["indicator_exit_policy"] == "AUTO"
+
+
+@pytest.mark.parametrize("extra", [
+    {"telegram_enabled": True},
+    {"paper_mode": True},
+    {"rule_parameters": {"max_positions": 4, "indicator_exit_policy": "AUTO", "initial_sl_pct": -9}},
+    {"bot_em_modes": ["NORMAL", "IND_EXIT"]},
+    {"rule_parameters": {"max_positions": 4, "indicator_exit_policy": "ALERT"}},
+])
+def test_preset_rejects_unagreed_setting_fields_without_writes(workspace, monkeypatch, tmp_path, extra):
+    root, _old, _env = workspace
+    raw = json.loads(tool.PRESET_PATH.read_text(encoding="utf-8"))
+    raw.update(extra)
+    preset = tmp_path / "bad-preset.json"
+    preset.write_text(json.dumps(raw), encoding="utf-8")
+    monkeypatch.setattr(tool, "PRESET_PATH", preset)
+    original = (root / "settings.json").read_bytes()
+    with pytest.raises(ValueError, match="Preset sai pham vi"):
+        tool.apply_preset("PARTNER")
+    assert (root / "settings.json").read_bytes() == original
+    assert not list(root.glob("*.bak"))
 
 
 def test_portable_preset_contains_no_secrets_or_runtime_fields():

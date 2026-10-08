@@ -332,6 +332,7 @@ function Connect-ZipRepository {
     Invoke-Native $GitExe @('branch', '--set-upstream-to=origin/main', 'main')
     Install-Packages
     Write-Host '[OK] Da noi Git va cap nhat. Lan sau dung muc 2; chon muc 3 de khoi dong.'
+    Write-Host '[SETTING] Muc 4 nap preset VA moi. Cap nhat code khong tu doi setting/API/Telegram.'
 }
 
 function Update-Code {
@@ -358,6 +359,7 @@ function Update-Code {
     $target = Invoke-Native $git @('rev-parse', '@{u}')
     if ([string]$current -eq [string]$target) {
         Write-Host '[OK] Khong co ban cap nhat moi.'
+        Write-Host '[SETTING] Muc 4 nap preset VA. Muc 2 chi cap nhat code, khong tu doi setting.'
         return
     }
     Assert-UpdatePaths $git $target
@@ -368,6 +370,7 @@ function Update-Code {
     Invoke-Native $git @('reset', '--hard', $target)
     Install-Packages
     Write-Host '[OK] Da cap nhat. Chon muc 3 de khoi dong.'
+    Write-Host '[SETTING] Muc 4 nap preset VA moi. Cap nhat code khong tu doi setting/API/Telegram.'
 }
 
 function Wait-AppRetry {
