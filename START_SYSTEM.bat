@@ -12,8 +12,7 @@ echo ========================================
 echo   1. Ra soat / cai moi truong
 echo   2. Kiem tra / cap nhat GitHub (clone / ZIP, ghi de source)
 echo   3. Khoi dong
-echo   4. Nap setting VA: MSN 15 / CTS 15 / HDB 15 / IDC 5 trieu
-echo      Dung 100%%, P1 100%%, E AUTO; giu API / Telegram tren may
+echo   4. Nap setting
 echo   0. Thoat
 echo.
 choice /c 12340 /n /m "Chon [1/2/3/4/0]: "

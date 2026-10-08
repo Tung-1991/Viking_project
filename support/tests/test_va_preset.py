@@ -98,6 +98,26 @@ def test_canceled_prompt_never_applies_settings(workspace, monkeypatch):
     assert list(root.glob("*.bak")) == []
 
 
+def test_preset_details_are_reviewed_before_confirmation_without_writes(workspace, monkeypatch, capsys):
+    root, _old, _env = workspace
+    monkeypatch.setattr("sys.argv", ["apply_va_preset.py", "--account", "PARTNER"])
+    original = (root / "settings.json").read_bytes()
+
+    def review_then_cancel(prompt):
+        review = capsys.readouterr().out
+        assert "MSN 15 / CTS 15 / HDB 15 / IDC 5 trieu" in review
+        assert "MAX LENH 1" in review and "P1 override 100%" in review
+        assert "[E] AUTO" in review and "[GIU] API, token, Telegram" in review
+        assert "[y/N]" in prompt
+        assert (root / "settings.json").read_bytes() == original
+        return "n"
+
+    monkeypatch.setattr("builtins.input", review_then_cancel)
+    assert tool.main() == 0
+    assert (root / "settings.json").read_bytes() == original
+    assert list(root.glob("*.bak")) == []
+
+
 @pytest.mark.parametrize("mode", ["PAPER", "REAL"])
 @pytest.mark.parametrize("capital", [50_000_000, 100_000_000])
 @pytest.mark.parametrize("symbol,envelope", [("MSN", 15_000_000), ("CTS", 15_000_000),

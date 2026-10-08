@@ -268,6 +268,9 @@ def test_start_crash_can_return_to_menu_without_retry(tmp_path):
 
 def test_batch_menu_routes_environment_update_start_and_preserves_logs():
     batch = (ROOT / "START_SYSTEM.bat").read_text(encoding="utf-8")
+    menu = batch.split(":menu", 1)[1].split("choice /c 12340", 1)[0]
+    assert "echo   4. Nap setting\n" in menu
+    assert all(detail not in menu for detail in ("MSN", "CTS", "HDB", "IDC", "P1 100", "E AUTO"))
     assert "choice /c 12340" in batch
     assert "if errorlevel 5 exit /b 0" in batch
     assert "if errorlevel 4 goto preset" in batch
