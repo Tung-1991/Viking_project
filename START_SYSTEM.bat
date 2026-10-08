@@ -12,10 +12,12 @@ echo ========================================
 echo   1. Ra soat / cai moi truong
 echo   2. Kiem tra / cap nhat GitHub (clone / ZIP, ghi de source)
 echo   3. Khoi dong
+echo   4. Nap bo VA: MSN / CTS / HDB / IDC, von 50 trieu
 echo   0. Thoat
 echo.
-choice /c 1230 /n /m "Chon [1/2/3/0]: "
-if errorlevel 4 exit /b 0
+choice /c 12340 /n /m "Chon [1/2/3/4/0]: "
+if errorlevel 5 exit /b 0
+if errorlevel 4 goto preset
 if errorlevel 3 goto start
 if errorlevel 2 goto update
 if errorlevel 1 goto environment
@@ -53,6 +55,13 @@ rem Parse the whole block before Git updates this batch file itself.
 :start
 cls
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0support\launcher.ps1" -Action Start
+echo.
+pause
+goto menu
+
+:preset
+cls
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0support\launcher.ps1" -Action PresetVA
 echo.
 pause
 goto menu

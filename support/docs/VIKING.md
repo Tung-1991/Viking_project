@@ -22,6 +22,8 @@ UI/Telegram không thay rule.
 | `backtest/` | Mô phỏng dùng chung rule/sizing, không chứng minh giá khớp/độ trễ LIVE |
 
 `support/launcher.ps1`/`START_SYSTEM.bat`: môi trường, update, start Windows.
+BAT 4: `support/presets/VA_4_MA_50M.json` qua `tools/apply_va_preset.py`; chỉ sửa
+danh sách/hạn mức/P1/max mã, giữ kết nối/rule khác/runtime; yêu cầu app/daemon dừng.
 `support/tests/`/`support/tools/`: regression offline, preflight, phục hồi có kiểm tra.
 
 ## Bất biến cần giữ

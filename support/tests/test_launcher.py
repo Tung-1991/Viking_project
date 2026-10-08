@@ -268,9 +268,10 @@ def test_start_crash_can_return_to_menu_without_retry(tmp_path):
 
 def test_batch_menu_routes_environment_update_start_and_preserves_logs():
     batch = (ROOT / "START_SYSTEM.bat").read_text(encoding="utf-8")
-    assert "choice /c 1230" in batch
-    assert "if errorlevel 4 exit /b 0" in batch
-    assert all(f"-Action {action}" in batch for action in ("Check", "Packages", "Update", "Start"))
+    assert "choice /c 12340" in batch
+    assert "if errorlevel 5 exit /b 0" in batch
+    assert "if errorlevel 4 goto preset" in batch
+    assert all(f"-Action {action}" in batch for action in ("Check", "Packages", "Update", "Start", "PresetVA"))
     assert "if errorlevel 3 goto start" in batch
     assert "if errorlevel 2 goto update" in batch
     assert "choice /c 120" in batch
@@ -280,6 +281,33 @@ def test_batch_menu_routes_environment_update_start_and_preserves_logs():
     assert "@(0, 130, -1073741510)" in helper
     assert "cls" in batch
     assert all(forbidden not in batch.lower() for forbidden in ("del ", "rmdir", "taskkill", "reset --hard"))
+
+
+def test_va_preset_menu_checks_stopped_app_and_uses_existing_venv_only(tmp_path):
+    python = tmp_path / "ckvnvenv" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"mock existing interpreter")
+    result = _run_ps(
+        "$script:stopped=$false\n"
+        "function Assert-AppStopped { $script:stopped=$true }\n"
+        "function Invoke-Native { param($Command,$Arguments); "
+        "if (-not $script:stopped -or $Command -ne $PythonExe "
+        "-or $Arguments[1] -notlike '*apply_va_preset.py') { throw 'WRONG_PRESET_CALL' }; 'PRESET_ROUTED' }\n"
+        "function Install-Packages { throw 'UNEXPECTED_INSTALL' }\n"
+        "function Start-App { throw 'UNEXPECTED_START' }\nApply-VASettings",
+        tmp_path,
+    )
+    _assert_ok(result)
+    assert "PRESET_ROUTED" in result.stdout
+
+
+def test_va_preset_menu_refuses_running_app(tmp_path):
+    result = _run_ps(
+        "function Assert-AppStopped { throw 'RUNNING_APP' }\n"
+        "function Invoke-Native { throw 'UNEXPECTED_PRESET' }\nApply-VASettings", tmp_path,
+    )
+    assert result.returncode != 0
+    assert "RUNNING_APP" in result.stderr + result.stdout
 
 
 @pytest.mark.parametrize("module", ["viking_v2.main", "viking_v2.services.daemon"])

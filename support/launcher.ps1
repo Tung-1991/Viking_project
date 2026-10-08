@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Check', 'Packages', 'Update', 'Start')]
+    [ValidateSet('Check', 'Packages', 'Update', 'Start', 'PresetVA')]
     [string]$Action = 'Packages'
 )
 
@@ -375,6 +375,12 @@ function Wait-AppRetry {
     return ($LASTEXITCODE -eq 1)
 }
 
+function Apply-VASettings {
+    Assert-AppStopped
+    if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) { throw 'Chua co venv. Chon muc 1 > 2 truoc.' }
+    Invoke-Native $PythonExe @('-u', (Join-Path $ProjectRoot 'support\tools\apply_va_preset.py'))
+}
+
 function Start-App {
     if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) { throw 'Chua co venv. Chon muc 1 > 2 truoc.' }
     Assert-AppStopped
@@ -402,6 +408,7 @@ if ($MyInvocation.InvocationName -ne '.') {
             'Packages' { Install-Packages }
             'Update' { Update-Code }
             'Start' { Start-App }
+            'PresetVA' { Apply-VASettings }
         }
         exit 0
     } catch {

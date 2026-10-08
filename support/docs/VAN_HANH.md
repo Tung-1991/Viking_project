@@ -34,6 +34,9 @@
 ## Bộ thử MSN / CTS / HDB / IDC
 
 Thiết lập khi đây đúng là vốn dành cho bộ thử: watchlist/Priority gồm 4 mã;
+**Nạp nhanh:** đóng app → BAT **4** → kiểm tra tài khoản trên máy đó → **y** → **3**.
+Preset đi cùng Git; giữ API/Telegram, EMA/RSI, giờ mua và cấu hình thoát của máy đó.
+Backup setting cũ nằm cạnh `settings.json` (`settings.before-va-*.bak`), không lên Git.
 RULE → P1 bật OVERRIDE, CP **100%**; tối đa mã BOT **4**.
 KẾT NỐI → MÃ CK → VỐN RIÊNG ON, tổng **50 triệu**, ⚙ từng mã:
 
