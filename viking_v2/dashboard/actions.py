@@ -2475,6 +2475,9 @@ class DashboardActionsMixin:
         self._update_order_preview()
         if time.time() - self._last_running_render >= 2.0:
             self._render_tables(status)
+        popup = getattr(self, "_advanced_popup", None)
+        if popup is not None:
+            popup.refresh_runtime_preview()
         self._refresh_api_health_panel(status)
         mode = str(self.mode.get() or "").upper()
         if healthy_daemon:

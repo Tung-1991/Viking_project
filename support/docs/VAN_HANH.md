@@ -61,6 +61,7 @@ làm tròn lô/dự phòng giá trần nên tiền dùng thấp hơn trần. IDC
 Hạn mức này áp dụng BUY BOT; số lượng MANUAL do người đặt quyết định.
 Preview hiện NAV/tiền khả dụng, tổng quỹ, đã/chưa chia và phần giữ tiền.
 CÒN HẠN MỨC trừ vốn cổ đang giữ + BUY chờ, không phải tiền khả dụng.
+LỆNH **1/2** = đã dùng/đang chờ 1 lượt BUY BOT trên tối đa 2; khớp từng phần tính 1, bán hết đếm lại. REAL/PAPER đếm riêng.
 VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nháp.
 
 ## Khi đang chạy

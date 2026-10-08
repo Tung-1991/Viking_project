@@ -28,7 +28,7 @@ from ..services.volume_scanner import (
     import_watchlist,
 )
 from ..trading.market import MarketDataService
-from ..trading.portfolio import cash_from_balance, nav_from_balance
+from ..trading.portfolio import cash_from_balance, nav_from_balance, priority_entry_orders
 from .dnse.client import DNSEClient
 from .dnse.websocket import DNSEMarketWS
 from .telegram import TelegramClient
@@ -1771,6 +1771,12 @@ class ConnectionPopup:
         if hasattr(self, "priority_summary"):
             self._refresh_priority_summary()
 
+    def refresh_runtime_preview(self) -> None:
+        """Use the dashboard's existing UI tick; no timer or broker request."""
+        if (self.top.winfo_exists() and self.top.winfo_viewable()
+                and self.tabs.get() == "MÃ CK"):
+            self._refresh_priority_summary()
+
     def _refresh_priority_summary(self) -> None:
         if not hasattr(self, "priority_summary"):
             return
@@ -1785,26 +1791,28 @@ class ConnectionPopup:
             self.priority_summary, text=overview, font=("Segoe UI", 11), anchor="w",
             justify="left", wraplength=950, text_color=self.RED if invalid else self.MUTED,
         )
-        self.priority_preview.grid(row=0, column=0, columnspan=6, sticky="ew", padx=10, pady=(6, 5))
+        self.priority_preview.grid(row=0, column=0, columnspan=7, sticky="ew", padx=10, pady=(6, 5))
         _HoverHint(self.priority_preview, self._priority_preview_hint(rows, invalid))
         headings = (
             ("MÃ", "Mã Priority được cấu hình ở bảng này."),
             ("HẠN MỨC", "Ngân sách dành cho mã, gồm tiền mua và phí; không phải số tiền đã mua."),
-            ("DÙNG / LỆNH", "% hạn mức cho một lần BUY / số lần tối đa trong vị thế. Ví dụ 50% · 2 lệnh: mỗi lần ≤ 7,5 triệu trên hạn mức 15 triệu."),
+            ("DÙNG", "% hạn mức cho một lần BUY. Ví dụ hạn mức 15 triệu, dùng 50%: mỗi lần ≤ 7,5 triệu, gồm phí."),
+            ("LỆNH", "BUY BOT đã dùng/đang chờ / MAX LỆNH, theo REAL hoặc PAPER đang chọn.\n0/2: chưa mua, tối đa 2 lượt; 1/2: đã dùng hoặc đang chờ 1 lượt.\nKhớp từng phần tính 1 lượt; hủy chưa khớp không tính. Bán hết mới đếm lại. MANUAL không tính.\nVỐN RIÊNG OFF: tối đa 1 lượt. —/2: chưa đọc được bộ đếm, không có nghĩa là 0. Bản nháp phải LƯU PRIORITY mới áp dụng."),
             ("ĐƯỢC MUA", "Tổng tối đa = hạn mức × % sử dụng × MAX LỆNH, không vượt hạn mức. 15 triệu × 50% × 2 = 15 triệu, gồm phí."),
             ("ĐỂ DÀNH", "Hạn mức − được mua. Ví dụ 15 triệu − 7,5 triệu = để dành 7,5 triệu."),
             ("CÒN HẠN MỨC", "Được mua trừ vốn cổ đang giữ và BUY đang chờ; không phải tiền khả dụng."),
         )
+        weights = (2, 4, 2, 3, 4, 4, 4)
         for column, (title, hint) in enumerate(headings):
-            self.priority_summary.grid_columnconfigure(column, weight=1, uniform="priority-money")
-            heading = ctk.CTkLabel(self.priority_summary, text=title, font=("Segoe UI", 11, "bold"),
+            self.priority_summary.grid_columnconfigure(column, weight=weights[column], uniform="priority-money")
+            heading = ctk.CTkLabel(self.priority_summary, text=title, width=0, font=("Segoe UI", 11, "bold"),
                                   text_color=self.MUTED)
-            heading.grid(row=1, column=column, padx=5, pady=3)
+            heading.grid(row=1, column=column, sticky="ew", padx=5, pady=3)
             _HoverHint(heading, hint)
         for index, values in enumerate(rows, 2):
             for column, value in enumerate(values):
-                ctk.CTkLabel(self.priority_summary, text=value, font=("Segoe UI", 12),
-                             text_color=self.TEXT).grid(row=index, column=column, padx=5, pady=2)
+                ctk.CTkLabel(self.priority_summary, text=value, width=0, font=("Segoe UI", 12),
+                             text_color=self.TEXT).grid(row=index, column=column, sticky="ew", padx=5, pady=2)
 
     def _priority_preview_hint(self, rows: list[tuple[str, ...]], invalid: bool) -> str:
         """Explain the displayed draft without adding another money rule."""
@@ -1816,7 +1824,7 @@ class ConnectionPopup:
                 "Ví dụ 100 triệu × P1 100% / 4 mã = 25 triệu/mã. Bỏ qua hạn mức và % riêng đang nhập."
             )
         examples = []
-        for symbol, cap, pct, buy, saved, _remaining in rows:
+        for symbol, cap, pct, _orders, buy, saved, _remaining in rows:
             allocation = self._priority_allocations.get(symbol, {})
             maximum = config.priority_max_orders(allocation.get("max_orders", 1))
             if maximum > 1:
@@ -1884,16 +1892,23 @@ class ConnectionPopup:
         for symbol in symbols:
             allocation = allocations.get(symbol, {"limit_vnd": 0.0, "use_pct": 100.0})
             cap, pct = allocation["limit_vnd"], allocation["use_pct"]
-            capital = {}
+            capital, checks = {}, {}
             if not invalid and callable(checks_fn):
                 checks = checks_fn(symbol, status, settings=draft) or {}
                 capital = checks.get("priority_capital") or {}
             if not enabled:
                 cap, pct = capital.get("limit_vnd"), 100.0
             maximum = config.priority_max_orders(allocation.get("max_orders", 1)) if enabled else 1
+            used = checks.get("entry_orders_used")
+            trades, queue = getattr(self.parent, "trade_state", None), getattr(self.parent, "queue", None)
+            if used is None and trades is not None and queue is not None:
+                # Counts are local and readable even before an account balance arrives.
+                used = priority_entry_orders(symbol, mode, trades, queue, enabled,
+                                             symbols, allocations)["entry_orders_used"]
             buy_limit = config.priority_buy_limit(allocation) if enabled else cap
             remaining = max(0.0, buy_limit - capital["committed_vnd"]) if buy_limit is not None and "committed_vnd" in capital else None
-            rows.append((symbol, money(cap) if cap is not None else "THEO RULE", f"{pct:g}%" + (f" · {maximum} lệnh" if maximum > 1 else ""),
+            rows.append((symbol, money(cap) if cap is not None else "THEO RULE", f"{pct:g}%",
+                         f"{used if used is not None else '—'}/{maximum}",
                          money(buy_limit) if buy_limit is not None else "THEO P1",
                          money(cap - buy_limit) if cap is not None else "—",
                          money(remaining) if remaining is not None else "—"))

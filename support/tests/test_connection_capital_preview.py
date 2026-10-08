@@ -62,8 +62,8 @@ def test_private_pool_preview_shows_current_book_total_and_savings(tmp_path, mod
     assert "PRIORITY 50 tr = ĐƯỢC MUA 35 tr + ĐỂ DÀNH 15 tr" in overview
     assert "HẠN MỨC ĐÃ CHIA 50 tr · CHƯA CHIA 0 tr" in overview
     assert rows == [
-        ("MSN", "30 tr", "50%", "15 tr", "15 tr", "15 tr"),
-        ("CTS", "20 tr", "100%", "20 tr", "0 tr", "20 tr"),
+        ("MSN", "30 tr", "50%", "0/1", "15 tr", "15 tr", "15 tr"),
+        ("CTS", "20 tr", "100%", "0/1", "20 tr", "0 tr", "20 tr"),
     ]
     assert not invalid
     assert asdict(parent.settings) == before
@@ -76,8 +76,80 @@ def test_two_entries_preview_changes_total_not_per_entry_percentage(tmp_path):
     overview, rows, invalid = popup._priority_preview_data()
     assert not invalid
     assert "ĐƯỢC MUA 50 tr + ĐỂ DÀNH 0 tr" in overview
-    assert rows[0][2:5] == ("50% · 2 lệnh", "30 tr", "0 tr")
+    assert rows[0][2:6] == ("50%", "0/2", "30 tr", "0 tr")
     assert "mỗi lần ≤ 15 triệu, tối đa 2 lần; tổng ≤ 30 tr" in popup._priority_preview_hint(rows, invalid)
+
+
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+@pytest.mark.parametrize("has_balance", [True, False])
+def test_entry_counter_uses_local_book_pending_and_fills_without_writes(tmp_path, mode, has_balance):
+    popup, parent = preview(tmp_path, mode=mode)
+    popup._priority_allocations["MSN"]["max_orders"] = 2
+    cycle = parent.trade_state.create("MSN", mode)
+    parent.trade_state.record_buy_fill(cycle.id, 100, 20, order_id="first")
+    first = parent.queue.add(OrderIntent(
+        id="first", symbol="MSN", side="BUY", quantity=200, order_type="LO", limit_price=20,
+        execution_mode=mode, source="BOT", trade_id=cycle.id,
+    ))
+    parent.queue._update(first.id, status="PARTIAL", filled_quantity=100, remaining_quantity=100)
+    for symbol, book, source, identifier in [
+        ("MSN", "PAPER" if mode == "REAL" else "REAL", "BOT", "other-book"),
+        ("CTS", mode, "BOT", "other-symbol"),
+        ("MSN", mode, "MANUAL", "manual"),
+    ]:
+        parent.queue.add(OrderIntent(id=identifier, symbol=symbol, side="BUY", quantity=100,
+                                     order_type="LO", limit_price=20, execution_mode=book, source=source))
+    if not has_balance:
+        parent.snapshots = {}
+
+    def counter():
+        before = (asdict(parent.settings), parent.queue._read(), parent.trade_state._read(),
+                  parent.rule_state.store.read())
+        count = popup._priority_preview_data()[1][0][3]
+        assert (asdict(parent.settings), parent.queue._read(), parent.trade_state._read(),
+                parent.rule_state.store.read()) == before
+        return count
+
+    assert counter() == "1/2"  # A partial fill and its pending remainder are one BUY.
+    parent.queue._update(first.id, status="CANCELLED", remaining_quantity=0)
+    second = parent.queue.add(OrderIntent(
+        id="second", symbol="MSN", side="BUY", quantity=100, order_type="LO", limit_price=20,
+        execution_mode=mode, source="BOT", trade_id=cycle.id,
+    ))
+    parent.queue._update(second.id, status="UNKNOWN")
+    assert counter() == "2/2"  # Unknown broker outcome still reserves an entry.
+    parent.queue._update(second.id, status="CANCELLED")
+    assert counter() == "1/2"
+    parent.trade_state.record_buy_fill(cycle.id, 100, 20, order_id=second.id)
+    assert counter() == "2/2"
+    popup._priority_allocations["MSN"]["max_orders"] = 1
+    assert counter() == "2/1"  # Lowering a draft limit must not erase entries already used.
+    popup.priority_capital_enabled.value = False
+    assert counter() == "2/1"  # Private OFF uses the original one-entry policy.
+    parent.trade_state.record_sell_fill(cycle.id, 200, 20)
+    assert counter() == "0/1"
+
+
+def test_missing_entry_store_shows_unknown_not_zero(tmp_path):
+    popup, parent = preview(tmp_path)
+    popup._priority_allocations["MSN"]["max_orders"] = 2
+    parent.snapshots = {}
+    del parent.trade_state
+    assert popup._priority_preview_data()[1][0][3] == "—/2"
+
+
+@pytest.mark.parametrize("visible,tab", [(False, "MÃ CK"), (True, "DNSE"), (True, "MÃ CK")])
+def test_runtime_preview_only_refreshes_visible_priority_tab(visible, tab):
+    popup = ConnectionPopup.__new__(ConnectionPopup)
+    popup.top = SimpleNamespace(winfo_exists=lambda: True, winfo_viewable=lambda: visible)
+    popup.tabs = Value(tab)
+    refreshed = []
+    popup._refresh_priority_summary = lambda: refreshed.append(True)
+    popup.refresh_runtime_preview()
+    assert refreshed == ([True] if visible and tab == "MÃ CK" else [])
+    popup.top.winfo_exists = lambda: False
+    popup.refresh_runtime_preview()
+    assert refreshed == ([True] if visible and tab == "MÃ CK" else [])
 
 
 def test_division_preserves_maximum_and_gear_preview_fits(ui_root):
@@ -124,7 +196,7 @@ def test_va_50m_preview_is_group_total_not_25m_per_symbol(tmp_path, use_pct, buy
     assert f"PRIORITY 50 tr = ĐƯỢC MUA {buy} tr + ĐỂ DÀNH {saved} tr" in overview
     assert "TÀI SẢN NGOÀI NGÂN SÁCH 49.974 tr" in overview
     assert len(overview.splitlines()) == 3
-    assert rows[0] == ("MSN", "15 tr", f"{use_pct}%", "7.5 tr" if use_pct == 50 else "15 tr",
+    assert rows[0] == ("MSN", "15 tr", f"{use_pct}%", "0/1", "7.5 tr" if use_pct == 50 else "15 tr",
                        "7.5 tr" if use_pct == 50 else "0 tr", "7.5 tr" if use_pct == 50 else "15 tr")
     hint = popup._priority_preview_hint(rows, invalid)
     assert f"MSN: 15 tr × {use_pct}% = được mua " in hint
@@ -167,7 +239,7 @@ def test_private_off_uses_original_p1_budget_ignoring_draft_limits(tmp_path):
     overview, rows, invalid = popup._priority_preview_data()
     assert "VỐN RIÊNG OFF" in overview
     assert "ĐƯỢC MUA" not in overview
-    assert rows[0] == ("MSN", "25 tr", "100%", "25 tr", "0 tr", "25 tr")
+    assert rows[0] == ("MSN", "25 tr", "100%", "0/1", "25 tr", "0 tr", "25 tr")
     assert not invalid
     assert parent._preview_entry_checks("MSN", {})["order_budget"] == 25_000_000
 
@@ -179,7 +251,7 @@ def test_draft_total_and_limits_refresh_without_saving_or_placing_orders(tmp_pat
     overview, rows, invalid = popup._priority_preview_data()
     assert "PRIORITY 60 tr = ĐƯỢC MUA 40 tr + ĐỂ DÀNH 20 tr" in overview
     assert "HẠN MỨC ĐÃ CHIA 60 tr" in overview
-    assert rows[0][3] == "20 tr"
+    assert rows[0][4] == "20 tr"
     assert parent.settings.priority_total_capital == 50_000_000
     assert parent.settings.priority_allocations["MSN"]["limit_vnd"] == 30_000_000
     assert parent.queue.list_all() == []
@@ -284,6 +356,39 @@ def test_priority_preview_widgets_update_without_rebuilding_unchanged_values(ui_
         client.close()
 
 
+def test_visible_priority_counter_refreshes_and_preserves_unchanged_widgets(ui_root, monkeypatch):
+    import customtkinter as ctk
+    count = {"used": 0}
+    monkeypatch.setattr(ui_root, "_preview_entry_checks",
+                        lambda *_a, **_k: {"entry_orders_used": count["used"]}, raising=False)
+    settings = config.AppSettings.from_dict({
+        "watchlist": ["MSN"], "priority_symbols": ["MSN"],
+        "priority_capital_enabled": True, "priority_total_capital": 15e6,
+        "priority_allocations": {"MSN": {"limit_vnd": 15e6, "use_pct": 50, "max_orders": 2}},
+    })
+    client = DNSEClient(account_no="PAPER")
+    popup = ConnectionPopup(ui_root, settings, "PAPER", client, lambda: None)
+    try:
+        popup.tabs.set("MÃ CK")
+        ui_root.update_idletasks()
+        def counter_widget():
+            return next(child for child in popup.priority_summary.winfo_children()
+                        if isinstance(child, ctk.CTkLabel) and child.grid_info()["row"] == 2
+                        and child.grid_info()["column"] == 3)
+        before = counter_widget()
+        assert before.cget("text") == "0/2"
+        popup.refresh_runtime_preview()
+        assert counter_widget() is before
+        count["used"] = 1
+        popup.refresh_runtime_preview()
+        assert counter_widget().cget("text") == "1/2"
+        assert not before.winfo_exists()
+        assert settings.priority_allocations["MSN"]["max_orders"] == 2
+    finally:
+        popup._close()
+        client.close()
+
+
 def test_priority_preview_and_money_headings_have_specific_hints(ui_root, monkeypatch):
     import viking_v2.connections.window as module
     attached = []
@@ -306,7 +411,10 @@ def test_priority_preview_and_money_headings_have_specific_hints(ui_root, monkey
         heading_hints = {widget.cget("text"): text for widget, text in attached
                          if widget.master is popup.priority_summary and widget is not popup.priority_preview}
         assert "15 triệu × 50% × 2 = 15 triệu" in heading_hints["ĐƯỢC MUA"]
-        assert "một lần BUY" in heading_hints["DÙNG / LỆNH"]
+        assert "một lần BUY" in heading_hints["DÙNG"]
+        assert "0/2: chưa mua" in heading_hints["LỆNH"]
+        assert "1/2: đã dùng hoặc đang chờ 1 lượt" in heading_hints["LỆNH"]
+        assert "MANUAL không tính" in heading_hints["LỆNH"]
         assert "không phải tiền khả dụng" in heading_hints["CÒN HẠN MỨC"]
     finally:
         popup._close()
@@ -322,13 +430,15 @@ def test_va_priority_summary_stays_three_lines_at_supported_widths(ui_root, monk
     settings = config.AppSettings.from_dict({
         "watchlist": symbols, "priority_symbols": symbols,
         "priority_capital_enabled": True, "priority_total_capital": 50_000_000,
-        "priority_allocations": {symbol: {"limit_vnd": cap * 1_000_000, "use_pct": 50}
+        "priority_allocations": {symbol: {"limit_vnd": cap * 1_000_000, "use_pct": 50, "max_orders": 100}
                                  for symbol, cap in zip(symbols, [15, 15, 5, 15])},
     })
     monkeypatch.setattr(ui_root, "mode", Value("PAPER"), raising=False)
     monkeypatch.setattr(ui_root, "snapshots", {
         "PAPER": ({"equity": 99_973_842.9, "availableCash": 99_973_842.9}, [], []),
     }, raising=False)
+    monkeypatch.setattr(ui_root, "_preview_entry_checks",
+                        lambda *_a, **_k: {"entry_orders_used": 100}, raising=False)
     client = DNSEClient(account_no="PAPER")
     ctk.set_widget_scaling(scale)
     popup = ConnectionPopup(ui_root, settings, "PAPER", client, lambda: None)
@@ -345,6 +455,17 @@ def test_va_priority_summary_stays_three_lines_at_supported_widths(ui_root, monk
         font = tkfont.Font(root=ui_root, font=label._label.cget("font"))
         assert max(font.measure(line) for line in lines) <= label.winfo_width()
         assert label._label.winfo_reqheight() < 4 * font.metrics("linespace")
+        headers = [child for child in popup.priority_summary.winfo_children()
+                   if child.grid_info()["row"] == 1]
+        assert [child.cget("text") for child in headers] == [
+            "MÃ", "HẠN MỨC", "DÙNG", "LỆNH", "ĐƯỢC MUA", "ĐỂ DÀNH", "CÒN HẠN MỨC",
+        ]
+        assert label.grid_info()["columnspan"] == 7
+        for child in popup.priority_summary.winfo_children():
+            assert child.winfo_x() + child.winfo_width() <= popup.priority_summary.winfo_width()
+            text_font = tkfont.Font(root=ui_root, font=child._label.cget("font"))
+            assert max(text_font.measure(line) for line in child.cget("text").splitlines()) <= child.winfo_width(), child.cget("text")
+        assert max(child.grid_info()["row"] for child in popup.priority_summary.winfo_children()) == 5
         import os
         if os.getenv("VIKING_CAPTURE_UI") == "1" and scale == 1.0 and width == 1080:
             from pathlib import Path
