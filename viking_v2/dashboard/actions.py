@@ -18,7 +18,7 @@ from ..backtest.window import BacktestPopup
 from ..backtest.data import HistoricalDataStore
 
 from .. import config
-from ..config import save_settings
+from ..config import AppSettings, save_settings
 from ..connections.telegram import SignalTelegramService, TelegramClient
 from ..connections.window import ConnectionPopup
 from ..exit_modes import EXIT_MODE_LABELS
@@ -2504,8 +2504,11 @@ class DashboardActionsMixin:
             exclude_intent_id=exclude_intent_id,
         )
 
-    def _preview_entry_checks(self, symbol: str, status: dict[str, Any]) -> dict[str, Any] | None:
+    def _preview_entry_checks(
+        self, symbol: str, status: dict[str, Any], *, settings: AppSettings | None = None,
+    ) -> dict[str, Any] | None:
         """Size the selected ticket from its book, independently of bot signals."""
+        settings = self.settings if settings is None else settings
         snapshots = getattr(self, "snapshots", None)
         if snapshots is None:
             return None
@@ -2514,16 +2517,16 @@ class DashboardActionsMixin:
         if not balance:
             return {}
         from ..rules.business import StaticRuleParameters
-        params = StaticRuleParameters.from_dict(self.settings.rule_parameters)
-        exposure = (self.settings.market_phase_override_exposure_pct / 100.0
-                    if self.settings.market_phase_override_enabled
+        params = StaticRuleParameters.from_dict(settings.rule_parameters)
+        exposure = (settings.market_phase_override_exposure_pct / 100.0
+                    if settings.market_phase_override_enabled
                     else params.exposure.get(self.rule_state.confirmed_market_state(), 0.0))
         tick = dict((status.get("ticks") or {}).get(symbol) or {})
         decision = (status.get("decisions") or {}).get(symbol) or {}
         if decision_is_fresh(decision, symbol, mode):
             checks = (decision.get("details") or {}).get("entry_checks") or {}
             tick.setdefault("ceiling_price", checks.get("buy_budget_price", 0.0))
-        fee_rate = self.settings.buy_fee_pct / 100.0
+        fee_rate = settings.buy_fee_pct / 100.0
         if mode == "REAL":
             fee_rate = getattr(self, "_fee_rates", {}).get((symbol, "BUY"), fee_rate)
         checks = PortfolioContextBuilder(
@@ -2532,10 +2535,10 @@ class DashboardActionsMixin:
         ).build(
             symbol, execution_mode=mode, balance=balance, positions=positions,
             tick=tick, exposure=exposure, max_positions=params.max_positions,
-            priority_symbols=self.settings.priority_symbols,
-            priority_capital_enabled=self.settings.priority_capital_enabled,
-            priority_total_capital=self.settings.priority_total_capital,
-            priority_allocations=self.settings.priority_allocations,
+            priority_symbols=settings.priority_symbols,
+            priority_capital_enabled=settings.priority_capital_enabled,
+            priority_total_capital=settings.priority_total_capital,
+            priority_allocations=settings.priority_allocations,
             no_compound_enabled=params.no_compound_enabled, budget_only=True,
         )
         checks["force_min_lot_enabled"] = params.force_min_lot_enabled
@@ -3273,6 +3276,9 @@ class DashboardActionsMixin:
             return
         self._paint_account()
         self._render_tables()
+        popup = getattr(self, "_advanced_popup", None)
+        if popup and popup.top.winfo_exists() and popup.top.winfo_viewable() and popup.tabs.get() == "MÃ CK":
+            popup._refresh_priority_summary()
 
     def _paint_account(self) -> None:
         mode = self.mode.get()

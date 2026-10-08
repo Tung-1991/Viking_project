@@ -16,6 +16,8 @@
 1. KẾT NỐI → DNSE: nhập API, **TEST → kiểm tra đúng tài khoản → LƯU API**.
 2. EMAIL OTP/SMART OTP đúng phương thức DNSE đang dùng → nhập mã → XÁC THỰC.
    OTP không lưu; Trading Token phải còn hiệu lực để gửi REAL.
+   XÓA TOKEN chỉ bỏ token. XÓA API bỏ cả API/token trên máy, giữ settings/vị thế;
+   không hủy lệnh DNSE. Muốn giao dịch REAL tiếp phải nhập API và OTP lại.
 3. Chọn đúng REAL/PAPER; đối chiếu tiền, danh mục và lệnh chờ với DNSE.
 4. Kiểm tra giá/HEALTH/daemon, watchlist và RULE; hover `?` xem điều kiện/ví dụ.
    PREVIEW là ước tính; **CHƯA LƯU** chưa áp dụng, `—` là thiếu dữ liệu/số lượng.
@@ -41,6 +43,9 @@ Có thêm 10 triệu: đổi tổng thành 60, cap HDB thành 15 rồi lưu; kh�
 CHIA HẠN MỨC thay các cap nháp bằng Tổng / số mã, không mua lệnh. Khối lượng thực tế
 làm tròn lô/dự phòng giá trần nên tiền dùng thấp hơn trần. IDC không mượn cap mã khác.
 Hạn mức này áp dụng BUY BOT; số lượng MANUAL do người đặt quyết định.
+Preview hiện NAV/tiền khả dụng, tổng quỹ, đã/chưa chia và phần giữ tiền.
+CÒN HẠN MỨC trừ vốn cổ đang giữ + BUY chờ, không phải tiền khả dụng.
+VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nháp.
 
 ## Khi đang chạy
 

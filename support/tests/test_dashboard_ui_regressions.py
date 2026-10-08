@@ -745,6 +745,7 @@ def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> 
             int(connection_popup.stats_card.grid_info()["row"]),
         } == {0}
         assert connection_popup.btn_save_dnse.cget("text") == "LƯU API"
+        assert connection_popup.btn_clear_dnse.cget("text") == "XÓA API"
         assert connection_popup.save_token_switch.cget("text") == "LƯU TOKEN"
         assert connection_popup.daily_stats_choice.get() == "THEO NGÀY"
         assert connection_popup.daily_stats_segment.cget("values") == [

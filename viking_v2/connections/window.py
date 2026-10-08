@@ -27,6 +27,7 @@ from ..services.volume_scanner import (
     import_watchlist,
 )
 from ..trading.market import MarketDataService
+from ..trading.portfolio import cash_from_balance, nav_from_balance
 from .dnse.client import DNSEClient
 from .dnse.websocket import DNSEMarketWS
 from .telegram import TelegramClient
@@ -479,6 +480,7 @@ class ConnectionPopup:
 
         self.tabs = ctk.CTkTabview(
             self.top, fg_color=self.BG, border_width=1, border_color=self.BORDER,
+            command=self._refresh_priority_summary,
             segmented_button_selected_color=self.BLUE,
             segmented_button_selected_hover_color="#245C92",
             segmented_button_unselected_color="#3A3F47",
@@ -495,6 +497,7 @@ class ConnectionPopup:
         self.show()
 
     def show(self) -> None:
+        self._refresh_priority_summary()
         self.top.deiconify()
         self.top.lift()
         self.top.focus_force()
@@ -622,7 +625,9 @@ class ConnectionPopup:
         credentials = self._card(
             body, "KẾT NỐI DNSE",
             "Nhập API Key/Secret rồi bấm TEST. Viking gọi GET /accounts để kiểm tra và hiển thị "
-            "tài khoản CKCS. LƯU ghi API và tài khoản hoạt động vào viking_v2/.env.",
+            "tài khoản CKCS. LƯU ghi API và tài khoản hoạt động vào viking_v2/.env. "
+            "XÓA API bỏ Key/Secret và Trading Token trên máy này; giữ tài khoản, settings và vị thế. "
+            "Không hủy lệnh đã gửi DNSE; muốn giao dịch REAL tiếp phải nhập API và xác thực OTP lại.",
         )
         credentials.grid(row=0, column=0, sticky="ew", padx=6, pady=6)
         credentials.grid_columnconfigure(1, weight=1)
@@ -683,7 +688,13 @@ class ConnectionPopup:
             font=("Segoe UI", 11, "bold"), fg_color=self.GREEN,
             hover_color="#16A34A", command=self._save_dnse,
         )
-        self.btn_save_dnse.grid(row=0, column=2)
+        self.btn_save_dnse.grid(row=0, column=2, padx=(0, 6))
+        self.btn_clear_dnse = ctk.CTkButton(
+            connection_actions, text="XÓA API", width=90, height=32,
+            font=("Segoe UI", 11, "bold"), fg_color="#7F1D1D",
+            hover_color="#991B1B", command=self._clear_dnse,
+        )
+        self.btn_clear_dnse.grid(row=0, column=3)
         self.dnse_status = ctk.CTkLabel(
             credentials, text="Nhập API rồi bấm TEST.",
             height=28, font=("Segoe UI", 12, "bold"), text_color=self.MUTED,
@@ -1089,10 +1100,15 @@ class ConnectionPopup:
         self.priority_total = ctk.CTkEntry(capital, width=95)
         self.priority_total.insert(0, f"{self.settings.priority_total_capital / 1_000_000:g}")
         self.priority_total.pack(side="left", padx=8)
+        self.priority_total.bind("<KeyRelease>", lambda _event: self._refresh_priority_summary(), add="+")
         ctk.CTkButton(capital, text="CHIA HẠN MỨC", width=120, command=self._divide_priority_capital).pack(side="left")
         self._hint_icon(capital,
             "OFF: mỗi Priority giữ ngân sách NAV × P1 / số mã BOT tối đa.\n"
+            "100 triệu, P1 100%, tối đa 4 mã → mỗi mã 25 triệu, không phải một mã dùng hết tài khoản.\n"
             "ON: dùng hạn mức riêng gồm phí; 15 triệu × 50% → mua tối đa 7,5 triệu, giữ 7,5 triệu.\n"
+            "Quỹ 50 triệu trong tài khoản NAV 100 triệu → dành ngân sách 50 triệu cho Priority, không chuyển tiền DNSE.\n"
+            "CÒN HẠN MỨC = MUA TỐI ĐA trừ vốn cổ đang giữ và BUY đang chờ, gồm phí. "
+            "Đây không phải tiền khả dụng hay cam kết sẽ mua; vẫn kiểm tra tiền, room P1 và lô giao dịch.\n"
             "CHIA HẠN MỨC thay các hạn mức nháp bằng Tổng / số Priority, giữ % sử dụng. "
             "Phải LƯU mới áp dụng, không tạo lệnh. Tiền giữ lại không cho mã khác mượn; vẫn chịu tiền thật và room P1."
         ).pack(side="left", padx=8)
@@ -1337,6 +1353,7 @@ class ConnectionPopup:
             return
         self._tested_account = None
         self.btn_load_accounts.configure(state="disabled", text="ĐANG TEST...")
+        self.btn_clear_dnse.configure(state="disabled")
         self.dnse_status.configure(text="Đang kiểm tra DNSE...", text_color=self.WARN)
 
         def worker() -> None:
@@ -1352,6 +1369,7 @@ class ConnectionPopup:
 
     def _finish_load_accounts(self, data: Any, health: dict[str, Any]) -> None:
         self.btn_load_accounts.configure(state="normal", text="TEST")
+        self.btn_clear_dnse.configure(state="normal")
         rows, custody, customer_name = self._account_payload(data)
         stock_accounts = [
             row for row in rows
@@ -1416,6 +1434,43 @@ class ConnectionPopup:
         self.on_saved()
         if self.on_apply_account:
             self.top.after(150, lambda: self.on_apply_account(selected_id))
+
+    def _clear_dnse(self) -> None:
+        if self.btn_verify_otp.cget("state") == "disabled":
+            self.dnse_status.configure(text="CHỜ XÁC THỰC OTP HOÀN TẤT TRƯỚC KHI XÓA API", text_color=self.WARN)
+            return
+        if not messagebox.askyesno(
+            "Xóa API DNSE",
+            "Xóa API Key/Secret và Trading Token trên máy này?\n"
+            "REAL ngừng kết nối/gửi lệnh mới cho đến khi nhập API và OTP lại.\n"
+            "Giữ tài khoản, settings, vị thế; không hủy lệnh đã gửi DNSE.",
+            parent=self.top,
+        ):
+            return
+        try:
+            update_env({
+                "DNSE_API_KEY": None, "DNSE_API_SECRET": None,
+                "DNSE_TRADING_TOKEN": None, "DNSE_TRADING_TOKEN_EXPIRES_AT": None,
+            })
+        except Exception:
+            self.dnse_status.configure(text="XÓA THẤT BẠI · KIỂM TRA QUYỀN GHI .ENV", text_color=self.RED)
+            return
+        self.client.api_key = self.client.api_secret = self.client.trading_token = ""
+        self.client.trading_token_expires_at = 0.0
+        self.client.connect()
+        self._tested_account = None
+        for entry in (self.dnse_key, self.dnse_secret, self.otp):
+            entry.delete(0, "end")
+        self.dnse_key.configure(show="•")
+        self.key_visibility.configure(text="HIỆN")
+        self.save_token_env.set(False)
+        self.token_status.configure(text="ĐÃ XÓA", text_color=self.WARN)
+        self.connection_summary.configure(text="ĐÃ XÓA API · GIỮ WORKSPACE", text_color=self.WARN)
+        self.dnse_status.configure(text="REAL CẦN API + OTP MỚI · KHÔNG HỦY LỆNH DNSE", text_color=self.WARN)
+        # Restart the data daemon with cleared credentials, keeping this account's
+        # runtime. Do not switch accounts, delete positions or cancel broker orders.
+        if self.on_apply_account:
+            self.on_apply_account(self.account_id)
 
     def _otp_type_changed(self, value: str) -> None:
         smart = str(value or "").upper() == "SMART OTP"
@@ -1707,20 +1762,87 @@ class ConnectionPopup:
     def _refresh_priority_summary(self) -> None:
         if not hasattr(self, "priority_summary"):
             return
+        overview, rows, invalid = self._priority_preview_data()
+        fingerprint = (overview, tuple(rows), invalid)
+        if fingerprint == getattr(self, "_priority_preview_fingerprint", None):
+            return
+        self._priority_preview_fingerprint = fingerprint
         for child in self.priority_summary.winfo_children():
             child.destroy()
-        for column, title in enumerate(("MÃ", "HẠN MỨC", "DÙNG", "MUA TỐI ĐA", "GIỮ TIỀN")):
+        self.priority_preview = ctk.CTkLabel(
+            self.priority_summary, text=overview, font=("Segoe UI", 11), anchor="w",
+            justify="left", wraplength=950, text_color=self.RED if invalid else self.MUTED,
+        )
+        self.priority_preview.grid(row=0, column=0, columnspan=6, sticky="ew", padx=10, pady=(6, 5))
+        for column, title in enumerate(("MÃ", "HẠN MỨC", "DÙNG", "MUA TỐI ĐA", "GIỮ TIỀN", "CÒN HẠN MỨC")):
             self.priority_summary.grid_columnconfigure(column, weight=1, uniform="priority-money")
             ctk.CTkLabel(self.priority_summary, text=title, font=("Segoe UI", 11, "bold"),
-                         text_color=self.MUTED).grid(row=0, column=column, padx=5, pady=3)
-        enabled = self.priority_capital_enabled.get()
-        for index, symbol in enumerate(self.priority_picker.get(), 1):
-            row = self._priority_allocations.get(symbol, {"limit_vnd": 0.0, "use_pct": 100.0})
-            cap, pct = row["limit_vnd"] / 1_000_000, row["use_pct"]
-            values = (symbol, f"{cap:g} tr", f"{pct:g}%", f"{cap * pct / 100:g} tr", f"{cap * (1 - pct / 100):g} tr") if enabled else (symbol, "THEO RULE", "100%", "THEO P1", "—")
+                         text_color=self.MUTED).grid(row=1, column=column, padx=5, pady=3)
+        for index, values in enumerate(rows, 2):
             for column, value in enumerate(values):
                 ctk.CTkLabel(self.priority_summary, text=value, font=("Segoe UI", 12),
                              text_color=self.TEXT).grid(row=index, column=column, padx=5, pady=2)
+
+    def _priority_preview_data(self) -> tuple[str, list[tuple[str, ...]], bool]:
+        """Read-only draft preview: reuse sizing rules, never queue or save a BUY."""
+        def money(value: float) -> str:
+            return f"{value / 1_000_000:,.3f}".rstrip("0").rstrip(".") + " tr"
+
+        enabled = bool(self.priority_capital_enabled.get())
+        symbols = self.priority_picker.get()
+        allocations = config.normalize_priority_allocations(self._priority_allocations, symbols)
+        mode_var = getattr(self.parent, "mode", None)
+        mode = mode_var.get() if mode_var is not None else ("PAPER" if self.settings.paper_mode else "REAL")
+        balance, positions, _orders = getattr(self.parent, "snapshots", {}).get(mode, ({}, [], []))
+        nav, cash = (nav_from_balance(balance, positions), cash_from_balance(balance)) if balance else (None, None)
+        overview = f"PREVIEW {mode} · NAV {money(nav) if nav is not None else '—'} · TIỀN KHẢ DỤNG {money(cash) if cash is not None else '—'}"
+        invalid = False
+        try:
+            total = self._priority_total_vnd() if enabled else 0.0
+            if enabled:
+                config.validate_priority_capital(total, symbols, allocations)
+        except (ValueError, TypeError):
+            total, invalid = 0.0, True
+        if enabled:
+            allocated = sum(row["limit_vnd"] for row in allocations.values())
+            buying = sum(row["limit_vnd"] * row["use_pct"] / 100.0 for row in allocations.values())
+            if invalid:
+                overview += "\nQUỸ KHÔNG HỢP LỆ · Tổng > 0 và tổng hạn mức ≤ quỹ"
+            else:
+                overview += f"\nQUỸ PRIORITY {money(total)} · ĐÃ CHIA {money(allocated)} · CHƯA CHIA {money(total - allocated)}"
+                overview += f"\nMUA TỐI ĐA {money(buying)} · GIỮ TIỀN {money(total - buying)} (gồm chưa chia)"
+                if nav is not None:
+                    overview += f" · NAV NGOÀI QUỸ {money(max(0.0, nav - total))}"
+                    if total > nav:
+                        overview += " · QUỸ VƯỢT NAV"
+        else:
+            overview += "\nVỐN RIÊNG OFF · 100% ngân sách theo P1 / số mã BOT tối đa; không dùng hạn mức nháp"
+
+        draft = deepcopy(self.settings)
+        draft.priority_symbols = list(symbols)
+        draft.priority_capital_enabled = enabled
+        draft.priority_total_capital = total
+        draft.priority_allocations = allocations
+        checks_fn = getattr(self.parent, "_preview_entry_checks", None)
+        status_fn = getattr(self.parent, "_book_preview_status", None)
+        status = status_fn() if callable(status_fn) else {}
+        rows = []
+        for symbol in symbols:
+            allocation = allocations.get(symbol, {"limit_vnd": 0.0, "use_pct": 100.0})
+            cap, pct = allocation["limit_vnd"], allocation["use_pct"]
+            capital = {}
+            if not invalid and callable(checks_fn):
+                checks = checks_fn(symbol, status, settings=draft) or {}
+                capital = checks.get("priority_capital") or {}
+            if not enabled:
+                cap, pct = capital.get("limit_vnd"), 100.0
+            buy_limit = cap * pct / 100.0 if cap is not None else None
+            remaining = max(0.0, buy_limit - capital["committed_vnd"]) if buy_limit is not None and "committed_vnd" in capital else None
+            rows.append((symbol, money(cap) if cap is not None else "THEO RULE", f"{pct:g}%",
+                         money(buy_limit) if buy_limit is not None else "THEO P1",
+                         money(cap - buy_limit) if cap is not None else "—",
+                         money(remaining) if remaining is not None else "—"))
+        return overview, rows, invalid
 
     def _divide_priority_capital(self) -> None:
         try:
