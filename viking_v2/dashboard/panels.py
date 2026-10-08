@@ -660,10 +660,11 @@ class DashboardPanelsMixin:
         info_header.grid_columnconfigure(0, weight=1, uniform="info_header_side")
         info_header.grid_columnconfigure(1, weight=0)
         info_header.grid_columnconfigure(2, weight=1, uniform="info_header_side")
-        ctk.CTkLabel(
-            info_header, text="HỆ THỐNG", font=("Segoe UI", 14, "bold"),
+        self.info_title = ctk.CTkLabel(
+            info_header, text="HỆ THỐNG  ⓘ", font=("Segoe UI", 14, "bold"),
             text_color=COL_TITLE, anchor="w",
-        ).grid(row=0, column=0, sticky="w", padx=(2, 12))
+        )
+        self.info_title.grid(row=0, column=0, sticky="w", padx=(2, 12))
         self.info_tab_selector = ctk.CTkSegmentedButton(
             info_header, values=["PREVIEW", "Manual", "Bot"],
             width=300, height=28, dynamic_resizing=False,
@@ -676,8 +677,10 @@ class DashboardPanelsMixin:
             command=self._select_info_tab,
         )
         self.info_tab_selector.grid(row=0, column=1)
+        # CTkSegmentedButton.bind raises NotImplementedError; attach the
+        # explanation to a stable label, not to the composite tab control.
         _HoverHint(
-            self.info_tab_selector,
+            self.info_title,
             "PREVIEW: tính thử, không gửi lệnh.\n"
             "Manual: thao tác tay, kể cả lần bị chặn. Bot: lệnh tự động và quản lý thoát.\n"
             "Từ bản này, nhật ký lưu kèm tab trên máy; mở lại app nạp dòng gần nhất. * = có dòng mới chưa đọc.",
