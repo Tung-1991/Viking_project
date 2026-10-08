@@ -202,9 +202,41 @@ def test_invalid_manual_numeric_input_is_reported_without_queuing(monkeypatch, f
     errors = []
     monkeypatch.setattr(module.messagebox, "showerror", lambda *args, **_kw: errors.append(args))
     subject, sent = manual_subject({})
+    messages = []
+    subject._log = lambda *args: messages.append(args)
     setattr(subject, field, SimpleNamespace(get=lambda: value))
     subject._submit("BUY")
     assert not sent and errors
+    assert len(messages) == 1 and "CHƯA GỬI" in messages[0][0] and messages[0][1] == "manual"
+
+
+def test_manual_auto_block_is_logged_without_creating_or_submitting_order(monkeypatch):
+    import viking_v2.dashboard.actions as module
+    errors, messages = [], []
+    monkeypatch.setattr(module.messagebox, "showerror", lambda *args, **_kw: errors.append(args))
+    subject, sent = manual_subject({})
+    subject.quantity = SimpleNamespace(get=lambda: "")
+    subject._suggested_order_quantity = lambda _price: (0, 0, False)
+    subject._preview_auto_feedback = {"hint": "THIẾU TIỀN CHO 100 CP\nTiền khả dụng: 2,192 đ."}
+    subject._log = lambda *args: messages.append(args)
+    subject._submit("BUY")
+    assert not sent and len(errors) == len(messages) == 1
+    assert "PAPER BUY MSN" in messages[0][0] and "2,192 đ" in messages[0][0]
+    assert messages[0][1] == "manual"
+
+
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+def test_automatic_exit_progress_belongs_to_bot_log(mode):
+    subject = DashboardActionsMixin()
+    messages = []
+    subject._log = lambda *args: messages.append(args)
+    intent = OrderIntent("exit", "MSN", "SELL", 100, "MARKET", execution_mode=mode,
+                         source="EM", status="WORKING", reason="INDICATOR_EXIT")
+    subject._log_order_progress(intent)
+    subject._log_order_progress(intent)
+    assert len(messages) == 1 and messages[0][1] == "bot"
+    assert f"{mode} SELL MSN" in messages[0][0]
+    assert "E AUTO" in messages[0][0]
 
 
 def test_order_progress_log_tracks_fills_once_in_correct_book_and_tab():

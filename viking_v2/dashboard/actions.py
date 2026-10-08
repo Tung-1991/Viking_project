@@ -101,12 +101,18 @@ class DashboardActionsMixin:
         )
         if intent.limit_price > 0:
             message += f" · GIÁ {_display_price(intent.limit_price)}"
+        if intent.source == "EM":
+            tactic = {
+                "STOP_LOSS": "SL", "TAKE_PROFIT": "TP", "INDICATOR_EXIT": "E AUTO",
+                "NORMAL_PROTECTION": "PROTECT", "NORMAL_DYNAMIC": "PROTECT DYNAMIC",
+            }.get(intent.reason, str(intent.reason or "THOÁT TỰ ĐỘNG").replace("_", " "))
+            message += f" · {tactic}"
         if intent.broker_order_id:
             broker_name = "DNSE" if intent.execution_mode == "REAL" else "PAPER"
             message += f" · {broker_name} #{intent.broker_order_id}"
         if intent.result and intent.status in {"REJECTED", "FAILED", "EXPIRED", "WAITING_TOKEN", "WAITING_SETTLEMENT"}:
             message += " · " + " ".join(str(intent.result).split())[:220]
-        self._log(message, "bot" if intent.source == "BOT" else "manual")
+        self._log(message, "bot" if intent.source in {"BOT", "EM"} else "manual")
 
     def _sync_order_progress(self, items: list[OrderIntent]) -> None:
         """Observe a local render snapshot; no broker calls or replay on startup."""
@@ -1459,23 +1465,29 @@ class DashboardActionsMixin:
     def _submit(self, side: str) -> None:
         symbol = self.symbol.get().strip().upper()
         kind = self.order_type.get()
+        mode = self.mode.get()
+
+        def blocked(title: str, explanation: str) -> None:
+            self._log(f"{mode} {side} {symbol} · {kind} · CHƯA GỬI: {explanation}", "manual")
+            messagebox.showerror(title, explanation, parent=self)
+
         limit_price = 0.0
         if kind == "LO":
             try:
                 entered = float(self.price.get().replace(",", ""))
                 limit_price = entered / 1000.0 if entered >= 1000 else entered
             except ValueError:
-                messagebox.showerror("Manual order", "Giá LO không hợp lệ.", parent=self)
+                blocked("Đặt lệnh", "Giá LO không hợp lệ.")
                 return
             if not math.isfinite(limit_price) or limit_price <= 0:
-                messagebox.showerror("Manual order", "Lệnh LO bắt buộc có giá.", parent=self)
+                blocked("Đặt lệnh", "Lệnh LO bắt buộc có giá lớn hơn 0.")
                 return
         raw_quantity = self.quantity.get().strip().replace(",", "")
         if raw_quantity:
             try:
                 quantity = int(raw_quantity)
             except ValueError:
-                messagebox.showerror("Manual order", "Khối lượng không hợp lệ.", parent=self)
+                blocked("Đặt lệnh", "Khối lượng phải là số nguyên dương.")
                 return
         else:
             entry_price = limit_price
@@ -1491,13 +1503,11 @@ class DashboardActionsMixin:
             quantity, _budget, _forced_minimum = self._suggested_order_quantity(entry_price)
             if quantity <= 0:
                 feedback = getattr(self, "_preview_auto_feedback", {})
-                messagebox.showerror(
+                blocked(
                     "Đặt lệnh",
                     feedback.get("hint") or feedback.get("reason") or "Chưa tính được khối lượng AUTO. Xem PREVIEW.",
-                    parent=self,
                 )
                 return
-        mode = self.mode.get()
         if mode == "REAL" and self.settings.confirm_real_orders:
             answer = messagebox.askyesno(
                 "Xác nhận lệnh REAL",
@@ -1505,6 +1515,7 @@ class DashboardActionsMixin:
                 parent=self,
             )
             if not answer:
+                self._log(f"{mode} {side} {symbol} · {kind} · CHƯA GỬI: hủy xác nhận.", "manual")
                 return
         em_key_map = {
             "normal_protection": "NORMAL",
@@ -1525,11 +1536,11 @@ class DashboardActionsMixin:
             elif sl_raw:
                 sl_mode, sl_value = "PRICE", _price_unit(float(sl_raw))
         except ValueError:
-            messagebox.showerror("Manual order", "Stop Loss không hợp lệ.", parent=self)
+            blocked("Đặt lệnh", "Stop Loss không hợp lệ.")
             return
         if (not math.isfinite(sl_value)
                 or (sl_mode != "DEFAULT" and (sl_value == 0 or (sl_mode == "PRICE" and sl_value < 0)))):
-            messagebox.showerror("Manual order", "Stop Loss phải là số hữu hạn, khác 0; giá phải lớn hơn 0.", parent=self)
+            blocked("Đặt lệnh", "Stop Loss phải là số hữu hạn, khác 0; giá phải lớn hơn 0.")
             return
         tp_mode, tp_value = "NONE", 0.0
         tp_raw = str(self.tp.get() or "").strip().replace(",", "")
@@ -1539,10 +1550,10 @@ class DashboardActionsMixin:
             elif tp_raw:
                 tp_mode, tp_value = "PRICE", _price_unit(float(tp_raw))
         except ValueError:
-            messagebox.showerror("Manual order", "Take Profit không hợp lệ.", parent=self)
+            blocked("Đặt lệnh", "Take Profit không hợp lệ.")
             return
         if not math.isfinite(tp_value) or (tp_mode != "NONE" and tp_value <= 0):
-            messagebox.showerror("Manual order", "Take Profit phải là số hữu hạn, lớn hơn 0.", parent=self)
+            blocked("Đặt lệnh", "Take Profit phải là số hữu hạn, lớn hơn 0.")
             return
         # A manual SELL of a Viking-managed position must close the same trade
         # cycle.  Leaving trade_id blank made the broker position disappear
@@ -1556,13 +1567,13 @@ class DashboardActionsMixin:
         )
         exchange = self._symbol_exchange(symbol)
         if not exchange:
-            messagebox.showerror("Order", f"Chưa xác định sàn của {symbol}.", parent=self)
+            blocked("Đặt lệnh", f"Chưa xác định sàn của {symbol}.")
             return
         if kind == "ATO" and exchange != "HOSE":
-            messagebox.showerror("Order", f"{exchange} không dùng ATO.", parent=self)
+            blocked("Đặt lệnh", f"{exchange} không dùng ATO.")
             return
         if kind == "ATC" and exchange == "UPCOM":
-            messagebox.showerror("Order", "UPCOM không có ATC.", parent=self)
+            blocked("Đặt lệnh", "UPCOM không có ATC.")
             return
         runtime_status = self.bridge.read_status()
         runtime_decisions = decisions_for_mode(runtime_status, mode, default_paper=self.settings.paper_mode)

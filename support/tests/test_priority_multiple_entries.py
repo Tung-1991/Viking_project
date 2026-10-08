@@ -394,6 +394,9 @@ def test_manual_zero_quantity_reports_actual_preview_reason(monkeypatch, reason,
     view = DashboardActionsMixin()
     field = lambda value: SimpleNamespace(get=lambda: value)
     view.symbol, view.order_type, view.quantity = field("MSN"), field("MARKET"), field("")
+    view.mode = field("PAPER")
+    logs = []
+    view._log = lambda *args: logs.append(args)
     view._current_tick_price = 70
     view._suggested_order_quantity = lambda _price: (0, 0, False)
     view._preview_auto_feedback = {"reason": reason, "waiting": waiting, "hint": reason + "\nChi tiết đúng sổ"}
@@ -401,3 +404,4 @@ def test_manual_zero_quantity_reports_actual_preview_reason(monkeypatch, reason,
     monkeypatch.setattr(module.messagebox, "showerror", lambda _title, text, **_kwargs: errors.append(text))
     view._submit("BUY")
     assert errors == [view._preview_auto_feedback["hint"]]
+    assert len(logs) == 1 and reason in logs[0][0] and logs[0][1] == "manual"

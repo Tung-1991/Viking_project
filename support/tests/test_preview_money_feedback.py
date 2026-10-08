@@ -91,7 +91,39 @@ def test_msn_zero_budget_explains_reserved_cap_not_empty_account(tmp_path):
     view = ticket(tmp_path, cash=40_000_000)
     assert view._suggested_order_quantity(74.2, {"ticks": {"MSN": {"ceiling_price": 80.4}}}, "MSN") == (0, 0, False)
     assert view._preview_auto_feedback["reason"] == "VỐN ĐÃ GIỮ CHO PRIORITY"
-    assert "40.00 tr" in view._preview_auto_feedback["hint"]
+    assert "40,000,000 đ" in view._preview_auto_feedback["hint"]
+
+
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+def test_tiny_cash_reports_missing_money_before_reserved_priority(tmp_path, mode):
+    view = ticket(tmp_path, mode=mode, cash=2192)
+    view.settings.priority_allocations["MSN"]["use_pct"] = 100
+    quantity, budget, forced = view._suggested_order_quantity(
+        74.2, {"ticks": {"MSN": {"price": 74.2, "ceiling_price": 80.4}}}, "MSN",
+    )
+    assert (quantity, budget, forced) == (0, 0, False)
+    feedback = view._preview_auto_feedback
+    assert feedback["reason"] == "THIẾU TIỀN CHO 100 CP"
+    assert not feedback["waiting"]
+    assert "2,192 đ" in feedback["hint"] and "80,400" in feedback["hint"]
+    assert "VỐN ĐÃ GIỮ" not in feedback["hint"]
+    assert "không phải tiền sẵn có" in feedback["hint"]
+    assert len(feedback["hint"].splitlines()) <= 5
+    assert not view.queue.list_all()
+
+
+def test_missing_bound_does_not_fabricate_a_minimum_lot_cash_failure():
+    feedback = _auto_quantity_feedback(
+        {"order_budget": 2192, "available_cash": 2192}, 74.2, 2192, 0, missing_bound=True,
+    )
+    assert feedback["waiting"] and feedback["reason"] == "CHỜ GIÁ TRẦN TÍNH KL"
+
+
+def test_status_hover_reports_actual_price_error_not_previous_auto_failure():
+    view = DashboardPanelsMixin()
+    view.preview_status_reason = SimpleNamespace(cget=lambda _key: "Giá LO không hợp lệ")
+    view._preview_auto_feedback = {"reason": "THIẾU TIỀN CHO 100 CP", "hint": "old cash failure"}
+    assert view._order_status_hint() == "Giá LO không hợp lệ"
 
 
 def test_paper_100m_without_own_cap_can_buy_msn(tmp_path):

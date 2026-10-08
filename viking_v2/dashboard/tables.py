@@ -8,6 +8,7 @@ from tkinter import ttk
 from typing import Any
 
 from .. import config
+from ..services.runtime import recent_ui_logs
 from ..trading.orders import CLAIMABLE_STATUSES, FINAL_STATUSES, LOCALLY_CONTROLLABLE_STATUSES
 from ..trading.portfolio import account_price
 from ..trading.validation import decision_is_fresh, decisions_for_mode
@@ -711,8 +712,8 @@ class DashboardTablesMixin:
         self._sync_cancel_button()
 
     def _log(self, message: str, target: str = "manual") -> None:
-        self.logger.info(message)
         target = "bot" if target == "bot" else "manual"
+        self.logger.info(message, extra={"ui_target": target})
         widget = self.log_bot if target == "bot" else self.log_manual
         if widget.winfo_exists():
             widget.insert("end", f"[{datetime.now():%H:%M:%S}] {message}\n")
@@ -725,6 +726,23 @@ class DashboardTablesMixin:
             active_target = "bot" if active == "Bot" else "manual" if active == "Manual" else ""
             if active_target != target:
                 self._set_log_unread(target, True)
+
+    def _restore_visible_logs(self) -> None:
+        """Restore text only: no queue changes, unread marks, or log replay."""
+        if getattr(self, "_visible_logs_restored", False):
+            return
+        self._visible_logs_restored = True
+        recent = recent_ui_logs(self.bridge.log_dir)
+        for target in ("manual", "bot"):
+            widget = self.log_bot if target == "bot" else self.log_manual
+            rows = [row for row in recent if row["target"] == target][-200:]
+            if rows and widget.winfo_exists():
+                lines = [f"[{row['ts'][:19].replace('T', ' ')}] {row['message']}" for row in rows]
+                widget.insert("end", "Nhật ký đã lưu · chỉ xem lại, không gửi lại lệnh\n" + "\n".join(lines) + "\n")
+                last_line = int(widget.index("end-1c").split(".", 1)[0])
+                if last_line > VISIBLE_LOG_LINE_LIMIT + 1:
+                    widget.delete("1.0", f"{last_line - VISIBLE_LOG_LINE_LIMIT}.0")
+                widget.see("end")
 
     def close(self) -> None:
         self.running = False

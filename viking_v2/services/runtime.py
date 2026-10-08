@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from collections import deque
 import json
 import logging
 from logging.handlers import TimedRotatingFileHandler
@@ -97,7 +98,47 @@ class JsonLineFormatter(logging.Formatter):
         }
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
+        target = getattr(record, "ui_target", None)
+        if target in {"manual", "bot"}:
+            payload["ui_target"] = target
         return json.dumps(payload, ensure_ascii=False)
+
+
+def recent_ui_logs(log_dir: str | Path, *, limit: int = 400) -> list[dict[str, str]]:
+    """Read a bounded display-only tail; never reconstruct or submit orders."""
+    root = Path(log_dir)
+    if limit <= 0:
+        return []
+    entries: deque[dict[str, str]] = deque(maxlen=min(limit, 2000))
+    try:
+        rotated = sorted(root.glob("ui.jsonl.*"), key=lambda path: path.name)[-1:]
+        paths = [*rotated, root / "ui.jsonl"]
+        for path in paths:
+            try:
+                with path.open("rb") as stream:
+                    size = stream.seek(0, 2)
+                    offset = max(0, size - 1_048_576)
+                    stream.seek(offset)
+                    if offset:
+                        stream.readline()  # Skip a possibly cut JSON record.
+                    for raw in stream:
+                        try:
+                            record = json.loads(raw.decode("utf-8"))
+                            if not isinstance(record, dict) or record.get("ui_target") not in {"manual", "bot"}:
+                                continue
+                            message, ts = record.get("message"), record.get("ts")
+                            if not isinstance(message, str) or not isinstance(ts, str):
+                                continue
+                            datetime.fromisoformat(ts)
+                            entries.append({"ts": ts, "target": record["ui_target"], "message": message[:4000]})
+                        except (UnicodeError, ValueError, TypeError, RecursionError):
+                            continue
+            except OSError:
+                continue
+    except OSError:
+        return []
+    return list(entries)
+
 
 def setup_logging(log_dir: str | Path, process_name: str, *, debug: bool = False) -> logging.Logger:
     root = Path(log_dir)

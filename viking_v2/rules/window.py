@@ -343,9 +343,9 @@ class RuleSettingsPopup:
         self.exp_dist = self._field(exposure, "Phân phối (%)", self.params.exposure["DISTRIBUTION"] * 100, "DISTRIBUTION. Mặc định tối đa 50% NAV.")
 
         override = self._card(
-            body, "OVERRIDE P1",
-            "Mặc định OFF. Khi ON, trạng thái và tỷ trọng cố định bên dưới thay P1 tự động cho BUY mới. "
-            "Bộ phân loại VNINDEX vẫn chạy để theo dõi; vị thế đang giữ không bị sửa.",
+            body, "TỶ TRỌNG CHỌN TAY (P1)",
+            "BẬT: dùng CP% nhập bên dưới, không chờ VNINDEX xác nhận. Ví dụ CP 100% = P1 không yêu cầu giữ tiền.\n"
+            "Tên trạng thái là lựa chọn tay, không phải kết luận VNINDEX. Vẫn phải đủ tiền/hạn mức; không tự bán cổ phiếu.",
             2, 0, span=3,
         )
         override_row = ctk.CTkFrame(override, fg_color="transparent")
@@ -615,7 +615,7 @@ class RuleSettingsPopup:
 
         whip = self._card(body, "WHIPSAW", "Bộ chống nhiễu trước entry. Không thuộc E/M và không can thiệp position đang giữ.", 1, 2)
         self.whipsaw_enabled = self._switch(
-            whip, "BẬT CHỐNG NHIỄU", self.params.whipsaw_enabled,
+            whip, "BẬT WHIPSAW", self.params.whipsaw_enabled,
             "Nếu cặp EMA BUY crossover đạt N lần trong X phiên, khóa BUY/Re-entry mới; position đang giữ vẫn hoạt động.",
         )
         self.whipsaw_n = self._field(whip, "Số lần (N)", self.params.whipsaw_n, "Mặc định 3 lần crossover trong cửa sổ X sẽ khóa BUY/Re-entry.")

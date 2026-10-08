@@ -706,7 +706,7 @@ def test_screen_log_is_bounded_but_every_message_still_reaches_logger(ui_root):
     bot = ctk.CTkTextbox(ui_root)
     subject = DashboardTablesMixin()
     recorded = []
-    subject.logger = SimpleNamespace(info=recorded.append)
+    subject.logger = SimpleNamespace(info=lambda message, **_kwargs: recorded.append(message))
     subject.log_manual = manual
     subject.log_bot = bot
     subject._set_log_unread = lambda *_: None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import math
 import tkinter as tk
 from tkinter import ttk
 from typing import Any
@@ -36,6 +37,7 @@ def _auto_quantity_feedback(
     money_ready = "order_budget" in checks or "available_capital" in checks
     priority = checks.get("priority_capital") or {}
     cash = _number(checks.get("available_cash"))
+    minimum = price * 100_000 * (1 + _number(checks.get("buy_fee_rate")))
     waiting, reason = False, ""
     if not money_ready:
         waiting, reason = True, "CHỜ TIỀN TÀI KHOẢN"
@@ -48,6 +50,11 @@ def _auto_quantity_feedback(
             reason = "P1 CHƯA CHO PHÉP MUA"
         elif "exposure_room" in checks and _number(checks.get("exposure_room")) <= 0:
             reason = "HẾT ROOM P1"
+        elif ("available_cash" in checks and price > 0 and not missing_bound
+              and cash < minimum):
+            # An account short of even one reserved lot is not primarily
+            # blocked by another symbol's configured Priority allowance.
+            reason = "THIẾU TIỀN CHO 100 CP"
         elif budget <= 0 and priority.get("reason") == "PRIORITY_CAPITAL_LIMIT":
             reason = (
                 "HẾT HẠN MỨC MÃ"
@@ -61,29 +68,24 @@ def _auto_quantity_feedback(
             waiting, reason = True, "CHỜ GIÁ TRẦN TÍNH KL"
         elif price <= 0:
             waiting, reason = True, "CHỜ GIÁ TÍNH KL"
-        elif cash < price * 100_000 * (1 + _number(checks.get("buy_fee_rate"))):
-            reason = "THIẾU TIỀN CHO 100 CP"
         else:
             reason = "HẠN MỨC CHƯA ĐỦ 100 CP" if checks.get("priority_capital_enabled") else "VỐN AUTO CHƯA ĐỦ 100 CP"
     lines = [reason] if reason else []
     if money_ready:
-        lines.extend((f"Tiền khả dụng: {_compact_vnd(cash)}.",
-                      f"Vốn AUTO: {_compact_vnd(budget)} trước phí."))
+        lines.append(f"Tiền khả dụng: {cash:,.0f} đ · AUTO: {_compact_vnd(budget)} chưa phí.")
         if price > 0 and not missing_bound:
-            minimum = price * 100_000 * (1 + _number(checks.get("buy_fee_rate")))
-            lines.append(f"Giá tính KL: {_display_price(price)}; 100 CP + phí: {_compact_vnd(minimum)}.")
+            lines.append(f"100 CP + phí: {_compact_vnd(minimum)} (dự trù giá {_display_price(price)} đ).")
         if priority.get("limit_vnd"):
             lines.append(
-                f"Priority: hạn mức {_compact_vnd(priority['limit_vnd'])} × {_number(priority.get('use_pct')):g}%"
-                f" = tối đa {_compact_vnd(priority.get('per_order_limit_vnd', priority.get('buy_limit_vnd')))} / lần gồm phí;"
-                f" đã dùng {_compact_vnd(priority.get('committed_vnd'))}."
+                f"Priority: {_compact_vnd(priority['limit_vnd'])} × {_number(priority.get('use_pct')):g}%"
+                f" → {_compact_vnd(priority.get('per_order_limit_vnd', priority.get('buy_limit_vnd')))} / lệnh, gồm phí."
             )
-            lines.append(f"Tổng được mua {_compact_vnd(priority.get('buy_limit_vnd'))}; MAX LỆNH {priority.get('max_orders', 1)}. Mua thêm cần tín hiệu mới.")
-            lines.append(f"BOT đã dùng {checks.get('entry_orders_used', 0)}/{checks.get('entry_orders_max', 1)} lần BUY trong vị thế; MANUAL không dùng giới hạn số lần BOT.")
-        if priority:
-            lines.append(f"Tiền giữ cho mã khác/phần tiết kiệm: {_compact_vnd(priority.get('reserved_cash'))}.")
-        if checks.get("priority_capital_enabled"):
-            lines.append("MARKET dự trù KL theo giá trần để không vượt hạn mức; LO dùng giá nhập.")
+        if reason in {"THIẾU TIỀN CHO 100 CP", "TIỀN KHẢ DỤNG = 0"}:
+            lines.append("Cần tăng tiền khả dụng; hạn mức không phải tiền sẵn có.")
+        elif priority and quantity <= 0:
+            lines.append(f"Dành cho mã khác/tiết kiệm: {_compact_vnd(priority.get('reserved_cash'))}.")
+        if checks.get("priority_capital_enabled") and reason not in {"THIẾU TIỀN CHO 100 CP", "TIỀN KHẢ DỤNG = 0"}:
+            lines.append("MARKET tính theo giá trần; LO theo giá nhập.")
     else:
         lines.append("Chưa nhận được số dư của sổ đang xem; không có nghĩa tài khoản hết tiền.")
     return {"waiting": waiting, "reason": reason, "hint": "\n".join(lines)}
@@ -674,6 +676,13 @@ class DashboardPanelsMixin:
             command=self._select_info_tab,
         )
         self.info_tab_selector.grid(row=0, column=1)
+        _HoverHint(
+            self.info_tab_selector,
+            "PREVIEW: tính thử, không gửi lệnh.\n"
+            "Manual: thao tác tay, kể cả lần bị chặn. Bot: lệnh tự động và quản lý thoát.\n"
+            "Từ bản này, nhật ký lưu kèm tab trên máy; mở lại app nạp dòng gần nhất. * = có dòng mới chưa đọc.",
+            placement="inside",
+        )
         self._info_collapsed = False
         self.info_collapse_button = ctk.CTkButton(
             info_header,
@@ -755,6 +764,9 @@ class DashboardPanelsMixin:
             text._textbox.configure(yscrollcommand=scrollbar.set)
             setattr(self, f"log_{target}", text)
             setattr(self, f"log_{target}_scrollbar", scrollbar)
+        restore_logs = getattr(self, "_restore_visible_logs", None)
+        if callable(restore_logs):
+            restore_logs()
         self.log_bot.insert(
             "end", "Mua tự động khởi động OFF; vị thế đang giữ vẫn được quản lý.\n"
         )
@@ -807,7 +819,7 @@ class DashboardPanelsMixin:
         self.preview_status_reason.grid(
             row=0, column=1, sticky="ew", padx=5
         )
-        _HoverHint(self.preview_status_reason, self._auto_quantity_hint, placement="inside")
+        _HoverHint(self.preview_status_reason, self._order_status_hint, placement="inside")
         self.preview_status_badge = ctk.CTkLabel(
             order_header, text="CHỜ", width=82, height=24,
             font=("Segoe UI", 10, "bold"), fg_color="#4A3B16",
@@ -921,7 +933,6 @@ class DashboardPanelsMixin:
         )
         _HoverHint(self.preview_em_normal, "PROTECT theo đỉnh, không phải TP cố định. Dynamic là bảo vệ trước ARM.\nAUTO bán theo % đã đặt; ALERT chỉ ghi nhận. Các con số ở đây là preview, chưa có vị thế thì chưa có đỉnh thật.")
         _HoverHint(self.preview_em_exit, "E dùng EMA SELL/RSI để thoát. AUTO bán 100% phần còn lại; ALERT không đặt lệnh.\nE độc lập với ARM/PROTECT; OFF là chưa gắn E cho lệnh MANUAL này.")
-        _HoverHint(self.preview_status_reason, lambda: self.preview_status_reason.cget("text"), placement="inside")
 
         rule_group.grid_columnconfigure(0, weight=1)
         for row in (1, 2, 3, 4):
@@ -1016,30 +1027,43 @@ class DashboardPanelsMixin:
             "P2 · BUY / E",
             self._indicator_preview_hint,
         )
+        phase2._viking_title_widget.grid(columnspan=2)
+        for row, name in ((1, "buy_ema"), (2, "sell_ema"), (3, "rsi")):
+            key = ctk.CTkLabel(
+                phase2, text="--:", width=1, height=14,
+                font=("Segoe UI", 11), text_color=COL_PREVIEW_TEXT, anchor="w",
+            )
+            key.grid(row=row, column=0, sticky="w", padx=(8, 6), pady=(0, 3) if row == 3 else 0)
+            setattr(self, f"preview_rule_{name}_key", key)
+            _HoverHint(key, self._indicator_preview_hint, placement="inside")
         self.preview_rule_ema = ctk.CTkLabel(
-            phase2, text="BUY EMA 3/6 · --/--", width=1, height=14,
+            phase2, text="-- / --", width=1, height=14,
             font=("Cascadia Mono", 12), text_color=COL_PREVIEW_TEXT,
-            anchor="w", justify="left", wraplength=300,
+            anchor="w", justify="left", wraplength=0,
         )
         self.preview_rule_ema.grid(
-            row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=0
+            row=1, column=1, sticky="ew", padx=(0, 8), pady=0
         )
         self.preview_rule_sell_ema = ctk.CTkLabel(
-            phase2, text="SELL EMA 3/6 · --/--", width=1, height=14,
+            phase2, text="-- / --", width=1, height=14,
             font=("Cascadia Mono", 12), text_color=COL_PREVIEW_TEXT,
-            anchor="w", justify="left", wraplength=300,
+            anchor="w", justify="left", wraplength=0,
         )
         self.preview_rule_sell_ema.grid(
-            row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=0
+            row=2, column=1, sticky="ew", padx=(0, 8), pady=0
         )
         self.preview_rule_rsi = ctk.CTkLabel(
-            phase2, text="RSI14 -- · WAIT", width=1, height=14,
+            phase2, text="--", width=1, height=14,
             font=("Cascadia Mono", 12), text_color=COL_PREVIEW_TEXT,
-            anchor="w", justify="left", wraplength=300,
+            anchor="w", justify="left", wraplength=0,
         )
         self.preview_rule_rsi.grid(
-            row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 3)
+            row=3, column=1, sticky="ew", padx=(0, 8), pady=(0, 3)
         )
+        for value in (self.preview_rule_ema, self.preview_rule_sell_ema, self.preview_rule_rsi):
+            value.bind("<Configure>", lambda _event, widget=value: fit_label_text(
+                widget, base_font=("Cascadia Mono", 12)), add="+")
+            _HoverHint(value, self._indicator_preview_hint, placement="inside")
 
         phase3 = phase_card(
             3,
@@ -1217,11 +1241,17 @@ class DashboardPanelsMixin:
                 fit_callback()
         return quantity, budget, forced_minimum
 
+    def _order_status_hint(self) -> str:
+        reason = str(self.preview_status_reason.cget("text") or "")
+        feedback = getattr(self, "_preview_auto_feedback", {})
+        if reason == feedback.get("reason"):
+            return str(feedback.get("hint") or reason)
+        return reason or "Chờ tính preview; chưa gửi lệnh."
+
     def _auto_quantity_hint(self) -> str:
         return (
-            "AUTO tính từ vốn của đúng sổ REAL/PAPER, làm tròn lô 100; nhập KL để đặt tay.\n"
-            "Ví dụ đủ tiền 450 CP → AUTO 400 CP. Không ép 100 CP khi thiếu tiền/room/hạn mức.\n"
-            + str(getattr(self, "_preview_auto_feedback", {}).get("hint", "Chờ tính AUTO."))
+            str(getattr(self, "_preview_auto_feedback", {}).get("hint", "Chờ tính AUTO."))
+            + "\nTrống KL = AUTO (450 → 400 CP); nhập KL = đặt tay."
         )
 
     def _book_preview_status(self, status: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1304,14 +1334,15 @@ class DashboardPanelsMixin:
     def _indicator_preview_hint(self) -> str:
         preview = getattr(self, "_preview_indicator_source", {})
         source = preview.get("source", "MISSING")
+        params = self.settings.rule_parameters
         text = (
-            "EMA/RSI của đúng mã đang xem, dùng chu kỳ trong RULE. CLOSED dùng nến ngày đã đóng; REALTIME dùng nến đang chạy.\n"
-            "Có quyết định: hiện chỉ số bot đã dùng. Chưa có quyết định: tính preview từ nến có sẵn; không tạo tín hiệu hoặc đặt lệnh.\n"
-            "Nhịp phút: khi chưa có quyết định, preview tham khảo cập nhật theo giá; quyết định bot vẫn theo nhịp đã chọn.\n"
-            "EMA nhanh > chậm không tự nó là lệnh BUY: còn phải có điểm cắt và đủ điều kiện RSI/rule."
+            "EMA: nhanh so với chậm. Ví dụ 73,76 > 72,70; chưa đủ để tự mua, còn cần điểm cắt và các điều kiện khác.\n"
+            f"Lọc RSI: BUY {'BẬT' if params.get('buy_signal_use_rsi', True) else 'TẮT'} / "
+            f"E {'BẬT' if params.get('sell_signal_use_rsi', True) else 'TẮT'}. ↑/↓ so với nến trước; đây không phải công tắc tự mua/bán.\n"
+            "Bot OFF vẫn tính chỉ số. Preview không tạo tín hiệu hoặc đặt lệnh."
         )
         if source == "MISSING":
-            return text + "\nChưa có nến cho mã này: chờ daemon tải lịch sử. Có giá tức thời không đồng nghĩa đã có nến để tính chỉ số."
+            return text + "\nDấu --: chưa đủ nến; chờ daemon tải lịch sử."
         return text + f"\nNguồn: {'quyết định bot' if source == 'DECISION' else 'preview nến'} · {preview.get('symbol', '')} · {preview.get('asof', '')}."
 
     def _atr_preview_hint(self) -> str:
@@ -1323,10 +1354,9 @@ class DashboardPanelsMixin:
         except (TypeError, ValueError, OSError, OverflowError):
             asof = "chưa có đủ nến"
         return (
-            "ATR14 · 1D: độ biến động theo % giá đóng cửa, tính bằng cùng công thức Wilder của bot. Không dùng nến hôm nay chưa đóng.\n"
-            "START = ATR × hệ số bắt đầu; LÙI = ATR × hệ số lùi trong RULE → E/M.\n"
-            "Ví dụ ATR 4%, START ×0,55 → 2,2%; LÙI ×0,8 → 3,2%. Các mức chỉ có tác dụng khi bật Dynamic.\n"
-            f"Phiên cuối dùng tính ATR: {asof}. Dấu -- nghĩa là chưa đủ dữ liệu, không phải ATR bằng 0."
+            "ATR14: mức biến động 14 nến ngày đã đóng; không dùng nến hôm nay chưa đóng.\n"
+            "Dynamic: START = ATR × hệ số bắt đầu; LÙI = ATR × hệ số lùi. Ví dụ ATR 4% × 0,55 → START 2,2%.\n"
+            f"Phiên cuối: {asof}. -- = chưa đủ dữ liệu, không phải 0."
         )
 
     def _market_confirmation_hint(self) -> str:
@@ -1339,45 +1369,38 @@ class DashboardPanelsMixin:
         active_pct = _number(allocation.get("exposure_pct"))
         headline = f"ĐANG DÙNG: {active} · CP {active_pct:g}% / TIỀN {100 - active_pct:g}%.\n"
         if current.get("override_enabled"):
-            explanation = "OVERRIDE: dùng trạng thái/tỷ trọng chọn tay, không chờ phiên xác nhận.\n"
+            headline = f"TỶ TRỌNG CHỌN TAY: CP {active_pct:g}% / TIỀN {100 - active_pct:g}%.\n"
+            explanation = "Bỏ qua phân loại VNINDEX và chờ xác nhận; đây không phải trạng thái thị trường thực tế.\n"
         elif current.get("confirmation_pending"):
             from ..rules.business import StaticRuleParameters
             candidate_pct = StaticRuleParameters.from_dict(self.settings.rule_parameters).exposure.get(state)
             target = f" (CP {candidate_pct * 100:g}% / TIỀN {100 - candidate_pct * 100:g}%)" if candidate_pct is not None else ""
             explanation = (
-                f"ĐANG XÁC NHẬN: {labels.get(state, 'ĐANG TÍNH')} · {count}/{required} PHIÊN.\n"
-                f"Cần {required} phiên liên tiếp cùng trạng thái mới đổi sang {labels.get(state, 'trạng thái mới')}{target}. "
-                f"Trong lúc chờ vẫn dùng {active}; ứng viên đổi thì đếm lại.\n"
+                f"Xác nhận {labels.get(state, 'ĐANG TÍNH')}: {count}/{required} phiên{target}. "
+                f"Cần {required} phiên liên tiếp mới đổi; đang chờ vẫn dùng {active}.\n"
             )
         else:
             explanation = "Hiện không có trạng thái mới đang chờ xác nhận.\n"
         nav = allocation.get("nav")
         example = (
             f"{allocation.get('mode', '')}: NAV {_compact_vnd(nav)} → CP tối đa "
-            f"{_compact_vnd(allocation.get('stock_limit'))}, giữ theo P1 {_compact_vnd(allocation.get('cash_reserve'))}.\n"
+            f"{_compact_vnd(allocation.get('stock_limit'))}, giữ tiền {_compact_vnd(allocation.get('cash_reserve'))}.\n"
             if nav is not None else "Chờ snapshot tài khoản để tính số tiền theo P1.\n"
         )
         return (f"{headline}{explanation}"
-                "P1 TỰ ĐỘNG = tự phân loại VNINDEX, không phải bật BUY BOT; không chờ giảm giá để mua/bán.\n"
-                "CP% / TIỀN% tính trên NAV của sổ REAL/PAPER đang xem: tiền + giá trị cổ phiếu.\n"
+                "CP% / TIỀN% tính trên NAV = tiền + giá trị cổ phiếu của sổ đang xem.\n"
                 f"{example}"
-                "Đây là giới hạn phân bổ, không phải tỷ trọng đang nắm hay ngân sách của một lệnh. "
-                "Đổi P1 không tự bán để cân lại danh mục.\n"
-                f"{count}/{required} đếm phiên, không đếm lần quét bot. Đổi số phiên tại RULE → P1 → Xác nhận (phiên).")
+                "Đây là giới hạn vốn, không phải lệnh mua/bán. Đổi tỷ trọng không tự bán cổ phiếu.")
 
     def _entry_capital_hint(self) -> str:
+        summary = getattr(self, "_preview_entry_summary", "chờ dữ liệu")
+        # The ticket hint already explains money; this hint explains slots.
         return (
-            "VỐN AUTO là ngân sách mua gợi ý cho mã đang chọn, tại thời điểm preview; tiền mua cổ trước phí.\n"
-            "Ví dụ NAV 50 triệu × P1 90% / tối đa 5 mã = 9 triệu/mã. "
-            "Tiền, room P1, BUY chờ và no-compound còn giới hạn con số thực tế.\n"
-            "Priority vốn riêng dùng hạn mức × % sử dụng, trừ vốn đang giữ/BUY chờ và phí. "
-            "Lô 100 và giá dự phòng khiến tiền mua thực tế thường thấp hơn ngân sách.\n"
-            "MANUAL nhập khối lượng tự quyết, không bị ép về VỐN AUTO; vẫn kiểm tra tiền/phí và điều kiện lệnh. "
-            "AUTO 100 khi bật chỉ nâng lên 1 lô nếu còn đủ tiền và room; không vượt cap Priority.\n"
-            "BOT = số mã đang giữ/BUY chờ trên tối đa; Priority giữ slot bên trong tổng. "
-            "Chống nhiễu và LOSS/BLOCK chỉ chặn BUY BOT mới, không chặn SELL hay lưu tín hiệu mua lại.\n"
-            f"{getattr(self, '_preview_auto_feedback', {}).get('hint', '')}\n"
-            f"Hiện tại: {getattr(self, '_preview_entry_summary', 'chờ dữ liệu')}."
+            f"{summary}.\n"
+            "Mã BOT 0/4 = đang giữ hoặc chờ mua 0 mã, tối đa 4 mã; không phải số lệnh.\n"
+            "Vốn mua là gợi ý cho mã đang chọn, chưa phí. Ví dụ 50 triệu × 90% / 5 mã = 9 triệu/mã; Priority dùng hạn mức riêng.\n"
+            "WHIPSAW = khóa BUY khi EMA cắt qua lại quá nhiều; LỖ = chuỗi lỗ / ngưỡng khóa. Không chặn SELL.\n"
+            "MANUAL nhập KL tự chọn, vẫn kiểm tra tiền/phí và điều kiện lệnh; không dùng giới hạn số lần BUY BOT."
         )
 
     def _phase1_capital_preview(self, details: dict[str, Any]) -> dict[str, Any]:
@@ -1712,9 +1735,7 @@ class DashboardPanelsMixin:
         indicators = details.get("indicators") if isinstance(details.get("indicators"), dict) else {}
         rule_params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
         buy_ema_enabled = bool(rule_params.get("buy_signal_use_ema", True))
-        buy_rsi_enabled = bool(rule_params.get("buy_signal_use_rsi", True))
         sell_ema_enabled = bool(rule_params.get("sell_signal_use_ema", True))
-        sell_rsi_enabled = bool(rule_params.get("sell_signal_use_rsi", True))
 
         action = str(decision.get("action") or "WAIT").upper()
         market_state = str(decision.get("market_state") or "UNKNOWN").upper()
@@ -1768,14 +1789,16 @@ class DashboardPanelsMixin:
         exposure_pct = allocation["exposure_pct"]
         cash_pct = max(0.0, 100.0 - exposure_pct)
         self.preview_rule_market.configure(
-            text=f"{state_label} · CP {exposure_pct:g}% · TIỀN {cash_pct:g}%",
-            text_color=market_color,
+            text=(f"CP: {exposure_pct:g}% · TIỀN: {cash_pct:g}%"
+                  if market_details.get("override_enabled") else
+                  f"{state_label} · CP: {exposure_pct:g}% · TIỀN: {cash_pct:g}%"),
+            text_color=COL_PREVIEW_TEXT if market_details.get("override_enabled") else market_color,
         )
         fit_label_text(self.preview_rule_market, base_font=("Segoe UI", 12))
         market_notes: list[str] = []
         override_enabled = bool(market_details.get("override_enabled", False))
         if override_enabled:
-            market_notes.append("OVERRIDE")
+            market_notes.append("TỶ TRỌNG CHỌN TAY")
         elif not pending_confirmation:
             market_notes.append("P1 TỰ ĐỘNG")
         if pending_confirmation:
@@ -1806,57 +1829,71 @@ class DashboardPanelsMixin:
         else:
             self.preview_rule_market_detail.grid_remove()
 
-        def ema_preview(prefix: str, key_prefix: str) -> tuple[str, str]:
+        def ema_preview(prefix: str, key_prefix: str) -> tuple[str, str, str]:
             fast_period = int(indicators.get(f"{key_prefix}_ema_fast_period", indicators.get("ema_fast_period", 3)) or 3)
             slow_period = int(indicators.get(f"{key_prefix}_ema_slow_period", indicators.get("ema_slow_period", 6)) or 6)
             fast_value = indicators.get(f"{key_prefix}_ema_fast", indicators.get("ema_fast"))
             slow_value = indicators.get(f"{key_prefix}_ema_slow", indicators.get("ema_slow"))
+            key = f"EMA {prefix} {fast_period}/{slow_period}:"
             try:
                 fast_number = float(fast_value)
                 slow_number = float(slow_value)
             except (TypeError, ValueError):
-                return f"{prefix} EMA {fast_period}/{slow_period} · --/--", COL_PREVIEW_TEXT
+                return key, "-- / --", COL_PREVIEW_TEXT
+            if not math.isfinite(fast_number) or not math.isfinite(slow_number):
+                return key, "-- / --", COL_PREVIEW_TEXT
             relation = ">" if fast_number > slow_number else "<" if fast_number < slow_number else "="
             spread = abs(fast_number - slow_number)
             decimals = 2 if spread >= 0.01 else 3 if spread >= 0.001 else 4
-            fast_text = f"{fast_number:,.{decimals}f}".rstrip("0").rstrip(".")
-            slow_text = f"{slow_number:,.{decimals}f}".rstrip("0").rstrip(".")
+            fast_text = f"{fast_number:,.{decimals}f}"
+            slow_text = f"{slow_number:,.{decimals}f}"
             color = COL_GREEN if fast_number > slow_number else COL_RED if fast_number < slow_number else COL_TEXT
-            return f"{prefix} EMA {fast_period}/{slow_period} · {fast_text}{relation}{slow_text}", color
+            return key, f"{fast_text} {relation} {slow_text}", color
 
-        buy_ema_text, buy_ema_color = ema_preview("BUY", "buy")
-        sell_ema_text, sell_ema_color = ema_preview("E", "sell")
+        buy_ema_key, buy_ema_text, buy_ema_color = ema_preview("BUY", "buy")
+        sell_ema_key, sell_ema_text, sell_ema_color = ema_preview("E", "sell")
         if not buy_ema_enabled:
-            buy_ema_text, buy_ema_color = buy_ema_text.replace("BUY EMA", "BUY EMA OFF", 1), COL_MUTED
+            buy_ema_key, buy_ema_color = buy_ema_key.replace(":", " OFF:"), COL_MUTED
         if not sell_ema_enabled:
-            sell_ema_text, sell_ema_color = sell_ema_text.replace("E EMA", "E EMA OFF", 1), COL_MUTED
+            sell_ema_key, sell_ema_color = sell_ema_key.replace(":", " OFF:"), COL_MUTED
         rsi_period = int(indicators.get("rsi_period", 14) or 14)
         current_rsi = indicators.get("rsi")
         previous_rsi = indicators.get("rsi_previous")
         try:
             rsi_number = float(current_rsi)
+        except (TypeError, ValueError):
+            rsi_number = None
+        if rsi_number is not None and (not math.isfinite(rsi_number) or not 0 <= rsi_number <= 100):
+            rsi_number = None
+        try:
             previous_number = float(previous_rsi)
         except (TypeError, ValueError):
-            rsi_number = previous_number = None
+            previous_number = None
+        if previous_number is not None and (not math.isfinite(previous_number) or not 0 <= previous_number <= 100):
+            previous_number = None
         if rsi_number is None:
-            rsi_text, rsi_color = f"RSI{rsi_period} -- · BUY {'BẬT' if buy_rsi_enabled else 'TẮT'} · E {'BẬT' if sell_rsi_enabled else 'TẮT'}", COL_PREVIEW_TEXT
+            rsi_text, rsi_color = "--", COL_PREVIEW_TEXT
         else:
-            arrow = "↑" if previous_number is not None and rsi_number > previous_number else "↓" if previous_number is not None and rsi_number < previous_number else "→"
+            arrow = ("" if previous_number is None else "↑" if rsi_number > previous_number
+                     else "↓" if rsi_number < previous_number else "→")
             rsi_text = (
-                f"RSI{rsi_period} {rsi_number:.1f} {arrow} · "
-                f"BUY {'BẬT' if buy_rsi_enabled else 'TẮT'} · E {'BẬT' if sell_rsi_enabled else 'TẮT'}"
+                f"{rsi_number:.1f} {arrow}".strip()
             )
             rsi_color = COL_GREEN if signal == "BUY" else COL_RED if signal == "SELL" else (
                 COL_GREEN if previous_number is not None and rsi_number > previous_number
                 else COL_RED if previous_number is not None and rsi_number < previous_number
                 else COL_TEXT
             )
-        self.preview_rule_ema.configure(
-            text=buy_ema_text,
-            text_color=buy_ema_color,
-        )
-        self.preview_rule_sell_ema.configure(text=sell_ema_text, text_color=sell_ema_color)
-        self.preview_rule_rsi.configure(text=rsi_text, text_color=rsi_color)
+        for name, key, value, color, widget in (
+            ("buy_ema", buy_ema_key, buy_ema_text, buy_ema_color, self.preview_rule_ema),
+            ("sell_ema", sell_ema_key, sell_ema_text, sell_ema_color, self.preview_rule_sell_ema),
+            ("rsi", f"RSI{rsi_period}:", rsi_text, rsi_color, self.preview_rule_rsi),
+        ):
+            key_widget = getattr(self, f"preview_rule_{name}_key", None)
+            if key_widget is not None:
+                key_widget.configure(text=key)
+            widget.configure(text=value if key_widget is not None else f"{key} {value}", text_color=color)
+            fit_label_text(widget, base_font=("Cascadia Mono", 12))
 
         checks = details.get("entry_checks") if isinstance(details.get("entry_checks"), dict) else {}
         budget_fn = getattr(self, "_preview_entry_checks", None)
@@ -1891,7 +1928,7 @@ class DashboardPanelsMixin:
         total_positions = int(
             slot_summary.get("total", bot_open_positions + manual_positions) or 0
         )
-        phase3_parts = [f"BOT {slot_used}/{slot_max or '--'}"]
+        phase3_parts = [f"Mã BOT: {slot_used}/{slot_max or '--'}"]
         if priority_positions:
             phase3_parts.append(f"GIỮ {int(slot_summary.get('reserved', checks.get('priority_reserved', 0)) or 0)} SLOT")
         if manual_positions:
@@ -1900,12 +1937,12 @@ class DashboardPanelsMixin:
         if pending_buys:
             phase3_parts.append(f"BUY CHỜ {pending_buys}")
         phase3_parts.append(
-            f"VỐN AUTO {_compact_vnd(capital)}" if "order_budget" in (budget_checks if budget_checks is not None else checks)
-            else "VỐN AUTO —"
+            f"Vốn mua: {_compact_vnd(capital) if capital else '0 đ'}" if "order_budget" in (budget_checks if budget_checks is not None else checks)
+            else "Vốn mua: —"
         )
         self._preview_entry_summary = " · ".join(phase3_parts)
         self.preview_rule_phase3.configure(
-            text=f"BOT {slot_used}/{slot_max or '--'} · {phase3_parts[-1].replace('VỐN AUTO', 'AUTO')}",
+            text=f"Mã: {slot_used}/{slot_max or '--'} · {phase3_parts[-1]}",
             text_color=COL_WARN if guard_warn else COL_TEXT,
         )
         fit_label_text(self.preview_rule_phase3, base_font=("Segoe UI", 11))
@@ -1937,9 +1974,9 @@ class DashboardPanelsMixin:
         )
         self.preview_rule_phase3_detail.configure(
             text=(
-                f"⚠ AUTO 100 · CHỐNG NHIỄU {whipsaw_status} · LỖ {losses}/{loss_limit or '--'}"
+                f"⚠ AUTO 100 · WHIPSAW: {whipsaw_status} · LỖ: {losses}/{loss_limit or '--'}"
                 if forced_minimum
-                else f"CHỐNG NHIỄU {whipsaw_status} · LỖ {losses}/{loss_limit or '--'}"
+                else f"WHIPSAW: {whipsaw_status} · LỖ: {losses}/{loss_limit or '--'}"
             ),
             text_color=COL_RED if guard_warn else COL_WARN if forced_minimum else COL_PREVIEW_TEXT,
         )
@@ -1967,7 +2004,7 @@ class DashboardPanelsMixin:
             "BROKER_REJECTED": "BROKER TỪ CHỐI",
             "BROKER_FAILED": "GỬI BROKER THẤT BẠI",
             "MARKET_STATE_UNKNOWN": "CHỜ · STATE CHƯA XÁC NHẬN",
-            "WHIPSAW_LOCK": "TẠM KHÓA DO NHIỄU",
+            "WHIPSAW_LOCK": "WHIPSAW · KHÓA BUY",
             "LOCKED_AFTER_3_LOSSES": "KHÓA SAU 3 LỆNH LỖ",
             "LOCKED_AFTER_LOSSES": "KHÓA SAU CHUỖI LỖ",
             "MANUAL_OR_EXTERNAL_POSITION": "VỊ THẾ MANUAL",

@@ -111,22 +111,63 @@ def test_rule_preview_keeps_current_money_in_hint_not_an_extra_row(budget):
                              "confirmation_count": 1, "confirmation_required": 3},
               }}}}
     view._refresh_rule_preview(status, "AAA")
-    assert "CP 90% · TIỀN 10%" in view.preview_rule_market.options["text"]
+    assert "CP: 90% · TIỀN: 10%" in view.preview_rule_market.options["text"]
     assert not hasattr(view, "preview_rule_market_money")
     assert "XÁC NHẬN GIẢM · 1/3 PHIÊN" in view.preview_rule_market_detail.options["text"]
-    expected = "4.00 tr" if budget else "0" if budget == 0 else "—"
-    assert f"AUTO {expected}" in view.preview_rule_phase3.options["text"]
+    expected = "4.00 tr" if budget else "0 đ" if budget == 0 else "—"
+    assert f"Vốn mua: {expected}" in view.preview_rule_phase3.options["text"]
     hint = view._market_confirmation_hint()
     assert "NAV" in hint and "45.00 tr" in hint and "5.00 tr" in hint
-    assert "không phải tỷ trọng đang nắm" in hint
+    assert "không phải lệnh mua/bán" in hint
     assert "1/3" in hint
     assert hint.startswith("ĐANG DÙNG: TĂNG")
-    assert "Trong lúc chờ vẫn dùng TĂNG" in hint
+    assert "đang chờ vẫn dùng TĂNG" in hint
     assert "CP 10% / TIỀN 90%" in hint
-    assert "không phải bật BUY BOT" in hint
+    assert len(hint.splitlines()) <= 5
     assert "9 triệu/mã" in view._entry_capital_hint()
-    assert f"VỐN AUTO {expected}" in view._entry_capital_hint()
+    assert f"Vốn mua: {expected}" in view._entry_capital_hint()
     assert "MANUAL" in view._entry_capital_hint()
+
+
+@pytest.mark.parametrize("current,previous,expected", [
+    (67.2, None, "67.2"), (67.2, float("inf"), "67.2"),
+    (67.2, 65, "67.2 ↑"), (67.2, 70, "67.2 ↓"), (0, 0, "0.0 →"),
+    (float("nan"), 65, "--"), (float("inf"), 65, "--"), (101, 65, "--"),
+])
+def test_rsi_current_value_does_not_depend_on_previous_value_or_imply_e_enabled(current, previous, expected):
+    view = subject()
+    for name in ("market", "market_detail", "title", "ema", "sell_ema", "rsi",
+                 "phase3", "phase3_detail", "phase3_guard", "reason",
+                 "buy_ema_key", "sell_ema_key", "rsi_key"):
+        setattr(view, f"preview_rule_{name}", Label())
+    view._em_states = {"indicator_exit": False}
+    view._render_exit_sell_preview = lambda *_args: None
+    status = {"execution_mode": "REAL", "decisions": {"AAA": {"details": {"indicators": {
+        "buy_ema_fast": 73.76, "buy_ema_slow": 72.7,
+        "sell_ema_fast": float("nan"), "sell_ema_slow": 72.7,
+        "rsi": current, "rsi_previous": previous,
+    }}}}}
+    view._refresh_rule_preview(status, "AAA")
+    assert view.preview_rule_rsi.options["text"] == expected
+    assert view.preview_rule_ema.options["text"] == "73.76 > 72.70"
+    assert view.preview_rule_sell_ema.options["text"] == "-- / --"
+    assert view.preview_rule_buy_ema_key.options["text"] == "EMA BUY 3/6:"
+    assert view.preview_rule_rsi_key.options["text"] == "RSI14:"
+    assert "công tắc tự mua/bán" in view._indicator_preview_hint()
+
+
+def test_preview_status_has_only_one_hover_handler(ui_root, monkeypatch):
+    import customtkinter as ctk
+    import viking_v2.dashboard.panels as module
+    registrations = []
+    monkeypatch.setattr(module, "_HoverHint", lambda widget, *_args, **_kwargs: registrations.append(widget))
+    top = ctk.CTkToplevel(ui_root)
+    try:
+        view = subject()
+        view._build_order_preview_tab(top)
+        assert sum(widget is view.preview_status_reason for widget in registrations) == 1
+    finally:
+        top.destroy()
 
 
 @pytest.mark.parametrize("state,pct", [("UPTREND", 90), ("ACCUMULATION", 100), ("DISTRIBUTION", 10)])
@@ -184,12 +225,24 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
         ui_root.update_idletasks()
         card = view.preview_rule_market.master
         from tkinter import font as tkfont
-        for label in (view.preview_rule_market, view.preview_rule_phase3):
+        for label in (view.preview_rule_market, view.preview_rule_phase3,
+                      view.preview_rule_ema, view.preview_rule_sell_ema, view.preview_rule_rsi):
             rendered_font = tkfont.Font(root=ui_root, font=label._label.cget("font"))
             assert rendered_font.measure(label.cget("text")) <= label.winfo_width(), (
                 label.cget("text"), label.cget("font"), rendered_font.actual(), label.winfo_width())
             assert label.cget("wraplength") == 0
         assert "TIỀN" in view.preview_rule_market.cget("text")
+        if view.settings.market_phase_override_enabled:
+            assert state not in view.preview_rule_market.cget("text")
+            assert "TỶ TRỌNG CHỌN TAY" in view.preview_rule_market_detail.cget("text")
+            assert view._market_confirmation_hint().startswith("TỶ TRỌNG CHỌN TAY:")
+        assert "WHIPSAW:" in view.preview_rule_phase3_detail.cget("text")
+        assert "E BẬT" not in view.preview_rule_rsi.cget("text")
+        for name, value in (("buy_ema", view.preview_rule_ema), ("sell_ema", view.preview_rule_sell_ema),
+                            ("rsi", view.preview_rule_rsi)):
+            key = getattr(view, f"preview_rule_{name}_key")
+            assert int(key.grid_info()["column"]) == 0 and int(value.grid_info()["column"]) == 1
+            assert key.winfo_x() + key.winfo_width() <= value.winfo_x()
         assert not hasattr(view, "preview_rule_market_money")
         assert int(view.preview_focus_panel.cget("height")) == 300
         assert int(view.preview_rule_market_detail.grid_info()["row"]) == 1
