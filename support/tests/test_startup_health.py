@@ -45,6 +45,51 @@ def test_calendar_loading_does_not_send_a_failure_alert(alert_subject):
     assert calls == []
 
 
+@pytest.mark.parametrize("stage,expected", [
+    ("RULE_EVALUATION", "tính tín hiệu mua/bán"),
+    ("ACCOUNT_SNAPSHOT", "đọc tiền/vị thế tài khoản"),
+    ("INDICATORS", "tính EMA/RSI"),
+    ("PORTFOLIO", "tính vốn/vị thế"),
+])
+def test_cycle_alert_explains_the_symbol_book_and_step_without_leaking_secrets(alert_subject, stage, expected):
+    subject, calls = alert_subject
+    status = {
+        "error": "SECRET-API-KEY SECRET-API-TOKEN traceback",
+        "cycle_error_context": {"symbol": "MSN", "execution_mode": "REAL", "stage": stage},
+    }
+    DashboardActionsMixin._notify_system_health(subject, status, "RUNNING", "CLOSED", "PAPER")
+    assert len(calls) == 1
+    summary = calls[0]["summary"]
+    assert "MSN · REAL" in summary
+    assert expected in summary
+    assert "Vòng sau sẽ thử lại" in summary
+    assert "SECRET" not in summary
+    assert "DAEMON LỖI CHU KỲ" not in summary
+
+
+@pytest.mark.parametrize("context", [None, [], {}, {"stage": [], "symbol": "SECRET/TOKEN", "execution_mode": "secret"}])
+def test_legacy_or_malformed_error_context_is_safe(alert_subject, context):
+    subject, calls = alert_subject
+    DashboardActionsMixin._notify_system_health(
+        subject, {"error": "SECRET", "cycle_error_context": context}, "RUNNING", "CLOSED", "REAL",
+    )
+    assert len(calls) == 1
+    assert "Lỗi xử lý dữ liệu" in calls[0]["summary"]
+    assert "SECRET" not in calls[0]["summary"]
+
+
+@pytest.mark.parametrize("state", ["STOPPED", "STALE"])
+def test_stopped_or_unresponsive_daemon_does_not_claim_it_will_retry(alert_subject, state):
+    subject, calls = alert_subject
+    DashboardActionsMixin._notify_system_health(
+        subject, {"error": "failed", "cycle_error_context": {"stage": "RULE_EVALUATION"}},
+        state, "CLOSED", "REAL",
+    )
+    assert len(calls) == 1
+    assert f"DAEMON {state}" in calls[0]["summary"]
+    assert "Vòng sau sẽ thử lại" not in calls[0]["summary"]
+
+
 @pytest.mark.parametrize("state", ["STARTING", "SYNC"])
 def test_old_process_errors_are_not_replayed_during_startup(alert_subject, state):
     subject, calls = alert_subject

@@ -3186,6 +3186,29 @@ class DashboardActionsMixin:
         ).start()
         return True
 
+    @staticmethod
+    def _cycle_error_summary(status: dict[str, Any], *, retrying: bool) -> str:
+        """Explain the failed step without forwarding exception text/secrets."""
+        raw = status.get("cycle_error_context")
+        context = raw if isinstance(raw, dict) else {}
+        steps = {
+            "ACCOUNT_SNAPSHOT": "đọc tiền/vị thế tài khoản",
+            "MARKET_DATA": "đọc giá cổ phiếu",
+            "INDICATORS": "tính EMA/RSI",
+            "PORTFOLIO": "tính vốn/vị thế",
+            "RULE_EVALUATION": "tính tín hiệu mua/bán",
+            "RULE_STATE": "cập nhật trạng thái rule",
+        }
+        step = steps.get(str(context.get("stage") or "").upper(), "xử lý dữ liệu")
+        mode = str(context.get("execution_mode") or "").upper()
+        mode = mode if mode in {"REAL", "PAPER"} else ""
+        symbol = str(context.get("symbol") or "").upper()
+        symbol = symbol if 1 <= len(symbol) <= 12 and symbol.isascii() and symbol.isalnum() else ""
+        scope = " · ".join(value for value in (symbol, mode) if value)
+        prefix = f"{scope}: " if scope else ""
+        retry_note = " Vòng sau sẽ thử lại." if retrying else ""
+        return f"{prefix}Lỗi {step}.{retry_note} Xem daemon.log để biết chi tiết."
+
     def _notify_system_health(
         self,
         status: dict[str, Any],
@@ -3208,7 +3231,9 @@ class DashboardActionsMixin:
         if market_status == "CALENDAR_UNKNOWN":
             issues.append("KHÔNG ĐỌC ĐƯỢC LỊCH GIAO DỊCH")
         if str(status.get("error") or "").strip():
-            issues.append("DAEMON LỖI CHU KỲ")
+            issues.append(DashboardActionsMixin._cycle_error_summary(
+                status, retrying=daemon_status not in {"STOPPED", "STALE"},
+            ))
 
         health = status.get("api_health") if isinstance(status.get("api_health"), dict) else {}
         rest = health.get("rest") if isinstance(health.get("rest"), dict) else {}

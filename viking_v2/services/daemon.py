@@ -281,6 +281,7 @@ def run(account_id: str | None = None) -> int:
         while running:
             started = time.time()
             cycle_error = ""
+            cycle_error_context: dict[str, str] = {}
             runtime = bridge.read_config()
             settings = load_settings(account_id)
             next_fingerprint = repr(settings.rule_parameters)
@@ -465,9 +466,15 @@ def run(account_id: str | None = None) -> int:
                             positions = client.get_positions()
                     except Exception as exc:
                         cycle_error = f"{decision_mode} account snapshot unavailable: {exc}"
+                        cycle_error_context = {
+                            "execution_mode": decision_mode, "stage": "ACCOUNT_SNAPSHOT",
+                            "exception_type": type(exc).__name__,
+                        }
+                        logger.warning("Account snapshot %s failed: %s", decision_mode, exc, exc_info=True)
                         continue
                     cycle_decision_time = datetime.now(VN_TZ)
                     for symbol in symbols:
+                        cycle_stage = "MARKET_DATA"
                         try:
                             symbol_phase = symbol_phases.get(symbol, "UNKNOWN_EXCHANGE")
                             symbol_exchange = resolved_exchanges.get(symbol, "")
@@ -532,6 +539,7 @@ def run(account_id: str | None = None) -> int:
                                     "auto_state": confirmed_market_state,
                                 }
                                 candle_key = str((bars[-1] if bars else {}).get("time", "") or "")
+                                cycle_stage = "INDICATORS"
                                 current_indicators: dict = {}
                                 if settings.signal_mode == "REALTIME" and bars:
                                     stream = decision_mode
@@ -575,6 +583,7 @@ def run(account_id: str | None = None) -> int:
                                         candle_key = f"{candle_key}|{interval}|{accepted_bucket or 'INIT'}"
                                     context["indicator_snapshot"] = current_indicators
                                 exposure = effective_exposure
+                                cycle_stage = "PORTFOLIO"
                                 portfolio = portfolio_builder.build(
                                     symbol,
                                     execution_mode=decision_mode,
@@ -600,6 +609,7 @@ def run(account_id: str | None = None) -> int:
                                     ),
                                     normal_arm_pct=rule.params.normal_arm_pct,
                                 )
+                                cycle_stage = "RULE_EVALUATION"
                                 if not symbol_exchange:
                                     decision = StrategyDecision(
                                         "WAIT", symbol, "UNKNOWN_EXCHANGE",
@@ -627,6 +637,7 @@ def run(account_id: str | None = None) -> int:
                                 )
                                 decision.details["updated_at"] = cycle_decision_time.isoformat()
                                 decision.details["execution_mode"] = decision_mode
+                                cycle_stage = "RULE_STATE"
                                 trade_id = str(portfolio.get("trade_id", "") or "")
                                 protect_state = str(
                                     decision.details.get("normal_state", "") or ""
@@ -734,7 +745,14 @@ def run(account_id: str | None = None) -> int:
                         except Exception as exc:
                             decisions.pop(symbol, None)
                             cycle_error = str(exc)
-                            logger.warning("Market update %s failed: %s", symbol, exc)
+                            cycle_error_context = {
+                                "symbol": symbol, "execution_mode": decision_mode,
+                                "stage": cycle_stage, "exception_type": type(exc).__name__,
+                            }
+                            logger.warning(
+                                "Market update %s (%s) failed at %s: %s",
+                                symbol, decision_mode, cycle_stage, exc, exc_info=True,
+                            )
                 decisions = decisions_by_mode[active_mode]
             publish_status(
                 RuntimeStatus(
@@ -748,6 +766,7 @@ def run(account_id: str | None = None) -> int:
                     decisions_by_mode=decisions_by_mode,
                     api_health=market.health(),
                     error=cycle_error,
+                    cycle_error_context=cycle_error_context,
                     working_dates=working_dates,
                     symbol_exchanges={symbol: resolved_exchanges.get(symbol, "") for symbol in symbols},
                     symbol_phases=symbol_phases,

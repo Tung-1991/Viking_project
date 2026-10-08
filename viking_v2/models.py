@@ -414,6 +414,7 @@ class RuntimeStatus:
     working_dates: list[str] = field(default_factory=list)
     symbol_exchanges: dict[str, str] = field(default_factory=dict)
     symbol_phases: dict[str, str] = field(default_factory=dict)
+    cycle_error_context: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

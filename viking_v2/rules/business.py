@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from math import isfinite
 from typing import Any, Iterable
 
 from ..config import DEFAULT_RULE_PARAMETERS, merge_rule_parameters
@@ -133,8 +134,9 @@ def crossover_signal_from_snapshots(
     def number(source: dict[str, Any], key: str) -> float | None:
         try:
             value = source.get(key)
-            return None if value is None else float(value)
-        except (TypeError, ValueError):
+            parsed = None if value is None else float(value)
+            return parsed if parsed is not None and isfinite(parsed) else None
+        except (TypeError, ValueError, OverflowError):
             return None
 
     current_rsi = number(current, "rsi")
@@ -175,11 +177,17 @@ def crossover_signal_from_snapshots(
         ema_values=(current_sell_fast, current_sell_slow, previous_sell_fast, previous_sell_slow),
     )
 
-    crossed_up = not buy_use_ema or (
-        previous_buy_fast <= previous_buy_slow and current_buy_fast > current_buy_slow
+    # Cold starts and period changes have no previous observation. Do not compare
+    # missing values; each side must be ready independently of the other side.
+    crossed_up = buy_ready and (
+        not buy_use_ema or (
+            previous_buy_fast <= previous_buy_slow and current_buy_fast > current_buy_slow
+        )
     )
-    crossed_down = not sell_use_ema or (
-        previous_sell_fast >= previous_sell_slow and current_sell_fast < current_sell_slow
+    crossed_down = sell_ready and (
+        not sell_use_ema or (
+            previous_sell_fast >= previous_sell_slow and current_sell_fast < current_sell_slow
+        )
     )
     buy_signal = buy_ready and bool(buy_use_ema or buy_use_rsi) and (
         (not buy_use_ema or crossed_up)
