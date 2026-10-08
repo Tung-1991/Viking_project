@@ -1069,13 +1069,22 @@ class DashboardPanelsMixin:
         budget = _number(checks.get("order_budget") or checks.get("available_capital"))
         available_cash = _number(checks.get("available_cash"))
         nav = _number(checks.get("nav"))
+        minimum_room = _number(checks.get("minimum_order_room"))
+        if checks.get("priority_capital_enabled"):
+            minimum_room = min(minimum_room, budget)
+            order_type = self.order_type.get() if hasattr(self, "order_type") else "MARKET"
+            if str(order_type).upper() != "LO":
+                bound = _number(checks.get("buy_budget_price"))
+                if bound <= 0:
+                    return 0, budget, False
+                entry_price = max(entry_price, bound)
         sizing = size_buy_order(
             budget_vnd=budget,
             price_board=entry_price,
             available_cash=available_cash,
             nav=nav,
             force_min_lot_enabled=bool(checks.get("force_min_lot_enabled", False)),
-            minimum_order_room_vnd=_number(checks.get("minimum_order_room")),
+            minimum_order_room_vnd=minimum_room,
             buy_fee_rate=_number(checks.get("buy_fee_rate")),
         )
         quantity = sizing.quantity
@@ -1528,7 +1537,7 @@ class DashboardPanelsMixin:
         loss_limit = max(0, int(checks.get("loss_lock_count", 0) or 0))
         force_min_lot = bool(checks.get("force_min_lot_enabled", False))
         whipsaw_locked = bool(whipsaw_on and whipsaw_limit and crosses >= whipsaw_limit)
-        loss_locked = bool(loss_limit and losses >= loss_limit)
+        loss_locked = bool(checks.get("loss_blocked")) or bool(loss_limit and losses >= loss_limit)
         guard_warn = whipsaw_locked or loss_locked
         slot_summary = getattr(self, "_slot_summary", {})
         slot_used = int(slot_summary.get("used", open_positions) or 0)

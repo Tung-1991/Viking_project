@@ -4,7 +4,7 @@ from pathlib import Path
 import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 from ..models import TradeCycle
 from .durable import DurableJSONStore
@@ -13,7 +13,8 @@ from .durable import DurableJSONStore
 class TradeStateStore:
     """Persistent trade-cycle state; business decisions live outside this class."""
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, loss_lock_policy: Callable[[], tuple[int, str]] | None = None):
+        self.loss_lock_policy = loss_lock_policy
         self.store = DurableJSONStore(
             path,
             default={
@@ -21,6 +22,7 @@ class TradeStateStore:
                 "loss_streaks": {},
                 "loss_streak_updated_at": {},
                 "capital": {},
+                "loss_blocks": {},
             },
             validator=self._validate,
         )
@@ -54,6 +56,7 @@ class TradeStateStore:
             "loss_streaks": streaks,
             "loss_streak_updated_at": streak_updates,
             "capital": capital,
+            "loss_blocks": dict(raw.get("loss_blocks") or {}),
         }
 
     @staticmethod
@@ -146,6 +149,10 @@ class TradeStateStore:
                     # reaches the configured threshold it is also the exact
                     # beginning of the wall-clock cooldown.
                     raw["loss_streak_updated_at"][key] = float(cycle.closed_at or time.time())
+                    if self.loss_lock_policy:
+                        threshold, lock_mode = self.loss_lock_policy()
+                        if lock_mode == "BLOCK" and raw["loss_streaks"][key] >= max(1, int(threshold)):
+                            raw["loss_blocks"][key] = True
                 capital = raw["capital"].get(key)
                 capital = dict(capital) if isinstance(capital, dict) else {}
                 principal = max(
@@ -240,11 +247,18 @@ class TradeStateStore:
         prefix = f"{mode}|"
         with self._lock:
             raw = self._read()
+            if self.loss_lock_policy:
+                threshold, lock_mode = self.loss_lock_policy()
+                if lock_mode == "BLOCK":
+                    for key, streak in raw["loss_streaks"].items():
+                        if key.startswith(prefix) and int(streak or 0) >= max(1, int(threshold)):
+                            raw["loss_blocks"][key] = True
+                    self.store.write(raw)
             keys = {
                 key for key in (
                     set(raw["loss_streaks"]) | set(raw["loss_streak_updated_at"])
                 )
-                if str(key).upper().startswith(prefix)
+                if str(key).upper().startswith(prefix) and not raw["loss_blocks"].get(key)
             }
             if not keys:
                 return 0
@@ -261,6 +275,7 @@ class TradeStateStore:
         *,
         threshold: int = 3,
         lock_hours: float = 24.0,
+        lock_mode: str = "TIMED",
         now: float | None = None,
     ) -> int:
         """Return the current streak and expire a completed loss cooldown.
@@ -276,7 +291,13 @@ class TradeStateStore:
         with self._lock:
             raw = self._read()
             streak = max(0, int(raw["loss_streaks"].get(key, 0) or 0))
+            if raw["loss_blocks"].get(key):
+                return streak
             if streak < limit:
+                return streak
+            if str(lock_mode).upper() == "BLOCK":
+                raw["loss_blocks"][key] = True
+                self.store.write(raw)
                 return streak
 
             started = float(raw["loss_streak_updated_at"].get(key, 0.0) or 0.0)
@@ -312,15 +333,34 @@ class TradeStateStore:
         threshold: int = 3,
         *,
         lock_hours: float = 24.0,
+        lock_mode: str = "TIMED",
         now: float | None = None,
     ) -> bool:
-        return self.active_loss_streak(
+        streak = self.active_loss_streak(
             symbol,
             execution_mode,
             threshold=threshold,
             lock_hours=lock_hours,
+            lock_mode=lock_mode,
             now=now,
-        ) >= max(1, int(threshold or 3))
+        )
+        return bool(self._read()["loss_blocks"].get(self._key(symbol, execution_mode))) or streak >= max(1, int(threshold or 3))
+
+    def loss_blocks(self, execution_mode: str) -> list[str]:
+        prefix = f"{str(execution_mode).upper()}|"
+        return sorted(key[len(prefix):] for key, blocked in self._read()["loss_blocks"].items()
+                      if blocked and key.startswith(prefix))
+
+    def unlock_loss_block(self, symbol: str, execution_mode: str) -> bool:
+        key = self._key(symbol, execution_mode)
+        with self._lock:
+            raw = self._read()
+            if not raw["loss_blocks"].pop(key, None):
+                return False
+            raw["loss_streaks"][key] = 0
+            raw["loss_streak_updated_at"].pop(key, None)
+            self.store.write(raw)
+            return True
 
     def capital_available(self, symbol: str, execution_mode: str, proposed: float) -> float:
         """Cap a new order by the symbol's non-compounding capital ledger."""

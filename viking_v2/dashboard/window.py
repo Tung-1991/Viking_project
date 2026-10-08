@@ -60,7 +60,13 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         self.queue = OrderQueue(self.bridge.pending_orders_path)
         self.queue.recover_claims()
         self.queue.discard_unsubmitted_bot_buys("Restart: bỏ BUY tự động chưa gửi")
-        self.trade_state = TradeStateStore(self.bridge.trade_state_path)
+        self.trade_state = TradeStateStore(
+            self.bridge.trade_state_path,
+            loss_lock_policy=lambda: (
+                int(self.settings.rule_parameters.get("loss_lock_count", 3)),
+                str(self.settings.rule_parameters.get("loss_lock_mode", "TIMED")),
+            ),
+        )
         self.rule_state = RuleStateStore(self.bridge.rule_state_path)
         self.signal_log = SignalLog(self.bridge.signal_log_path)
         self.execution = ExecutionService(
@@ -83,6 +89,7 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
                 self.bridge.read_config().bot_enabled
                 and mode == ("PAPER" if self.bridge.read_config().paper_mode else "REAL")
             ),
+            bot_entry_guard=self._check_bot_entry_limits,
         )
         self.daily_fees = DailyFeeTracker(
             self.bridge.history_csv_path,

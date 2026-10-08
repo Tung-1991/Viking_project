@@ -313,7 +313,7 @@ class InfoPopup:
             ),
             em_modes=settings.bot_em_modes,
             whipsaw_enabled=p.whipsaw_enabled,
-            loss_lock=f"{p.loss_lock_count} LOSS · {p.loss_lock_hours} GIỜ",
+            loss_lock=f"{p.loss_lock_count} LOSS · " + ("BLOCK" if p.loss_lock_mode == "BLOCK" else f"{p.loss_lock_hours} GIỜ"),
             compact_layout=True,
         )
         self._section(body, row, "THỰC THI", [

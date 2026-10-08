@@ -473,6 +473,8 @@ def run(account_id: str | None = None) -> int:
                                     )
                                 bars = bars_by_symbol.get(symbol, [])
                                 portfolio_tick = dict(tick)
+                                if settings.priority_capital_enabled:
+                                    portfolio_tick["ceiling_price"] = float((client.get_secdef(symbol) or {}).get("ceilingPrice", 0.0) or 0.0)
                                 if bars:
                                     portfolio_tick["daily_close"] = float(bars[-1].get("close", 0.0) or 0.0)
                                     portfolio_tick["daily_bar_closed"] = bool(bars[-1].get("closed", False))
@@ -548,9 +550,13 @@ def run(account_id: str | None = None) -> int:
                                     exposure=exposure,
                                     max_positions=rule.params.max_positions,
                                     priority_symbols=settings.priority_symbols,
+                                    priority_capital_enabled=settings.priority_capital_enabled,
+                                    priority_total_capital=settings.priority_total_capital,
+                                    priority_allocations=settings.priority_allocations,
                                     no_compound_enabled=rule.params.no_compound_enabled,
                                     loss_lock_count=rule.params.loss_lock_count,
                                     loss_lock_hours=rule.params.loss_lock_hours,
+                                    loss_lock_mode=rule.params.loss_lock_mode,
                                     corporate_actions=settings.corporate_actions,
                                     working_dates=working_dates,
                                     normal_t2_reset_enabled=bool(

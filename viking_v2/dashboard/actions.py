@@ -33,7 +33,7 @@ from ..services.signal_coordinator import (
 )
 from ..storage import CSVOrderJournal
 from ..trading.market import VN_TZ, market_phase, market_session_clock, normalize_exchange
-from ..trading.portfolio import sell_quantity_for_fraction
+from ..trading.portfolio import PortfolioContextBuilder, sell_quantity_for_fraction
 from ..trading.validation import decision_is_fresh, quote_is_fresh
 from .view import (
     COL_GRAY, COL_GREEN, COL_MUTED, COL_PREVIEW_TEXT, COL_RED, COL_SURFACE_2,
@@ -1003,6 +1003,7 @@ class DashboardActionsMixin:
             self.account_id,
             self._settings_saved,
             lambda visible: self._set_tool_popup_state("RULE", visible),
+            trade_state=self.trade_state,
         )
 
     def _set_tool_popup_state(self, name: str, visible: bool) -> None:
@@ -2435,6 +2436,20 @@ class DashboardActionsMixin:
     ) -> Any:
         details = decision.details if isinstance(decision.details, dict) else {}
         checks = details.get("entry_checks") if isinstance(details.get("entry_checks"), dict) else {}
+        if decision.action == "BUY" and (
+            getattr(self.settings, "priority_capital_enabled", False)
+            or self.settings.rule_parameters.get("loss_lock_mode") == "BLOCK"
+            or self.trade_state.loss_blocks(mode)
+        ):
+            balance, positions, _orders = self.snapshots[mode]
+            fresh = self._build_entry_limits(decision.symbol, mode, tick, balance, positions,
+                                             float(details.get("exposure", 0.0) or 0.0))
+            if fresh["loss_blocked"] or fresh["loss_streak"] >= int(self.settings.rule_parameters.get("loss_lock_count", 3)):
+                from ..rules.planner import PlanResult
+                return PlanResult(None, "LOCKED_AFTER_LOSSES")
+            details["order_budget"] = min(float(details.get("order_budget", 0.0) or 0.0), fresh["order_budget"])
+            checks.update(minimum_order_room=fresh["minimum_order_room"], priority_capital=fresh["priority_capital"])
+            checks["priority_capital_enabled"] = self.settings.priority_capital_enabled
         portfolio = {
             "order_budget": details.get("order_budget", 0.0),
             "trade_id": details.get("trade_id", ""),
@@ -2446,7 +2461,7 @@ class DashboardActionsMixin:
                 nav=checks.get("nav", 0.0),
                 minimum_order_room=min(
                     max(0.0, available_cash),
-                    float(checks.get("minimum_order_room", available_cash) or available_cash),
+                    float(checks.get("minimum_order_room", available_cash) or 0.0),
                 ),
                 buy_fee_rate=checks.get("buy_fee_rate", 0.0),
             )
@@ -2462,6 +2477,57 @@ class DashboardActionsMixin:
             bot_em_modes=self.settings.bot_em_modes,
             sell_wait_policy=self.settings.sell_wait_policy,
         )
+
+    def _build_entry_limits(self, symbol, mode, tick, balance, positions, exposure, exclude_intent_id="", fee_rate=None):
+        params = self.settings.rule_parameters
+        if self.settings.market_phase_override_enabled:
+            exposure = self.settings.market_phase_override_exposure_pct / 100.0
+        return PortfolioContextBuilder(
+            self.queue, self.trade_state, self.rule_state,
+            buy_fee_rate=lambda: self.settings.buy_fee_pct / 100.0 if fee_rate is None else fee_rate,
+        ).build(
+            symbol, execution_mode=mode, balance=balance, positions=positions,
+            tick=tick, exposure=exposure, max_positions=int(params.get("max_positions", 5)),
+            priority_symbols=self.settings.priority_symbols,
+            priority_capital_enabled=self.settings.priority_capital_enabled,
+            priority_total_capital=self.settings.priority_total_capital,
+            priority_allocations=self.settings.priority_allocations,
+            no_compound_enabled=bool(params.get("no_compound_enabled", True)),
+            loss_lock_count=int(params.get("loss_lock_count", 3)),
+            loss_lock_hours=float(params.get("loss_lock_hours", 24)),
+            loss_lock_mode=str(params.get("loss_lock_mode", "TIMED")),
+            exclude_intent_id=exclude_intent_id,
+        )
+
+    def _check_bot_entry_limits(self, intent: OrderIntent, quote: dict[str, Any]) -> str:
+        """Final check of the new policies, without changing MANUAL or exits."""
+        params = self.settings.rule_parameters
+        if self.trade_state.is_loss_locked(
+            intent.symbol, intent.execution_mode, int(params.get("loss_lock_count", 3)),
+            lock_hours=float(params.get("loss_lock_hours", 24)),
+            lock_mode=str(params.get("loss_lock_mode", "TIMED")),
+        ):
+            return "LOCKED_AFTER_LOSSES"
+        if not self.settings.priority_capital_enabled:
+            return ""
+        broker = self.paper if intent.execution_mode == "PAPER" else self.real
+        if intent.execution_mode == "REAL":
+            balance, positions = broker.get_balance(force=True), broker.get_positions(force=True)
+        else:
+            balance, positions = broker.get_balance(), broker.get_positions()
+        exposure = (self.settings.market_phase_override_exposure_pct / 100.0
+                    if self.settings.market_phase_override_enabled
+                    else float(params.get("exposure", {}).get(intent.entry_market_state, 0.0)))
+        context = self._build_entry_limits(intent.symbol, intent.execution_mode, quote,
+                                         balance, positions, exposure, intent.id,
+                                         fee_rate=quote.get("buy_fee_rate"))
+        price = intent.limit_price if intent.order_type == "LO" else _price_unit(
+            (self.real.get_secdef(intent.symbol) or {}).get("ceilingPrice", 0.0)
+        )
+        needed = (intent.remaining_quantity or intent.quantity) * price * 1000.0
+        if price <= 0 or needed > context["order_budget"] + 0.01:
+            return "PRIORITY_CAPITAL_LIMIT"
+        return ""
 
     def _record_signal_decision(
         self, decision: StrategyDecision, tick: dict[str, Any], mode: str,
@@ -3198,6 +3264,7 @@ class DashboardActionsMixin:
             "Reset thống kê",
             f"Reset chung PNL/phí và clear rule cooldown của {mode}?\n"
             "Tiền, vị thế và lịch sử giao dịch vẫn được giữ nguyên.",
+            # BLOCK is intentionally not part of clear_loss_cooldowns.
             parent=self,
         ):
             return

@@ -256,6 +256,7 @@ class SymbolPicker(ctk.CTkFrame):
         columns: int = 8,
         placeholder: str = "FPT, SSI, VCB",
         on_change: Callable[[list[str]], None] | None = None,
+        on_configure: Callable[[str], None] | None = None,
         compact: bool = False,
         **kwargs: Any,
     ):
@@ -265,6 +266,7 @@ class SymbolPicker(ctk.CTkFrame):
         self.compact = bool(compact)
         self.columns = max(1, int(columns))
         self.on_change = on_change
+        self.on_configure = on_configure
         self._symbols = list(dict.fromkeys(str(v).strip().upper() for v in (symbols or []) if str(v).strip()))
         self.grid_columnconfigure(0, weight=1)
 
@@ -324,6 +326,19 @@ class SymbolPicker(ctk.CTkFrame):
                 self.chips, text="CHƯA CÓ MÃ", font=("Segoe UI", 11, "bold"), text_color=self.WARN,
             ).grid(row=0, column=0, sticky="w", padx=10, pady=10)
         for index, symbol in enumerate(self._symbols):
+            if self.on_configure:
+                chip = ctk.CTkFrame(self.chips, fg_color="transparent")
+                chip.grid(row=index // self.columns, column=index % self.columns, sticky="ew", padx=4, pady=2)
+                ctk.CTkButton(
+                    chip, text=f"{symbol} ×", width=70, height=30,
+                    font=("Cascadia Mono", 11, "bold"),
+                    command=lambda value=symbol: self.remove(value),
+                ).pack(side="left", fill="x", expand=True)
+                ctk.CTkButton(
+                    chip, text="⚙", width=30, height=30,
+                    command=lambda value=symbol: self.on_configure(value),
+                ).pack(side="left", padx=(2, 0))
+                continue
             ctk.CTkButton(
                 self.chips, text=f"{symbol}  ×", width=98, height=30 if self.compact else 36,
                 fg_color=PALETTE["BORDER"], hover_color=PALETTE["SLATE_HOVER"],

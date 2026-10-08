@@ -45,6 +45,7 @@ class ExecutionService:
         trade_event_callback: Callable[[str, TradeCycle, OrderIntent], None] | None = None,
         manual_sell_pause_seconds_provider: Callable[[], float] | None = None,
         bot_buy_allowed_provider: Callable[[str], bool] | None = None,
+        bot_entry_guard: Callable[[OrderIntent, dict[str, Any]], str] | None = None,
     ):
         self.real = real
         self.paper = paper
@@ -58,6 +59,7 @@ class ExecutionService:
         self.trade_event_callback = trade_event_callback
         self.manual_sell_pause_seconds_provider = manual_sell_pause_seconds_provider
         self.bot_buy_allowed_provider = bot_buy_allowed_provider
+        self.bot_entry_guard = bot_entry_guard
         self.database = queue.store.database
         self._blocked_rechecks: set[str] = set()
         self._deferred_events: list[tuple[str, TradeCycle, OrderIntent]] | None = None
@@ -419,6 +421,7 @@ class ExecutionService:
                         if execution_price <= 0:
                             raise ValueError("Không có giá để kiểm tra tiền")
                         fee_rate = float(package.get("brokerFirmBuyingFeeRate", 0) or 0)
+                        quote = {**(quote or {}), "buy_fee_rate": fee_rate}
                         cash = cash_from_balance(broker.get_balance(force=True) or {})
                         for other in self.queue.list_all():
                             if other.id == intent.id or other.execution_mode != mode or other.side != "BUY" or other.status in FINAL_STATUSES:
@@ -465,6 +468,18 @@ class ExecutionService:
                     result = BrokerOrderResult(False, "REJECTED", error="SEND_VALIDATION_FAILED", message=str(exc))
                     self.queue.finish(intent, result, submitted_quantity=send_quantity)
                     self._append_local_event({"ts": time.time(), "intent": (self.queue.get(intent.id) or intent).to_dict(), "queue_status": "REJECTED", "result": asdict(result)})
+                    completed.append((intent, result))
+                    continue
+            if intent.side == "BUY" and intent.source == "BOT" and self.bot_entry_guard:
+                try:
+                    blocked = self.bot_entry_guard(intent, quote or {})
+                except Exception:
+                    blocked = "ENTRY_LIMIT_SNAPSHOT_UNAVAILABLE"
+                if blocked:
+                    cancelled = self.queue.cancel_claimed_local(intent.id, blocked)
+                    result = BrokerOrderResult(True, "CANCELLED", message=blocked)
+                    self._append_local_event({"ts": time.time(), "intent": (cancelled or intent).to_dict(),
+                                              "queue_status": "CANCELLED", "result": asdict(result)})
                     completed.append((intent, result))
                     continue
             if intent.side == "BUY" and intent.source == "BOT" and self.bot_buy_allowed_provider is not None and not self.bot_buy_allowed_provider(mode):

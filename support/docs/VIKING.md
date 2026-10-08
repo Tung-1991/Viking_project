@@ -451,3 +451,34 @@ Sau tối ưu: **570/570 test passed trong 50,32 giây**; smoke test khởi tạ
 vẽ và đóng GUI đầy đủ offline thành công, `pip check`/`compileall` thành công.
 OTP có test request mock cho cả `email_otp`/`smart_otp` và selector UI; không
 xác thực OTP thật, không gọi API giao dịch hay Telegram trong lượt này.
+
+### Bổ sung backend ngày 08/10/2026: BLOCK và vốn riêng Priority
+
+- RULE → KHÓA SAU LỖ → **BLOCK**: đủ chuỗi LOSS thì chặn BUY BOT của mã,
+  riêng REAL/PAPER. Không dừng SL/TP/E/PROTECT, SELL hay thao tác MANUAL.
+  Khóa được lưu ở runtime của tài khoản; restart, WIN thủ công, đổi lại TIMED
+  hoặc reset thống kê không tự mở BLOCK. Chọn sổ/mã và bấm **MỞ BLOCK** để
+  mở khóa, reset chuỗi LOSS về 0; không mua lại tín hiệu đã bỏ qua.
+- PRIORITY → **VỐN RIÊNG** mặc định OFF, giữ cách chia NAV/exposure/slots cũ.
+  ON: nhập tổng vốn bằng triệu đồng; **CHIA ĐỀU** chia bản nháp cho các mã
+  đã thêm. **⚙** chỉnh hạn mức (triệu đồng, gồm phí mua) và sử dụng 0–100%.
+  Tổng hạn mức không vượt tổng vốn; mã chưa có hạn mức không được mua.
+  Bấm **LƯU PRIORITY** mới áp dụng. Thêm/bỏ mã không tự chia lại hạn mức.
+- Ví dụ tổng 60 triệu, ba hạn mức 20 triệu, sử dụng 100/100/50%: ngân sách
+  mua tối đa 20/20/10 triệu gồm phí. 10 triệu để dành và vốn chưa phân bổ
+  không được BOT chuyển sang mã khác; MANUAL vẫn do người vận hành quyết định.
+  Cổ đang giữ tính theo vốn mua, lệnh BUY chưa hoàn tất giữ chỗ phần còn lại;
+  tiền khả dụng và room Phase 1 vẫn là các giới hạn trên. FORCE 100 không
+  được vượt hạn mức riêng. Giảm hạn mức không tự bán vị thế hiện có.
+- MARKET/ATO/ATC được dự phòng theo giá trần khi bật vốn riêng; LO dùng giá
+  giới hạn. Khối lượng làm tròn lô 100, nên tiền mua thực tế thường thấp hơn
+  ngân sách. App kiểm tra lại khóa/vốn trước khi tạo và gửi BUY BOT; lệnh
+  bị chặn được bỏ qua/hủy tại máy, không giữ chờ tín hiệu cũ.
+- REPEAT và các điều kiện PROTECT không đổi. SL/TP/E–AUTO vẫn bán 100%.
+  Backtest có BLOCK; vốn Priority được sao chép bằng nút SYNC từ BOT, không
+  tự đọc thay đổi setting LIVE. Backtest tính giới hạn tại giá khớp mô phỏng,
+  không tái tạo dự phòng giá trần/order book của lệnh thật.
+
+Kiểm tra offline: 26 test mới cho BLOCK, vốn Priority, batch, khớp một phần,
+kiểm tra trước gửi và setting UI; tổng **596 test đạt**. `pip check`, compile
+và `git diff --check` đạt. Không gửi lệnh DNSE hoặc xác thực OTP thật.

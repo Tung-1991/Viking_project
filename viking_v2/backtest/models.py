@@ -39,6 +39,10 @@ class BacktestConfig:
     use_market_phase: bool = True
     loss_lock_enabled: bool = False
     loss_lock_hours: int = 24
+    priority_symbols: list[str] = field(default_factory=list)
+    priority_capital_enabled: bool = False
+    priority_total_capital: float = 0.0
+    priority_allocations: dict[str, dict[str, float]] = field(default_factory=dict)
     whipsaw_enabled: bool = False
     em_modes: list[str] = field(default_factory=lambda: ["NORMAL", "IND_EXIT"])
     sell_wait_policy: str = "RECHECK"
@@ -76,6 +80,11 @@ class BacktestConfig:
         if self.fixed_market_phase not in VALID_PHASES:
             raise ValueError("Phase cố định không hợp lệ.")
         self.loss_lock_hours = max(0, int(self.loss_lock_hours or 0))
+        self.priority_symbols = list(dict.fromkeys(str(x).strip().upper() for x in self.priority_symbols if str(x).strip()))
+        self.priority_allocations = config.normalize_priority_allocations(self.priority_allocations, self.priority_symbols)
+        self.priority_total_capital = config.finite_nonnegative(self.priority_total_capital)
+        if self.priority_capital_enabled:
+            config.validate_priority_capital(self.priority_total_capital, self.priority_symbols, self.priority_allocations)
         self.whipsaw_enabled = bool(self.whipsaw_enabled)
         self.em_modes = normalize_exit_modes(self.em_modes)
         self.sell_wait_policy = str(self.sell_wait_policy or "RECHECK").upper()
@@ -131,6 +140,10 @@ class BacktestSettings:
     # Mirrors the live bot, which ships with both guards on.
     loss_lock_enabled: bool = True
     loss_lock_hours: int = 24
+    priority_symbols: list[str] = field(default_factory=list)
+    priority_capital_enabled: bool = False
+    priority_total_capital: float = 0.0
+    priority_allocations: dict[str, dict[str, float]] = field(default_factory=dict)
     whipsaw_enabled: bool = True
     em_modes: list[str] = field(default_factory=lambda: ["NORMAL", "IND_EXIT"])
     sell_wait_policy: str = "RECHECK"

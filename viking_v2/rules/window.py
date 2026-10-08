@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import tkinter as tk
+from tkinter import messagebox
 from typing import Any, Callable
 
 import customtkinter as ctk
@@ -30,10 +31,12 @@ class RuleSettingsPopup:
         account_id: str,
         on_saved: Callable[[], None],
         on_visibility_changed: Callable[[bool], None] | None = None,
+        *, trade_state: Any = None,
     ):
         self.parent = parent
         self.settings, self.account_id, self.on_saved = settings, account_id, on_saved
         self.on_visibility_changed = on_visibility_changed
+        self.trade_state = trade_state
         self.params = StaticRuleParameters.from_dict(settings.rule_parameters)
         # The strategy still computes one RSI series for BUY and E. Mirror the
         # setting in both cards so editing either place cannot silently diverge.
@@ -85,6 +88,8 @@ class RuleSettingsPopup:
         self.show()
 
     def show(self) -> None:
+        if self.trade_state and hasattr(self, "block_book"):
+            self._refresh_blocks()
         self.top.deiconify()
         self.top.lift()
         self.top.focus_force()
@@ -564,6 +569,23 @@ class RuleSettingsPopup:
             self.params.loss_lock_hours,
             "Tính theo giờ đồng hồ kể từ lúc đóng lệnh lỗ đủ ngưỡng; có tính đêm, cuối tuần và ngày nghỉ.",
         )
+        self.loss_block = self._switch(
+            stops, "BLOCK", self.params.loss_lock_mode == "BLOCK",
+            "ON: đủ số LOSS thì chặn BUY BOT của mã đó đến khi MỞ BLOCK. Restart và reset thống kê không mở khóa. "
+            "OFF: khóa mới dùng số giờ bên trên; BLOCK đã khóa vẫn phải MỞ BLOCK. "
+            "SL/TP/E/PROTECT và SELL vẫn chạy; REAL/PAPER khóa riêng.",
+        )
+        if self.trade_state:
+            row = ctk.CTkFrame(stops, fg_color="transparent")
+            row.pack(fill="x", padx=12, pady=6)
+            self.block_book = tk.StringVar(value="PAPER" if self.settings.paper_mode else "REAL")
+            ctk.CTkOptionMenu(row, values=["REAL", "PAPER"], variable=self.block_book, width=90,
+                              command=lambda _value: self._refresh_blocks()).pack(side="left", padx=(0, 5))
+            self.block_symbol = ctk.CTkOptionMenu(row, values=["—"], width=100)
+            self.block_symbol.pack(side="left", padx=(0, 5))
+            self.block_unlock = ctk.CTkButton(row, text="MỞ BLOCK", width=100, command=self._unlock_block)
+            self.block_unlock.pack(side="left")
+            self._refresh_blocks()
 
         whip = self._card(body, "WHIPSAW", "Bộ chống nhiễu trước entry. Không thuộc E/M và không can thiệp position đang giữ.", 1, 2)
         self.whipsaw_enabled = self._switch(
@@ -1002,6 +1024,24 @@ class RuleSettingsPopup:
             raise ValueError(f"{label} không được là số âm")
         return value
 
+    def _refresh_blocks(self) -> None:
+        values = self.trade_state.loss_blocks(self.block_book.get())
+        self.block_symbol.configure(values=values or ["—"])
+        if self.block_symbol.get() not in values:
+            self.block_symbol.set(values[0] if values else "—")
+        self.block_unlock.configure(state="normal" if values else "disabled")
+
+    def _unlock_block(self) -> None:
+        mode, symbol = self.block_book.get(), self.block_symbol.get()
+        if symbol == "—" or not messagebox.askyesno(
+            "Mở BLOCK", f"Mở BLOCK cho {symbol} · {mode} và reset chuỗi LOSS về 0?\n"
+            "Không mua lại tín hiệu đã bỏ qua.", parent=self.top,
+        ):
+            return
+        self.trade_state.unlock_loss_block(symbol, mode)
+        self._refresh_blocks()
+        self.status.configure(text=f"ĐÃ MỞ BLOCK · {symbol} · {mode}", text_color=self.GREEN)
+
     def save(self) -> None:
         try:
             ma_period = int(self._number(self.ma_period, "MA dài hạn"))
@@ -1157,6 +1197,7 @@ class RuleSettingsPopup:
             self.params.reentry_sl_pct = reentry_sl
             self.params.loss_lock_count = loss_lock
             self.params.loss_lock_hours = loss_lock_hours
+            self.params.loss_lock_mode = "BLOCK" if self.loss_block.get() else "TIMED"
             self.settings.manual_sell_pause_minutes = manual_sell_pause
             self.params.whipsaw_enabled = bool(self.whipsaw_enabled.get())
             self.params.whipsaw_n = whipsaw_n
@@ -1204,6 +1245,8 @@ class RuleSettingsPopup:
             self.settings.rule_parameters = self.params.to_dict()
             save_settings(self.settings, self.account_id)
             self.on_saved()
+            if self.trade_state:
+                self._refresh_blocks()
             self.status.configure(
                 text="ĐÃ LƯU · DAEMON TỰ ĐỘNG NHẬN CẤU HÌNH",
                 text_color=self.GREEN,

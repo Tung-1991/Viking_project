@@ -167,7 +167,7 @@ PHASE_PARAMETER_KEYS = frozenset(
     key for _title, _subtitle, fields in PHASE_GROUPS for _label, key, _help in fields
 )
 BACKTEST_RULE_KEYS = PHASE_PARAMETER_KEYS | {
-    "exposure", "whipsaw_enabled", "loss_lock_hours", "max_positions",
+    "exposure", "whipsaw_enabled", "loss_lock_hours", "loss_lock_mode", "max_positions",
     "indicator_exit_policy",
     "normal_policy", "normal_dynamic_enabled", "normal_repeat_enabled",
     "normal_atr_activation_enabled", "normal_atr_trail_enabled",
@@ -1368,6 +1368,9 @@ class BacktestPopup:
         self._label(lock_row, "MỞ SAU (GIỜ)", 14, bold=True).grid(row=0, column=2, sticky="w", padx=(22, 8))
         self.cooldown_entry = self._entry(lock_row, str(self.config.loss_lock_hours), 90)
         self.cooldown_entry.grid(row=0, column=3, sticky="w")
+        self.loss_block = ctk.BooleanVar(value=params.loss_lock_mode == "BLOCK")
+        ctk.CTkSwitch(lock_row, text="BLOCK", variable=self.loss_block).grid(row=1, column=0, sticky="w", pady=4)
+        self._hint(lock_row, "BLOCK: đủ chuỗi LOSS thì không tự mở khóa trong phần còn lại của backtest.").grid(row=1, column=1)
 
         signal_toggle_row = ctk.CTkFrame(card, fg_color="transparent")
         signal_toggle_row.grid(row=3, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
@@ -1545,6 +1548,11 @@ class BacktestPopup:
 
     def _sync_from_bot(self) -> None:
         params = StaticRuleParameters.from_dict(self.settings.rule_parameters).to_dict()
+        self.loss_block.set(params.get("loss_lock_mode") == "BLOCK")
+        self.config.priority_symbols = list(self.settings.priority_symbols)
+        self.config.priority_capital_enabled = self.settings.priority_capital_enabled
+        self.config.priority_total_capital = self.settings.priority_total_capital
+        self.config.priority_allocations = {symbol: dict(row) for symbol, row in self.settings.priority_allocations.items()}
         exposure = params.get("exposure") or {}
         for key, entry in self._rule_entries.items():
             entry.delete(0, "end")
@@ -1763,6 +1771,7 @@ class BacktestPopup:
         except ValueError as exc:
             raise ValueError("MỞ KHÓA SAU phải là số giờ") from exc
         params["loss_lock_hours"] = loss_lock_hours
+        params["loss_lock_mode"] = "BLOCK" if self.loss_block.get() else "TIMED"
         normalized = StaticRuleParameters.from_dict(params).validate()
         params = normalized.to_dict()
         fees = {
@@ -1782,6 +1791,10 @@ class BacktestPopup:
             fixed_exposure_pct=float(exposure.get(chosen, 0.0)) * 100.0,
             loss_lock_enabled=bool(self.loss_lock.get()),
             loss_lock_hours=loss_lock_hours,
+            priority_symbols=list(self.config.priority_symbols),
+            priority_capital_enabled=self.config.priority_capital_enabled,
+            priority_total_capital=self.config.priority_total_capital,
+            priority_allocations=self.config.priority_allocations,
             whipsaw_enabled=bool(self.whipsaw.get()),
             em_modes=[
                 name for name, variable in (
@@ -1817,6 +1830,10 @@ class BacktestPopup:
                 fixed_market_phase=values.fixed_market_phase,
                 fixed_exposure_pct=values.fixed_exposure_pct,
                 loss_lock_enabled=values.loss_lock_enabled, loss_lock_hours=values.loss_lock_hours,
+                priority_symbols=values.priority_symbols,
+                priority_capital_enabled=values.priority_capital_enabled,
+                priority_total_capital=values.priority_total_capital,
+                priority_allocations=values.priority_allocations,
                 whipsaw_enabled=values.whipsaw_enabled, em_modes=values.em_modes,
                 sell_wait_policy=values.sell_wait_policy, fill_session=values.fill_session,
                 rule_parameters=values.rule_parameters,
@@ -1881,6 +1898,10 @@ class BacktestPopup:
                     rule_parameters=values.rule_parameters,
                     loss_lock_enabled=values.loss_lock_enabled,
                     loss_lock_hours=values.loss_lock_hours,
+                    priority_symbols=values.priority_symbols,
+                    priority_capital_enabled=values.priority_capital_enabled,
+                    priority_total_capital=values.priority_total_capital,
+                    priority_allocations=values.priority_allocations,
                     sell_wait_policy=values.sell_wait_policy,
                     fill_session=values.fill_session,
                     buy_fee_rate=values.buy_fee_pct / 100.0,
@@ -1935,6 +1956,10 @@ class BacktestPopup:
                         rule_parameters=params,
                         loss_lock_enabled=values.loss_lock_enabled,
                         loss_lock_hours=values.loss_lock_hours,
+                        priority_symbols=values.priority_symbols,
+                        priority_capital_enabled=values.priority_capital_enabled,
+                        priority_total_capital=values.priority_total_capital,
+                        priority_allocations=values.priority_allocations,
                         sell_wait_policy=values.sell_wait_policy,
                         fill_session=values.fill_session,
                         buy_fee_rate=values.buy_fee_pct / 100.0,

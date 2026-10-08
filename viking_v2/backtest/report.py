@@ -273,7 +273,8 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
     ) or "chỉ cắt lỗ")
     line("PROTECT", protect_of)
     line("Khóa sau LOSS", lambda r: (
-        f"{(r.config.rule_parameters or {}).get('loss_lock_count')} LOSS · {r.config.loss_lock_hours} giờ"
+        f"{(r.config.rule_parameters or {}).get('loss_lock_count')} LOSS · "
+        + ("BLOCK" if (r.config.rule_parameters or {}).get("loss_lock_mode") == "BLOCK" else f"{r.config.loss_lock_hours} giờ")
         if r.config.loss_lock_enabled else "OFF"
     ))
     line("Whipsaw", lambda r: (

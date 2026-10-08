@@ -70,6 +70,10 @@ class StrategyOrderPlanner:
                 and isinstance(decision.details.get("entry_checks"), dict)
                 else {}
             )
+            if style != "LO_LOCAL" and checks.get("priority_capital_enabled"):
+                price = max(price, float(checks.get("buy_budget_price", 0.0) or 0.0))
+                if float(checks.get("buy_budget_price", 0.0) or 0.0) <= 0:
+                    return PlanResult(None, "NO_PRIORITY_PRICE_BOUND")
             available_cash = float(
                 portfolio.get("available_cash", checks.get("available_cash", 0.0)) or 0.0
             )
@@ -79,6 +83,8 @@ class StrategyOrderPlanner:
             )
             if minimum_room is None:
                 minimum_room = nav
+            if checks.get("priority_capital_enabled"):
+                minimum_room = min(float(minimum_room), float(portfolio.get("order_budget", 0.0) or 0.0))
             sizing = size_buy_order(
                 budget_vnd=float(portfolio.get("order_budget", 0.0) or 0.0),
                 price_board=price,

@@ -313,6 +313,7 @@ class StaticRuleParameters:
     reentry_sl_pct: float = float(DEFAULT_RULE_PARAMETERS["reentry_sl_pct"])
     loss_lock_count: int = int(DEFAULT_RULE_PARAMETERS["loss_lock_count"])
     loss_lock_hours: int = int(DEFAULT_RULE_PARAMETERS["loss_lock_hours"])
+    loss_lock_mode: str = str(DEFAULT_RULE_PARAMETERS["loss_lock_mode"])
     no_compound_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["no_compound_enabled"])
     force_min_lot_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["force_min_lot_enabled"])
     take_profit_pct: float = float(DEFAULT_RULE_PARAMETERS["take_profit_pct"])
@@ -382,6 +383,9 @@ class StaticRuleParameters:
         self.normal_dynamic_enabled = bool(self.normal_dynamic_enabled)
         self.normal_t2_reset_enabled = bool(self.normal_t2_reset_enabled)
         self.normal_repeat_enabled = bool(self.normal_repeat_enabled)
+        self.loss_lock_mode = str(self.loss_lock_mode or "TIMED").upper()
+        if self.loss_lock_mode not in {"TIMED", "BLOCK"}:
+            raise ValueError("Khóa sau lỗ phải là TIMED hoặc BLOCK")
         validate_buy_window(self.buy_window_start, "15:00")
 
     @classmethod
@@ -1020,6 +1024,11 @@ class StaticRule:
                 "loss_streak": int(portfolio.get("loss_streak", 0) or 0),
                 "loss_lock_count": self.params.loss_lock_count,
                 "loss_lock_hours": self.params.loss_lock_hours,
+                "loss_lock_mode": self.params.loss_lock_mode,
+                "loss_blocked": bool(portfolio.get("loss_blocked", False)),
+                "priority_capital": portfolio.get("priority_capital", {}),
+                "priority_capital_enabled": bool(portfolio.get("priority_capital")),
+                "buy_budget_price": float(portfolio.get("buy_budget_price", 0.0) or 0.0),
                 "whipsaw_enabled": self.params.whipsaw_enabled,
                 "whipsaw_crossovers": crosses,
                 "whipsaw_limit": self.params.whipsaw_n,
@@ -1067,7 +1076,7 @@ class StaticRule:
             return StrategyDecision("WAIT", symbol, "MARKET_STATE_UNKNOWN", signal=signal, market_state=market_state, details=details)
         if bool(portfolio.get("pending_buy")):
             return StrategyDecision("WAIT", symbol, "BUY_ALREADY_PENDING", signal=signal, market_state=market_state, details=details)
-        if int(portfolio.get("loss_streak", 0) or 0) >= self.params.loss_lock_count:
+        if bool(portfolio.get("loss_blocked")) or int(portfolio.get("loss_streak", 0) or 0) >= self.params.loss_lock_count:
             return StrategyDecision("WAIT", symbol, "LOCKED_AFTER_LOSSES", signal=signal, market_state=market_state, details=details)
         details["whipsaw_crossovers"] = crosses
         if self.params.whipsaw_enabled and crosses >= self.params.whipsaw_n:

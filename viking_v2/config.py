@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from copy import deepcopy
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -133,6 +134,7 @@ DEFAULT_RULE_PARAMETERS: dict[str, Any] = {
     "reentry_sl_pct": -2.5,
     "loss_lock_count": 3,
     "loss_lock_hours": 24,
+    "loss_lock_mode": "TIMED",
     "no_compound_enabled": True,
     "force_min_lot_enabled": True,
     "take_profit_pct": 7.0,
@@ -269,12 +271,45 @@ def update_env(values: dict[str, str | None], path: str | Path = ENV_PATH) -> No
             os.environ[str(key)] = str(value)
 
 
+def finite_nonnegative(value: Any) -> float:
+    try:
+        number = float(value or 0.0)
+        return number if math.isfinite(number) and number >= 0 else 0.0
+    except (ValueError, TypeError, OverflowError):
+        return 0.0
+
+
+def normalize_priority_allocations(raw: Any, symbols: Any) -> dict[str, dict[str, float]]:
+    allowed = {str(symbol).strip().upper() for symbol in symbols}
+    result = {}
+    for symbol, row in (raw.items() if isinstance(raw, dict) else []):
+        symbol = str(symbol).strip().upper()
+        if symbol not in allowed or not isinstance(row, dict):
+            continue
+        result[symbol] = {
+            "limit_vnd": finite_nonnegative(row.get("limit_vnd")),
+            "use_pct": min(100.0, finite_nonnegative(row.get("use_pct", 100.0))),
+        }
+    return result
+
+
+def validate_priority_capital(total: float, symbols: Any, allocations: Any) -> None:
+    if not math.isfinite(total) or total <= 0:
+        raise ValueError("Tổng vốn Priority phải lớn hơn 0 và hữu hạn.")
+    normalized = normalize_priority_allocations(allocations, symbols)
+    if sum(row["limit_vnd"] for row in normalized.values()) > total + 0.01:
+        raise ValueError("Tổng hạn mức từng mã không được vượt tổng vốn Priority.")
+
+
 @dataclass(slots=True)
 class AppSettings:
     watchlist: list[str] = field(default_factory=_watchlist_from_env)
     # Symbols promoted inside the watchlist. They keep every normal entry
     # guard, but are ranked first and may bypass only the BOT slot quota.
     priority_symbols: list[str] = field(default_factory=list)
+    priority_capital_enabled: bool = False
+    priority_total_capital: float = 0.0
+    priority_allocations: dict[str, dict[str, float]] = field(default_factory=dict)
     # Manual fallback only. LIVE/PAPER normally learns the exchange from DNSE.
     symbol_exchanges: dict[str, str] = field(default_factory=dict)
     paper_mode: bool = True
@@ -346,6 +381,11 @@ class AppSettings:
             )
             if symbol in watchlist_set
         ]
+        self.priority_capital_enabled = bool(self.priority_capital_enabled)
+        self.priority_total_capital = finite_nonnegative(self.priority_total_capital)
+        self.priority_allocations = normalize_priority_allocations(
+            self.priority_allocations, self.priority_symbols,
+        )
         aliases = {"HOSE": "HOSE", "HSX": "HOSE", "STO": "HOSE",
                    "HNX": "HNX", "STX": "HNX", "UPCOM": "UPCOM", "UPX": "UPCOM"}
         self.symbol_exchanges = {

@@ -154,6 +154,49 @@ def affordable_quantity(budget_vnd: float, price_board: float) -> int:
     return round_lot_down(max(0.0, float(budget_vnd or 0.0)) / price_vnd)
 
 
+def priority_capital_budget(
+    symbol: str, *, total: float, symbols: Iterable[str], allocations: dict[str, Any],
+    budget: float, account_room: float, cash: float, fee_rate: float,
+    holding_costs: dict[str, float], pending_costs: dict[str, float],
+    pending_cash: float = 0.0,
+) -> dict[str, Any]:
+    """Fixed Priority envelopes, including fees; unused money is never lent out.
+
+    Holdings consume acquisition capital, not fluctuating market value. The
+    latter is still checked separately through Phase 1's account_room.
+    """
+    priority = {str(value).upper() for value in symbols}
+    rows = config.normalize_priority_allocations(allocations, priority)
+    try:
+        config.validate_priority_capital(total, priority, rows)
+    except ValueError:
+        return {"budget": 0.0, "minimum_room": 0.0, "reason": "INVALID_PRIORITY_CAPITAL"}
+    fee_factor = 1.0 + max(0.0, fee_rate)
+    limits = {value: rows.get(value, {}).get("limit_vnd", 0.0) for value in priority}
+    committed = {value: max(0.0, holding_costs.get(value, 0.0))
+                 + max(0.0, pending_costs.get(value, 0.0)) for value in priority}
+    unassigned = max(0.0, total - sum(limits.values()))
+    reserved = unassigned + sum(max(0.0, limits[value] - committed[value])
+                                for value in priority if value != symbol)
+    limit = limits.get(symbol, 0.0)
+    use_pct = rows.get(symbol, {}).get("use_pct", 100.0)
+    buy_limit = limit * use_pct / 100.0
+    if symbol in priority:
+        # Even the current symbol cannot spend its explicit savings.
+        reserved += max(0.0, limit - max(buy_limit, committed[symbol]))
+        symbol_room = max(0.0, buy_limit - committed[symbol]) / fee_factor
+    else:
+        symbol_room = max(0.0, budget)
+    cash_room = max(0.0, cash - pending_cash - reserved) / fee_factor
+    allowed = max(0.0, min(symbol_room, account_room, cash_room))
+    return {
+        "budget": allowed, "minimum_room": allowed,
+        "limit_vnd": limit, "use_pct": use_pct, "buy_limit_vnd": buy_limit,
+        "committed_vnd": committed.get(symbol, 0.0), "reserved_cash": reserved,
+        "reason": "" if allowed > 0 else "PRIORITY_CAPITAL_LIMIT",
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class BuySizing:
     quantity: int
@@ -254,9 +297,14 @@ class PortfolioContextBuilder:
         exposure: float,
         max_positions: int,
         priority_symbols: Iterable[str] = (),
+        priority_capital_enabled: bool = False,
+        priority_total_capital: float = 0.0,
+        priority_allocations: dict[str, Any] | None = None,
         no_compound_enabled: bool = True,
         loss_lock_count: int = 3,
         loss_lock_hours: float = 24.0,
+        loss_lock_mode: str = "TIMED",
+        exclude_intent_id: str = "",
         now: float | None = None,
         corporate_actions: list[dict[str, Any]] | None = None,
         working_dates: list[str] | None = None,
@@ -265,6 +313,7 @@ class PortfolioContextBuilder:
         normal_arm_pct: float = 7.0,
     ) -> dict[str, Any]:
         symbol = str(symbol or "").upper()
+        priority_symbols = tuple(priority_symbols)
         mode = str(execution_mode or "PAPER").upper()
         rows = [row for row in positions or [] if isinstance(row, dict)]
         nav = nav_from_balance(balance or {}, rows)
@@ -273,25 +322,33 @@ class PortfolioContextBuilder:
         pending_buys = [
             item for item in self.queue.list_all()
             if item.side == "BUY"
+            and item.id != exclude_intent_id
             and item.execution_mode == mode
             # UNKNOWN may already exist at DNSE, so its slot and capital stay
             # reserved until broker reconciliation resolves the request.
             and item.status not in {"FILLED", "CANCELLED", "EXPIRED", "FAILED", "REJECTED"}
         ]
         pending_value = 0.0
+        pending_costs: dict[str, float] = {}
+        pending_cash = 0.0
+        fee_rate = max(0.0, float(self.buy_fee_rate() or 0.0))
         for item in pending_buys:
             price = item.limit_price or float(item.details.get("reservation_price", 0) or 0)
             if not price and item.symbol == symbol:
                 price = float(tick.get("ask", tick.get("price", 0.0)) or 0.0)
-            if not price and item.entry_budget:
-                pending_value += max(0, item.entry_budget)
-                continue
-            if not price:
+            if price:
+                value = max(0, item.remaining_quantity) * max(0.0, price) * 1000.0
+            elif item.entry_budget:
+                value = max(0, item.entry_budget)
+            else:
                 # Unknown reservation is not free money. Wait for that order's
                 # quote/price rather than borrowing another symbol's price.
-                pending_value += cash
-                continue
-            pending_value += max(0, item.remaining_quantity) * max(0.0, price) * 1000.0
+                value = cash
+            pending_value += value
+            cost = value * (1.0 + fee_rate)
+            pending_costs[item.symbol] = pending_costs.get(item.symbol, 0.0) + cost
+            if not item.broker_order_id and not item.handed_off_at:
+                pending_cash += cost
         budget = order_budget(
             nav=nav,
             exposure=exposure,
@@ -309,6 +366,21 @@ class PortfolioContextBuilder:
             exposure_room,
             cash / (1.0 + max(0.0, float(self.buy_fee_rate() or 0.0))),
         )
+        priority_capital = {}
+        if priority_capital_enabled:
+            holding_costs: dict[str, float] = {}
+            for row in rows:
+                value = str(row.get("symbol", "")).upper()
+                cost = position_quantity(row) * (position_cost(row) or position_price(row)) * 1000.0 * (1.0 + fee_rate)
+                holding_costs[value] = holding_costs.get(value, 0.0) + cost
+            priority_capital = priority_capital_budget(
+                symbol, total=priority_total_capital, symbols=priority_symbols,
+                allocations=priority_allocations or {}, budget=budget,
+                account_room=minimum_order_room, cash=cash, fee_rate=fee_rate,
+                holding_costs=holding_costs, pending_costs=pending_costs, pending_cash=pending_cash,
+            )
+            budget = priority_capital["budget"]
+            minimum_order_room = priority_capital["minimum_room"]
         if no_compound_enabled:
             budget = self.trades.capital_available(symbol, mode, budget)
             minimum_order_room = min(
@@ -343,6 +415,7 @@ class PortfolioContextBuilder:
             mode,
             threshold=loss_lock_count,
             lock_hours=loss_lock_hours,
+            lock_mode=loss_lock_mode,
             now=now,
         )
         context: dict[str, Any] = {
@@ -364,6 +437,9 @@ class PortfolioContextBuilder:
             ),
             "pending_buy": bool(self.queue.find_active(symbol, side="BUY", execution_mode=mode)),
             "loss_streak": active_loss_streak,
+            "loss_blocked": symbol in self.trades.loss_blocks(mode),
+            "priority_capital": priority_capital,
+            "buy_budget_price": board_price(tick.get("ceiling_price", 0.0)) if priority_capital_enabled else 0.0,
         }
         action = action_for_symbol(
             corporate_actions or [],

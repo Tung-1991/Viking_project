@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import math
+from copy import deepcopy
 import re
 import threading
 import tkinter as tk
@@ -450,6 +452,7 @@ class ConnectionPopup:
         self._tested_account: dict[str, str] | None = None
         self._watchlist_draft = list(settings.watchlist)
         self._priority_draft = list(settings.priority_symbols)
+        self._priority_allocations = deepcopy(settings.priority_allocations)
         self._holiday_draft = sorted(
             set(settings.custom_holidays).difference(config.DEFAULT_VN_TRADING_HOLIDAYS)
         )
@@ -1046,6 +1049,7 @@ class ConnectionPopup:
             self.priority_card, self._priority_draft,
             columns=6, compact=True, placeholder="FPT, SSI",
             on_change=lambda values: setattr(self, "_priority_draft", list(values)),
+            on_configure=self._configure_priority_symbol,
         )
         self.priority_picker.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(2, 9))
         self.btn_save_priority = ctk.CTkButton(
@@ -1053,12 +1057,27 @@ class ConnectionPopup:
             font=("Segoe UI", 12, "bold"), fg_color=self.WARN,
             hover_color="#D97706", text_color="#111318", command=self._save_priority,
         )
-        self.btn_save_priority.grid(row=2, column=1, sticky="e", padx=12, pady=(0, 10))
+        self.btn_save_priority.grid(row=3, column=1, sticky="e", padx=12, pady=(0, 10))
         self.priority_status = ctk.CTkLabel(
             self.priority_card, text="", font=("Segoe UI", 11),
             text_color=self.MUTED, anchor="w",
         )
-        self.priority_status.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 10))
+        self.priority_status.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 10))
+        capital = ctk.CTkFrame(self.priority_card, fg_color="transparent")
+        capital.grid(row=2, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 10))
+        self.priority_capital_enabled = tk.BooleanVar(value=self.settings.priority_capital_enabled)
+        ctk.CTkSwitch(capital, text="VỐN RIÊNG", variable=self.priority_capital_enabled).pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(capital, text="TỔNG (triệu)").pack(side="left")
+        self.priority_total = ctk.CTkEntry(capital, width=95)
+        self.priority_total.insert(0, f"{self.settings.priority_total_capital / 1_000_000:g}")
+        self.priority_total.pack(side="left", padx=8)
+        ctk.CTkButton(capital, text="CHIA ĐỀU", width=100, command=self._divide_priority_capital).pack(side="left")
+        self._hint_icon(capital,
+            "OFF: giữ cách tính vốn theo RULE. ON: tổng vốn riêng cho Priority, gồm phí mua. "
+            "CHIA ĐỀU chỉ sửa bản nháp; ⚙ chỉnh hạn mức và % sử dụng từng mã. Mã chưa có hạn mức không được mua. "
+            "Tiền để dành/tiền chưa phân bổ không chuyển cho mã khác. Vẫn chịu tiền khả dụng và room Phase 1. "
+            "Bấm LƯU PRIORITY để áp dụng; không tự mua/bán vị thế đang giữ."
+        ).pack(side="left", padx=8)
 
         holiday = self._card(
             body,
@@ -1653,10 +1672,69 @@ class ConnectionPopup:
             text=f"ĐÃ ÁP DỤNG {len(symbols)} MÃ · DAEMON TỰ NHẬN", text_color=self.GREEN,
         )
 
+    def _priority_total_vnd(self) -> float:
+        value = float(self.priority_total.get().strip()) * 1_000_000
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("Tổng vốn phải lớn hơn 0.")
+        return value
+
+    def _divide_priority_capital(self) -> None:
+        try:
+            symbols = self.priority_picker.get()
+            if not symbols:
+                raise ValueError("Thêm mã Priority trước khi chia vốn.")
+            limit = self._priority_total_vnd() // len(symbols)
+            self._priority_allocations = {
+                symbol: {"limit_vnd": limit, "use_pct": self._priority_allocations.get(symbol, {}).get("use_pct", 100.0)}
+                for symbol in symbols
+            }
+            self.priority_status.configure(text=f"BẢN NHÁP · {limit / 1_000_000:g} triệu/mã · cần LƯU", text_color=self.WARN)
+        except (ValueError, TypeError) as exc:
+            self.priority_status.configure(text=str(exc), text_color=self.RED)
+
+    def _configure_priority_symbol(self, symbol: str) -> None:
+        top = _window(self.top, f"PRIORITY · {symbol}", "430x270")
+        row = self._priority_allocations.get(symbol, {"limit_vnd": 0.0, "use_pct": 100.0})
+        ctk.CTkLabel(top, text=f"{symbol} · NGÂN SÁCH RIÊNG", font=("Segoe UI", 16, "bold")).pack(pady=10)
+        ctk.CTkLabel(top, text="HẠN MỨC (triệu đồng, gồm phí)").pack()
+        limit = ctk.CTkEntry(top)
+        limit.insert(0, f"{row['limit_vnd'] / 1_000_000:g}")
+        limit.pack()
+        ctk.CTkLabel(top, text="SỬ DỤNG (%) · phần còn lại giữ tiền").pack()
+        use = ctk.CTkEntry(top)
+        use.insert(0, f"{row['use_pct']:g}")
+        use.pack()
+        status = ctk.CTkLabel(top, text="Chỉ áp dụng khi VỐN RIÊNG được bật.")
+        status.pack(pady=5)
+
+        def apply() -> None:
+            try:
+                cap, pct = float(limit.get()) * 1_000_000, float(use.get())
+                if not math.isfinite(cap) or not math.isfinite(pct) or cap < 0 or not 0 <= pct <= 100:
+                    raise ValueError("Hạn mức ≥ 0; sử dụng từ 0 đến 100%.")
+                if symbol not in self.priority_picker.get():
+                    raise ValueError("Mã đã bị bỏ khỏi Priority.")
+                self._priority_allocations[symbol] = {"limit_vnd": cap, "use_pct": pct}
+                self.priority_status.configure(
+                    text=f"BẢN NHÁP · {symbol}: {cap / 1_000_000:g} triệu × {pct:g}% · cần LƯU", text_color=self.WARN,
+                )
+                top.destroy()
+            except (ValueError, TypeError) as exc:
+                status.configure(text=str(exc), text_color=self.RED)
+        ctk.CTkButton(top, text="ÁP DỤNG BẢN NHÁP", command=apply).pack(pady=5)
+
     def _save_priority(self) -> None:
         priority = self.priority_picker.get()
         symbols = list(dict.fromkeys(self.watchlist_picker.get() + priority))
         try:
+            enabled = bool(self.priority_capital_enabled.get())
+            total = self._priority_total_vnd() if enabled else config.finite_nonnegative(self.priority_total.get()) * 1_000_000
+            allocations = config.normalize_priority_allocations(self._priority_allocations, priority)
+            if enabled:
+                config.validate_priority_capital(total, priority, allocations)
+            self.settings.priority_capital_enabled = enabled
+            self.settings.priority_total_capital = total
+            self.settings.priority_allocations = allocations
             self._apply_watchlist(symbols, priority_symbols=priority)
         except Exception as exc:
             self.priority_status.configure(text=f"LƯU THẤT BẠI · {exc}", text_color=self.RED)
