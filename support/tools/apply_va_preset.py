@@ -1,4 +1,4 @@
-"""Apply agreed VA allocation/E/BUY-alert settings; no broker or Telegram calls."""
+"""Apply agreed VA allocation/E/notification settings; no broker or Telegram calls."""
 from __future__ import annotations
 
 import argparse
@@ -38,13 +38,13 @@ def prepared_settings(account_id: str) -> config.AppSettings:
             or not isinstance(preset["rule_parameters"], dict)
             or set(preset["rule_parameters"]) != PRESET_RULE_FIELDS
             or not isinstance(preset["telegram_notifications"], dict)
-            or set(preset["telegram_notifications"]) != {"blocked_buy"}
-            or preset["telegram_notifications"]["blocked_buy"] is not True
+            or set(preset["telegram_notifications"]) != {"blocked_buy", "protect"}
+            or any(value is not True for value in preset["telegram_notifications"].values())
             or preset["bot_em_modes"] != ["IND_EXIT"]
             or preset["rule_parameters"]["indicator_exit_policy"] != "AUTO"):
-        raise ValueError("Preset sai pham vi; chi nap von VA, E AUTO va tin BUY cho/chan da chot.")
+        raise ValueError("Preset sai pham vi; chi nap von VA, E AUTO, tin BUY cho/chan va PROTECT da chot.")
     rules = {**current["rule_parameters"], **preset["rule_parameters"]}
-    # Opt in to waiting/blocked BUY alerts; keep every other local category,
+    # Opt in to waiting/blocked BUY and PROTECT alerts; keep every other local category,
     # Telegram connection and delivery interval exactly as configured.
     notifications = {**current["telegram_notifications"], **preset["telegram_notifications"]}
     # Enable E on future BOT trades without removing TP/PROTECT already selected.
@@ -111,6 +111,7 @@ def main() -> int:
             ))
         print(f"[TIN HIEU] Gui ngay khi BUY cho/chan; chong lap {settings.telegram_cooldown_minutes['blocked_buy']} phut; "
               "khong doi gio mua / khoa von.")
+        print("[PROTECT] Bat tin cham muc; khong thay doi cong tac bao ve hay AUTO/ALERT.")
         print("[GIU] API, token, chat ID, cac setting Telegram khac, EMA/RSI, SL/PROTECT/TP, gio mua va giao dich.")
         print(f"[GIO MUA] {'Tu ' + str(settings.rule_parameters['buy_window_start']) if settings.rule_parameters['buy_window_enabled'] else 'Trong phien, theo tin hieu'}")
         if not args.yes and input("Nap vao dung tai khoan nay? [y/N]: ").strip().lower() != "y":

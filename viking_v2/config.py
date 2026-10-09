@@ -86,7 +86,7 @@ DEFAULT_CKCS_WATCHLIST = (
 TELEGRAM_NOTIFICATION_DEFAULTS: dict[str, bool] = {
     "buy_queued": True,
     "closed": True,
-    "protect": False,
+    "protect": True,
     "indicator_exit": True,
     "blocked_buy": True,
     "corporate_action": True,

@@ -12,6 +12,6 @@
   "market_phase_override_enabled": true,
   "market_phase_override_exposure_pct": 100,
   "bot_em_modes": ["IND_EXIT"],
-  "telegram_notifications": {"blocked_buy": true},
+  "telegram_notifications": {"blocked_buy": true, "protect": true},
   "rule_parameters": {"max_positions": 4, "indicator_exit_policy": "AUTO"}
 }

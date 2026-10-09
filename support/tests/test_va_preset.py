@@ -21,6 +21,7 @@ def workspace(tmp_path, monkeypatch):
     settings.telegram_token_env = "LOCAL_TOKEN_KEY"
     settings.telegram_notifications["indicator_exit"] = False
     settings.telegram_notifications["blocked_buy"] = False
+    settings.telegram_notifications["protect"] = False
     settings.paper_mode = False
     settings.rule_parameters.update(buy_ema_fast=5, buy_ema_slow=10, initial_sl_pct=-4)
     config.save_settings(settings, "PARTNER")
@@ -50,7 +51,7 @@ def test_preset_changes_only_agreed_allocation_e_and_signal_fields_and_backup_is
     assert "IND_EXIT" in current["bot_em_modes"]
     assert current["telegram_notifications"]["blocked_buy"] is True
     assert current["telegram_notifications"] == {
-        **old["telegram_notifications"], "blocked_buy": True,
+        **old["telegram_notifications"], "blocked_buy": True, "protect": True,
     }
     assert current["priority_allocations"] == {
         symbol: {"limit_vnd": cap, "use_pct": 100, "max_orders": 1}
@@ -121,7 +122,7 @@ def test_signal_opt_in_keeps_local_telegram_preferences_and_buy_guards(
     saved = config.load_settings("PARTNER")
     assert saved.telegram_enabled is telegram_enabled
     assert saved.telegram_buy_batch_minutes == 7
-    assert saved.telegram_notifications == {**current.telegram_notifications, "blocked_buy": True}
+    assert saved.telegram_notifications == {**current.telegram_notifications, "blocked_buy": True, "protect": True}
     assert saved.telegram_cooldown_minutes == current.telegram_cooldown_minutes
     assert saved.rule_parameters["buy_window_enabled"] is window_enabled
     assert saved.rule_parameters["buy_window_start"] == "13:45"
@@ -141,6 +142,7 @@ def test_preset_details_are_reviewed_before_confirmation_without_writes(workspac
         assert "MAX LENH 1" in review and "P1 override 100%" in review
         assert "[E] AUTO" in review and "[GIU] API, token" in review
         assert "TIN HIEU ON" in review and "E ALERT OFF" in review
+        assert "PROTECT ON" in review and "khong thay doi cong tac bao ve" in review
         assert "[TIN HIEU] Gui ngay" in review and "khong doi gio mua" in review
         assert "local-chat-only" not in review and "LOCAL_TOKEN_KEY" not in review
         assert "[y/N]" in prompt
@@ -258,7 +260,10 @@ def test_preset_enables_e_without_disabling_other_exit_flags(workspace, old_mode
     {"rule_parameters": {"max_positions": 4, "indicator_exit_policy": "AUTO", "initial_sl_pct": -9}},
     {"bot_em_modes": ["NORMAL", "IND_EXIT"]},
     {"rule_parameters": {"max_positions": 4, "indicator_exit_policy": "ALERT"}},
-    {"telegram_notifications": {"blocked_buy": True, "protect": True}},
+    {"telegram_notifications": {"blocked_buy": True, "protect": True, "closed": True}},
+    {"telegram_notifications": {"blocked_buy": True, "protect": False}},
+    {"telegram_notifications": {"blocked_buy": True, "protect": "true"}},
+    {"telegram_notifications": {"blocked_buy": True, "protect": 1}},
     {"telegram_notifications": {"blocked_buy": False}},
     {"telegram_notifications": {"blocked_buy": "true"}},
     {"telegram_notifications": {"blocked_buy": 1}},
