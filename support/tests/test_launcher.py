@@ -268,13 +268,15 @@ def test_start_crash_can_return_to_menu_without_retry(tmp_path):
 
 def test_batch_menu_routes_environment_update_start_and_preserves_logs():
     batch = (ROOT / "START_SYSTEM.bat").read_text(encoding="utf-8")
-    menu = batch.split(":menu", 1)[1].split("choice /c 12340", 1)[0]
+    menu = batch.split(":menu", 1)[1].split("choice /c 123450", 1)[0]
     assert "echo   4. Nap setting\n" in menu
+    assert "echo   5. Mo thu muc log\n" in menu
     assert all(detail not in menu for detail in ("MSN", "CTS", "HDB", "IDC", "P1 100", "E AUTO"))
-    assert "choice /c 12340" in batch
-    assert "if errorlevel 5 exit /b 0" in batch
+    assert "choice /c 123450" in batch
+    assert "if errorlevel 6 exit /b 0" in batch
+    assert "if errorlevel 5 goto logs" in batch
     assert "if errorlevel 4 goto preset" in batch
-    assert all(f"-Action {action}" in batch for action in ("Check", "Packages", "Update", "Start", "PresetVA"))
+    assert all(f"-Action {action}" in batch for action in ("Check", "Packages", "Update", "Start", "PresetVA", "Logs"))
     assert "if errorlevel 3 goto start" in batch
     assert "if errorlevel 2 goto update" in batch
     assert "choice /c 120" in batch
@@ -284,6 +286,68 @@ def test_batch_menu_routes_environment_update_start_and_preserves_logs():
     assert "@(0, 130, -1073741510)" in helper
     assert "cls" in batch
     assert all(forbidden not in batch.lower() for forbidden in ("del ", "rmdir", "taskkill", "reset --hard"))
+
+
+def test_open_single_account_logs_without_python_credentials_or_stopping_app(tmp_path):
+    project = tmp_path / "VPS with spaces"
+    logs = project / "viking_v2/runtime/accounts/0004018061/logs"
+    logs.mkdir(parents=True)
+    (logs / "daemon.log").write_text("TEST_ONLY\n", encoding="utf-8")
+    before = (logs / "daemon.log").read_bytes()
+    result = _run_ps(
+        "function Assert-AppStopped { throw 'UNEXPECTED_STOP_CHECK' }\n"
+        "function Invoke-Native { throw 'UNEXPECTED_PYTHON_OR_GIT' }\n"
+        "function Install-Packages { throw 'UNEXPECTED_INSTALL' }\n"
+        "function Start-App { throw 'UNEXPECTED_APP_START' }\n"
+        "function Get-Content { throw 'UNEXPECTED_CREDENTIAL_READ' }\n"
+        "function Read-Host { throw 'UNEXPECTED_ACCOUNT_PROMPT' }\n"
+        "function Invoke-Item { param($LiteralPath); Write-Output ('OPEN=' + $LiteralPath) }\n"
+        "Open-LogFolder", project,
+    )
+    _assert_ok(result)
+    assert "OPEN=" + str(logs) in result.stdout
+    assert "daemon.log = backend" in result.stdout and "Windows co the hien ten daemon" in result.stdout
+    assert (logs / "daemon.log").read_bytes() == before
+    assert not (project / "ckvnvenv").exists()
+
+
+def test_open_logs_selects_named_account_instead_of_guessing_active_account(tmp_path):
+    for account in ("0004018061", "0003810158"):
+        (tmp_path / "viking_v2/runtime/accounts" / account / "logs").mkdir(parents=True)
+    # An unrelated account without logs is not offered.
+    (tmp_path / "viking_v2/runtime/accounts/PAPER").mkdir()
+    result = _run_ps(
+        "$script:prompts=0\n"
+        "function Read-Host { $script:prompts++; if ($script:prompts -eq 1) { '../outside' } else { '2' } }\n"
+        "function Invoke-Item { param($LiteralPath); Write-Output ('OPEN=' + $LiteralPath) }\n"
+        "Open-LogFolder", tmp_path,
+    )
+    _assert_ok(result)
+    assert "1. 0003810158" in result.stdout and "2. 0004018061" in result.stdout
+    assert "Chon so tai khoan" in result.stdout
+    assert "OPEN=" + str(tmp_path / "viking_v2/runtime/accounts/0004018061/logs") in result.stdout
+    assert result.stdout.count("OPEN=") == 1
+
+
+@pytest.mark.parametrize("answer", ["0", ""])
+def test_open_logs_cancel_does_not_open_or_change_anything(tmp_path, answer):
+    for account in ("A", "B"):
+        (tmp_path / "viking_v2/runtime/accounts" / account / "logs").mkdir(parents=True)
+    result = _run_ps(
+        f"function Read-Host {{ {_ps_quote(answer)} }}\n"
+        "function Invoke-Item { throw 'UNEXPECTED_EXPLORER' }\nOpen-LogFolder", tmp_path,
+    )
+    _assert_ok(result)
+
+
+def test_open_logs_before_first_start_does_not_create_runtime(tmp_path):
+    result = _run_ps(
+        "function Invoke-Item { throw 'UNEXPECTED_EXPLORER' }\n"
+        "function Start-App { throw 'UNEXPECTED_APP_START' }\nOpen-LogFolder", tmp_path,
+    )
+    _assert_ok(result)
+    assert "Chua co thu muc log" in result.stdout and "Duong dan mac dinh" in result.stdout
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_va_preset_menu_checks_stopped_app_and_uses_existing_venv_only(tmp_path):

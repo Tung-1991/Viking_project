@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Check', 'Packages', 'Update', 'Start', 'PresetVA')]
+    [ValidateSet('Check', 'Packages', 'Update', 'Start', 'PresetVA', 'Logs')]
     [string]$Action = 'Packages'
 )
 
@@ -384,6 +384,46 @@ function Apply-VASettings {
     Invoke-Native $PythonExe @('-u', (Join-Path $ProjectRoot 'support\tools\apply_va_preset.py'))
 }
 
+function Open-LogFolder {
+    # Read folder names only: no Python, credentials, account writes or app start.
+    $accountsRoot = Join-Path $ProjectRoot 'viking_v2\runtime\accounts'
+    $logFolders = @(
+        if (Test-Path -LiteralPath $accountsRoot -PathType Container) {
+            Get-ChildItem -LiteralPath $accountsRoot -Directory | Sort-Object Name | ForEach-Object {
+                $logPath = Join-Path $_.FullName 'logs'
+                if (Test-Path -LiteralPath $logPath -PathType Container) {
+                    [pscustomobject]@{Account=$_.Name; Path=$logPath}
+                }
+            }
+        }
+    )
+    if (-not $logFolders.Count) {
+        Write-Host '[LOG] Chua co thu muc log. Khong tao log gia / khong tu khoi dong app.'
+        Write-Host "[LOG] Duong dan mac dinh: $accountsRoot\<account>\logs\"
+        return
+    }
+    $selected = $logFolders[0]
+    if ($logFolders.Count -gt 1) {
+        for ($index = 0; $index -lt $logFolders.Count; $index++) {
+            Write-Host ('  {0}. {1}' -f ($index + 1), $logFolders[$index].Account)
+        }
+        Write-Host '  0. Quay lai (Enter cung quay lai)'
+        do {
+            $answer = Read-Host 'Chon tai khoan can xem log'
+            if ([string]::IsNullOrWhiteSpace($answer) -or $answer.Trim() -eq '0') { return }
+            $number = 0
+            $valid = [int]::TryParse($answer, [ref]$number) -and $number -ge 1 -and $number -le $logFolders.Count
+            if (-not $valid) { Write-Host '[LOG] Chon so tai khoan trong danh sach.' }
+        } while (-not $valid)
+        $selected = $logFolders[$number - 1]
+    }
+    Write-Host "[LOG] Tai khoan $($selected.Account): $($selected.Path)"
+    Write-Host '[DOC] daemon.log = backend; ui.log = giao dien; daemon-process.log = stdout/stderr.'
+    Write-Host '[DOC] .jsonl = log co cau truc; duoi ngay YYYY-MM-DD = log ngay cu.'
+    Write-Host '[GUI] Loi DNSE: gui daemon.log dung ngay/gio loi. Windows co the hien ten daemon neu an duoi .log.'
+    Invoke-Item -LiteralPath $selected.Path
+}
+
 function Start-App {
     if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) { throw 'Chua co venv. Chon muc 1 > 2 truoc.' }
     Assert-AppStopped
@@ -412,6 +452,7 @@ if ($MyInvocation.InvocationName -ne '.') {
             'Update' { Update-Code }
             'Start' { Start-App }
             'PresetVA' { Apply-VASettings }
+            'Logs' { Open-LogFolder }
         }
         exit 0
     } catch {

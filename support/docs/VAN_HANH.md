@@ -10,6 +10,8 @@
   `.env`, runtime và venv giữ tại máy; backup ở `.artifacts/update-backups/`, không lên Git.
 - **3** khởi động, giữ console xem log. Đóng app hoặc Ctrl+C để dừng.
   Giữ PC/VM bật, không sleep/logoff. Ngắt RDP không phải đăng xuất.
+- **5** mở thư mục log bằng Explorer; nhiều tài khoản thì chọn đúng ID.
+  Dùng được khi app đang chạy hoặc đã dừng, không cần OTP/venv, không sửa dữ liệu.
 
 ## Trước khi bật BUY BOT
 
@@ -168,4 +170,16 @@ Log ghi khi lỗi đổi hoặc phục hồi, không ghi lại cùng lỗi ở m
 LỊCH CHỜ lúc mở app = đang tải; LỊCH LỖI = chưa có lịch dùng được, không gửi lệnh mới.
 Token hết hạn: nhập OTP lại. UNKNOWN / RECONCILE_REQUIRED: đối chiếu lệnh DNSE trước,
 không đặt lại vì nghĩ chưa gửi. Giữ runtime/logs; không reset/xóa dữ liệu để chữa lỗi.
-Log: `viking_v2/runtime/accounts/<id>/logs/`. Giá màn hình không bảo đảm là giá khớp.
+Log: `<thư mục cài app>/viking_v2/runtime/accounts/<id>/logs/`; BAT **5** mở đúng tài khoản.
+Windows ẩn đuôi `.log` có thể hiện tên `daemon`, `ui`, `daemon-process` (Text Document).
+
+| File | Nội dung / khi cần gửi |
+|---|---|
+| `daemon.log` | Backend giá/chỉ báo/tài khoản; ưu tiên gửi khi lỗi DNSE hoặc bot không ra quyết định |
+| `ui.log` | Giao diện, đồng bộ tài khoản và xử lý lệnh phía app; gửi thêm khi lỗi thao tác/gửi lệnh |
+| `daemon-process.log` | stdout/stderr tiến trình daemon; cần khi daemon không khởi động hoặc bị dừng/crash |
+| `daemon.jsonl`, `ui.jsonl` | Cùng log ở dạng JSON từng dòng để công cụ đọc; thường chỉ cần gửi bản `.log` |
+
+File có đuôi ngày (ví dụ `.2026-10-08`) là log ngày cũ; chọn đúng ngày xảy ra lỗi.
+Gửi đoạn có giờ và chi tiết ngay sau lỗi, không chỉ dòng console lặp; không gửi `.env`/API Secret/token/OTP.
+Giá màn hình không bảo đảm là giá khớp.
