@@ -101,6 +101,8 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   lịch nghỉ/chốt quyền, SELL trên DNSE app, hệ thống. BUY đã xếp mặc định GỬI NGAY;
   có thể đổi GOM TIN (mặc định nhớ 30 phút, chỉnh 1–120). Cửa sổ gom tính từ lệnh đầu tiên;
   không có lệnh mới thì không có tin gom mới, không trì hoãn đặt lệnh.
+  GỬI NGAY lỗi mạng giữ tin BUY đã xếp để thử lại sau 60 giây khi app còn chạy;
+  tin thử lại vẫn riêng từng lệnh, chỉ thử lại tin thất bại. Tắt nhóm/Telegram hoặc đổi nơi gửi hủy tin chờ.
   Giãn mặc định: BUY EMA/RSI 60 phút, MẤT BUY 60, E ALERT 30, hệ thống 30, lịch 1440;
   PROTECT/SELL ngoài app 0 phút nhưng vẫn chống trùng sự kiện. CLOSED 1 tin/vị thế đã bán hết.
   BUY EMA/RSI phải đạt các chỉ báo đang bật; thông báo không bỏ qua RSI. Nó độc lập với giờ/khóa giao dịch.
@@ -117,6 +119,8 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Sự kiện ghi khi ENTRY xuất hiện/mất, EXIT E xuất hiện hoặc xử lý/lý do đổi;
   giá thay đổi, phút xác nhận tăng hay raw signal NONE không tự sinh thêm sự kiện.
   Thiếu dữ liệu không coi là mất ENTRY. E chỉ được ghi lại sau khi điều kiện E đã mất rồi xuất hiện lại.
+  Lỗi ghi CSV không đánh dấu đã ghi. App giữ các quan sát chưa ghi trong bộ nhớ, thử lại theo thứ tự,
+  giữ giờ/số gốc và không dừng vòng cập nhật hay thực hiện lại lệnh. Không đóng app khi lỗi ghi chưa hết nếu cần giữ phần đang chờ.
   Bản cũ lặp cùng trạng thái được gộp khi xem (×N cũ), giữ bản ghi đầu và nhật ký gốc,
   không xóa dữ liệu hoặc gộp các chu kỳ ENTRY mới. PROTECT không trộn vào bảng tín hiệu ENTRY/E.
 - **⚙ GHI TÍN HIỆU**: một form nhỏ bật/tắt ghi định kỳ, chỉnh từ/đến giờ và nhịp phút.
@@ -139,6 +143,8 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   CSV được lưu riêng theo phiên chuẩn giá (phiên cuối CSV); tự chọn đúng bộ dữ liệu của ngày sự kiện.
   Nạp CSV ngày mới không xóa bộ của ngày cũ. Ngày chưa có CSV đúng chuẩn báo thiếu dữ liệu;
   không tự giả định hệ số điều chỉnh hay lấy CSV đã điều chỉnh hôm nay gán cho ngày cũ.
+  Mẫu đối chiếu hiện **TV · Đạt / TV · Chưa đạt / TV · Chưa có số** theo kết quả TradingView.
+  Xử lý sự kiện lịch sử vẫn ghi rõ **DNSE · ...**; Chi tiết giữ kết quả DNSE đã ghi, không đổi quyết định cũ.
   Không khôi phục TradingView bằng cách nhân/chia RSI hoặc tự đoán hệ số từ dữ liệu DNSE đã làm tròn.
 - XUẤT EXCEL gồm DNSE gốc và TradingView đối chiếu của các dòng trong danh sách (kể cả nhóm chưa xổ),
   không xuất dòng đã xóa/ẩn và không tự kéo dữ liệu mạng. Có mẫu định kỳ thì thêm TRACE/SETTING đầy đủ.

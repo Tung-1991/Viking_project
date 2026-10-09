@@ -16,6 +16,91 @@ def row(clock="13:00:00", **changes):
             **changes}
 
 
+@pytest.mark.parametrize("restart", [False, True])
+def test_failed_csv_append_does_not_claim_observation_and_can_retry(tmp_path, monkeypatch, restart):
+    from pathlib import Path
+    path = tmp_path / "signals.csv"
+    log = SignalLog(path)
+    original_open = Path.open
+    def fail_append(self, mode="r", *args, **kwargs):
+        if self == path and mode == "a":
+            raise OSError("SIMULATED_DISK_ERROR")
+        return original_open(self, mode, *args, **kwargs)
+    with monkeypatch.context() as faults:
+        faults.setattr(Path, "open", fail_append)
+        with pytest.raises(OSError):
+            log.observe(row(), entry_condition=True, exit_condition=False)
+    assert log.state.read() == {} and not log.observations.read()
+    if restart:
+        log = SignalLog(path)
+    assert log.observe(row(), entry_condition=True, exit_condition=False) == ["ENTRY"]
+    assert len(log.read_all()) == 1
+
+
+def test_failed_dedup_state_write_retries_without_duplicate_csv_and_survives_restart(tmp_path, monkeypatch):
+    path = tmp_path / "signals.csv"
+    log = SignalLog(path)
+    with monkeypatch.context() as faults:
+        faults.setattr(log.state, "write", lambda _value: (_ for _ in ()).throw(OSError("SIMULATED_STATE_ERROR")))
+        with pytest.raises(OSError):
+            log.observe(row(), entry_condition=True, exit_condition=False)
+    assert len(log.read_all()) == 1 and log._state_dirty
+    log.observe(row(), entry_condition=True, exit_condition=False)
+    assert len(log.read_all()) == 1 and not log._state_dirty
+    assert not SignalLog(path).observe(row(), entry_condition=True, exit_condition=False)
+
+
+def test_log_io_failure_buffers_original_entry_and_loss_without_interrupting_runtime(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from viking_v2.dashboard.actions import DashboardActionsMixin
+    log = SignalLog(tmp_path / "signals.csv")
+    app = SimpleNamespace(signal_log=log, logger=Mock())
+    first, lost = row(), row("13:30:00", signal="", blocked_by="NO_NEW_BUY_SIGNAL")
+    before = deepcopy([first, lost])
+    original = log.observe
+    with monkeypatch.context() as faults:
+        faults.setattr(log, "observe", lambda *_a, **_kw: (_ for _ in ()).throw(OSError("SIMULATED_DISK_ERROR")))
+        DashboardActionsMixin._append_signal_log(app, first, entry_condition=True, exit_condition=False)
+        DashboardActionsMixin._append_signal_log(app, lost, entry_condition=False, exit_condition=False)
+    # A later tick no longer carries the ENTRY pulse. Retain and replay the original observation, not the order.
+    DashboardActionsMixin._append_signal_log(app, {**lost, "timestamp": "2026-10-09 13:31:00"},
+                                             entry_condition=False, exit_condition=False)
+    saved = log.read_all()
+    assert [value["signal_event"] for value in saved] == ["ENTRY", "ENTRY_LOST"]
+    assert [value["timestamp"] for value in saved] == [first["timestamp"], lost["timestamp"]]
+    assert not app._pending_signal_logs and app.logger.warning.call_count == 1
+    assert [first, lost] == before and log.observe == original
+
+
+def test_log_outage_dedup_is_per_symbol_not_just_last_global_poll(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from viking_v2.dashboard.actions import DashboardActionsMixin
+    app = SimpleNamespace(signal_log=SignalLog(tmp_path / "signals.csv"), logger=Mock())
+    with monkeypatch.context() as faults:
+        faults.setattr(app.signal_log, "observe", lambda *_a, **_kw: (_ for _ in ()).throw(OSError("SIMULATED_DISK_ERROR")))
+        for _ in range(10):
+            for symbol in ("HDB", "IDC"):
+                DashboardActionsMixin._append_signal_log(app, row(symbol=symbol), entry_condition=True, exit_condition=False)
+    assert len(app._pending_signal_logs) == 2
+    DashboardActionsMixin._append_signal_log(app, row(), entry_condition=True, exit_condition=False)
+    assert len(app.signal_log.read_all()) == 2 and not app._pending_signal_logs
+
+
+def test_direct_order_result_log_also_retries_without_replanning(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from viking_v2.dashboard.actions import DashboardActionsMixin
+    app = SimpleNamespace(signal_log=SignalLog(tmp_path / "signals.csv"), logger=Mock())
+    value = row(signal_event="ORDER_RESULT", blocked_by="BROKER_FAILED")
+    with monkeypatch.context() as faults:
+        faults.setattr(app.signal_log, "record", lambda *_a, **_kw: (_ for _ in ()).throw(OSError("SIMULATED_DISK_ERROR")))
+        DashboardActionsMixin._append_signal_log(app, value, direct=True)
+    DashboardActionsMixin._append_signal_log(app, value, direct=True)
+    assert len(app.signal_log.read_all()) == 1 and not app._pending_signal_logs
+
+
 def test_entry_only_notes_appearance_loss_reappearance_and_processing_change(tmp_path):
     log = SignalLog(tmp_path / "signals.csv")
     assert log.observe(row(), entry_condition=True, exit_condition=False) == ["ENTRY"]

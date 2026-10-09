@@ -63,6 +63,39 @@ def test_no_fake_tradingview_conversion_when_dataset_or_adjustment_basis_is_miss
         assert "phiên chuẩn giá" in row["comparison_error"] and row["rsi_previous"] == ""
 
 
+@pytest.mark.parametrize("computed,error,expected", [
+    (True, "", "TV · Đạt"), (False, "", "TV · Chưa đạt"),
+    (None, "Chưa nạp CSV TradingView 1D của mã", "TV · Chưa có số"),
+])
+def test_periodic_tv_label_uses_comparison_not_recorded_dnse_result(computed, error, expected):
+    from types import SimpleNamespace
+    from viking_v2.dashboard.windows import HistoryPopup
+    from viking_v2.services.signal_history import periodic_history_row
+    sample = periodic_history_row(dict(timestamp="2026-10-09T14:00:01+07:00", scheduled_at="2026-10-09T14:00:00+07:00",
+                                      symbol="HDB", execution_mode="REAL", price_vnd=22500,
+                                      entry=True, ema_fast=22.45, ema_slow=22.4, rsi=58, rsi_previous=56.8))
+    original = deepcopy(sample)
+    class Comparison:
+        def compare(self, rows):
+            return [dict(value, comparison_source="TRADINGVIEW", comparison_entry=computed,
+                         comparison_error=error, rsi=50 if computed is False else 58) for value in rows]
+    view = HistoryPopup._history_views(SimpleNamespace(indicator_comparison=Comparison()), [sample], "TRADINGVIEW")[0]
+    assert view["suggestion"] == expected and "DNSE đã ghi: Đạt" in view["_reason_detail"]
+    assert view["entry"] is True and sample == original
+    if error:
+        assert error in view["_reason_detail"]
+
+
+def test_historical_event_processing_remains_explicitly_dnse_in_tv_view(tmp_path):
+    from types import SimpleNamespace
+    from viking_v2.dashboard.windows import HistoryPopup
+    original = event(signal="BUY", acted="WAIT", blocked_by="BUY_WINDOW_WAIT")
+    view = HistoryPopup._history_views(SimpleNamespace(indicator_comparison=IndicatorComparisonStore(tmp_path)),
+                                      [original], "TRADINGVIEW")[0]
+    assert view["suggestion"].startswith("DNSE · ")
+    assert "Chưa nạp CSV" in view["_reason_detail"] and view["signal"] == "BUY"
+
+
 def test_chart_import_does_not_round_precision_and_survives_reopen(tmp_path):
     path = tmp_path / "HDB.csv"
     chart_csv(path)

@@ -1204,6 +1204,10 @@ class HistoryPopup:
                 row["display_signal"] = "ĐỊNH KỲ"
                 row["suggestion"] = ("EMA/RSI đạt" if sample.get("entry") is True else
                                      "Chưa đạt" if sample.get("entry") is False else "Thiếu dữ liệu")
+                if basis == "TRADINGVIEW":
+                    compared = sample.get("comparison_entry")
+                    row["suggestion"] = ("TV · Đạt" if compared is True else
+                                         "TV · Chưa đạt" if compared is False else "TV · Chưa có số")
                 row["reason"] = sample.get("reason", "")
                 views.append(row)
         for row in views:
@@ -1222,6 +1226,15 @@ class HistoryPopup:
                 row["reason"] += " · TV đối chiếu"
             elif row.get("_rsi_issue"):
                 row["reason"] += " · " + row["_rsi_issue"]
+            if basis == "TRADINGVIEW":
+                original_entry = row.get("entry")
+                if row.get("record_kind") == "PERIODIC":
+                    row["_reason_detail"] += " · DNSE đã ghi: " + (
+                        "Đạt" if original_entry is True else "Chưa đạt" if original_entry is False else "Thiếu dữ liệu")
+                else:
+                    row["suggestion"] = "DNSE · " + row["suggestion"]
+                if row.get("comparison_error"):
+                    row["_reason_detail"] += " · " + str(row["comparison_error"])
         return sorted(views, key=history_sort_key, reverse=True)
 
     def _refresh_signals(self) -> None:

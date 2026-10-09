@@ -137,15 +137,30 @@ class SignalTelegramService:
             "order_info": dict(order_info or {}),
         }
         with self._buy_lock:
+            key = self._buy_key(item)
+            if key in self._pending_buys:
+                return True  # Already retained for delivery; do not send twice.
             if self.buy_batch_seconds > 0:
-                self._pending_buys[self._buy_key(item)] = item
+                self._pending_buys[key] = item
                 if self._buy_timer is None:
                     self._buy_window_started = datetime.now()
                     self._buy_timer = threading.Timer(self.buy_batch_seconds, self.flush_buys)
                     self._buy_timer.daemon = True
                     self._buy_timer.start()
                 return True
-        return self._send(self._format_buys([item]))
+            generation = self._buy_generation
+        if self._send(self._format_buys([item])):
+            return True
+        with self._buy_lock:
+            if generation == self._buy_generation:
+                item["immediate_delivery"] = True
+                self._pending_buys.setdefault(key, item)
+                if self._buy_timer is None:
+                    self._buy_window_started = datetime.now()
+                    self._buy_timer = threading.Timer(60.0, self.flush_buys)
+                    self._buy_timer.daemon = True
+                    self._buy_timer.start()
+        return False
 
     def _format_buys(
         self,
@@ -222,10 +237,28 @@ class SignalTelegramService:
             generation = self._buy_generation
         if not items:
             return False
-        sent = self._send(self._format_buys(items, started=started))
+        # Retry immediate notices individually; they must not become a digest.
+        failed = []
+        batched = []
+        for item in items:
+            with self._buy_lock:
+                if generation != self._buy_generation:
+                    return False  # Category/destination changed while a prior send was in flight.
+            if item.get("immediate_delivery"):
+                if not self._send(self._format_buys([item])):
+                    failed.append(item)
+            else:
+                batched.append(item)
+        if batched:
+            with self._buy_lock:
+                if generation != self._buy_generation:
+                    return False
+            if not self._send(self._format_buys(batched, started=started)):
+                failed.extend(batched)
+        sent = not failed
         with self._buy_lock:
             if not sent and generation == self._buy_generation:
-                for item in items:
+                for item in failed:
                     self._pending_buys.setdefault(self._buy_key(item), item)
                 if self._buy_timer is None:
                     self._buy_window_started = started or datetime.now()

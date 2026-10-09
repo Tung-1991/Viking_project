@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from collections import deque
+import csv
 import json
 import math
 import os
@@ -3180,11 +3182,11 @@ class DashboardActionsMixin:
             ),
         }
         if protect_alert:
-            self.signal_log.record(row)
+            DashboardActionsMixin._append_signal_log(self, row, direct=True)
         else:
             params = self.settings.rule_parameters
             if details.get("execution_failure") or decision.reason in {"BROKER_REJECTED", "BROKER_FAILED"}:
-                self.signal_log.record({**row, "signal_event": "ORDER_RESULT"})
+                DashboardActionsMixin._append_signal_log(self, {**row, "signal_event": "ORDER_RESULT"}, direct=True)
                 return
             row.update(
                 exit_ema_fast=marks.get("sell_ema_fast"), exit_ema_slow=marks.get("sell_ema_slow"),
@@ -3197,8 +3199,46 @@ class DashboardActionsMixin:
                     "sell_signal_use_ema", "sell_signal_use_rsi", "buy_ema_fast", "buy_ema_slow",
                     "sell_ema_fast", "sell_ema_slow", "rsi_period",
                 )}, sort_keys=True)
-            self.signal_log.observe(row, entry_condition=compare_entry(marks, params)[2],
-                                    exit_condition=exit_conditions(marks, params))
+            DashboardActionsMixin._append_signal_log(
+                self, row, entry_condition=compare_entry(marks, params)[2],
+                exit_condition=exit_conditions(marks, params),
+            )
+
+    def _append_signal_log(self, row: dict, *, direct: bool = False,
+                           entry_condition: bool | None = None, exit_condition: bool | None = None) -> None:
+        """Retry original observations in order; log I/O cannot stop runtime polling."""
+        pending = getattr(self, "_pending_signal_logs", None)
+        if pending is None:
+            self._pending_signal_logs = pending = deque()
+            self._pending_signal_log_latest = {}
+        # Repeated polls during a disk outage are not new semantic events.
+        signature = (direct, entry_condition, exit_condition,
+                     str(row.get("timestamp", ""))[:10],
+                     *(row.get(key, "") for key in (
+                         "execution_mode", "symbol", "signal", "acted", "blocked_by",
+                         "signal_cycle", "candle_key", "signal_event", "buy_window_state",
+                         "observation_profile")))
+        stream = (row.get("execution_mode", ""), row.get("symbol", ""))
+        latest = self._pending_signal_log_latest
+        if latest.get(stream) != signature:
+            pending.append((signature, dict(row), direct, entry_condition, exit_condition))
+            latest[stream] = signature
+        while pending:
+            _, original, use_record, entry, exited = pending[0]
+            try:
+                if use_record:
+                    self.signal_log.record(original)
+                else:
+                    self.signal_log.observe(original, entry_condition=entry, exit_condition=exited)
+            except (OSError, UnicodeError, csv.Error) as exc:
+                now = time.time()
+                if now - getattr(self, "_signal_log_error_logged_at", 0.0) >= 30:
+                    self.logger.warning("Signal log write failed; %d observations waiting, runtime continues: %s",
+                                        len(pending), safe_detail(str(exc)))
+                    self._signal_log_error_logged_at = now
+                return
+            pending.popleft()
+        latest.clear()
 
     def _claim_terminal_buy(self, decision: StrategyDecision, mode: str) -> None:
         if (

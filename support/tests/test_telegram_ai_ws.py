@@ -194,6 +194,73 @@ def test_immediate_buy_sends_each_order_without_batch_timer(buy_timers):
     assert buy_timers == [] and service._pending_buys == {}
 
 
+def test_failed_immediate_buy_is_retained_and_retried_once_after_recovery(buy_timers):
+    class OfflineTelegram(Telegram):
+        def send_message(self, chat_id, text):
+            raise RuntimeError("offline")
+    service = SignalTelegramService(OfflineTelegram(), chat_id="7")
+    kwargs = dict(symbol="HDB", signal_id="HDB1", price=22.5, market_state="ACCUMULATION")
+    assert not service.notify_buy(**kwargs)
+    retry = service._buy_timer
+    assert retry.interval == 60 and retry.started and len(service._pending_buys) == 1
+    assert service.notify_buy(**kwargs)  # Already waiting; no second retry timer.
+    assert service._buy_timer is retry
+    service.client = Telegram()
+    retry.function()
+    retry.function()
+    assert len(service.client.sent) == 1 and "BUY · HDB" in service.client.sent[0][1]
+    assert not service._pending_buys and service._buy_timer is None
+
+
+def test_immediate_retry_keeps_notices_separate_and_does_not_repeat_successes(buy_timers):
+    class FlakyTelegram(Telegram):
+        recovered = False
+        def send_message(self, chat_id, text):
+            if not self.recovered or "BUY · MSN" in text:
+                raise RuntimeError("offline")
+            super().send_message(chat_id, text)
+    client = FlakyTelegram()
+    service = SignalTelegramService(client, chat_id="7")
+    for symbol in ("HDB", "MSN"):
+        service.notify_buy(symbol=symbol, signal_id=symbol, price=22.5, market_state="ACCUMULATION")
+    client.recovered = True
+    assert not service.flush_buys()
+    assert len(client.sent) == 1 and "BUY · HDB" in client.sent[0][1]
+    assert len(service._pending_buys) == 1
+    service.client = Telegram()
+    service._buy_timer.function()
+    assert len(service.client.sent) == 1 and "BUY · MSN" in service.client.sent[0][1]
+    assert not service._pending_buys
+
+
+def test_disabled_category_during_failed_immediate_send_cannot_requeue(buy_timers):
+    class TurnOffWhileSending(Telegram):
+        def send_message(self, chat_id, text):
+            service.cancel_pending_buys()
+            raise RuntimeError("offline")
+    service = SignalTelegramService(TurnOffWhileSending(), chat_id="7")
+    assert not service.notify_buy(symbol="HDB", signal_id="HDB1", price=22.5, market_state="ACCUMULATION")
+    assert not service._pending_buys and service._buy_timer is None and not buy_timers
+
+
+def test_turning_category_off_during_retry_stops_remaining_immediate_notices(buy_timers):
+    class OfflineTelegram(Telegram):
+        def send_message(self, chat_id, text):
+            raise RuntimeError("offline")
+    service = SignalTelegramService(OfflineTelegram(), chat_id="7")
+    for symbol in ("HDB", "MSN"):
+        service.notify_buy(symbol=symbol, signal_id=symbol, price=22.5, market_state="ACCUMULATION")
+    attempted = []
+    class TurnOffWhileRetrying(Telegram):
+        def send_message(self, chat_id, text):
+            attempted.append(text)
+            service.cancel_pending_buys()
+            raise RuntimeError("offline")
+    service.client = TurnOffWhileRetrying()
+    assert not service.flush_buys()
+    assert len(attempted) == 1 and not service._pending_buys and service._buy_timer is None
+
+
 def test_switch_to_immediate_flushes_existing_batch_once_in_worker(buy_timers):
     tele = Telegram()
     service = SignalTelegramService(tele, chat_id="7", buy_batch_minutes=30)
@@ -412,6 +479,27 @@ def _technical_subject(monkeypatch, tmp_path):
     subject.telegram = SignalTelegramService(tele, chat_id="7")
     subject.rule_state = RuleStateStore(tmp_path / "rules.json")
     return subject, tele
+
+
+def test_queued_buy_delivery_recovers_even_after_app_claimed_original_notice(monkeypatch, tmp_path, buy_timers):
+    class OfflineTelegram(Telegram):
+        def send_message(self, chat_id, text):
+            raise RuntimeError("offline")
+    subject, tele = _technical_subject(monkeypatch, tmp_path)
+    subject.settings.telegram_notifications["blocked_buy"] = False
+    subject.telegram.client = OfflineTelegram()
+    decision = StrategyDecision("BUY", "HDB", "BUY_SIGNAL", signal="BUY", details={
+        "signal_cycle": "CROSS1", "indicators": {"buy_ema_fast": 22.5, "buy_ema_slow": 22.2,
+                                                   "rsi": 58.0, "rsi_previous": 56.8},
+    })
+    for _ in range(2):
+        subject._notify_rule_signal("HDB", decision, {"price": 22.5}, signal_id="T1", execution_mode="REAL")
+    assert len(subject.telegram._pending_buys) == 1 and len(buy_timers) == 1
+    before = subject.rule_state.store.read()
+    subject.telegram.client = tele
+    subject.telegram._buy_timer.function()
+    assert len(tele.sent) == 1 and "ĐÃ XẾP LỆNH" in tele.sent[0][1]
+    assert subject.rule_state.store.read() == before and not subject.telegram._pending_buys
 
 
 def test_technical_alert_and_successful_buy_notification_are_separate(monkeypatch, tmp_path):

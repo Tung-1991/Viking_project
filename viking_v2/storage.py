@@ -320,6 +320,7 @@ class SignalLog:
             str(symbol): str(value)
             for symbol, value in (raw_state.items() if isinstance(raw_state, dict) else [])
         }
+        self._state_dirty = False
         self._ensure_schema()
         self.excel_archive = MonthlyExcelArchive(self.path, self.FIELDS, "TÍN HIỆU")
         self._recent_count: int | None = None
@@ -410,11 +411,18 @@ class SignalLog:
             str(row.get("blocked_by", "") or ""),
         ) if value)
         with self._lock:
-            if not symbol or self._last.get(state_symbol) == state_key:
+            if not symbol:
                 return False
-            self._last[state_symbol] = state_key
-            self.state.write(self._last)
+            if self._last.get(state_symbol) == state_key:
+                if self._state_dirty:
+                    self.state.write(self._last)
+                    self._state_dirty = False
+                return False
             if not signal:
+                updated = {**self._last, state_symbol: state_key}
+                self.state.write(updated)
+                self._last = updated
+                self._state_dirty = False
                 return False
             if self._recent_count is None:
                 self._recent_count = self.excel_archive.bootstrap_csv(
@@ -428,6 +436,11 @@ class SignalLog:
                 if new_file:
                     writer.writeheader()
                 writer.writerow(saved_row)
+                handle.flush()
+                os.fsync(handle.fileno())
+            # A failed CSV append must remain retryable, including after restart.
+            self._last[state_symbol] = state_key
+            self._state_dirty = True
             self._recent_count += 1
             archived = self.excel_archive.append(saved_row)
             if archived and self._recent_count > self.RECENT_CSV_ROWS:
@@ -436,6 +449,8 @@ class SignalLog:
                 self._recent_count = len(recent)
             elif not archived:
                 self.excel_archive.invalidate_bootstrap()
+            self.state.write(self._last)
+            self._state_dirty = False
         return True
 
     def _ensure_schema(self) -> None:
