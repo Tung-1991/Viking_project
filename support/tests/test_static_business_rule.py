@@ -86,7 +86,7 @@ def test_realtime_crossover_compares_two_consecutive_observations():
         "sell_ema_fast": 10.1, "sell_ema_slow": 10.0,
         "rsi": 55.0, "rsi_previous": 50.0,
     }
-    assert crossover_signal_from_snapshots(current, previous) == "BUY"
+    assert crossover_signal_from_snapshots(current, previous, buy_signal_require_ema_cross=False) == "BUY"
 
     previous = {
         "buy_ema_fast": 10.1, "buy_ema_slow": 10.0,
@@ -118,7 +118,7 @@ def test_realtime_rsi_recovery_without_a_new_ema_cross_depends_on_optional_filte
     previous = {"buy_ema_fast": 22.4163, "buy_ema_slow": 22.4031, "rsi": 56.7921}
     current = {"buy_ema_fast": 22.4413, "buy_ema_slow": 22.4174,
                "rsi": 57.7026, "rsi_previous": 56.7921}
-    assert crossover_signal_from_snapshots(current, previous) == "BUY"
+    assert crossover_signal_from_snapshots(current, previous, buy_signal_require_ema_cross=False) == "BUY"
     assert crossover_signal_from_snapshots(current, previous, buy_signal_require_ema_cross=True) == ""
 
 

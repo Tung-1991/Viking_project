@@ -23,8 +23,9 @@ PRESET_FIELDS = {
     "priority_allocations", "market_phase_override_enabled", "market_phase_override_exposure_pct",
     "bot_em_modes", "rule_parameters", "telegram_notifications", "telegram_cooldown_minutes",
     "telegram_buy_delivery_mode",
+    "signal_trace_enabled", "signal_trace_interval_minutes", "signal_trace_start", "signal_trace_end",
 }
-PRESET_RULE_FIELDS = {"max_positions", "indicator_exit_policy"}
+PRESET_RULE_FIELDS = {"max_positions", "indicator_exit_policy", "buy_signal_require_ema_cross"}
 
 
 def prepared_settings(account_id: str) -> config.AppSettings:
@@ -46,7 +47,11 @@ def prepared_settings(account_id: str) -> config.AppSettings:
             or any(type(value) is not int for value in preset["telegram_cooldown_minutes"].values())
             or preset["telegram_buy_delivery_mode"] != "IMMEDIATE"
             or preset["bot_em_modes"] != ["IND_EXIT"]
-            or preset["rule_parameters"]["indicator_exit_policy"] != "AUTO"):
+            or preset["rule_parameters"]["indicator_exit_policy"] != "AUTO"
+            or preset["rule_parameters"]["buy_signal_require_ema_cross"] is not True
+            or preset["signal_trace_enabled"] is not True
+            or preset["signal_trace_interval_minutes"] != 2
+            or preset["signal_trace_start"] != "14:00" or preset["signal_trace_end"] != "14:30"):
         raise ValueError("Preset sai pham vi; chi nap von VA, E AUTO, BUY gui ngay, tin ky thuat/PROTECT va gian tin da chot.")
     rules = {**current["rule_parameters"], **preset["rule_parameters"]}
     # Operator-approved VA preset enables every notification category. Keep
@@ -121,7 +126,9 @@ def main() -> int:
               f"gian {settings.telegram_cooldown_minutes['buy_lost']} phut.")
         print(f"[HE THONG] Gian canh bao {settings.telegram_cooldown_minutes['system']} phut.")
         print("[PROTECT] Bat tin cham muc; khong thay doi cong tac bao ve hay AUTO/ALERT.")
-        print("[GIU] API, token, chat ID, cong tac Telegram tong, cac gian tin khac, EMA/RSI, SL/PROTECT/TP, gio mua va giao dich.")
+        print("[ENTRY] Bat EMA vua cat len + RSI phien truoc; khong ep mua khi EMA da o tren.")
+        print("[TRACE] ON, 2 phut/lan tu 14:00 den 14:30; lich su -> TRACE -> Excel.")
+        print("[GIU] API, token, chat ID, cong tac Telegram tong, cac gian tin khac, chu ky EMA/RSI, SL/PROTECT/TP, gio mua va giao dich.")
         print(f"[GIO MUA] {'Tu ' + str(settings.rule_parameters['buy_window_start']) if settings.rule_parameters['buy_window_enabled'] else 'Trong phien, theo tin hieu'}")
         if not args.yes and input("Nap vao dung tai khoan nay? [y/N]: ").strip().lower() != "y":
             print("[HUY] Khong doi setting.")

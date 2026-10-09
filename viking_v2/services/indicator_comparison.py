@@ -7,7 +7,7 @@ only that session's raw intraday prices can safely be combined with it.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from math import isfinite
 from pathlib import Path
 from typing import Any
@@ -28,6 +28,11 @@ class IndicatorComparisonStore:
             raise ValueError("Mã chứng khoán không hợp lệ.")
         return AtomicJSONStore(self.root / f"{symbol}_tradingview_1D.json", default={})
 
+    def _dated_store(self, symbol: str, day: str) -> AtomicJSONStore:
+        original = self._store(symbol)
+        day = date.fromisoformat(day).isoformat()
+        return AtomicJSONStore(original.path.with_name(f"{original.path.stem}_{day}.json"), default={})
+
     def import_daily(self, path: str | Path, symbol: str, exchange: str = "HOSE") -> int:
         rows, _scale = _normalized_rows(
             Path(path), resolution="1D", exchange=exchange,
@@ -40,11 +45,15 @@ class IndicatorComparisonStore:
             raise ValueError("Cần CSV khung 1D, không phải nhiều nến intraday trong một ngày.")
         if len(rows) < 100:
             raise ValueError("Cần ít nhất 100 nến 1D để đối chiếu EMA/RSI; nên xuất toàn bộ lịch sử chart.")
-        self._store(symbol).write({
+        data = {
             "source": "TRADINGVIEW_CSV", "symbol": symbol.upper(),
             "basis_date": dates[-1], "imported_at": datetime.now().isoformat(),
             "bars": rows,
-        })
+        }
+        # Each export preserves its own as-of price basis. Never replace an
+        # earlier session's source with today's retrospectively adjusted CSV.
+        self._dated_store(symbol, dates[-1]).write(data)
+        self._store(symbol).write(data)  # Compatibility with existing exports.
         return len(rows)
 
     def compare(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -53,20 +62,22 @@ class IndicatorComparisonStore:
         for original in rows:
             row = dict(original)
             symbol = str(row.get("symbol", "")).upper()
-            if symbol not in datasets:
+            day = str(row.get("timestamp", ""))[:10]
+            key = (symbol, day)
+            if key not in datasets:
                 try:
-                    loaded = self._store(symbol).read() if symbol else {}
-                    datasets[symbol] = loaded if isinstance(loaded, dict) else {}
+                    dated = self._dated_store(symbol, day)
+                    loaded = dated.read() if dated.path.exists() else self._store(symbol).read()
+                    datasets[key] = loaded if isinstance(loaded, dict) else {}
                 except ValueError:
-                    datasets[symbol] = {}
-            data = datasets[symbol]
+                    datasets[key] = {}
+            data = datasets[key]
             row["comparison_source"] = "TRADINGVIEW"
             # Keep the complete original record separate from computed values.
             row["dnse_indicators"] = {key: original.get(key, "") for key in (
                 "ema_fast", "ema_slow", "rsi", "rsi_previous", "rsi_previous_date",
             )}
             row.update(ema_fast="", ema_slow="", rsi="", rsi_previous="", rsi_previous_date="")
-            day = str(row.get("timestamp", ""))[:10]
             if not data.get("bars"):
                 row["comparison_error"] = "Chưa nạp CSV TradingView 1D của mã"
             elif day != data.get("basis_date"):

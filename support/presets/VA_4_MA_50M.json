@@ -19,5 +19,9 @@
   },
   "telegram_buy_delivery_mode": "IMMEDIATE",
   "telegram_cooldown_minutes": {"blocked_buy": 60, "buy_lost": 60, "system": 30},
-  "rule_parameters": {"max_positions": 4, "indicator_exit_policy": "AUTO"}
+  "signal_trace_enabled": true,
+  "signal_trace_interval_minutes": 2,
+  "signal_trace_start": "14:00",
+  "signal_trace_end": "14:30",
+  "rule_parameters": {"max_positions": 4, "indicator_exit_policy": "AUTO", "buy_signal_require_ema_cross": true}
 }

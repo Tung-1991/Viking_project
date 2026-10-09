@@ -1579,7 +1579,7 @@ class DashboardPanelsMixin:
         params = self.settings.rule_parameters
         buy_ema_rule = (
             "BUY cần EMA nhanh vừa vượt từ ≤ lên > EMA chậm."
-            if params.get("buy_signal_require_ema_cross", False)
+            if params.get("buy_signal_require_ema_cross", True)
             else "BUY chỉ cần EMA nhanh hiện tại > EMA chậm, không bắt vừa vượt lên."
         ) if params.get("buy_signal_use_ema", True) else "BUY không dùng điều kiện EMA."
         rsi_basis = (

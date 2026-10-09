@@ -426,8 +426,8 @@ class RuleSettingsPopup:
 
         self.buy_signal_require_ema_cross = self._switch(
             buy_group, "BUY CẦN EMA VỪA VƯỢT LÊN", self.params.buy_signal_require_ema_cross,
-            "TẮT (mặc định): EMA nhanh đang > EMA chậm là đạt phần EMA, kể cả lúc bật BOT.\n"
-            "BẬT: trước ≤, lần này > mới tạo BUY mới (REALTIME: hai lần quan sát; CLOSED: hai nến ngày).\n"
+            "BẬT (mặc định): trước ≤, lần này > mới tạo BUY mới (REALTIME: hai lần quan sát; CLOSED: hai nến ngày).\n"
+            "TẮT: EMA nhanh đang > EMA chậm là đạt phần EMA, kể cả lúc bật BOT.\n"
             "RSI vẫn so với phiên trước; giờ mua, vốn và WHIPSAW vẫn kiểm tra. Không áp dụng khi DÙNG EMA tắt; không đổi E/SELL.",
         )
 
@@ -555,6 +555,16 @@ class RuleSettingsPopup:
             buy_volume, "Tối thiểu (%)", self.params.buy_volume_min_ratio * 100.0,
             "100% nghĩa volume hiện tại phải ít nhất bằng trung bình các phiên trước. Nếu chưa đủ lịch sử, BUY bị chặn rõ lý do.",
         )
+        trace = self._card(body, "TRACE TÍN HIỆU", "Ghi mẫu định kỳ mọi mã, kể cả không đạt ENTRY. Không đổi cách tính hay thời điểm đặt lệnh.", 3, 0, span=2)
+        self.signal_trace_enabled = self._switch(
+            trace, "LƯU TRACE", self.settings.signal_trace_enabled,
+            "Mặc định ON, 2 phút/lần từ 14:00–14:30 giờ Việt Nam. Có cả mẫu không đạt tín hiệu/giá lỗi.\n"
+            "Lịch sử → TRACE để xem và xuất Excel. Lưu riêng 30 ngày; không gửi Telegram và không tạo lệnh.\n"
+            "App phải đang mở. Restart không ghi trùng mẫu, không bù mẫu đã bỏ lỡ.",
+        )
+        self.signal_trace_interval = self._field(trace, "Nhịp ghi (phút)", self.settings.signal_trace_interval_minutes, "1–30 phút; độc lập nhịp EMA/RSI.")
+        self.signal_trace_start = self._field(trace, "Từ giờ", self.settings.signal_trace_start, "HH:MM, giờ Việt Nam.")
+        self.signal_trace_end = self._field(trace, "Đến giờ", self.settings.signal_trace_end, "HH:MM, bao gồm phút cuối của khung đã chọn; không ghi ngày nghỉ.")
 
     def _phase3(self, frame: ctk.CTkFrame) -> None:
         body = self._content(frame)
@@ -1303,6 +1313,16 @@ class RuleSettingsPopup:
             if self.buy_confirmation_enabled.get() and self.signal_mode.get() != "REALTIME":
                 raise ValueError("Xác nhận BUY theo phút cần CÁCH ĐỌC NẾN = REALTIME")
             window_start = self.buy_window_start.get().strip()
+            trace_interval = self._number(self.signal_trace_interval, "Nhịp TRACE")
+            if not trace_interval.is_integer():
+                raise ValueError("Nhịp TRACE phải là số phút nguyên")
+            trace_interval = int(trace_interval)
+            if not 1 <= trace_interval <= 30:
+                raise ValueError("Nhịp TRACE phải từ 1 đến 30 phút")
+            trace_start = datetime.strptime(self.signal_trace_start.get().strip(), "%H:%M").strftime("%H:%M")
+            trace_end = datetime.strptime(self.signal_trace_end.get().strip(), "%H:%M").strftime("%H:%M")
+            if trace_start > trace_end:
+                raise ValueError("Giờ TRACE kết thúc phải từ giờ bắt đầu trở đi")
             validate_buy_window(window_start, "15:00")
             if self.buy_window_enabled.get() and self.signal_mode.get() != "REALTIME":
                 raise ValueError("Khung giờ mua cần CÁCH ĐỌC NẾN = REALTIME")
@@ -1340,6 +1360,9 @@ class RuleSettingsPopup:
             self.params.buy_window_start = window_start
             self.settings.signal_mode = self.signal_mode.get()
             self.settings.realtime_indicator_interval = self.realtime_indicator_interval.get()
+            self.settings.signal_trace_enabled = bool(self.signal_trace_enabled.get())
+            self.settings.signal_trace_interval_minutes = trace_interval
+            self.settings.signal_trace_start, self.settings.signal_trace_end = trace_start, trace_end
             self.params.max_positions = max_positions
             self.params.no_compound_enabled = bool(self.no_compound.get())
             self.params.force_min_lot_enabled = bool(self.force_min_lot.get())

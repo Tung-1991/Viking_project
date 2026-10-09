@@ -23,7 +23,10 @@ def workspace(tmp_path, monkeypatch):
     settings.telegram_notifications["blocked_buy"] = False
     settings.telegram_notifications["protect"] = False
     settings.paper_mode = False
-    settings.rule_parameters.update(buy_ema_fast=5, buy_ema_slow=10, initial_sl_pct=-4)
+    settings.rule_parameters.update(buy_ema_fast=5, buy_ema_slow=10, initial_sl_pct=-4,
+                                    buy_signal_require_ema_cross=False)
+    settings.signal_trace_enabled = False
+    settings.signal_trace_interval_minutes = 5
     config.save_settings(settings, "PARTNER")
     root = config.account_root("PARTNER")
     for name in ("runtime_config.json", "pending_orders.json", "market_bars.json", "state.sqlite"):
@@ -48,6 +51,9 @@ def test_preset_changes_only_agreed_allocation_e_and_signal_fields_and_backup_is
     assert current["market_phase_override_enabled"] and current["market_phase_override_exposure_pct"] == 100
     assert current["rule_parameters"]["max_positions"] == 4
     assert current["rule_parameters"]["indicator_exit_policy"] == "AUTO"
+    assert current["rule_parameters"]["buy_signal_require_ema_cross"] is True
+    assert current["signal_trace_enabled"] is True and current["signal_trace_interval_minutes"] == 2
+    assert current["signal_trace_start"] == "14:00" and current["signal_trace_end"] == "14:30"
     assert "IND_EXIT" in current["bot_em_modes"]
     assert current["telegram_notifications"]["blocked_buy"] is True
     assert current["telegram_notifications"] == config.TELEGRAM_NOTIFICATION_DEFAULTS

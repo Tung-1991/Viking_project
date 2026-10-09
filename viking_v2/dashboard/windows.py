@@ -4,6 +4,7 @@ from datetime import datetime
 from math import isfinite
 import re
 from pathlib import Path
+import sqlite3
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import ttk, filedialog, messagebox, simpledialog
@@ -13,6 +14,8 @@ import customtkinter as ctk
 
 from ..branding import window_title
 from ..services.indicator_comparison import IndicatorComparisonStore, number_comparison
+from ..services.signal_trace import SignalTraceStore, export_trace
+from ..trading.market import VN_TZ
 
 # One palette for every popup, so the app cannot drift into four colour schemes.
 PALETTE = {
@@ -129,6 +132,8 @@ _SIGNAL_REASONS = {
     "CORPORATE_ACTION_BLOCK": "Đang chặn vì sự kiện quyền",
     "MARKET_STATE_UNKNOWN": "Chưa xác nhận trạng thái thị trường",
     "NO_NEW_BUY_SIGNAL": "Chưa có tín hiệu BUY mới",
+    "NO_FRESH_DECISION": "Chưa có quyết định mới",
+    "BUY_SIGNAL": "Đạt ENTRY của rule",
     "BUY_CONFIRMATION_WAIT": "Đang giữ điều kiện BUY đủ số phút đã đặt",
     "BUY_WINDOW_WAIT": "Tín hiệu đang chờ đến khung giờ mua",
     "BUY_WINDOW_BROKEN": "Điều kiện BUY mất trong khi chờ giờ mua",
@@ -750,6 +755,7 @@ class HistoryPopup:
         on_visibility_changed: Callable[[bool], None] | None = None,
         signals_provider: Callable[[], list[dict[str, Any]]] | None = None,
         indicator_comparison: IndicatorComparisonStore | None = None,
+        trace_store: SignalTraceStore | None = None,
     ):
         self.parent = parent
         self.rows_provider = rows_provider
@@ -758,6 +764,7 @@ class HistoryPopup:
             from .. import config
             indicator_comparison = IndicatorComparisonStore(config.RUNTIME_ROOT / "indicator_comparison")
         self.indicator_comparison = indicator_comparison
+        self.trace_store = trace_store or SignalTraceStore(indicator_comparison.root.parent / "signal_trace.sqlite3")
         self.indicator_basis = "DNSE"
         self.on_visibility_changed = on_visibility_changed
         parent.update_idletasks()
@@ -867,6 +874,7 @@ class HistoryPopup:
                 text_color=PALETTE["DIM"], fg_color=PALETTE["SURFACE"],
             )
         self._build_signal_tab()
+        self._build_trace_tab()
         self.tabs.set("CKCS REAL" if str(initial_mode).upper() == "REAL" else "CKCS PAPER")
         self.refresh()
         self.show()
@@ -885,6 +893,105 @@ class HistoryPopup:
         ("market_state", "THỊ TRƯỜNG", 210, "center"),
         ("reason", "LÝ DO", 540, "w"),
     )
+
+    TRACE_COLUMNS = (
+        ("execution_mode", "MODE", 90), ("priority", "ƯU TIÊN", 90),
+        ("display_price", "GIÁ / NGUỒN", 170), ("ema_comparison", "EMA NHANH / CHẬM", 240),
+        ("rsi_comparison", "RSI HIỆN TẠI / TRƯỚC", 230), ("rsi_previous_date", "PHIÊN RSI TRƯỚC", 170),
+        ("display_entry", "ENTRY", 110), ("display_exit", "EXIT E", 100),
+        ("display_whipsaw", "WHIPSAW", 180), ("slot_usage", "SLOT", 90),
+        ("display_capital", "VỐN / LỆNH", 140), ("display_operating", "BOT / OTP", 160),
+        ("display_reason", "XỬ LÝ / LÝ DO", 430), ("queue_summary", "LỆNH ĐÃ GHI", 440),
+    )
+
+    def _build_trace_tab(self) -> None:
+        frame = self.tabs.add("TRACE")
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(2, weight=1)
+        bar = ctk.CTkFrame(frame, fg_color="transparent")
+        bar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=8, pady=5)
+        today = datetime.now(VN_TZ).date().isoformat()
+        self.trace_day = tk.StringVar(value=today)
+        self.trace_symbol = tk.StringVar(value="TẤT CẢ MÃ")
+        self.trace_mode = tk.StringVar(value="CẢ HAI MODE")
+        self.trace_day_menu = ctk.CTkOptionMenu(bar, variable=self.trace_day, values=[today],
+                                             width=140, command=lambda _v: self._refresh_trace())
+        self.trace_day_menu.pack(side="left", padx=4)
+        self.trace_symbol_menu = ctk.CTkOptionMenu(bar, variable=self.trace_symbol, values=["TẤT CẢ MÃ"],
+                                                width=130, command=lambda _v: self._refresh_trace())
+        self.trace_symbol_menu.pack(side="left", padx=4)
+        ctk.CTkOptionMenu(bar, variable=self.trace_mode, values=["CẢ HAI MODE", "REAL", "PAPER"],
+                         width=145, command=lambda _v: self._refresh_trace()).pack(side="left", padx=4)
+        ctk.CTkButton(bar, text="XUẤT EXCEL", width=115, command=self._export_trace).pack(side="right", padx=4)
+        self.trace_status = ctk.CTkLabel(frame, text="", anchor="w", font=("Segoe UI", 12))
+        self.trace_status.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=3)
+        _HoverHint(self.trace_status, "Mẫu định kỳ, không phải tín hiệu/lệnh mới. Giờ là thời điểm app ghi, không phải giờ gửi Telegram.\n"
+                   "ENTRY chỉ phản ánh EMA/RSI; XỬ LÝ/LỆNH là dữ liệu app đã ghi. Đã xếp không đồng nghĩa đã gửi/khớp.\n"
+                   "Không có mẫu quá khứ thì không tự bù. Excel có số gốc, vốn, các khóa và setting lúc ghi.")
+        keys = [key for key, *_ in self.TRACE_COLUMNS]
+        tree = self.trace_tree = ttk.Treeview(frame, columns=keys, show="tree headings", style="Signal.Treeview")
+        tree.heading("#0", text="MÃ / GIỜ GHI (VN)")
+        tree.column("#0", width=245, minwidth=200)
+        for key, label, width in self.TRACE_COLUMNS:
+            tree.heading(key, text=label)
+            tree.column(key, width=width, minwidth=90, anchor="w" if key in {"display_reason", "queue_summary"} else "center")
+        tree.tag_configure("trace_ok", foreground="#65D991")
+        tree.tag_configure("trace_wait", foreground="#F6C35B")
+        tree.grid(row=2, column=0, sticky="nsew")
+        ys = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        xs = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+        ys.grid(row=2, column=1, sticky="ns")
+        xs.grid(row=3, column=0, sticky="ew")
+        tree.configure(yscrollcommand=ys.set, xscrollcommand=xs.set)
+
+    def _refresh_trace(self) -> None:
+        try:
+            today = datetime.now(VN_TZ).date().isoformat()
+            self.trace_day_menu.configure(values=list(dict.fromkeys([today, *self.trace_store.days()])))
+            day_rows = self.trace_store.read(day=self.trace_day.get(), limit=5000)
+            self.trace_symbol_menu.configure(values=["TẤT CẢ MÃ", *sorted({r["symbol"] for r in day_rows})])
+            rows = [r for r in day_rows if (self.trace_symbol.get() == "TẤT CẢ MÃ" or r["symbol"] == self.trace_symbol.get())
+                    and (self.trace_mode.get() == "CẢ HAI MODE" or r["execution_mode"] == self.trace_mode.get())]
+            self.trace_rows = rows
+            opened = {iid for iid in self.trace_tree.get_children() if self.trace_tree.item(iid, "open")}
+            self.trace_tree.delete(*self.trace_tree.get_children())
+            for symbol in sorted({r["symbol"] for r in rows}):
+                iid = "trace_" + symbol
+                self.trace_tree.insert("", "end", iid=iid, text=symbol, open=iid in opened)
+                for row in (r for r in rows if r["symbol"] == symbol):
+                    view = dict(row)
+                    view["display_price"] = f"{row['price_vnd']:,.0f} · {row['price_source']}" if row.get("price_vnd") is not None else "—"
+                    view["display_entry"] = "ĐẠT" if row["entry"] is True else "CHƯA ĐẠT" if row["entry"] is False else "—"
+                    view["display_exit"] = "CÓ" if row["exit_e"] is True else "—"
+                    view["display_whipsaw"] = (f"{row['whipsaw_count']}/{row['whipsaw_limit']} · {row['whipsaw_window']} phiên"
+                                                   if row.get("whipsaw_count") is not None else "—") + (" · OFF" if row.get("whipsaw_on") is False else "")
+                    view["display_capital"] = f"{row['order_budget']/1e6:.2f} tr" if row.get("order_budget") is not None else "—"
+                    view["display_operating"] = f"BOT {'ON' if row['bot_on'] else 'OFF'} · OTP " + ("OK" if row['otp_ok'] else "THIẾU" if row['otp_ok'] is False else "—")
+                    reason = _SIGNAL_REASONS.get(row["reason"], row["reason"])
+                    if row["reason"] == "NO_NEW_BUY_SIGNAL" and row["entry"]:
+                        reason = "Chưa có lần EMA vừa vượt lên" if row.get("ema_cross_required") else reason
+                    view["display_reason"] = f"{row['rule_action']} · {reason}" + (f" · {row['quote_issue']}" if row["quote_issue"] else "")
+                    if row.get("system_issue"):
+                        view["display_reason"] += " · " + row["system_issue"]
+                    self.trace_tree.insert(iid, "end", text=row["timestamp"][11:19], values=[view.get(key, "") for key, *_ in self.TRACE_COLUMNS],
+                                           tags=("trace_ok" if row["entry"] is True else "trace_wait",))
+            self.trace_status.configure(text=f"{len(rows)} mẫu · Lưu 30 ngày · Mẫu định kỳ, không phải lệnh mới" if rows
+                                        else "Chưa có TRACE ngày này · Không tự bù dữ liệu quá khứ · Bật trong RULE → PHASE 2")
+        except (OSError, ValueError, KeyError, sqlite3.Error) as exc:
+            self.trace_status.configure(text=f"Không đọc được TRACE: {type(exc).__name__}")
+
+    def _export_trace(self) -> None:
+        self._refresh_trace()
+        if not getattr(self, "trace_rows", []):
+            messagebox.showinfo("TRACE", "Không có mẫu trong bộ lọc đang chọn.", parent=self.top)
+            return
+        path = filedialog.asksaveasfilename(parent=self.top, defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")],
+                                          initialfile=f"TRACE_{self.trace_day.get()}.xlsx")
+        if path:
+            try:
+                export_trace(self.trace_rows, path)
+            except (OSError, ValueError, ImportError) as exc:
+                messagebox.showerror("TRACE", str(exc), parent=self.top)
 
     def _build_signal_tab(self) -> None:
         """Every signal the rule produced, whether the bot could act or not."""
@@ -1126,6 +1233,7 @@ class HistoryPopup:
 
     def refresh(self) -> None:
         self._refresh_signals()
+        self._refresh_trace()
         for mode, tree in self.trees.items():
             tree.delete(*tree.get_children())
             groups = self.rows_provider(mode)

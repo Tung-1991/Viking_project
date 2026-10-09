@@ -1395,7 +1395,7 @@ class BacktestPopup:
         ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
         self._hint(
             signal_toggle_row,
-            "TẮT (mặc định): EMA nhanh hiện tại > EMA chậm. BẬT: lần trước ≤, lần này > mới tạo BUY mới.\n"
+            "BẬT (mặc định): lần trước ≤, lần này > mới tạo BUY mới. TẮT: chỉ cần EMA nhanh hiện tại > EMA chậm.\n"
             "REALTIME so hai lần quan sát intraday; CLOSED so hai nến ngày đã đóng. RSI vẫn so phiên trước. Không đổi E/SELL hoặc các khóa vào lệnh.",
         ).grid(row=1, column=3, padx=10, pady=(8, 0))
 
@@ -1579,7 +1579,7 @@ class BacktestPopup:
         self.force_min_lot.set(bool(params.get("force_min_lot_enabled", True)))
         self.buy_signal_ema.set(bool(params.get("buy_signal_use_ema", True)))
         self.buy_signal_rsi.set(bool(params.get("buy_signal_use_rsi", True)))
-        self.buy_signal_require_ema_cross.set(bool(params.get("buy_signal_require_ema_cross", False)))
+        self.buy_signal_require_ema_cross.set(bool(params.get("buy_signal_require_ema_cross", True)))
         self.sell_signal_ema.set(bool(params.get("sell_signal_use_ema", True)))
         self.sell_signal_rsi.set(bool(params.get("sell_signal_use_rsi", True)))
         indicator_exit_policy = str(

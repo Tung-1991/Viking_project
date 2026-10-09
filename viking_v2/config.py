@@ -125,7 +125,7 @@ DEFAULT_RULE_PARAMETERS: dict[str, Any] = {
     "rsi_period": 14,
     "buy_signal_use_ema": True,
     "buy_signal_use_rsi": True,
-    "buy_signal_require_ema_cross": False,
+    "buy_signal_require_ema_cross": True,
     "buy_volume_enabled": False,
     "buy_volume_average_sessions": 20,
     "buy_volume_min_ratio": 1.0,
@@ -380,6 +380,11 @@ class AppSettings:
     # REALTIME still calculates indicators on the unfinished 1D candle.  This
     # setting only controls how often a new provisional close is accepted.
     realtime_indicator_interval: str = "TICK"
+    # Observation only: never changes rule timing, indicators or submissions.
+    signal_trace_enabled: bool = True
+    signal_trace_interval_minutes: int = 2
+    signal_trace_start: str = "14:00"
+    signal_trace_end: str = "14:30"
     rule_parameters: dict[str, Any] = field(default_factory=default_rule_parameters)
     corporate_actions: list[dict[str, Any]] = field(default_factory=list)
     custom_holidays: list[str] = field(default_factory=list)
@@ -504,6 +509,18 @@ class AppSettings:
         ).strip().upper()
         if self.realtime_indicator_interval not in {"TICK", "1M", "2M", "5M"}:
             self.realtime_indicator_interval = "TICK"
+        self.signal_trace_enabled = self.signal_trace_enabled is True
+        try:
+            self.signal_trace_interval_minutes = max(1, min(30, int(self.signal_trace_interval_minutes)))
+        except (TypeError, ValueError, OverflowError):
+            self.signal_trace_interval_minutes = 2
+        try:
+            self.signal_trace_start = datetime.strptime(str(self.signal_trace_start), "%H:%M").strftime("%H:%M")
+            self.signal_trace_end = datetime.strptime(str(self.signal_trace_end), "%H:%M").strftime("%H:%M")
+            if self.signal_trace_start > self.signal_trace_end:
+                raise ValueError("Invalid trace window")
+        except (TypeError, ValueError):
+            self.signal_trace_start, self.signal_trace_end = "14:00", "14:30"
         self.rule_parameters = merge_rule_parameters(self.rule_parameters)
         self.corporate_actions = [
             dict(item) for item in self.corporate_actions if isinstance(item, dict) and str(item.get("symbol", "")).strip()

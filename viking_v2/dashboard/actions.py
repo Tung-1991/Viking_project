@@ -40,6 +40,7 @@ from ..services.signal_coordinator import (
     is_terminal_buy_block,
 )
 from ..services.indicator_comparison import IndicatorComparisonStore
+from ..services.signal_trace import SignalTraceStore
 from ..storage import CSVOrderJournal
 from ..trading.market import VN_TZ, market_phase, market_session_clock, normalize_exchange
 from ..trading.portfolio import PortfolioContextBuilder, sell_quantity_for_fraction, validate_quantity
@@ -612,6 +613,7 @@ class DashboardActionsMixin:
                 self, self._history_popup_groups, initial_mode=self.mode.get(),
                 signals_provider=self._signal_log_rows,
                 indicator_comparison=IndicatorComparisonStore(self.bridge.root / "indicator_comparison"),
+                trace_store=SignalTraceStore(self.bridge.root / "signal_trace.sqlite3"),
                 on_visibility_changed=lambda visible: self.history_button.configure(
                     fg_color=COL_GREEN if visible else COL_GRAY,
                     hover_color="#16A34A" if visible else "#4B515B",
@@ -2764,7 +2766,44 @@ class DashboardActionsMixin:
             self, status, daemon, market, mode,
         )
         self._consume_bot_decisions(status, daemon)
+        DashboardActionsMixin._capture_signal_trace(self, status, daemon)
         self.after(1000, self._poll_runtime)
+
+    def _capture_signal_trace(self, status: dict, daemon: str) -> None:
+        """Observe after planning; tracing never creates/claims a signal or order."""
+        if not getattr(self.settings, "signal_trace_enabled", False):
+            return
+        now = datetime.now(VN_TZ)
+        if SignalTraceStore.schedule(self.settings, now) is None:
+            return
+        try:
+            store = getattr(self, "_signal_trace_store", None)
+            if store is None:
+                self._signal_trace_store = store = SignalTraceStore(self.bridge.root / "signal_trace.sqlite3")
+            runtime = self.bridge.read_config()
+            mode = "PAPER" if runtime.paper_mode else "REAL"
+            books = status.get("decisions_by_mode") or {mode: status.get("decisions", {})}
+            traced_books = {}
+            final = getattr(self, "_trace_final_decisions", {})
+            for book, rows in books.items():
+                traced_books[book] = {}
+                for symbol, raw in rows.items():
+                    planned = final.get((book, symbol))
+                    same_observation = (planned and (planned.get("details") or {}).get("updated_at")
+                                        == (raw.get("details") or {}).get("updated_at"))
+                    traced_books[book][symbol] = planned if same_observation and daemon == "RUNNING" else raw
+            if daemon != "RUNNING":
+                traced_books = {book: {} for book in books}
+            count = store.capture({**status, "decisions_by_mode": traced_books}, self.settings,
+                                  active_mode=mode, intents=self.queue.list_all(),
+                                  otp_ok=self.real.has_trading_token(),
+                                  pause_by_mode={book: self.rule_state.entry_pause(book) for book in books}, now=now)
+            if count:
+                self.logger.info("TRACE: recorded %d samples (%s)", count, now.strftime("%H:%M"))
+        except Exception as exc:
+            if time.time() - getattr(self, "_trace_error_logged_at", 0.0) >= 30:
+                self.logger.warning("TRACE write failed; trading unchanged: %s", safe_detail(str(exc)))
+                self._trace_error_logged_at = time.time()
 
     @staticmethod
     def _blocked_decision(decision: StrategyDecision, reason: str) -> StrategyDecision:
@@ -3022,6 +3061,9 @@ class DashboardActionsMixin:
         self, decision: StrategyDecision, tick: dict[str, Any], mode: str,
         allocator: BuySlotAllocator,
     ) -> None:
+        if not hasattr(self, "_trace_final_decisions"):
+            self._trace_final_decisions = {}
+        self._trace_final_decisions[(mode, decision.symbol)] = decision.to_dict()
         details = decision.details if isinstance(decision.details, dict) else {}
         marks = details.get("indicators") if isinstance(details.get("indicators"), dict) else {}
         confirmation = details.get("buy_confirmation") if isinstance(details.get("buy_confirmation"), dict) else {}
@@ -3124,7 +3166,7 @@ class DashboardActionsMixin:
             return
         params = getattr(getattr(self, "settings", None), "rule_parameters", {}) or {}
         requires_cross = bool(params.get("buy_signal_use_ema", True)
-                              and params.get("buy_signal_require_ema_cross", False))
+                              and params.get("buy_signal_require_ema_cross", True))
         if (decision.reason in {"BOT_OFF", "MANUAL_SELL_PAUSE"}
                 and not requires_cross):
             # Level mode must recheck current conditions after operator arming

@@ -16,11 +16,11 @@ def marks(fast=101.0, slow=100.0, rsi=60.0):
             "sell_ema_fast_period": 3, "sell_ema_slow_period": 6, "rsi_period": 14}
 
 
-def test_new_and_sparse_settings_default_to_current_ema_levels():
-    assert config.DEFAULT_RULE_PARAMETERS["buy_signal_require_ema_cross"] is False
-    assert StaticRuleParameters().buy_signal_require_ema_cross is False
-    assert StaticRuleParameters.from_dict({}).buy_signal_require_ema_cross is False
-    assert AppSettings.from_dict({"rule_parameters": {"buy_ema_fast": 3}}).rule_parameters["buy_signal_require_ema_cross"] is False
+def test_new_and_sparse_settings_default_to_fresh_cross():
+    assert config.DEFAULT_RULE_PARAMETERS["buy_signal_require_ema_cross"] is True
+    assert StaticRuleParameters().buy_signal_require_ema_cross is True
+    assert StaticRuleParameters.from_dict({}).buy_signal_require_ema_cross is True
+    assert AppSettings.from_dict({"rule_parameters": {"buy_ema_fast": 3}}).rule_parameters["buy_signal_require_ema_cross"] is True
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -32,8 +32,8 @@ def test_option_survives_rule_and_app_settings_roundtrip(enabled):
 
 
 @pytest.mark.parametrize("previous", [None, {}, marks(), marks(fast=102.0)])
-def test_default_accepts_ema_already_above_without_requiring_previous_observation(previous):
-    assert crossover_signal_from_snapshots(marks(fast=103.0), previous) == "BUY"
+def test_disabled_option_accepts_ema_already_above_without_requiring_previous_observation(previous):
+    assert crossover_signal_from_snapshots(marks(fast=103.0), previous, buy_signal_require_ema_cross=False) == "BUY"
 
 
 @pytest.mark.parametrize("previous,expected", [
@@ -84,8 +84,8 @@ def test_actual_rule_uses_option_for_already_above_ema_in_both_books(mode, enabl
     ({"entry_slot_available": False}, "MAX_POSITIONS"),
     ({"available_capital": 0}, "NO_AVAILABLE_CAPITAL"),
 ])
-def test_default_level_mode_does_not_bypass_entry_guards(guard, reason):
-    rule = StaticRule(StaticRuleParameters(whipsaw_enabled=False))
+def test_disabled_cross_level_mode_does_not_bypass_entry_guards(guard, reason):
+    rule = StaticRule(StaticRuleParameters(whipsaw_enabled=False, buy_signal_require_ema_cross=False))
     decision = rule.evaluate({
         "symbol": "TEST", "bars": [{"close": 100, "closed": True}] * 30,
         "signal_mode": "REALTIME", "indicator_snapshot": marks(), "previous_indicators": {},
@@ -155,7 +155,7 @@ def test_repeated_level_signals_cannot_queue_duplicate_buys(tmp_path, mode):
     from viking_v2.trading.state import TradeStateStore
     queue = OrderQueue(tmp_path / "orders.json")
     planner = StrategyOrderPlanner(queue, TradeStateStore(tmp_path / "trades.json"), RuleStateStore(tmp_path / "rules.json"))
-    rule = StaticRule(StaticRuleParameters(whipsaw_enabled=False))
+    rule = StaticRule(StaticRuleParameters(whipsaw_enabled=False, buy_signal_require_ema_cross=False))
     context = {"symbol": "TEST", "bars": [{"close": 100, "closed": True}] * 30,
                "signal_mode": "REALTIME", "indicator_snapshot": marks(), "previous_indicators": marks(),
                "previous_market_state": "UPTREND"}

@@ -83,9 +83,11 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   chưa nhận quản lý hiển thị SL OFF; PROTECT CHỜ DỮ LIỆU không phải mức lùi bằng 0.
 - Mặc định BUY xét EMA nhanh > EMA chậm và RSI hiện tại > RSI phiên trước theo các công tắc RULE.
   RSI hiện tại là nến 1D tạm tính từ giá mới; mốc so sánh là nến 1D phiên trước, không phải tick trước.
-  Tùy chọn **PHẢI VỪA CẮT EMA** mặc định OFF; ON đòi lần quan sát trước nhanh ≤ chậm, lần này nhanh > chậm.
+  Tùy chọn **PHẢI VỪA CẮT EMA** mặc định ON theo VA: lần quan sát trước nhanh ≤ chậm, lần này nhanh > chậm.
+  OFF chỉ đòi EMA nhanh đang > chậm. RSI vẫn phải đạt; không đổi cách tính hai đường EMA.
   Đủ chỉ báo chưa phải đã gửi lệnh: còn giờ mua, bộ lọc/WHIPSAW/khóa lỗ, vốn/slot, BOT và token REAL.
-  Bật lại BOT sau OFF hoặc hết khóa bán tay sẽ đánh giá điều kiện hiện tại ở chế độ mặc định, không phục hồi lệnh cũ.
+  Bật lại BOT/hết khóa bán tay không phục hồi lệnh cũ. Khi cần vừa cắt, EMA đã nằm trên không tự sinh ENTRY mới;
+  chỉ khi OFF mới xét lại điều kiện hiện tại không cần lần cắt mới. Cập nhật giữ OFF đã lưu; nạp preset VA bật ON.
   Lệnh bị chặn vốn/slot và tín hiệu chờ có quy tắc riêng; xem lý do, không coi Telegram là xác nhận đã mua.
 - BLOCK phải **MỞ BLOCK** đúng mã/sổ. ↻ reset thống kê/khóa chờ, không mở BLOCK,
   không xóa vị thế. THEO NGÀY chốt đúng giờ GMT+7; CỘNG DỒN từ lần ↻ gần nhất.
@@ -112,11 +114,33 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 - Mặc định **DNSE** giữ nguyên số bot đã ghi. **TRADINGVIEW** tính lại để đối chiếu, không đổi bot/lệnh.
   NẠP CSV 1D xuất từ TradingView, đơn vị VND, ít nhất 100 nến (nên toàn bộ lịch sử); chọn đúng mã.
   Giữ số lẻ của CSV, dùng lịch sử đến phiên trước + giá intraday đã ghi, không dùng close cuối ngày để tính ngược.
-  Chỉ đối chiếu phiên cuối của CSV vì chưa có bộ hệ số điều chỉnh theo ngày; phiên khác báo thiếu chuẩn giá.
+  CSV được lưu riêng theo phiên chuẩn giá (phiên cuối CSV); tự chọn đúng bộ dữ liệu của ngày sự kiện.
+  Nạp CSV ngày mới không xóa bộ của ngày cũ. Ngày chưa có CSV đúng chuẩn báo thiếu dữ liệu;
+  không tự giả định hệ số điều chỉnh hay lấy CSV đã điều chỉnh hôm nay gán cho ngày cũ.
   Không khôi phục TradingView bằng cách nhân/chia RSI hoặc tự đoán hệ số từ dữ liệu DNSE đã làm tròn.
 - XUẤT EXCEL gồm DNSE gốc và TradingView đối chiếu của các dòng đang hiển thị; không tự kéo dữ liệu mạng.
   UI giữ 7 ngày ghi nhận gần nhất, tối đa 250 dòng; CSV gần nhất 500 dòng, Excel tự lưu theo tháng.
-  TRACE định kỳ 2 phút từ 14h–14h30 vẫn là phương án chưa triển khai, không nhầm với lịch sử sự kiện hiện có.
+
+## TRACE / kiểm tra ENTRY trong phiên
+
+- **RULE → PHASE 2 → TRACE TÍN HIỆU**: mặc định ON, 2 phút/lần, 14:00–14:30 giờ Việt Nam.
+  Có thể tắt, chỉnh nhịp 1–30 phút và giờ bắt đầu/kết thúc. Độc lập nhịp EMA/RSI, không tạo lệnh hay tin Telegram.
+- App phải đang mở. Ghi tất cả mã theo dõi, kể cả không có ENTRY, giá lỗi hay daemon chưa sẵn sàng.
+  Mỗi mốc chỉ ghi một lần/mã/sổ; restart không ghi trùng, không bù các mẫu quá khứ đã bỏ lỡ.
+  Giờ ghi thực tế và mốc lấy mẫu được lưu riêng. Bao gồm mẫu 14:30; ngày nghỉ không ghi.
+- **LỊCH SỬ → TRACE**: lọc ngày/mã/REAL–PAPER, xổ theo mã. XUẤT EXCEL xuất bộ lọc đang chọn,
+  có sheet TRACE (số gốc) và SETTING (setting lúc ghi, không token/chat). Trace lưu SQLite riêng 30 ngày;
+  chỉ dọn các mẫu TRACE cũ, không xóa tín hiệu, nhật ký lệnh hay danh mục.
+- Mẫu có giá/nguồn/tuổi dữ liệu, EMA/RSI hiện tại và phiên trước, chu kỳ, ENTRY/EXIT E,
+  WHIPSAW, khóa lỗ, giờ mua, vốn/slot/hạn mức, BOT/OTP và lệnh app đã ghi cùng mã/sổ/ngày.
+  ENTRY là phần EMA/RSI; XỬ LÝ APP/lý do còn phản ánh giao cắt/giờ/khóa/vốn. Lệnh đã xếp không phải đã khớp.
+  Giá/quyết định không hợp lệ hiện **—**, không báo ENTRY từ dữ liệu cũ. Chưa có mẫu ngày cũ thì không dựng giả.
+- Phát lại chỉ báo một ngày bằng nến 1 phút DNSE:
+  `python support/tools/audit_entry_day.py --symbol IDC --date 2026-10-09 --account <account> --exchange HNX --allow-api --output <report.xlsx>`.
+  Tool chỉ GET OHLC; dùng nền 1D đến phiên trước + một nến ngày tạm tính theo close mỗi phút,
+  không tính EMA/RSI khung 1 phút, không dùng close cuối ngày hôm đó để tính ngược.
+  Close được gắn giờ cuối phút. Báo cáo đối chiếu nền cache và API hiện tại, tách đạt EMA/RSI với cần vừa cắt.
+  Đây không phải nhật ký tick/vốn/slot/OTP/lệnh thật VPS; không kết luận đã gửi/khớp từ replay.
 
 ## Khi có bất thường
 

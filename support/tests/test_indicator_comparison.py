@@ -124,6 +124,24 @@ def test_distinct_signal_cycles_are_not_hidden_even_in_the_same_second():
     assert len(signal_rows_by_day([rows[0], dict(rows[0])])[0]["rows"]) == 1
 
 
+def test_csv_bases_are_archived_by_session_not_replaced_with_newer_adjustments(tmp_path):
+    store = IndicatorComparisonStore(tmp_path / "comparison")
+    path = tmp_path / "chart.csv"
+    chart_csv(path)
+    store.import_daily(path, "HDB")
+    old = store._store("HDB").read()
+    day = old["basis_date"]
+    wanted = event(timestamp=day + " 14:00:01")
+    before = store.compare([wanted])[0]["rsi"]
+    newer = deepcopy(old)
+    newer["basis_date"] = "2026-10-12"
+    newer["bars"] = [{**r, "close": r["close"] * 0.5} for r in newer["bars"]]
+    store._dated_store("HDB", newer["basis_date"]).write(newer)
+    store._store("HDB").write(newer)
+    assert store.compare([wanted])[0]["rsi"] == before
+    assert store._dated_store("HDB", day).read() == old
+
+
 def test_history_excel_preserves_raw_values_and_never_executes_spreadsheet_formulas(ui_root, tmp_path, monkeypatch):
     from openpyxl import load_workbook
     from viking_v2.dashboard.windows import HistoryPopup

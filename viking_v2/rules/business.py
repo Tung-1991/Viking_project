@@ -81,7 +81,7 @@ def crossover_signal(
     prefer: str = "BUY",
     buy_use_ema: bool = True,
     buy_use_rsi: bool = True,
-    buy_signal_require_ema_cross: bool = False,
+    buy_signal_require_ema_cross: bool = True,
     sell_use_ema: bool = True,
     sell_use_rsi: bool = True,
 ) -> str:
@@ -120,14 +120,14 @@ def crossover_signal_from_snapshots(
     prefer: str = "BUY",
     buy_use_ema: bool = True,
     buy_use_rsi: bool = True,
-    buy_signal_require_ema_cross: bool = False,
+    buy_signal_require_ema_cross: bool = True,
     sell_use_ema: bool = True,
     sell_use_rsi: bool = True,
 ) -> str:
     """Evaluate BUY levels (or an optional fresh cross) and the SELL transition.
 
     ``current`` may be an unfinished daily candle rebuilt from a live tick or
-    an intraday source bar. BUY defaults to current fast EMA > slow EMA.
+    an intraday source bar. BUY defaults to requiring a fresh upward cross.
     When its fresh-cross option is enabled, compare with the preceding
     observation of that same candle, not repeatedly with yesterday's close.
     RSI keeps the documented daily comparison through ``rsi_previous``.
