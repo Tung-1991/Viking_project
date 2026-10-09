@@ -121,6 +121,7 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   không xóa dữ liệu hoặc gộp các chu kỳ ENTRY mới. PROTECT không trộn vào bảng tín hiệu ENTRY/E.
 - **⚙ GHI TÍN HIỆU**: một form nhỏ bật/tắt ghi định kỳ, chỉnh từ/đến giờ và nhịp phút.
   Không đổi BOT, rule giao dịch hay cấu hình Telegram. Mẫu ĐỊNH KỲ không gửi Telegram.
+  Có nút **?** cho từng mục (bấm hoặc rê chuột); giờ ghi theo Việt Nam, không phải giờ được phép mua.
 - Chuột phải vào dòng/mã/ngày: **Chi tiết / Sao chép / Xuất Excel phần đã chọn / Xóa khỏi lịch sử**.
   Delete cũng xóa phần đã chọn, có xác nhận. Chỉ đưa ID vào `signal_history_trash.json` của tài khoản;
   không xóa CSV, SQLite, Excel đã lưu, nhật ký lệnh hay trạng thái chống lặp.
@@ -129,8 +130,10 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 - Cột **CẮT EMA** dùng chứng cứ backend lúc ghi; bản cũ thiếu hiện —.
   Tín hiệu chờ giờ còn hiệu lực giữ giờ cắt ban đầu, không đòi cắt lại đúng 14h.
 - EMA/RSI hiện phép so sánh số gốc; bản ghi mới giữ RSI tham chiếu, phiên tham chiếu và chu kỳ chỉ báo.
-  Bản cũ thiếu mốc RSI hiện **—**, không lấy RSI cuối ngày hôm nay điền ngược.
+  Thiếu RSI phiên trước vẫn hiện số hiện tại, ví dụ **52.29 · Trước: —**; thiếu hiện tại vẫn giữ số trước.
+  Thiếu cả hai mới hiện **—**. Không lấy RSI cuối ngày hôm nay hoặc giá mới điền ngược bản ghi cũ.
 - Mặc định **DNSE** giữ nguyên số bot đã ghi. **TRADINGVIEW** tính lại để đối chiếu, không đổi bot/lệnh.
+  Nút và dòng trạng thái có hint giải thích cần CSV; nếu chưa tính được, báo số dòng lỗi và xem LÝ DO/Chi tiết.
   NẠP CSV 1D xuất từ TradingView, đơn vị VND, ít nhất 100 nến (nên toàn bộ lịch sử); chọn đúng mã.
   Giữ số lẻ của CSV, dùng lịch sử đến phiên trước + giá intraday đã ghi, không dùng close cuối ngày để tính ngược.
   CSV được lưu riêng theo phiên chuẩn giá (phiên cuối CSV); tự chọn đúng bộ dữ liệu của ngày sự kiện.

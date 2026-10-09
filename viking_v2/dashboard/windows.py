@@ -13,7 +13,7 @@ from typing import Any, Callable
 import customtkinter as ctk
 
 from ..branding import window_title
-from ..services.indicator_comparison import IndicatorComparisonStore, number_comparison
+from ..services.indicator_comparison import IndicatorComparisonStore, number_comparison, rsi_observation_display
 from ..services.signal_trace import SignalTraceStore, trace_workbook
 from ..services.signal_history import (
     SignalHistoryTrash, history_sort_key, observation_id, periodic_history_row, recording_options,
@@ -240,6 +240,7 @@ def signal_rows_by_day(rows: list[dict[str, Any]], *, compact: bool = False) -> 
             str(raw.get("signal_cycle", "") or ""), str(raw.get("candle_key", "") or ""),
         )
         suggestion, reason = signal_advice(raw)
+        rsi_text, rsi_issue = rsi_observation_display(raw.get("rsi"), raw.get("rsi_previous"))
         detail = {
             **raw,
             "timestamp": timestamp,
@@ -259,7 +260,8 @@ def signal_rows_by_day(rows: list[dict[str, Any]], *, compact: bool = False) -> 
             "reason": reason,
             "repeat_count": 1,
             "ema_comparison": number_comparison(raw.get("ema_fast"), raw.get("ema_slow"), 4),
-            "rsi_comparison": number_comparison(raw.get("rsi"), raw.get("rsi_previous")),
+            "rsi_comparison": rsi_text,
+            "_rsi_issue": rsi_issue,
             "display_price": _signal_price(raw.get("price")),
             "ema_cross_display": (ema_cross_caption({
                 "state": ("CROSSED_UP" if raw.get("ema_cross_at")
@@ -830,9 +832,34 @@ class SignalRecordingPopup:
         body = ctk.CTkFrame(self.top, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=22, pady=18)
         body.grid_columnconfigure(1, weight=1)
-        ctk.CTkSwitch(body, text="Ghi mẫu định kỳ", variable=self.enabled, text_color=PALETTE["TEXT"],
-                      progress_color=PALETTE["GREEN"]).grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 16))
+        self.enabled_switch = ctk.CTkSwitch(body, text="Lưu chỉ báo định kỳ", variable=self.enabled,
+                                           text_color=PALETTE["TEXT"], progress_color=PALETTE["GREEN"])
+        self.enabled_switch.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 16))
+        self.hints = {}
+        self.hint_buttons = {}
+        hints = {
+            "enabled": "Bật: lưu giá, EMA/RSI, vốn/slot và các khóa theo lịch, kể cả mã chưa có ENTRY.\n"
+                       "Tắt: chỉ ngừng ghi định kỳ; ENTRY / mất ENTRY / EXIT E vẫn ghi khi đổi.\n"
+                       "Không gửi Telegram, không tạo lệnh, không bù mẫu quá khứ.",
+            "start": "Giờ Việt Nam bắt đầu ghi định kỳ, không phải giờ được phép mua.\n"
+                     "Ví dụ 14:00. App phải đang mở; ngày nghỉ không ghi.",
+            "end": "Giờ Việt Nam kết thúc ghi định kỳ. Mốc cuối được ghi nếu đúng nhịp.\n"
+                   "14:00–14:30, mỗi 2 phút: có mẫu 14:30. Không đổi giờ mua của BOT.",
+            "interval": "Khoảng cách giữa các mẫu, từ 1 đến 30 phút.\n"
+                        "2 phút: 14:00, 14:02, 14:04…14:30. Không đổi nhịp tính EMA/RSI.\n"
+                        "Mỗi mốc chỉ ghi một lần/mã/sổ; không gửi Telegram.",
+        }
+
+        def add_hint(key, row, widget):
+            button = ctk.CTkButton(body, text="?", width=28, height=28,
+                                  font=("Segoe UI", 13, "bold"), fg_color=PALETTE["BLUE"])
+            button.grid(row=row, column=2, padx=(10, 0), sticky="e")
+            hint = _HoverHint(button, hints[key], placement="below")
+            button.configure(command=hint._show)
+            self.hints[key], self.hint_buttons[key] = hint, button
+            _HoverHint(widget, hints[key], placement="below")
+
+        add_hint("enabled", 0, self.enabled_switch)
         self.entries = {}
         for index, (key, label, value) in enumerate((
             ("start", "Từ giờ (HH:MM)", settings.signal_trace_start),
@@ -846,13 +873,16 @@ class SignalRecordingPopup:
             entry.insert(0, str(value))
             entry.grid(row=index, column=1, sticky="e", pady=4)
             self.entries[key] = entry
-        ctk.CTkLabel(body, text="Mẫu không gửi Telegram.\nENTRY / mất / E vẫn ghi khi trạng thái đổi.",
+            add_hint(key, index, entry)
+        ctk.CTkLabel(body, text="Mẫu: lưu cả mã chưa có ENTRY.\n"
+                                "Không gửi Telegram, không tạo lệnh.\n"
+                                "Sự kiện vẫn ghi khi trạng thái đổi.",
                      justify="left", anchor="w", text_color=PALETTE["MUTED"]).grid(
-            row=4, column=0, columnspan=2, sticky="w", pady=12)
+            row=4, column=0, columnspan=3, sticky="w", pady=12)
         self.save_button = ctk.CTkButton(body, text="LƯU", command=self.save,
                                        fg_color=PALETTE["GREEN"], hover_color=PALETTE["GREEN_HOVER"],
                                        state="normal" if on_save else "disabled")
-        self.save_button.grid(row=5, column=1, sticky="e")
+        self.save_button.grid(row=5, column=1, columnspan=2, sticky="e")
         self.top.update_idletasks()
         scale = self.top._get_window_scaling()
         widget_scale = body._get_widget_scaling()
@@ -1071,13 +1101,29 @@ class HistoryPopup:
             selected_color=PALETTE["BLUE"], unselected_color=PALETTE["SLATE"])
         self.signal_basis_button.set("DNSE")
         self.signal_basis_button.grid(row=1, column=1, padx=6)
-        _HoverHint(self.signal_basis_status, "DNSE: số bot đã ghi; bản cũ thiếu mốc RSI hiện —.\n"
-                   "TradingView: đối chiếu CSV 1D + giá lúc ghi, không sửa lệnh cũ.\n"
+        basis_hint = "DNSE: giữ số bot đã ghi. Thiếu một vế RSI vẫn hiện vế còn có.\n"
+        basis_hint += "TRADINGVIEW: cần NẠP CSV 1D của mã, đúng phiên chuẩn giá; app tự tính lại EMA/RSI.\n"
+        basis_hint += "Chưa có CSV: không có số TradingView, không tự đổi từ DNSE. Chỉ đối chiếu, không sửa lệnh cũ."
+        # CTkSegmentedButton does not support bind; its actual buttons do.
+        self.signal_basis_hints = {
+            button.cget("text"): _HoverHint(button, basis_hint, placement="below")
+            for button in self.signal_basis_button.winfo_children()
+            if isinstance(button, ctk.CTkButton)
+        }
+        _HoverHint(self.signal_basis_status, basis_hint + "\n"
                    "ĐỊNH KỲ: mẫu theo lịch, không phải tín hiệu mới và không gửi Telegram.")
-        ctk.CTkButton(toolbar, text="NẠP CSV 1D", width=110, command=self._import_tradingview,
-                      font=("Segoe UI", 11, "bold"), fg_color=PALETTE["BLUE"]).grid(row=1, column=2, padx=6)
-        ctk.CTkButton(toolbar, text="XUẤT EXCEL", width=110, command=self._export_signals,
-                      font=("Segoe UI", 11, "bold"), fg_color=PALETTE["BLUE"]).grid(row=1, column=3)
+        self.signal_import_button = ctk.CTkButton(toolbar, text="NẠP CSV 1D", width=110, command=self._import_tradingview,
+                                                 font=("Segoe UI", 11, "bold"), fg_color=PALETTE["BLUE"])
+        self.signal_import_button.grid(row=1, column=2, padx=6)
+        _HoverHint(self.signal_import_button, "CSV nến 1D xuất từ TradingView, giá VND, ít nhất 100 nến.\n"
+                   "App dùng lịch sử đến phiên trước + giá tại giờ ghi để tính lại EMA/RSI.\n"
+                   "Không đổi tín hiệu, lệnh cũ hay dữ liệu DNSE.", placement="below")
+        self.signal_export_button = ctk.CTkButton(toolbar, text="XUẤT EXCEL", width=110, command=self._export_signals,
+                                                 font=("Segoe UI", 11, "bold"), fg_color=PALETTE["BLUE"])
+        self.signal_export_button.grid(row=1, column=3)
+        _HoverHint(self.signal_export_button, "Xuất sự kiện và mẫu định kỳ trong danh sách, kể cả nhóm chưa xổ.\n"
+                   "Không xuất dòng đã xóa/ẩn. Muốn xuất riêng: chọn dòng/mã/ngày → chuột phải.\n"
+                   "Có mẫu định kỳ thì kèm TRACE/SETTING; thiếu CSV thì sheet TradingView ghi rõ lý do.", placement="below")
         keys = tuple(item[0] for item in self.SIGNAL_COLUMNS)
         tree = self.signal_tree = ttk.Treeview(
             frame, columns=keys, show="tree headings", selectmode="extended", style="Signal.Treeview")
@@ -1174,8 +1220,8 @@ class HistoryPopup:
                 row["reason"] = "Thiếu CSV đúng phiên"
             elif row.get("comparison_source") == "TRADINGVIEW":
                 row["reason"] += " · TV đối chiếu"
-            elif number_comparison(row.get("rsi"), row.get("rsi_previous")) == "—" and row.get("record_kind") != "PERIODIC":
-                row["reason"] += " · RSI cũ thiếu"
+            elif row.get("_rsi_issue"):
+                row["reason"] += " · " + row["_rsi_issue"]
         return sorted(views, key=history_sort_key, reverse=True)
 
     def _refresh_signals(self) -> None:
@@ -1191,7 +1237,11 @@ class HistoryPopup:
             sources = [row for row in sources if str(row.get("timestamp", ""))[:10] in days]
             views = self._history_views(sources, self.indicator_basis)
             self._visible_history_sources = sources
-            self.signal_basis_status.configure(text=f"{self.indicator_basis} · Sự kiện + mẫu định kỳ · 7 ngày gần nhất")
+            failures = sum(bool(row.get("comparison_error")) for row in views)
+            status = f"{self.indicator_basis} · Sự kiện + mẫu định kỳ · 7 ngày gần nhất"
+            if self.indicator_basis == "TRADINGVIEW" and failures:
+                status = f"TRADINGVIEW · {failures}/{len(views)} dòng chưa đối chiếu được — xem LÝ DO / Chi tiết"
+            self.signal_basis_status.configure(text=status)
         except (OSError, ValueError, KeyError, sqlite3.Error) as exc:
             self.signal_basis_status.configure(text=f"Không đọc được tín hiệu: {type(exc).__name__}")
             return

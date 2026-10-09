@@ -122,3 +122,25 @@ def number_comparison(left: Any, right: Any, decimals: int = 2) -> str:
         if a == b or f"{a:.{places}f}" != f"{b:.{places}f}":
             return f"{a:.{places}f} {sign} {b:.{places}f}"
     return f"{a!r} {sign} {b!r}"
+
+
+def rsi_observation_display(current: Any, previous: Any) -> tuple[str, str]:
+    """Keep available RSI evidence visible without inventing the missing side.
+
+    Display only: does not calculate a new baseline or change the entry rule.
+    """
+    def valid(value: Any) -> float | None:
+        try:
+            number = float(value)
+            return number if isfinite(number) and 0 <= number <= 100 else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    now, prior = valid(current), valid(previous)
+    if now is not None and prior is not None:
+        return number_comparison(now, prior), ""
+    if now is not None:
+        return f"{now:.2f} · Trước: —", "Thiếu RSI trước"
+    if prior is not None:
+        return f"— · Trước: {prior:.2f}", "Thiếu RSI hiện tại"
+    return "—", "Thiếu RSI"

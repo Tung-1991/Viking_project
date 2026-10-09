@@ -199,6 +199,7 @@ def test_single_settings_button_layout_and_small_form_fit_at_remote_scaling(ui_r
         popup.tabs.set("TÍN HIỆU")
         popup._open_recording_settings()
         form = popup.recording_popup
+        ui_root.update()  # Process window mapping before checking pixel bounds.
         ui_root.update_idletasks()
         assert form.save_button.winfo_y() + form.save_button.winfo_height() <= form.save_button.master.winfo_height()
         assert form.save_button.winfo_rooty() + form.save_button.winfo_height() <= form.top.winfo_rooty() + form.top.winfo_height()
@@ -206,6 +207,18 @@ def test_single_settings_button_layout_and_small_form_fit_at_remote_scaling(ui_r
         buttons = [child for child in toolbar.winfo_children() if child.grid_info().get("row") == 1]
         assert all(child.winfo_x() + child.winfo_width() <= toolbar.winfo_width() for child in buttons)
         assert len(form.entries) == 3
+        assert set(form.hints) == {"enabled", "start", "end", "interval"}
+        for key, hint in form.hints.items():
+            form.hint_buttons[key].invoke()
+            ui_root.update_idletasks()
+            assert hint.popup is not None
+            assert hint.popup.winfo_x() >= 0 and hint.popup.winfo_y() >= 0
+            assert hint.popup.winfo_x() + hint.popup.winfo_width() <= form.top.winfo_width()
+            assert hint.popup.winfo_y() + hint.popup.winfo_height() <= form.top.winfo_height()
+            hint._hide()
+        assert "không phải giờ được phép mua" in form.hints["start"].text
+        assert "Không đổi nhịp tính EMA/RSI" in form.hints["interval"].text
+        assert "Không gửi Telegram" in form.hints["enabled"].text
         _capture_ui(ui_root, form.top, f"signal-recording-{scaling}")
         form.enabled.set(False)
         form.entries["interval"].delete(0, "end")

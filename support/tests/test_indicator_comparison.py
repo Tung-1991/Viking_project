@@ -6,7 +6,7 @@ import pytest
 
 from viking_v2.backtest.data import VN_TZ
 from viking_v2.rules.business import indicator_snapshot
-from viking_v2.services.indicator_comparison import IndicatorComparisonStore, number_comparison
+from viking_v2.services.indicator_comparison import IndicatorComparisonStore, number_comparison, rsi_observation_display
 
 
 def chart_csv(path, *, count=260, final_price=22400):
@@ -92,6 +92,21 @@ def test_numeric_comparison_never_changes_the_raw_sign_due_to_rounding(a, b, exp
     assert number_comparison(a, b) == expected
 
 
+@pytest.mark.parametrize("current,previous,text,issue", [
+    (52.29, "", "52.29 · Trước: —", "Thiếu RSI trước"),
+    ("52.29", None, "52.29 · Trước: —", "Thiếu RSI trước"),
+    (None, 56.79, "— · Trước: 56.79", "Thiếu RSI hiện tại"),
+    (0, None, "0.00 · Trước: —", "Thiếu RSI trước"),
+    (100, float("nan"), "100.00 · Trước: —", "Thiếu RSI trước"),
+    (float("inf"), -1, "—", "Thiếu RSI"),
+    (52.29, 56.79, "52.29 < 56.79", ""),
+    (56.791, 56.789, "56.791 > 56.789", ""),
+    (56.79, 56.79, "56.79 = 56.79", ""),
+])
+def test_rsi_display_keeps_valid_side_without_guessing_missing_baseline(current, previous, text, issue):
+    assert rsi_observation_display(current, previous) == (text, issue)
+
+
 def test_history_toggle_is_read_only_and_symbols_are_expandable(ui_root, tmp_path):
     from viking_v2.dashboard.windows import HistoryPopup
     raw = [event(rsi_previous=56.79), event(symbol="MSN")]
@@ -110,8 +125,49 @@ def test_history_toggle_is_read_only_and_symbols_are_expandable(ui_root, tmp_pat
         popup._change_indicator_basis("TRADINGVIEW")
         assert popup.signal_tree.item(hdb, "open")
         assert popup.signal_tree.set(popup.signal_tree.get_children(hdb)[0], "rsi_comparison") == "—"
+        assert "chưa đối chiếu được" in popup.signal_basis_status.cget("text")
+        assert set(popup.signal_basis_hints) == {"DNSE", "TRADINGVIEW"}
+        assert "cần NẠP CSV 1D" in popup.signal_basis_hints["TRADINGVIEW"].text
         popup._change_indicator_basis("DNSE")
         assert raw == before and popup.signal_tree.set(popup.signal_tree.get_children(hdb)[0], "rsi_comparison") == "52.29 < 56.79"
+    finally:
+        popup.close()
+
+
+def test_legacy_rsi_survives_display_copy_excel_and_restore_without_changing_raw_journal(ui_root, tmp_path, monkeypatch):
+    from openpyxl import load_workbook
+    from viking_v2.dashboard.windows import HistoryPopup
+    original = [event()]
+    before = deepcopy(original)
+    popup = HistoryPopup(ui_root, lambda _mode: [], signals_provider=lambda: original,
+                         indicator_comparison=IndicatorComparisonStore(tmp_path / "comparison"))
+    try:
+        tree = popup.signal_tree
+        hdb = "symbol:2026-10-09:HDB"
+        leaf = tree.get_children(hdb)[0]
+        assert tree.set(leaf, "rsi_comparison") == "52.29 · Trước: —"
+        assert "Thiếu RSI trước" in tree.set(leaf, "reason")
+        tree.selection_set(leaf)
+        copied = []
+        monkeypatch.setattr(popup.top, "clipboard_clear", lambda: None)
+        monkeypatch.setattr(popup.top, "clipboard_append", copied.append)
+        popup._copy_signal_rows()
+        assert "52.29 · Trước: —" in copied[0]
+        target = tmp_path / "legacy.xlsx"
+        monkeypatch.setattr("viking_v2.dashboard.windows.filedialog.asksaveasfilename", lambda **_kw: str(target))
+        popup._export_signals(selected_only=True)
+        book = load_workbook(target)
+        try:
+            assert "52.29 · Trước: —" in [cell.value for cell in book["DNSE GỐC"][2]]
+        finally:
+            book.close()
+        monkeypatch.setattr("viking_v2.dashboard.windows.messagebox.askyesno", lambda *_a, **_kw: True)
+        popup._delete_signal_rows()
+        assert not tree.get_children()
+        popup._restore_signal_rows()
+        restored = tree.get_children(hdb)[0]
+        assert tree.set(restored, "rsi_comparison") == "52.29 · Trước: —"
+        assert original == before and "rsi_previous" not in original[0]
     finally:
         popup.close()
 
