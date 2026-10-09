@@ -1237,7 +1237,8 @@ def test_signal_history_ui_names_cancellations_and_recording_time_without_creati
         assert tree.heading("suggestion", "text") == "XỬ LÝ"
         assert tree.heading("display_signal", "text") == "SỰ KIỆN"
         parent = tree.get_children()[0]
-        assert "Xếp 0" in tree.set(parent, "reason")
+        assert "2 sự kiện" in tree.item(parent, "text")
+        assert tree.set(parent, "reason") == ""
         symbol = tree.get_children(parent)[0]
         sell, cancelled = tree.get_children(symbol)
         assert tree.set(cancelled, "display_signal") == "MẤT ENTRY"

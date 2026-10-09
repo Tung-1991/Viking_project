@@ -113,12 +113,19 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 - TÍN HIỆU xổ **ngày → mã → giờ ghi nhận**; giữ sổ REAL/PAPER, ưu tiên và slot lúc ghi.
   ENTRY, MẤT ENTRY, EXIT · E là sự kiện chỉ báo; ĐÃ XẾP chỉ là tạo yêu cầu, không phải khớp.
   Kết quả gửi/khớp/hủy xem tab lịch sử giao dịch. Không gộp các giờ khác nhau chỉ vì giá giống nhau.
-- Trong **TÍN HIỆU**, chọn **SỰ KIỆN / CAPTURE ĐỊNH KỲ**, không có tab TRACE riêng.
-  SỰ KIỆN ghi khi ENTRY xuất hiện/mất, EXIT E xuất hiện hoặc xử lý/lý do đổi;
+- Trong **TÍN HIỆU**, sự kiện và mẫu **ĐỊNH KỲ** nằm chung dưới từng mã, không có tab/view TRACE riêng.
+  Sự kiện ghi khi ENTRY xuất hiện/mất, EXIT E xuất hiện hoặc xử lý/lý do đổi;
   giá thay đổi, phút xác nhận tăng hay raw signal NONE không tự sinh thêm sự kiện.
   Thiếu dữ liệu không coi là mất ENTRY. E chỉ được ghi lại sau khi điều kiện E đã mất rồi xuất hiện lại.
   Bản cũ lặp cùng trạng thái được gộp khi xem (×N cũ), giữ bản ghi đầu và nhật ký gốc,
   không xóa dữ liệu hoặc gộp các chu kỳ ENTRY mới. PROTECT không trộn vào bảng tín hiệu ENTRY/E.
+- **⚙ GHI TÍN HIỆU**: một form nhỏ bật/tắt ghi định kỳ, chỉnh từ/đến giờ và nhịp phút.
+  Không đổi BOT, rule giao dịch hay cấu hình Telegram. Mẫu ĐỊNH KỲ không gửi Telegram.
+- Chuột phải vào dòng/mã/ngày: **Chi tiết / Sao chép / Xuất Excel phần đã chọn / Xóa khỏi lịch sử**.
+  Delete cũng xóa phần đã chọn, có xác nhận. Chỉ đưa ID vào `signal_history_trash.json` của tài khoản;
+  không xóa CSV, SQLite, Excel đã lưu, nhật ký lệnh hay trạng thái chống lặp.
+  Chuột phải **Khôi phục các dòng đã xóa** trả lại danh sách, không gửi Telegram/tạo lệnh lần nữa.
+  Lý do trong bảng được rút ngắn; số gốc và chi tiết vẫn xem được bằng chuột phải hoặc nhấp đúp dòng.
 - Cột **CẮT EMA** dùng chứng cứ backend lúc ghi; bản cũ thiếu hiện —.
   Tín hiệu chờ giờ còn hiệu lực giữ giờ cắt ban đầu, không đòi cắt lại đúng 14h.
 - EMA/RSI hiện phép so sánh số gốc; bản ghi mới giữ RSI tham chiếu, phiên tham chiếu và chu kỳ chỉ báo.
@@ -130,20 +137,21 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Nạp CSV ngày mới không xóa bộ của ngày cũ. Ngày chưa có CSV đúng chuẩn báo thiếu dữ liệu;
   không tự giả định hệ số điều chỉnh hay lấy CSV đã điều chỉnh hôm nay gán cho ngày cũ.
   Không khôi phục TradingView bằng cách nhân/chia RSI hoặc tự đoán hệ số từ dữ liệu DNSE đã làm tròn.
-- XUẤT EXCEL gồm DNSE gốc và TradingView đối chiếu của các dòng đang hiển thị; không tự kéo dữ liệu mạng.
-  UI giữ 7 ngày ghi nhận gần nhất, tối đa 250 dòng; CSV gần nhất 500 dòng, Excel tự lưu theo tháng.
+- XUẤT EXCEL gồm DNSE gốc và TradingView đối chiếu của các dòng trong danh sách (kể cả nhóm chưa xổ),
+  không xuất dòng đã xóa/ẩn và không tự kéo dữ liệu mạng. Có mẫu định kỳ thì thêm TRACE/SETTING đầy đủ.
+  UI giữ 7 ngày ghi nhận gần nhất; nguồn sự kiện gần nhất tối đa 250 dòng, mẫu định kỳ được gộp thêm.
+  CSV gần nhất 500 dòng, Excel sự kiện tự lưu theo tháng.
 
 ## TRACE / kiểm tra ENTRY trong phiên
 
-- **RULE → PHASE 2 → TRACE TÍN HIỆU**: mặc định ON, 2 phút/lần, 14:00–14:30 giờ Việt Nam.
+- **LỊCH SỬ → TÍN HIỆU → ⚙ GHI TÍN HIỆU**: mặc định ON, 2 phút/lần, 14:00–14:30 giờ Việt Nam.
   Có thể tắt, chỉnh nhịp 1–30 phút và giờ bắt đầu/kết thúc. Độc lập nhịp EMA/RSI, không tạo lệnh hay tin Telegram.
 - App phải đang mở. Ghi tất cả mã theo dõi, kể cả không có ENTRY, giá lỗi hay daemon chưa sẵn sàng.
   Mỗi mốc chỉ ghi một lần/mã/sổ; restart không ghi trùng, không bù các mẫu quá khứ đã bỏ lỡ.
   Giờ ghi thực tế và mốc lấy mẫu được lưu riêng. Bao gồm mẫu 14:30; ngày nghỉ không ghi.
-- **LỊCH SỬ → TÍN HIỆU → CAPTURE ĐỊNH KỲ**: lọc ngày/mã/REAL–PAPER, xổ theo mã.
-  Công tắc **GHI CAPTURE** trong TÍN HIỆU bật/tắt ghi và hiện giờ/nhịp đang cấu hình;
-  chỉ đổi quan sát, không bật BOT hay tạo tin Telegram. XUẤT EXCEL xuất bộ lọc đang chọn,
-  có sheet TRACE (số gốc) và SETTING (setting lúc ghi, không token/chat). Trace lưu SQLite riêng 30 ngày;
+- Mẫu **ĐỊNH KỲ** nằm ngay trong cây ngày → mã → giờ cùng ENTRY/MẤT ENTRY/EXIT E.
+  Chế độ REAL/PAPER ghi ở từng dòng. XUẤT EXCEL có sheet TRACE (số gốc)
+  và SETTING (setting lúc ghi, không token/chat). Trace lưu SQLite riêng 30 ngày;
   chỉ dọn các mẫu TRACE cũ, không xóa tín hiệu, nhật ký lệnh hay danh mục.
 - Mẫu có giá/nguồn/tuổi dữ liệu, EMA/RSI hiện tại và phiên trước, chu kỳ, ENTRY/EXIT E,
   WHIPSAW, khóa lỗ, giờ mua, vốn/slot/hạn mức, BOT/OTP và lệnh app đã ghi cùng mã/sổ/ngày.

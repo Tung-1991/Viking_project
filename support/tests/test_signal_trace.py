@@ -124,27 +124,33 @@ def test_excel_keeps_original_numbers_settings_and_no_formulas(tmp_path):
         book.close()
 
 
-def test_capture_is_a_view_inside_signals_filtered_and_exportable(ui_root, tmp_path, monkeypatch):
+def test_capture_is_in_the_same_symbol_tree_as_events_and_exportable(ui_root, tmp_path, monkeypatch):
     from viking_v2.dashboard.windows import HistoryPopup
     store = SignalTraceStore(tmp_path / "trace.sqlite3")
     store.capture(status(), settings(), active_mode="REAL", now=NOW)
-    popup = HistoryPopup(ui_root, lambda _mode: [], trace_store=store)
+    events = [{"timestamp": "2026-10-09 13:40:53", "symbol": "HDB", "execution_mode": "REAL",
+               "signal": "BUY", "acted": "WAIT", "blocked_by": "BUY_WINDOW_WAIT"}]
+    popup = HistoryPopup(ui_root, lambda _mode: [], trace_store=store, signals_provider=lambda: events)
     try:
         assert set(popup.tabs._tab_dict) == {"CKCS REAL", "CKCS PAPER", "TÍN HIỆU"}
-        assert popup.signal_view == "SỰ KIỆN"
-        popup._change_signal_view("CAPTURE ĐỊNH KỲ")
-        popup.trace_day.set("2026-10-09")
-        popup.trace_symbol.set("IDC")
-        popup._refresh_trace()
-        assert len(popup.trace_rows) == 1 and popup.signal_tree.get_children() == ()
-        parent = popup.trace_tree.get_children()[0]
-        child = popup.trace_tree.get_children(parent)[0]
-        assert "vừa vượt" in popup.trace_tree.set(child, "display_reason")
+        assert not hasattr(popup, "signal_view_button") and not hasattr(popup, "trace_tree")
+        tree = popup.signal_tree
+        hdb = tree.get_children("symbol:2026-10-09:HDB")
+        assert [tree.set(child, "display_signal") for child in hdb] == ["ĐỊNH KỲ", "ENTRY"]
+        idc = tree.get_children("symbol:2026-10-09:IDC")[0]
+        assert tree.set(idc, "display_signal") == "ĐỊNH KỲ"
+        assert tree.set(idc, "suggestion") == "EMA/RSI đạt"
+        assert tree.set(idc, "reason") == "Chờ cắt EMA"
         monkeypatch.setattr("viking_v2.dashboard.windows.filedialog.asksaveasfilename", lambda **_kw: str(tmp_path / "out.xlsx"))
-        popup._export_trace()
+        popup._export_signals()
         assert (tmp_path / "out.xlsx").exists()
-        popup._change_signal_view("SỰ KIỆN")
-        assert popup.trace_frame.winfo_manager() == ""
+        from openpyxl import load_workbook
+        book = load_workbook(tmp_path / "out.xlsx")
+        try:
+            assert book.sheetnames == ["DNSE GỐC", "TRADINGVIEW ĐỐI CHIẾU", "TRACE", "SETTING"]
+            assert book["DNSE GỐC"].max_row == 4 and book["TRACE"].max_row == 3
+        finally:
+            book.close()
     finally:
         popup.close()
 
@@ -210,3 +216,37 @@ def test_trace_disk_failure_is_coalesced_detailed_and_does_not_stop_trading(tmp_
     DashboardActionsMixin._capture_signal_trace(view, status(), "RUNNING")
     DashboardActionsMixin._capture_signal_trace(view, status(), "RUNNING")
     assert len(warnings) == 1 and "Disk is full" in str(warnings[0])
+
+
+def test_entire_capture_window_never_dispatches_telegram_or_orders_even_with_raw_buy_sell(tmp_path, monkeypatch):
+    from viking_v2.dashboard.actions import DashboardActionsMixin
+    import viking_v2.dashboard.actions as actions
+    clock = [NOW]
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0]
+    monkeypatch.setattr(actions, "datetime", Clock)
+    attempted, warnings = [], []
+    class ReadOnlyGuard:
+        def __init__(self, **allowed):
+            self.allowed = allowed
+        def __getattr__(self, name):
+            if name in self.allowed:
+                return self.allowed[name]
+            attempted.append(name)
+            raise AssertionError("Capture attempted external mutation: " + name)
+    view = SimpleNamespace(settings=settings(),
+        bridge=SimpleNamespace(root=tmp_path, read_config=lambda: SimpleNamespace(paper_mode=False)),
+        queue=ReadOnlyGuard(list_all=lambda: []), real=ReadOnlyGuard(has_trading_token=lambda: True),
+        telegram=ReadOnlyGuard(), rule_state=ReadOnlyGuard(entry_pause=lambda _mode: {}),
+        logger=SimpleNamespace(info=lambda *_a: None, warning=lambda *args: warnings.append(args)))
+    for index in range(16):
+        clock[0] = NOW + timedelta(minutes=index * 2)
+        source = status(clock[0], signal="BUY" if index % 2 else "SELL")
+        source["decisions_by_mode"]["REAL"]["IDC"]["action"] = "BUY"
+        before = deepcopy(source)
+        DashboardActionsMixin._capture_signal_trace(view, source, "RUNNING")
+        assert source == before
+    assert attempted == [] and warnings == []
+    assert len(SignalTraceStore(tmp_path / "signal_trace.sqlite3").read()) == 32

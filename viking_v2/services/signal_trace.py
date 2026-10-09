@@ -40,6 +40,15 @@ def compare_entry(marks: dict, params: dict) -> tuple[bool | None, bool | None, 
 
 def export_trace(rows: list[dict], path: str | Path) -> None:
     """Export the selected audit rows and only their allowlisted settings."""
+    book = trace_workbook(rows)
+    try:
+        book.save(path)
+    finally:
+        book.close()
+
+
+def trace_workbook(rows: list[dict]):
+    """Reusable sheets for the unified history export, with the full capture evidence."""
     from openpyxl import Workbook
     book = Workbook()
     sheet = book.active
@@ -103,10 +112,7 @@ def export_trace(rows: list[dict], path: str | Path) -> None:
                     cell.data_type = "s"
         for column in ws.columns:
             ws.column_dimensions[column[0].column_letter].width = min(55, max(16, max(len(str(c.value or "")) for c in column) + 2))
-    try:
-        book.save(path)
-    finally:
-        book.close()
+    return book
 
 
 class SignalTraceStore:
@@ -214,6 +220,7 @@ class SignalTraceStore:
                     "bot_on": bool(status.get("bot_enabled")), "otp_ok": bool(otp_ok) if mode == "REAL" else None,
                     "pause_active": bool((pause_by_mode or {}).get(mode, {}).get("active")),
                     "market_phase": (status.get("symbol_phases") or {}).get(symbol, status.get("market_status", "")),
+                    "market_state": raw.get("market_state", "") if fresh else "",
                     "buy_window_state": (details.get("buy_window") or {}).get("state", ""),
                     "whipsaw_count": checks.get("whipsaw_crossovers"), "whipsaw_limit": checks.get("whipsaw_limit"),
                     "whipsaw_window": checks.get("whipsaw_window"), "whipsaw_on": checks.get("whipsaw_enabled"),

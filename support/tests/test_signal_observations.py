@@ -90,14 +90,16 @@ def test_capture_toggle_inside_signals_does_not_toggle_bot_or_create_signals(ui_
     from viking_v2.services.signal_trace import SignalTraceStore
     configured = AppSettings()
     before = deepcopy(configured.to_dict())
-    def toggle(enabled):
-        configured.signal_trace_enabled = enabled
+    def save(options):
+        for key, value in options.items():
+            setattr(configured, key, value)
     popup = HistoryPopup(ui_root, lambda _mode: [], trace_store=SignalTraceStore(tmp_path / "trace.db"),
-                         trace_settings_provider=lambda: configured, on_trace_toggle=toggle)
+                         trace_settings_provider=lambda: configured, on_trace_settings=save)
     try:
-        assert popup.trace_capture_enabled.get()
-        popup.trace_capture_enabled.set(False)
-        popup._toggle_trace_capture()
+        popup._open_recording_settings()
+        assert popup.recording_popup.enabled.get()
+        popup.recording_popup.enabled.set(False)
+        popup.recording_popup.save()
         assert not configured.signal_trace_enabled
         assert configured.to_dict() == {**before, "signal_trace_enabled": False}
         assert not popup.trace_store.path.exists() and not popup.signal_tree.get_children()

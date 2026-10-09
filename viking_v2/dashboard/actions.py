@@ -616,7 +616,7 @@ class DashboardActionsMixin:
                 indicator_comparison=IndicatorComparisonStore(self.bridge.root / "indicator_comparison"),
                 trace_store=SignalTraceStore(self.bridge.root / "signal_trace.sqlite3"),
                 trace_settings_provider=lambda: self.settings,
-                on_trace_toggle=self._set_signal_trace_enabled,
+                on_trace_settings=self._save_signal_recording_settings,
                 on_visibility_changed=lambda visible: self.history_button.configure(
                     fg_color=COL_GREEN if visible else COL_GRAY,
                     hover_color="#16A34A" if visible else "#4B515B",
@@ -624,10 +624,13 @@ class DashboardActionsMixin:
             )
         self._refresh_real_history_on_demand()
 
-    def _set_signal_trace_enabled(self, enabled: bool) -> None:
-        # Capture is an observation setting, not the BOT/trading switch.
+    def _save_signal_recording_settings(self, options: dict[str, Any]) -> None:
+        from ..services.signal_history import recording_options
+        values = recording_options(options["signal_trace_enabled"], options["signal_trace_interval_minutes"],
+                                   options["signal_trace_start"], options["signal_trace_end"])
         updated = config.load_settings(self.account_id)
-        updated.signal_trace_enabled = bool(enabled)
+        for key, value in values.items():
+            setattr(updated, key, value)
         save_settings(updated, self.account_id)
         self.settings = updated
 
