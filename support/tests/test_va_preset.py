@@ -20,6 +20,7 @@ def workspace(tmp_path, monkeypatch):
     settings.telegram_chat_id = "local-chat-only"
     settings.telegram_token_env = "LOCAL_TOKEN_KEY"
     settings.telegram_notifications["indicator_exit"] = False
+    settings.telegram_notifications["blocked_buy"] = False
     settings.paper_mode = False
     settings.rule_parameters.update(buy_ema_fast=5, buy_ema_slow=10, initial_sl_pct=-4)
     config.save_settings(settings, "PARTNER")
@@ -32,7 +33,7 @@ def workspace(tmp_path, monkeypatch):
     return root, settings.to_dict(), env
 
 
-def test_preset_changes_only_agreed_allocation_and_e_fields_and_backup_is_exact(workspace):
+def test_preset_changes_only_agreed_allocation_e_and_signal_fields_and_backup_is_exact(workspace):
     root, old, env = workspace
     target = root / "settings.json"
     original = target.read_bytes()
@@ -47,6 +48,10 @@ def test_preset_changes_only_agreed_allocation_and_e_fields_and_backup_is_exact(
     assert current["rule_parameters"]["max_positions"] == 4
     assert current["rule_parameters"]["indicator_exit_policy"] == "AUTO"
     assert "IND_EXIT" in current["bot_em_modes"]
+    assert current["telegram_notifications"]["blocked_buy"] is True
+    assert current["telegram_notifications"] == {
+        **old["telegram_notifications"], "blocked_buy": True,
+    }
     assert current["priority_allocations"] == {
         symbol: {"limit_vnd": cap, "use_pct": 100, "max_orders": 1}
         for symbol, cap in (("MSN", 16_000_000), ("CTS", 12_000_000),
@@ -98,6 +103,32 @@ def test_canceled_prompt_never_applies_settings(workspace, monkeypatch):
     assert list(root.glob("*.bak")) == []
 
 
+@pytest.mark.parametrize("telegram_enabled", [False, True])
+@pytest.mark.parametrize("window_enabled", [False, True])
+def test_signal_opt_in_keeps_local_telegram_preferences_and_buy_guards(
+    workspace, telegram_enabled, window_enabled,
+):
+    root, _old, env = workspace
+    current = config.load_settings("PARTNER")
+    current.telegram_enabled = telegram_enabled
+    current.telegram_buy_batch_minutes = 7
+    current.telegram_notifications["protect"] = True
+    current.telegram_cooldown_minutes["blocked_buy"] = 12
+    current.rule_parameters.update(buy_window_enabled=window_enabled, buy_window_start="13:45")
+    config.save_settings(current, "PARTNER")
+    env_before = env.read_bytes()
+    tool.apply_preset("PARTNER")
+    saved = config.load_settings("PARTNER")
+    assert saved.telegram_enabled is telegram_enabled
+    assert saved.telegram_buy_batch_minutes == 7
+    assert saved.telegram_notifications == {**current.telegram_notifications, "blocked_buy": True}
+    assert saved.telegram_cooldown_minutes == current.telegram_cooldown_minutes
+    assert saved.rule_parameters["buy_window_enabled"] is window_enabled
+    assert saved.rule_parameters["buy_window_start"] == "13:45"
+    assert env.read_bytes() == env_before
+    assert (root / "runtime_config.json").read_bytes() == b"existing runtime must stay identical"
+
+
 def test_preset_details_are_reviewed_before_confirmation_without_writes(workspace, monkeypatch, capsys):
     root, _old, _env = workspace
     monkeypatch.setattr("sys.argv", ["apply_va_preset.py", "--account", "PARTNER"])
@@ -108,7 +139,10 @@ def test_preset_details_are_reviewed_before_confirmation_without_writes(workspac
         assert "MSN 16 / CTS 12 / HDB 15 / IDC 7 trieu" in review
         assert "[IDC] 7 trieu = 50 - 16 - 12 - 15" in review
         assert "MAX LENH 1" in review and "P1 override 100%" in review
-        assert "[E] AUTO" in review and "[GIU] API, token, Telegram" in review
+        assert "[E] AUTO" in review and "[GIU] API, token" in review
+        assert "TIN HIEU ON" in review and "E ALERT OFF" in review
+        assert "[TIN HIEU] Gui ngay" in review and "khong doi gio mua" in review
+        assert "local-chat-only" not in review and "LOCAL_TOKEN_KEY" not in review
         assert "[y/N]" in prompt
         assert (root / "settings.json").read_bytes() == original
         return "n"
@@ -224,6 +258,11 @@ def test_preset_enables_e_without_disabling_other_exit_flags(workspace, old_mode
     {"rule_parameters": {"max_positions": 4, "indicator_exit_policy": "AUTO", "initial_sl_pct": -9}},
     {"bot_em_modes": ["NORMAL", "IND_EXIT"]},
     {"rule_parameters": {"max_positions": 4, "indicator_exit_policy": "ALERT"}},
+    {"telegram_notifications": {"blocked_buy": True, "protect": True}},
+    {"telegram_notifications": {"blocked_buy": False}},
+    {"telegram_notifications": {"blocked_buy": "true"}},
+    {"telegram_notifications": {"blocked_buy": 1}},
+    {"telegram_notifications": None},
 ])
 def test_preset_rejects_unagreed_setting_fields_without_writes(workspace, monkeypatch, tmp_path, extra):
     root, _old, _env = workspace

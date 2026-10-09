@@ -1,4 +1,4 @@
-"""Apply the agreed VA allocation/E settings; no broker or Telegram calls."""
+"""Apply agreed VA allocation/E/BUY-alert settings; no broker or Telegram calls."""
 from __future__ import annotations
 
 import argparse
@@ -21,7 +21,7 @@ PRESET_PATH = PROJECT_ROOT / "support" / "presets" / "VA_4_MA_50M.json"
 PRESET_FIELDS = {
     "watchlist", "priority_symbols", "priority_capital_enabled", "priority_total_capital",
     "priority_allocations", "market_phase_override_enabled", "market_phase_override_exposure_pct",
-    "bot_em_modes", "rule_parameters",
+    "bot_em_modes", "rule_parameters", "telegram_notifications",
 }
 PRESET_RULE_FIELDS = {"max_positions", "indicator_exit_policy"}
 
@@ -37,15 +37,22 @@ def prepared_settings(account_id: str) -> config.AppSettings:
     if (not isinstance(preset, dict) or set(preset) != PRESET_FIELDS
             or not isinstance(preset["rule_parameters"], dict)
             or set(preset["rule_parameters"]) != PRESET_RULE_FIELDS
+            or not isinstance(preset["telegram_notifications"], dict)
+            or set(preset["telegram_notifications"]) != {"blocked_buy"}
+            or preset["telegram_notifications"]["blocked_buy"] is not True
             or preset["bot_em_modes"] != ["IND_EXIT"]
             or preset["rule_parameters"]["indicator_exit_policy"] != "AUTO"):
-        raise ValueError("Preset sai pham vi; chi nap bo von VA va E AUTO da chot.")
+        raise ValueError("Preset sai pham vi; chi nap von VA, E AUTO va tin BUY cho/chan da chot.")
     rules = {**current["rule_parameters"], **preset["rule_parameters"]}
+    # Opt in to waiting/blocked BUY alerts; keep every other local category,
+    # Telegram connection and delivery interval exactly as configured.
+    notifications = {**current["telegram_notifications"], **preset["telegram_notifications"]}
     # Enable E on future BOT trades without removing TP/PROTECT already selected.
     # Existing trades and their management flags stay in their own runtime store.
     modes = normalize_exit_modes([*current["bot_em_modes"], *preset["bot_em_modes"]])
     settings = config.AppSettings.from_dict(
-        {**current, **preset, "rule_parameters": rules, "bot_em_modes": modes}
+        {**current, **preset, "rule_parameters": rules, "bot_em_modes": modes,
+         "telegram_notifications": notifications}
     )
     config.validate_priority_capital(settings.priority_total_capital,
                                     settings.priority_symbols, settings.priority_allocations)
@@ -90,7 +97,21 @@ def main() -> int:
               "khong muon ngan sach cac ma khac.")
         print("[E] AUTO: tu tao SELL 100% khi du dieu kien. Bat E mac dinh cho trade BOT moi.")
         print("[E] Vi the dang co chi ap dung AUTO neu E da bat; khong tu gan E vao vi the cu.")
-        print("[GIU] API, token, Telegram, EMA/RSI, SL/PROTECT/TP, gio mua va toan bo giao dich.")
+        print(f"[TELE] Ket noi {'ON' if settings.telegram_enabled else 'OFF'} (giu cua may nay); "
+              f"BUY gom {settings.telegram_buy_batch_minutes} phut.")
+        for row in (
+            (("buy_queued", "BUY"), ("closed", "CLOSED"),
+             ("indicator_exit", "E ALERT"), ("blocked_buy", "TIN HIEU")),
+            (("protect", "PROTECT"), ("corporate_action", "Lich/quyen"),
+             ("external_sell", "Ban mobile"), ("system", "He thong")),
+        ):
+            print("[TELE] " + " / ".join(
+                f"{label} {'ON' if settings.telegram_notifications[key] else 'OFF'}"
+                for key, label in row
+            ))
+        print(f"[TIN HIEU] Gui ngay khi BUY cho/chan; chong lap {settings.telegram_cooldown_minutes['blocked_buy']} phut; "
+              "khong doi gio mua / khoa von.")
+        print("[GIU] API, token, chat ID, cac setting Telegram khac, EMA/RSI, SL/PROTECT/TP, gio mua va giao dich.")
         print(f"[GIO MUA] {'Tu ' + str(settings.rule_parameters['buy_window_start']) if settings.rule_parameters['buy_window_enabled'] else 'Trong phien, theo tin hieu'}")
         if not args.yes and input("Nap vao dung tai khoan nay? [y/N]: ").strip().lower() != "y":
             print("[HUY] Khong doi setting.")

@@ -154,11 +154,27 @@ def test_telegram_settings_only_keep_connection_values():
     assert settings.telegram_buy_batch_minutes == 30
     assert settings.telegram_notifications["protect"] is False
     assert settings.telegram_notifications["indicator_exit"] is True
-    assert settings.telegram_notifications["blocked_buy"] is False
+    assert settings.telegram_notifications["blocked_buy"] is True
     assert settings.telegram_notifications["system"] is True
     assert settings.telegram_cooldown_minutes["indicator_exit"] == 30
     assert settings.telegram_cooldown_minutes["system"] == 15
     assert not hasattr(settings, "telegram_system_alerts")
+
+
+def test_telegram_defaults_enable_waiting_buy_without_changing_buy_window():
+    settings = AppSettings().normalize()
+    assert settings.telegram_notifications == {
+        "buy_queued": True, "closed": True, "protect": False,
+        "indicator_exit": True, "blocked_buy": True,
+        "corporate_action": True, "external_sell": True, "system": True,
+    }
+    assert settings.telegram_buy_batch_minutes == 30
+    assert settings.telegram_cooldown_minutes["blocked_buy"] == 30
+    assert settings.rule_parameters["buy_window_enabled"] is True
+    assert settings.rule_parameters["buy_window_start"] == "14:00"
+    # An existing explicit opt-out is not silently undone by app startup.
+    saved = AppSettings.from_dict({"telegram_notifications": {"blocked_buy": False}})
+    assert saved.telegram_notifications["blocked_buy"] is False
 
 
 def test_legacy_telegram_alert_switch_migrates_to_explicit_categories():

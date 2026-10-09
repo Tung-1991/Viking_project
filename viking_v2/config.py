@@ -88,7 +88,7 @@ TELEGRAM_NOTIFICATION_DEFAULTS: dict[str, bool] = {
     "closed": True,
     "protect": False,
     "indicator_exit": True,
-    "blocked_buy": False,
+    "blocked_buy": True,
     "corporate_action": True,
     "external_sell": True,
     "system": True,

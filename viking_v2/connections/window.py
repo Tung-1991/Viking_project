@@ -1251,8 +1251,8 @@ class ConnectionPopup:
             ("buy_queued", "BOT BUY ĐÃ XẾP LỆNH", "Báo BUY BOT đã tạo lệnh, không có nghĩa đã khớp. 30 phút = gom các BUY thành một tin; 0 = gửi ngay. Lệnh vẫn xử lý ngay, không chờ Telegram. MANUAL không gửi loại tin này.", "batch"),
             (
                 "blocked_buy", "BUY CÓ TÍN HIỆU · CHƯA MUA",
-                "Gửi BUY đã xuất hiện trong bảng TÍN HIỆU nhưng không thành lệnh, "
-                "ví dụ BOT OFF, đủ slot, khóa mua, thiếu vốn hoặc broker từ chối.",
+                "Báo BUY chưa đặt: chờ giờ mua, BOT OFF, thiếu vốn, đủ slot/khóa hoặc broker từ chối.\n"
+                "Tin đầu gửi ngay; phút = chống lặp cùng mã. Chỉ báo tin, không bỏ giờ mua hay khóa vốn.",
                 "cooldown",
             ),
             ("protect", "PROTECT CHẠM MỨC", "OFF ở đây chỉ tắt tin, PROTECT AUTO vẫn bán. ON = AUTO vừa bán vừa báo; PROTECT ALERT chỉ báo, không bán. Phút = giãn các tin mới cùng mã, không trì hoãn SELL.", "cooldown"),

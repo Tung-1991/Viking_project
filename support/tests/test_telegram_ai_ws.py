@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import msgpack
+import pytest
 
 from viking_v2.connections.dnse.websocket import DNSEMarketWS
 from viking_v2.connections.telegram import SignalTelegramService, TelegramClient
@@ -165,6 +166,65 @@ def test_telegram_blocked_buy_explains_whipsaw_without_internal_reason_code():
     )
     assert "CHƯA GỬI: WHIPSAW đang khóa BUY" in tele.sent[0][1]
     assert "WHIPSAW_LOCK" not in tele.sent[0][1]
+
+
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+@pytest.mark.parametrize("reason,text", [
+    ("BUY_WINDOW_WAIT", "CHỜ GIỜ MUA · TỪ 14:00"),
+    ("NO_AVAILABLE_CAPITAL", "KHÔNG ĐỦ VỐN"),
+])
+def test_default_waiting_buy_alert_is_immediate_deduplicated_and_creates_no_order(
+    monkeypatch, tmp_path, mode, reason, text,
+):
+    from viking_v2.config import AppSettings
+    from viking_v2.trading.orders import OrderQueue
+    from viking_v2.trading.state import TradeStateStore
+
+    class ImmediateThread:
+        def __init__(self, *, target, kwargs, daemon):
+            self.target, self.kwargs = target, kwargs
+
+        def start(self):
+            self.target(**self.kwargs)
+
+    monkeypatch.setattr("viking_v2.dashboard.actions.threading.Thread", ImmediateThread)
+    now = [1000.0]
+    monkeypatch.setattr("viking_v2.rules.state.time.time", lambda: now[0])
+    tele = Telegram()
+    subject = DashboardActionsMixin()
+    subject.settings = AppSettings(telegram_enabled=True).normalize()
+    subject.telegram = SignalTelegramService(tele, chat_id="7", buy_batch_minutes=30)
+    subject.rule_state = RuleStateStore(tmp_path / "rules.json")
+    subject.queue = OrderQueue(tmp_path / "orders.json")
+    subject.trade_state = TradeStateStore(tmp_path / "trades.json")
+    settings_before = subject.settings.to_dict()
+    decision = StrategyDecision("WAIT", "MSN", reason, signal="BUY", details={
+        "signal_cycle": "SIGNAL1", "status_text": text,
+    })
+    for _ in range(10):
+        subject._notify_rule_signal("MSN", decision, {"price": 74.4}, execution_mode=mode)
+    assert len(tele.sent) == 1
+    assert f"TÍN HIỆU BUY · MSN · {mode}" in tele.sent[0][1]
+    assert f"CHƯA GỬI: {text}" in tele.sent[0][1]
+    assert "ĐÃ XẾP LỆNH" not in tele.sent[0][1]
+    assert subject.telegram._buy_timer is None  # No 30-minute BUY batching delay.
+    decision.details["signal_cycle"] = "SIGNAL2"
+    now[0] += 60
+    subject._notify_rule_signal("MSN", decision, {"price": 74.4}, execution_mode=mode)
+    assert len(tele.sent) == 1
+    now[0] = 2800.0
+    subject._notify_rule_signal("MSN", decision, {"price": 74.4}, execution_mode=mode)
+    assert len(tele.sent) == 2
+    subject.settings.telegram_notifications["blocked_buy"] = False
+    decision.details["signal_cycle"] = "SIGNAL3"
+    now[0] += 1800
+    subject._notify_rule_signal("MSN", decision, {"price": 74.4}, execution_mode=mode)
+    assert len(tele.sent) == 2  # Explicit opt-out still works.
+    subject.settings.telegram_notifications["blocked_buy"] = True
+    assert subject.settings.to_dict() == settings_before
+    assert subject.queue.list_all() == []
+    assert subject.trade_state.list_cycles() == []
+    assert subject.rule_state.active_telegram_signal("MSN", mode) is None
 
 
 def test_closed_flushes_queued_buy_before_summary():
