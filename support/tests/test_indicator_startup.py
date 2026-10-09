@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from viking_v2.rules.business import StaticRule, crossover_signal_from_snapshots, indicator_snapshot
+from viking_v2.rules.business import StaticRule, StaticRuleParameters, crossover_signal_from_snapshots, indicator_snapshot
 from viking_v2.rules.state import RuleStateStore
 
 
@@ -25,10 +25,33 @@ def _previous():
     return {**_current(), "buy_ema_fast": 9.9, "sell_ema_fast": 9.9}
 
 
+def test_live_ticks_change_today_rsi_but_keep_previous_completed_daily_rsi():
+    from viking_v2.services.daemon import indicator_snapshot_at_close
+
+    bars = [{"close": value, "closed": True} for value in
+            ([20.0] * 16 + [20.2, 20.1, 20.3, 20.2, 20.4, 20.3])]
+    previous_daily = indicator_snapshot(bars)["rsi"]
+    bars.append({"close": 20.5, "closed": False})
+    before = [dict(row) for row in bars]
+    params = StaticRuleParameters()
+    higher = indicator_snapshot_at_close(bars, 20.6, params)
+    lower = indicator_snapshot_at_close(bars, 20.2, params)
+    assert higher["rsi_previous"] == lower["rsi_previous"] == previous_daily
+    assert higher["rsi"] > previous_daily > lower["rsi"]
+    assert bars == before  # Each tick replaces the provisional daily close, not daily history.
+    current = {**_current(), "rsi": 55.0, "rsi_previous": 50.0}
+    previous_tick = {**_previous(), "rsi": 80.0}
+    assert crossover_signal_from_snapshots(current, previous_tick) == "BUY"
+    # Current RSI fell versus the prior tick, but is still above the daily baseline.
+
+
 @pytest.mark.parametrize("previous", [None, {}, {"buy_ema_fast": None, "buy_ema_slow": None}])
 @pytest.mark.parametrize("prefer", ["BUY", "SELL"])
-def test_first_tick_without_previous_ema_waits(previous, prefer):
-    assert crossover_signal_from_snapshots(_current(), previous, prefer=prefer) == ""
+@pytest.mark.parametrize("require_cross,expected", [(False, "BUY"), (True, "")])
+def test_first_tick_without_previous_ema_obeys_optional_cross_filter(previous, prefer, require_cross, expected):
+    assert crossover_signal_from_snapshots(
+        _current(), previous, prefer=prefer, buy_signal_require_ema_cross=require_cross,
+    ) == expected
 
 
 @pytest.mark.parametrize("flags", list(product((False, True), repeat=4)))
@@ -44,10 +67,12 @@ def test_empty_history_is_safe_for_every_indicator_toggle(flags):
 @pytest.mark.parametrize("source", ["current", "previous"])
 @pytest.mark.parametrize("key", ["buy_ema_fast", "buy_ema_slow"])
 @pytest.mark.parametrize("bad_value", [None, "invalid", float("nan"), float("inf"), -float("inf")])
-def test_missing_or_invalid_required_ema_cannot_generate_buy(source, key, bad_value):
+@pytest.mark.parametrize("require_cross", [False, True])
+def test_missing_or_invalid_ema_is_required_only_for_the_selected_buy_mode(source, key, bad_value, require_cross):
     current, previous = _current(), _previous()
     (current if source == "current" else previous)[key] = bad_value
-    assert crossover_signal_from_snapshots(current, previous) == ""
+    expected = "" if source == "current" or require_cross else "BUY"
+    assert crossover_signal_from_snapshots(current, previous, buy_signal_require_ema_cross=require_cross) == expected
 
 
 @pytest.mark.parametrize("key", ["rsi", "rsi_previous"])
@@ -80,25 +105,27 @@ def test_rsi_only_signal_does_not_require_previous_ema():
 
 
 @pytest.mark.parametrize("mode", ["REAL", "PAPER"])
-def test_cold_stream_waits_then_accepts_a_real_crossover_and_period_change(tmp_path, mode):
+@pytest.mark.parametrize("require_cross", [False, True])
+def test_cold_stream_accepts_levels_or_requires_a_cross_and_resets_on_period_change(tmp_path, mode, require_cross):
     state = RuleStateStore(tmp_path / "rules.json")
     baseline = _previous()
     prior = state.observe_indicators("MSN", mode, "2026-10-08", baseline)
     assert prior == {}
-    assert crossover_signal_from_snapshots(baseline, prior) == ""
+    assert crossover_signal_from_snapshots(baseline, prior, buy_signal_require_ema_cross=require_cross) == ""
     current = _current()
     prior = state.observe_indicators("MSN", mode, "2026-10-08", current)
-    assert crossover_signal_from_snapshots(current, prior) == "BUY"
+    assert crossover_signal_from_snapshots(current, prior, buy_signal_require_ema_cross=require_cross) == "BUY"
     changed = {**current, "buy_ema_slow_period": 10}
     prior = state.observe_indicators("MSN", mode, "2026-10-08", changed)
     assert prior == {}
-    assert crossover_signal_from_snapshots(changed, prior) == ""
+    assert crossover_signal_from_snapshots(changed, prior, buy_signal_require_ema_cross=require_cross) == ("" if require_cross else "BUY")
 
 
-def test_actual_rule_keeps_indicators_visible_while_initialising_first_tick():
+@pytest.mark.parametrize("require_cross,expected", [(False, "BUY"), (True, "WAIT")])
+def test_actual_rule_keeps_indicators_visible_while_initialising_first_tick(require_cross, expected):
     bars = [{"close": value, "closed": True} for value in [100] * 15 + [99, 98, 97, 98, 100]]
     snapshot = indicator_snapshot(bars)
-    decision = StaticRule().evaluate(
+    decision = StaticRule(StaticRuleParameters(buy_signal_require_ema_cross=require_cross)).evaluate(
         {
             "symbol": "MSN", "bars": bars, "signal_mode": "REALTIME",
             "indicator_snapshot": snapshot, "previous_indicators": {},
@@ -106,8 +133,8 @@ def test_actual_rule_keeps_indicators_visible_while_initialising_first_tick():
         },
         {"available_capital": 100_000_000, "open_positions": 0},
     )
-    assert decision.action == "WAIT"
-    assert decision.signal == ""
+    assert decision.action == expected
+    assert decision.signal == ("BUY" if expected == "BUY" else "")
     assert decision.details["indicators"] == snapshot
 
 

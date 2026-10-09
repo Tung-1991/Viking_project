@@ -4,6 +4,7 @@ from pathlib import Path
 import hashlib
 import threading
 import time
+import uuid
 from typing import Any, Callable
 
 from ..trading.durable import DurableJSONStore
@@ -37,6 +38,7 @@ class RuleStateStore:
                 "processed_signals": {},
                 "processed_alerts": {},
                 "telegram_signals": {},
+                "telegram_buy_watches": {},
                 "indicator_streams": {},
                 "buy_confirmations": {},
                 "signal_observations": {},
@@ -57,6 +59,7 @@ class RuleStateStore:
         raw["processed_signals"] = _renamed_signal_keys(raw.get("processed_signals"))
         raw["processed_alerts"] = raw.get("processed_alerts") if isinstance(raw.get("processed_alerts"), dict) else {}
         raw["telegram_signals"] = raw.get("telegram_signals") if isinstance(raw.get("telegram_signals"), dict) else {}
+        raw["telegram_buy_watches"] = raw.get("telegram_buy_watches") if isinstance(raw.get("telegram_buy_watches"), dict) else {}
         raw["indicator_streams"] = raw.get("indicator_streams") if isinstance(raw.get("indicator_streams"), dict) else {}
         raw["buy_confirmations"] = raw.get("buy_confirmations") if isinstance(raw.get("buy_confirmations"), dict) else {}
         raw["signal_observations"] = raw.get("signal_observations") if isinstance(raw.get("signal_observations"), dict) else {}
@@ -142,14 +145,19 @@ class RuleStateStore:
             value = self._read()["buy_confirmations"].get(key)
             return dict(value) if isinstance(value, dict) else {}
 
-    def discard_buy_candidates(self) -> None:
+    def discard_buy_candidates(self, *, recheck_current_conditions: bool = False) -> None:
         """Restart drops action candidates, not cooldowns or indicator history."""
         with self._lock:
             raw = self._read()
-            for key, observation in raw["signal_observations"].items():
+            for key, observation in list(raw["signal_observations"].items()):
                 if observation.get("signal") == "BUY" and observation.get("first_seen"):
                     stream, _, symbol = key.partition("|")
                     raw["processed_signals"][f"{stream}|{symbol}|BUY"] = f"{observation['candle_key']}|{observation['first_seen']}"
+                    if recheck_current_conditions:
+                        # Drop the old observation, not its consumed ID. A
+                        # fresh valid level creates a new observation after
+                        # startup; old queued requests are never resurrected.
+                        raw["signal_observations"].pop(key, None)
             raw["buy_confirmations"] = {}
             self.store.write(raw)
 
@@ -781,6 +789,62 @@ class RuleStateStore:
             }
             self.store.write(raw)
             return True
+
+    def observe_telegram_buy(
+        self, symbol: str, stream: str, valid: bool | None, *,
+        session_key: str, queued: bool = False, snapshot: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Track technical transitions separately from trade IDs and order state.
+
+        Only transitions/order creation write state; price changes alone do not.
+        Missing indicators never mean a lost BUY. One bounded record per book/mã
+        survives restarts, with a new episode on recovery or a new session/rule.
+        """
+        key = self._buy_confirmation_key(symbol, stream)
+        with self._lock:
+            raw = self._read()
+            saved = raw["telegram_buy_watches"].get(key)
+            watch = dict(saved) if isinstance(saved, dict) else {}
+            if watch and watch.get("session_key") != session_key:
+                watch = {}
+            if valid is True and not watch.get("active"):
+                watch = {
+                    "id": uuid.uuid4().hex, "symbol": str(symbol).upper(),
+                    "execution_mode": str(stream).upper(), "session_key": session_key,
+                    "active": True, "announced": False, "queued": False,
+                }
+            changed_to_lost = valid is False and bool(watch.get("active"))
+            if changed_to_lost:
+                watch["active"] = False
+                watch["lost_snapshot"] = dict(snapshot or {})
+            if queued and watch:
+                watch["queued"] = True
+            if watch != (saved or {}):
+                if watch:
+                    raw["telegram_buy_watches"][key] = watch
+                else:
+                    raw["telegram_buy_watches"].pop(key, None)
+                self.store.write(raw)
+            lost = (
+                dict(watch) if changed_to_lost and watch.get("announced")
+                and not watch.get("queued") else None
+            )
+            return dict(watch), lost
+
+    def mark_telegram_buy_announced(
+        self, symbol: str, stream: str, watch_id: str,
+    ) -> dict[str, Any] | None:
+        """A successful send may finish after a loss; preserve that ordering."""
+        key = self._buy_confirmation_key(symbol, stream)
+        with self._lock:
+            raw = self._read()
+            watch = raw["telegram_buy_watches"].get(key)
+            if not isinstance(watch, dict) or watch.get("id") != watch_id:
+                return None
+            if not watch.get("announced"):
+                watch["announced"] = True
+                self.store.write(raw)
+            return dict(watch) if not watch.get("active") and not watch.get("queued") else None
 
     def open_telegram_signal(
         self,

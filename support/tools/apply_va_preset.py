@@ -21,7 +21,8 @@ PRESET_PATH = PROJECT_ROOT / "support" / "presets" / "VA_4_MA_50M.json"
 PRESET_FIELDS = {
     "watchlist", "priority_symbols", "priority_capital_enabled", "priority_total_capital",
     "priority_allocations", "market_phase_override_enabled", "market_phase_override_exposure_pct",
-    "bot_em_modes", "rule_parameters", "telegram_notifications",
+    "bot_em_modes", "rule_parameters", "telegram_notifications", "telegram_cooldown_minutes",
+    "telegram_buy_delivery_mode",
 }
 PRESET_RULE_FIELDS = {"max_positions", "indicator_exit_policy"}
 
@@ -38,21 +39,26 @@ def prepared_settings(account_id: str) -> config.AppSettings:
             or not isinstance(preset["rule_parameters"], dict)
             or set(preset["rule_parameters"]) != PRESET_RULE_FIELDS
             or not isinstance(preset["telegram_notifications"], dict)
-            or set(preset["telegram_notifications"]) != {"blocked_buy", "protect"}
+            or set(preset["telegram_notifications"]) != set(config.TELEGRAM_NOTIFICATION_DEFAULTS)
             or any(value is not True for value in preset["telegram_notifications"].values())
+            or not isinstance(preset["telegram_cooldown_minutes"], dict)
+            or preset["telegram_cooldown_minutes"] != {"blocked_buy": 60, "buy_lost": 60, "system": 30}
+            or any(type(value) is not int for value in preset["telegram_cooldown_minutes"].values())
+            or preset["telegram_buy_delivery_mode"] != "IMMEDIATE"
             or preset["bot_em_modes"] != ["IND_EXIT"]
             or preset["rule_parameters"]["indicator_exit_policy"] != "AUTO"):
-        raise ValueError("Preset sai pham vi; chi nap von VA, E AUTO, tin BUY cho/chan va PROTECT da chot.")
+        raise ValueError("Preset sai pham vi; chi nap von VA, E AUTO, BUY gui ngay, tin ky thuat/PROTECT va gian tin da chot.")
     rules = {**current["rule_parameters"], **preset["rule_parameters"]}
-    # Opt in to waiting/blocked BUY and PROTECT alerts; keep every other local category,
-    # Telegram connection and delivery interval exactly as configured.
+    # Operator-approved VA preset enables every notification category. Keep
+    # the connection, unrelated intervals and remembered batching interval.
     notifications = {**current["telegram_notifications"], **preset["telegram_notifications"]}
+    cooldowns = {**current["telegram_cooldown_minutes"], **preset["telegram_cooldown_minutes"]}
     # Enable E on future BOT trades without removing TP/PROTECT already selected.
     # Existing trades and their management flags stay in their own runtime store.
     modes = normalize_exit_modes([*current["bot_em_modes"], *preset["bot_em_modes"]])
     settings = config.AppSettings.from_dict(
         {**current, **preset, "rule_parameters": rules, "bot_em_modes": modes,
-         "telegram_notifications": notifications}
+         "telegram_notifications": notifications, "telegram_cooldown_minutes": cooldowns}
     )
     config.validate_priority_capital(settings.priority_total_capital,
                                     settings.priority_symbols, settings.priority_allocations)
@@ -98,7 +104,7 @@ def main() -> int:
         print("[E] AUTO: tu tao SELL 100% khi du dieu kien. Bat E mac dinh cho trade BOT moi.")
         print("[E] Vi the dang co chi ap dung AUTO neu E da bat; khong tu gan E vao vi the cu.")
         print(f"[TELE] Ket noi {'ON' if settings.telegram_enabled else 'OFF'} (giu cua may nay); "
-              f"BUY gom {settings.telegram_buy_batch_minutes} phut.")
+              "BUY gui ngay (co the chon GOM TIN trong app).")
         for row in (
             (("buy_queued", "BUY"), ("closed", "CLOSED"),
              ("indicator_exit", "E ALERT"), ("blocked_buy", "TIN HIEU")),
@@ -109,10 +115,13 @@ def main() -> int:
                 f"{label} {'ON' if settings.telegram_notifications[key] else 'OFF'}"
                 for key, label in row
             ))
-        print(f"[TIN HIEU] Gui ngay khi BUY cho/chan; chong lap {settings.telegram_cooldown_minutes['blocked_buy']} phut; "
+        print(f"[TIN HIEU] Gui ngay theo EMA/RSI; gian {settings.telegram_cooldown_minutes['blocked_buy']} phut/ma/so; "
               "khong doi gio mua / khoa von.")
+        print(f"[MAT BUY] {'ON' if settings.telegram_notifications['buy_lost'] else 'OFF'}; "
+              f"gian {settings.telegram_cooldown_minutes['buy_lost']} phut.")
+        print(f"[HE THONG] Gian canh bao {settings.telegram_cooldown_minutes['system']} phut.")
         print("[PROTECT] Bat tin cham muc; khong thay doi cong tac bao ve hay AUTO/ALERT.")
-        print("[GIU] API, token, chat ID, cac setting Telegram khac, EMA/RSI, SL/PROTECT/TP, gio mua va giao dich.")
+        print("[GIU] API, token, chat ID, cong tac Telegram tong, cac gian tin khac, EMA/RSI, SL/PROTECT/TP, gio mua va giao dich.")
         print(f"[GIO MUA] {'Tu ' + str(settings.rule_parameters['buy_window_start']) if settings.rule_parameters['buy_window_enabled'] else 'Trong phien, theo tin hieu'}")
         if not args.yes and input("Nap vao dung tai khoan nay? [y/N]: ").strip().lower() != "y":
             print("[HUY] Khong doi setting.")

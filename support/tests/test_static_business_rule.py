@@ -4,6 +4,7 @@ import math
 import pytest
 
 from viking_v2.rules.business import (
+    crossover_count,
     crossover_signal,
     crossover_signal_from_snapshots,
     entry_volume_snapshot,
@@ -20,6 +21,21 @@ def _bars(values, *, last_closed=True):
     if rows:
         rows[-1]["closed"] = last_closed
     return rows
+
+
+def test_whipsaw_counts_daily_ema_crosses_not_each_intraday_signal_flip():
+    history = [100.0] * 20 + [99.0, 98.0, 97.0]
+    # Same provisional daily candle observed at 13:00, 13:40, then after 14:00.
+    counts = [crossover_count(_bars(history + [price], last_closed=False), window=7)
+              for price in (101.0, 101.0, 96.0)]
+    assert counts == [2, 2, 1]  # Recomputed from daily bars; not an accumulating tick counter.
+    rule = StaticRule()
+    decisions = [rule.evaluate(
+        {"symbol": "TEST", "bars": _bars(history + [price], last_closed=False),
+         "signal_mode": "REALTIME", "previous_market_state": "UPTREND"},
+        {"available_capital": 100_000_000, "open_positions": 0},
+    ) for price in (101.0, 101.0, 96.0)]
+    assert [decision.details["entry_checks"]["whipsaw_crossovers"] for decision in decisions] == counts
 
 
 M_VALUES = [100] * 15 + [99, 98, 97, 98, 100]
@@ -82,6 +98,47 @@ def test_realtime_crossover_compares_two_consecutive_observations():
         "rsi": 45.0, "rsi_previous": 50.0,
     }
     assert crossover_signal_from_snapshots(current, previous, prefer="SELL") == "SELL"
+
+
+@pytest.mark.parametrize("current_rsi,previous_tick_rsi,expected", [
+    (55.0, 90.0, "BUY"),  # RSI falls from the last tick but exceeds the daily baseline.
+    (49.0, 20.0, ""),     # RSI rises from the last tick but is below the daily baseline.
+    (50.0, 20.0, ""),     # Equality with yesterday is not a BUY.
+])
+def test_realtime_buy_rsi_compares_with_previous_daily_candle_not_previous_tick(
+    current_rsi, previous_tick_rsi, expected,
+):
+    previous = {"buy_ema_fast": 9.9, "buy_ema_slow": 10.0, "rsi": previous_tick_rsi}
+    current = {"buy_ema_fast": 10.1, "buy_ema_slow": 10.0,
+               "rsi": current_rsi, "rsi_previous": 50.0}
+    assert crossover_signal_from_snapshots(current, previous, sell_use_ema=False, sell_use_rsi=False) == expected
+
+
+def test_realtime_rsi_recovery_without_a_new_ema_cross_depends_on_optional_filter():
+    previous = {"buy_ema_fast": 22.4163, "buy_ema_slow": 22.4031, "rsi": 56.7921}
+    current = {"buy_ema_fast": 22.4413, "buy_ema_slow": 22.4174,
+               "rsi": 57.7026, "rsi_previous": 56.7921}
+    assert crossover_signal_from_snapshots(current, previous) == "BUY"
+    assert crossover_signal_from_snapshots(current, previous, buy_signal_require_ema_cross=True) == ""
+
+
+@pytest.mark.parametrize("current_rsi,previous_tick_rsi,expected", [
+    (45.0, 20.0, "SELL"), (51.0, 90.0, ""), (50.0, 90.0, ""),
+])
+def test_realtime_sell_rsi_also_uses_daily_baseline(current_rsi, previous_tick_rsi, expected):
+    previous = {"sell_ema_fast": 10.1, "sell_ema_slow": 10.0, "rsi": previous_tick_rsi}
+    current = {"sell_ema_fast": 9.9, "sell_ema_slow": 10.0,
+               "rsi": current_rsi, "rsi_previous": 50.0}
+    assert crossover_signal_from_snapshots(current, previous, buy_use_ema=False, buy_use_rsi=False) == expected
+
+
+def test_rebuilding_today_daily_candle_keeps_yesterdays_rsi_fixed():
+    completed = _bars(M_VALUES)
+    baseline = indicator_snapshot(completed)["rsi"]
+    snapshots = [indicator_snapshot(completed + _bars([price], last_closed=False))
+                 for price in (99.0, 100.0, 101.0)]
+    assert all(snapshot["rsi_previous"] == baseline for snapshot in snapshots)
+    assert len({snapshot["rsi"] for snapshot in snapshots}) == 3
 
 
 def test_phase2_only_requires_the_indicators_enabled_for_each_signal():
@@ -203,8 +260,9 @@ def test_closed_and_realtime_use_independent_comparison_points():
         "previous_indicators": current,
     }
     portfolio = {"available_capital": 100_000_000, "open_positions": 0}
-    realtime = StaticRule().evaluate({**context, "signal_mode": "REALTIME"}, portfolio)
-    closed = StaticRule().evaluate({**context, "signal_mode": "CLOSED"}, portfolio)
+    rule = StaticRule(StaticRuleParameters(buy_signal_require_ema_cross=True))
+    realtime = rule.evaluate({**context, "signal_mode": "REALTIME"}, portfolio)
+    closed = rule.evaluate({**context, "signal_mode": "CLOSED"}, portfolio)
     assert realtime.signal == "" and realtime.action == "WAIT"
     assert closed.signal == "BUY" and closed.action == "BUY"
 

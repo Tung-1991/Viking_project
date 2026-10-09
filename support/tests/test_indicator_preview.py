@@ -10,7 +10,8 @@ import pytest
 
 from viking_v2.config import AppSettings
 from viking_v2.dashboard.actions import DashboardActionsMixin
-from viking_v2.dashboard.panels import DashboardPanelsMixin
+from viking_v2.dashboard.panels import DashboardPanelsMixin, _rsi_comparison_preview
+from viking_v2.dashboard.view import COL_GREEN, COL_PREVIEW_TEXT, COL_RED, COL_TEXT
 from viking_v2.rules.business import average_true_range_pct, indicator_snapshot
 from viking_v2.trading.market import VN_TZ, market_now, merge_tick_into_daily_bars
 
@@ -30,6 +31,33 @@ def subject(mode="PAPER"):
     view._preview_bars_symbol = "AAA"
     view._preview_bars = history()
     return view
+
+
+@pytest.mark.parametrize("current,previous,text,color", [
+    (58.5756, 56.7921, "56.79 → 58.58 ↑", COL_GREEN),
+    (56.79212294979958, 56.79212294979958, "56.79 → 56.79 =", COL_TEXT),
+    (52.2897, 56.7921, "56.79 → 52.29 ↓", COL_RED),
+    (56.794, 56.791, "56.791 → 56.794 ↑", COL_GREEN),
+    (56.79209, 56.79212, "56.79212 → 56.79209 ↓", COL_RED),
+    (None, None, "-- → --", COL_PREVIEW_TEXT),
+    (-1, 50, "50.00 → --", COL_PREVIEW_TEXT),
+    (100, 0, "0.00 → 100.00 ↑", COL_GREEN),
+])
+def test_rsi_comparison_preview_is_precise_and_validated(current, previous, text, color):
+    assert _rsi_comparison_preview(current, previous) == (text, color)
+
+
+@pytest.mark.parametrize("mode,expected", [
+    ("REALTIME", "phiên trước đã đóng → phiên hiện tại theo giá realtime"),
+    ("CLOSED", "hai phiên đã đóng liên tiếp"),
+])
+def test_indicator_hint_explains_daily_rsi_baseline_and_strict_comparison(mode, expected):
+    view = subject()
+    view.settings.signal_mode = mode
+    hint = view._indicator_preview_hint()
+    assert expected in hint
+    assert "không so với tick trước" in hint
+    assert "bằng không đạt" in hint
 
 
 def test_bars_show_ema_rsi_atr_without_any_decision_or_bot_entry():

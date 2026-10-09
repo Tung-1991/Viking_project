@@ -317,7 +317,10 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
     params = first.rule_parameters or {}
     buy_terms = [
         value for enabled, value in (
-            (params.get("buy_signal_use_ema", True), f"EMA{params.get('buy_ema_fast')} cắt lên EMA{params.get('buy_ema_slow')}"),
+            (params.get("buy_signal_use_ema", True),
+             f"EMA{params.get('buy_ema_fast')} cắt lên EMA{params.get('buy_ema_slow')}"
+             if params.get("buy_signal_require_ema_cross", False)
+             else f"EMA{params.get('buy_ema_fast')} > EMA{params.get('buy_ema_slow')}"),
             (params.get("buy_signal_use_rsi", True), f"RSI{params.get('rsi_period')} tăng"),
         ) if enabled
     ]

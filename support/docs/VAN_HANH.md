@@ -37,28 +37,31 @@ Thiết lập khi đây đúng là vốn dành cho bộ thử: watchlist/Priorit
 **Nạp nhanh:** đóng app → BAT **4** → kiểm tra tài khoản trên máy đó → **y** → **3**.
 VPS chọn **2 → 4 → y → 3** để cập nhật rồi nạp bộ setting này.
 Preset đi cùng Git; không tự đồng bộ mọi chỉnh sửa UI trên máy khác. Giữ API/token/
-Telegram, EMA/RSI, giờ mua, SL/TP/PROTECT của máy đó; bật E mặc định cho BOT và đặt **E AUTO**.
+Telegram tổng/token/chat, EMA/RSI, giờ mua, SL/TP/PROTECT của máy đó; bật E mặc định cho BOT và đặt **E AUTO**.
+Preset bật cả 9 loại tin Telegram, BUY gửi ngay, BUY kỹ thuật/MẤT BUY giãn 60 phút, hệ thống 30 phút.
+Không tự bật công tắc Telegram tổng nếu máy đang OFF; các khoảng giãn khác giữ lựa chọn tại máy.
 Backup setting cũ nằm cạnh `settings.json` (`settings.before-va-*.bak`), không lên Git.
 RULE → P1 bật OVERRIDE, CP **100%**; tối đa mã BOT **4**.
 KẾT NỐI → MÃ CK → VỐN RIÊNG ON, tổng **50 triệu**, ⚙ từng mã:
 
 | Mã | Hạn mức | Sử dụng | Mua tối đa gồm phí | Giữ tiền |
 |---|---:|---:|---:|---:|
-| MSN | 15 triệu | 100% | 15 triệu | 0 |
-| CTS | 15 triệu | 100% | 15 triệu | 0 |
+| MSN | 16 triệu | 100% | 16 triệu | 0 |
+| CTS | 12 triệu | 100% | 12 triệu | 0 |
 | HDB | 15 triệu | 100% | 15 triệu | 0 |
-| IDC | 5 triệu | 100% | 5 triệu | 0 |
+| IDC | 7 triệu | 100% | 7 triệu | 0 |
 
 **LƯU PRIORITY**. Tổng được mua **50 triệu**, không giữ lại 25 triệu như bản cũ.
 MAX LỆNH **1** mỗi mã; cần tín hiệu BUY, không ép mua hết tiền ngay.
-MSN/CTS/HDB được dành đủ 15 triệu/mã; IDC dùng **50 − 45 = 5 triệu**, không mượn
+MSN/CTS/HDB được dành tổng 43 triệu; IDC dùng **50 − 16 − 12 − 15 = 7 triệu**, không mượn
 phần ba mã kia chưa dùng. Đây là hạn mức cấu hình, không tự tăng khi nạp tiền.
-PAPER 100 triệu vẫn chịu cap này: MSN tối đa 15 triệu, IDC tối đa 5 triệu gồm phí.
+PAPER 100 triệu vẫn chịu cap này: MSN tối đa 16 triệu, IDC tối đa 7 triệu gồm phí.
 Nếu 100 CP theo giá trần + phí vượt cap, MARKET AUTO không mua; xem hint KL để biết số tiền cần.
-Có thêm 10 triệu: đổi tổng thành 60, cap **IDC** thành 15 rồi lưu; không tự mua bù.
+Có thêm 10 triệu: đổi tổng thành 60, cap **IDC** thành 17 rồi lưu; không tự mua bù.
 CHIA HẠN MỨC thay các cap nháp bằng Tổng / số mã, không mua lệnh. Khối lượng thực tế
 làm tròn lô/dự phòng giá trần nên tiền dùng thấp hơn trần. IDC không mượn cap mã khác.
-Hạn mức này áp dụng BUY BOT; số lượng MANUAL do người đặt quyết định.
+MANUAL có thể nhập số lượng tay nhưng vẫn bị chặn nếu vượt vốn được dùng sau khi giữ Priority/phần để dành.
+Không tự co/chia lại hạn mức để cho một lệnh MANUAL vượt qua; MARKET dự trù giá trần + phí, LO theo giá nhập + phí.
 Preview hiện NAV/tiền khả dụng, tổng quỹ, đã/chưa chia và phần giữ tiền.
 CÒN HẠN MỨC trừ vốn cổ đang giữ + BUY chờ, không phải tiền khả dụng.
 LỆNH **1/2** = đã dùng/đang chờ 1 lượt BUY BOT trên tối đa 2; khớp từng phần tính 1, bán hết đếm lại. REAL/PAPER đếm riêng.
@@ -78,22 +81,54 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Log Bot/Manual ghi đúng sổ, ID, KL đã khớp/còn lại; CHỜ KHỚP không phải đã mua xong.
   Chỉ ghi khi trạng thái/KL đổi, không phát lại log cũ khi restart. Vị thế ngoài app
   chưa nhận quản lý hiển thị SL OFF; PROTECT CHỜ DỮ LIỆU không phải mức lùi bằng 0.
-- BUY bỏ qua không tự mua lại khi có tiền/slot. Lịch sử tín hiệu để đối chiếu;
-  mua sau là quyết định MANUAL mới. Ưu tiên thao tác qua Money Hunter.
+- Mặc định BUY xét EMA nhanh > EMA chậm và RSI hiện tại > RSI phiên trước theo các công tắc RULE.
+  RSI hiện tại là nến 1D tạm tính từ giá mới; mốc so sánh là nến 1D phiên trước, không phải tick trước.
+  Tùy chọn **PHẢI VỪA CẮT EMA** mặc định OFF; ON đòi lần quan sát trước nhanh ≤ chậm, lần này nhanh > chậm.
+  Đủ chỉ báo chưa phải đã gửi lệnh: còn giờ mua, bộ lọc/WHIPSAW/khóa lỗ, vốn/slot, BOT và token REAL.
+  Bật lại BOT sau OFF hoặc hết khóa bán tay sẽ đánh giá điều kiện hiện tại ở chế độ mặc định, không phục hồi lệnh cũ.
+  Lệnh bị chặn vốn/slot và tín hiệu chờ có quy tắc riêng; xem lý do, không coi Telegram là xác nhận đã mua.
 - BLOCK phải **MỞ BLOCK** đúng mã/sổ. ↻ reset thống kê/khóa chờ, không mở BLOCK,
   không xóa vị thế. THEO NGÀY chốt đúng giờ GMT+7; CỘNG DỒN từ lần ↻ gần nhất.
 - Telegram: GOM chờ gom tin BUY, không chờ đặt lệnh; GIÃN hạn chế tin mới cùng mã/loại.
   0 phút vẫn chống tin trùng. 1 TIN/VỊ THẾ = tổng kết khi BOT bán hết, không phải mỗi lần khớp.
-  Mặc định loại tin ON: BUY đã xếp (gom 30 phút), BOT đã đóng, E ALERT, lịch nghỉ/chốt
-  quyền, bán trên DNSE app, hệ thống. OFF: PROTECT chạm mức và TÍN HIỆU BUY chưa thực hiện.
-  E AUTO không gửi tin E ALERT; khi bán hết có tin BOT đã đóng. Telegram cần bật tổng,
-  token/chat đúng; nạp preset giữ lựa chọn Telegram của VPS, không reset về mặc định.
+  Mặc định cả 9 loại tin ON: BUY đã xếp, BUY EMA/RSI, MẤT BUY, PROTECT, E ALERT, BOT đã đóng,
+  lịch nghỉ/chốt quyền, SELL trên DNSE app, hệ thống. BUY đã xếp mặc định GỬI NGAY;
+  có thể đổi GOM TIN (mặc định nhớ 30 phút, chỉnh 1–120). Cửa sổ gom tính từ lệnh đầu tiên;
+  không có lệnh mới thì không có tin gom mới, không trì hoãn đặt lệnh.
+  Giãn mặc định: BUY EMA/RSI 60 phút, MẤT BUY 60, E ALERT 30, hệ thống 30, lịch 1440;
+  PROTECT/SELL ngoài app 0 phút nhưng vẫn chống trùng sự kiện. CLOSED 1 tin/vị thế đã bán hết.
+  BUY EMA/RSI phải đạt các chỉ báo đang bật; thông báo không bỏ qua RSI. Nó độc lập với giờ/khóa giao dịch.
+  MẤT BUY chỉ gửi khi đã báo BUY, điều kiện mất và chưa xếp lệnh; thiếu dữ liệu không coi là mất BUY.
+  E AUTO không gửi tin E ALERT; khi bán hết có tin BOT đã đóng. Telegram cần bật tổng, token/chat đúng.
+  Cập nhật Git giữ các lựa chọn OFF đã lưu; nạp lại preset VA là thao tác chủ động bật cả 9 loại tin.
+
+## Lịch sử tín hiệu / đối chiếu
+
+- TÍN HIỆU xổ **ngày → mã → giờ ghi nhận**; giữ sổ REAL/PAPER, ưu tiên và slot lúc ghi.
+  ENTRY, MẤT ENTRY, EXIT · E là sự kiện chỉ báo; ĐÃ XẾP chỉ là tạo yêu cầu, không phải khớp.
+  Kết quả gửi/khớp/hủy xem tab lịch sử giao dịch. Không gộp các giờ khác nhau chỉ vì giá giống nhau.
+- EMA/RSI hiện phép so sánh số gốc; bản ghi mới giữ RSI tham chiếu, phiên tham chiếu và chu kỳ chỉ báo.
+  Bản cũ thiếu mốc RSI hiện **—**, không lấy RSI cuối ngày hôm nay điền ngược.
+- Mặc định **DNSE** giữ nguyên số bot đã ghi. **TRADINGVIEW** tính lại để đối chiếu, không đổi bot/lệnh.
+  NẠP CSV 1D xuất từ TradingView, đơn vị VND, ít nhất 100 nến (nên toàn bộ lịch sử); chọn đúng mã.
+  Giữ số lẻ của CSV, dùng lịch sử đến phiên trước + giá intraday đã ghi, không dùng close cuối ngày để tính ngược.
+  Chỉ đối chiếu phiên cuối của CSV vì chưa có bộ hệ số điều chỉnh theo ngày; phiên khác báo thiếu chuẩn giá.
+  Không khôi phục TradingView bằng cách nhân/chia RSI hoặc tự đoán hệ số từ dữ liệu DNSE đã làm tròn.
+- XUẤT EXCEL gồm DNSE gốc và TradingView đối chiếu của các dòng đang hiển thị; không tự kéo dữ liệu mạng.
+  UI giữ 7 ngày ghi nhận gần nhất, tối đa 250 dòng; CSV gần nhất 500 dòng, Excel tự lưu theo tháng.
+  TRACE định kỳ 2 phút từ 14h–14h30 vẫn là phương án chưa triển khai, không nhầm với lịch sử sự kiện hiện có.
 
 ## Khi có bất thường
 
 Giá cũ / HEALTH lỗi: kiểm tra mạng, daemon, DNSE và đồng hồ; không dùng giá cũ đặt tay.
 CHỜ TIỀN TÀI KHOẢN = chưa có số dư, khác TIỀN KHẢ DỤNG = 0. Hint KL ghi tiền/cap/giá tính lô.
 Lỗi làm mới REAL không làm mất số dư PAPER; sổ lỗi giữ snapshot trước, không tạo số dư 0 giả.
+Ngoài phiên, không có lệnh REAL chưa rõ kết quả: đồng bộ tài khoản mỗi 5 phút.
+Còn lệnh chờ/khớp một phần/UNKNOWN, hoặc trong phiên: giữ nhịp 5 giây;
+kiểm tra trước gửi lệnh luôn đọc mới, không dùng snapshot cũ để vượt qua lỗi.
+Lỗi ngoài phiên ghi log ngay; kéo dài 10 phút mới gửi cảnh báo Telegram theo GIÃN HỆ THỐNG.
+Hint HEALTH/API hiện bước/HTTP/nguyên nhân, lần đồng bộ tốt gần nhất và nhịp thử lại.
+Log ghi khi lỗi đổi hoặc phục hồi, không ghi lại cùng lỗi ở mỗi vòng kiểm tra.
 LỊCH CHỜ lúc mở app = đang tải; LỊCH LỖI = chưa có lịch dùng được, không gửi lệnh mới.
 Token hết hạn: nhập OTP lại. UNKNOWN / RECONCILE_REQUIRED: đối chiếu lệnh DNSE trước,
 không đặt lại vì nghĩ chưa gửi. Giữ runtime/logs; không reset/xóa dữ liệu để chữa lỗi.

@@ -53,6 +53,34 @@ def test_broken_morning_signal_requires_a_new_cross(broken):
     assert decision.action == "BUY"
 
 
+def test_hdb_rsi_equality_cancels_waiting_buy_without_placing_an_order():
+    rule = StaticRule(StaticRuleParameters(buy_window_enabled=True, whipsaw_enabled=False))
+    baseline = 56.79212294979958
+    context = {"symbol": "HDB", "signal_mode": "REALTIME", "confirmed_market_state": "ACCUMULATION"}
+    portfolio = {"available_capital": 15_000_000}
+    state = {}
+    for at, fast, slow, current_rsi, raw, expected_reason in (
+        ("13:39:31", 22.4413, 22.4174, 57.7026, True, "BUY_WINDOW_WAIT"),
+        ("13:39:41", 22.4163, 22.4031, baseline, False, "BUY_WINDOW_BROKEN"),
+    ):
+        decision = StrategyDecision(
+            "BUY" if raw else "WAIT", "HDB", "BUY_SIGNAL" if raw else "NO_NEW_BUY_SIGNAL",
+            signal="BUY" if raw else "",
+            details={"indicators": {"buy_ema_fast": fast, "buy_ema_slow": slow,
+                                    "rsi": current_rsi, "rsi_previous": baseline}},
+        )
+        state, result = apply_buy_filters(
+            rule, decision, context, portfolio, state,
+            observed_at=datetime.fromisoformat(f"2026-10-09T{at}+07:00"), exchange="HOSE",
+        )
+        assert result.action == "WAIT" and result.reason == expected_reason
+        # The BUY label refers to the waiting candidate, not a fresh valid BUY.
+        assert result.signal == "BUY"
+    assert state == {}
+    assert result.details["buy_window"]["state"] == "CANCELLED"
+    assert result.details["indicators"]["rsi"] == result.details["indicators"]["rsi_previous"]
+
+
 def test_window_holds_only_the_enabled_base_buy_conditions():
     params = StaticRuleParameters(
         buy_window_enabled=True,

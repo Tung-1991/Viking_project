@@ -50,9 +50,8 @@ def test_preset_changes_only_agreed_allocation_e_and_signal_fields_and_backup_is
     assert current["rule_parameters"]["indicator_exit_policy"] == "AUTO"
     assert "IND_EXIT" in current["bot_em_modes"]
     assert current["telegram_notifications"]["blocked_buy"] is True
-    assert current["telegram_notifications"] == {
-        **old["telegram_notifications"], "blocked_buy": True, "protect": True,
-    }
+    assert current["telegram_notifications"] == config.TELEGRAM_NOTIFICATION_DEFAULTS
+    assert all(current["telegram_notifications"].values())
     assert current["priority_allocations"] == {
         symbol: {"limit_vnd": cap, "use_pct": 100, "max_orders": 1}
         for symbol, cap in (("MSN", 16_000_000), ("CTS", 12_000_000),
@@ -106,13 +105,14 @@ def test_canceled_prompt_never_applies_settings(workspace, monkeypatch):
 
 @pytest.mark.parametrize("telegram_enabled", [False, True])
 @pytest.mark.parametrize("window_enabled", [False, True])
-def test_signal_opt_in_keeps_local_telegram_preferences_and_buy_guards(
+def test_signal_opt_in_changes_only_agreed_intervals_and_keeps_buy_guards(
     workspace, telegram_enabled, window_enabled,
 ):
     root, _old, env = workspace
     current = config.load_settings("PARTNER")
     current.telegram_enabled = telegram_enabled
     current.telegram_buy_batch_minutes = 7
+    current.telegram_buy_delivery_mode = "BATCH"
     current.telegram_notifications["protect"] = True
     current.telegram_cooldown_minutes["blocked_buy"] = 12
     current.rule_parameters.update(buy_window_enabled=window_enabled, buy_window_start="13:45")
@@ -122,8 +122,11 @@ def test_signal_opt_in_keeps_local_telegram_preferences_and_buy_guards(
     saved = config.load_settings("PARTNER")
     assert saved.telegram_enabled is telegram_enabled
     assert saved.telegram_buy_batch_minutes == 7
-    assert saved.telegram_notifications == {**current.telegram_notifications, "blocked_buy": True, "protect": True}
-    assert saved.telegram_cooldown_minutes == current.telegram_cooldown_minutes
+    assert saved.telegram_buy_delivery_mode == "IMMEDIATE"
+    assert saved.telegram_notifications == config.TELEGRAM_NOTIFICATION_DEFAULTS
+    assert saved.telegram_cooldown_minutes == {
+        **current.telegram_cooldown_minutes, "blocked_buy": 60, "buy_lost": 60, "system": 30,
+    }
     assert saved.rule_parameters["buy_window_enabled"] is window_enabled
     assert saved.rule_parameters["buy_window_start"] == "13:45"
     assert env.read_bytes() == env_before
@@ -141,9 +144,11 @@ def test_preset_details_are_reviewed_before_confirmation_without_writes(workspac
         assert "[IDC] 7 trieu = 50 - 16 - 12 - 15" in review
         assert "MAX LENH 1" in review and "P1 override 100%" in review
         assert "[E] AUTO" in review and "[GIU] API, token" in review
-        assert "TIN HIEU ON" in review and "E ALERT OFF" in review
+        assert "TIN HIEU ON" in review and "E ALERT ON" in review
         assert "PROTECT ON" in review and "khong thay doi cong tac bao ve" in review
         assert "[TIN HIEU] Gui ngay" in review and "khong doi gio mua" in review
+        assert "BUY gui ngay (co the chon GOM TIN trong app)" in review
+        assert "gian 60 phut/ma/so" in review and "[HE THONG] Gian canh bao 30 phut" in review
         assert "local-chat-only" not in review and "LOCAL_TOKEN_KEY" not in review
         assert "[y/N]" in prompt
         assert (root / "settings.json").read_bytes() == original
@@ -268,6 +273,13 @@ def test_preset_enables_e_without_disabling_other_exit_flags(workspace, old_mode
     {"telegram_notifications": {"blocked_buy": "true"}},
     {"telegram_notifications": {"blocked_buy": 1}},
     {"telegram_notifications": None},
+    {"telegram_cooldown_minutes": {"blocked_buy": 60, "system": 15}},
+    {"telegram_cooldown_minutes": {"blocked_buy": 30, "system": 30}},
+    {"telegram_cooldown_minutes": {"blocked_buy": 60, "system": 30, "protect": 0}},
+    {"telegram_cooldown_minutes": {"blocked_buy": 60.0, "system": 30}},
+    {"telegram_cooldown_minutes": None},
+    {"telegram_buy_delivery_mode": "BATCH"},
+    {"telegram_buy_delivery_mode": None},
 ])
 def test_preset_rejects_unagreed_setting_fields_without_writes(workspace, monkeypatch, tmp_path, extra):
     root, _old, _env = workspace
@@ -287,4 +299,4 @@ def test_portable_preset_contains_no_secrets_or_runtime_fields():
     raw = json.loads(tool.PRESET_PATH.read_text(encoding="utf-8"))
     assert set(raw) == tool.PRESET_FIELDS
     assert not any(word in tool.PRESET_PATH.read_text(encoding="utf-8").lower()
-                   for word in ("token", "api_key", "secret", "chat_id", "cooldown"))
+                   for word in ("token", "api_key", "secret", "chat_id"))

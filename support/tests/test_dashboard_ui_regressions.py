@@ -982,14 +982,14 @@ def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> 
         assert connection_popup.tele_event_time_controls["buy_queued"] is connection_popup.tele_batch
         assert connection_popup.tele_event_time_controls["closed"].cget("text") == "1 TIN/VỊ THẾ"
         assert list(connection_popup.tele_event_labels) == [
-            "buy_queued", "blocked_buy", "protect", "indicator_exit", "closed",
+            "buy_queued", "blocked_buy", "buy_lost", "protect", "indicator_exit", "closed",
             "external_sell", "corporate_action", "system",
         ]
         assert {int(button.grid_info()["column"]) for button in connection_popup.tele_event_hint_buttons.values()} == {1}
         assert connection_popup.save_telegram_token_switch.cget("text") == "LƯU BOT TOKEN"
         assert connection_popup.btn_clear_telegram_token.cget("text") == "XÓA"
         assert set(connection_popup.tele_cooldown_entries) == {
-            "protect", "indicator_exit", "blocked_buy", "corporate_action", "external_sell",
+            "protect", "indicator_exit", "blocked_buy", "buy_lost", "corporate_action", "external_sell",
             "system",
         }
     finally:
@@ -997,6 +997,94 @@ def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> 
             closer = getattr(popup, "close", None) or getattr(popup, "_close", None)
             if callable(closer) and popup.top.winfo_exists():
                 closer()
+        client.close()
+
+
+@pytest.mark.parametrize("saved_mode", ["IMMEDIATE", "BATCH"])
+def test_telegram_buy_delivery_selector_saves_draft_only_after_validating(
+    ui_root, monkeypatch, saved_mode,
+) -> None:
+    from viking_v2.config import AppSettings
+    from viking_v2.connections.dnse.client import DNSEClient
+    from viking_v2.connections.window import ConnectionPopup
+
+    settings = AppSettings(telegram_buy_delivery_mode=saved_mode,
+                           telegram_buy_batch_minutes=7).normalize()
+    writes, applied = [], []
+    monkeypatch.setattr("viking_v2.connections.window.save_settings",
+                        lambda value, _account: writes.append(value.to_dict()))
+    monkeypatch.setattr(ConnectionPopup, "_store_telegram_token", lambda *_args: "RAM")
+    monkeypatch.setattr(ConnectionPopup, "show", lambda _self: None)
+    client = DNSEClient(account_no="PAPER", api_key="", api_secret="")
+    popup = ConnectionPopup(ui_root, settings, "PAPER", client, lambda: applied.append(True))
+    try:
+        assert popup.tele_buy_mode_selector.cget("values") == ["GỬI NGAY", "GOM TIN"]
+        assert popup.tele_buy_mode.get() == ("GOM TIN" if saved_mode == "BATCH" else "GỬI NGAY")
+        assert bool(popup.tele_batch.grid_info()) is (saved_mode == "BATCH")
+        assert popup.tele_event_time_controls["buy_queued"] is popup.tele_batch
+        original = settings.to_dict()
+        popup.tele_chat.delete(0, "end")
+        popup.tele_chat.insert(0, "changed-draft-chat")
+        popup.tele_buy_mode_selector.set("GOM TIN")
+        popup._telegram_buy_mode_changed()
+        popup.tele_batch.delete(0, "end")
+        popup.tele_batch.insert(0, "0")
+        assert settings.to_dict() == original and writes == []  # Selection is a draft.
+        popup._save_telegram()
+        assert settings.to_dict() == original and writes == [] and applied == []
+        assert "1 ĐẾN 120" in popup.tele_status.cget("text")
+        popup.tele_buy_mode_selector.set("GỬI NGAY")
+        popup._telegram_buy_mode_changed()
+        assert popup.tele_batch.grid_info() == {} and popup.tele_batch_suffix.grid_info() == {}
+        popup._save_telegram()  # Inactive invalid batch draft cannot prevent immediate delivery.
+        assert settings.telegram_buy_delivery_mode == "IMMEDIATE"
+        assert settings.telegram_buy_batch_minutes == 7 and len(writes) == len(applied) == 1
+        popup.tele_buy_mode_selector.set("GOM TIN")
+        popup._telegram_buy_mode_changed()
+        assert popup.tele_batch.grid_info() and popup.tele_batch_suffix.grid_info()
+        popup.tele_batch.delete(0, "end")
+        popup.tele_batch.insert(0, "15")
+        popup._save_telegram()
+        assert settings.telegram_buy_delivery_mode == "BATCH"
+        assert settings.telegram_buy_batch_minutes == 15 and len(writes) == len(applied) == 2
+        assert writes[-1]["telegram_chat_id"] == "changed-draft-chat"
+        assert settings.rule_parameters == original["rule_parameters"]
+        assert settings.telegram_cooldown_minutes == original["telegram_cooldown_minutes"]
+    finally:
+        popup._close()
+        client.close()
+
+
+def test_telegram_buy_lost_option_and_cooldown_save_without_changing_trade_rules(ui_root, monkeypatch):
+    from viking_v2.config import AppSettings
+    from viking_v2.connections.dnse.client import DNSEClient
+    from viking_v2.connections.window import ConnectionPopup
+
+    settings = AppSettings().normalize()
+    before = settings.to_dict()
+    writes = []
+    monkeypatch.setattr("viking_v2.connections.window.save_settings", lambda value, _account: writes.append(value.to_dict()))
+    monkeypatch.setattr(ConnectionPopup, "_store_telegram_token", lambda *_args: "RAM")
+    monkeypatch.setattr(ConnectionPopup, "show", lambda _self: None)
+    client = DNSEClient(account_no="PAPER", api_key="", api_secret="")
+    popup = ConnectionPopup(ui_root, settings, "PAPER", client, lambda: None)
+    try:
+        assert popup.tele_event_labels["buy_lost"].cget("text") == "BUY · MẤT TÍN HIỆU"
+        assert popup.tele_event_switches["buy_lost"].get()
+        assert popup.tele_cooldown_entries["buy_lost"].get() == "60"
+        popup.tele_event_switches["buy_lost"].set(False)
+        popup.tele_cooldown_entries["buy_lost"].delete(0, "end")
+        popup.tele_cooldown_entries["buy_lost"].insert(0, "-1")
+        popup._save_telegram()
+        assert settings.to_dict() == before and writes == []
+        popup.tele_cooldown_entries["buy_lost"].delete(0, "end")
+        popup.tele_cooldown_entries["buy_lost"].insert(0, "7")
+        popup._save_telegram()
+        assert settings.telegram_notifications["buy_lost"] is False
+        assert settings.telegram_cooldown_minutes["buy_lost"] == 7 and len(writes) == 1
+        assert settings.rule_parameters == before["rule_parameters"]
+    finally:
+        popup._close()
         client.close()
 
 
@@ -1125,3 +1213,39 @@ def test_backtest_ui_covers_every_static_rule_parameter() -> None:
     from viking_v2.rules.business import StaticRuleParameters
 
     assert BACKTEST_RULE_KEYS == frozenset(StaticRuleParameters.__dataclass_fields__)
+
+
+def test_signal_history_ui_names_cancellations_and_recording_time_without_creating_orders(ui_root):
+    from copy import deepcopy
+    from viking_v2.dashboard.windows import HistoryPopup
+
+    rows = [
+        {"timestamp": "2026-10-09 13:39:41", "symbol": "HDB", "signal": "BUY",
+         "acted": "WAIT", "blocked_by": "BUY_WINDOW_BROKEN"},
+        {"timestamp": "2026-10-09 14:00:01", "symbol": "HDB", "signal": "SELL",
+         "acted": "WAIT", "blocked_by": "NO_NEW_BUY_SIGNAL"},
+        {"timestamp": "2026-10-09 14:06:11", "symbol": "HDB", "signal": "SELL",
+         "acted": "WAIT", "blocked_by": "NO_NEW_BUY_SIGNAL"},
+    ]
+    before = deepcopy(rows)
+    popup = HistoryPopup(ui_root, rows_provider=lambda _mode: [], signals_provider=lambda: rows)
+    try:
+        popup.tabs.set("TÍN HIỆU")
+        ui_root.update_idletasks()
+        tree = popup.signal_tree
+        assert tree.heading("#0", "text") == "NGÀY / MÃ / GIỜ GHI NHẬN"
+        assert tree.heading("suggestion", "text") == "XỬ LÝ"
+        assert tree.heading("display_signal", "text") == "SỰ KIỆN"
+        parent = tree.get_children()[0]
+        assert "Xếp 0" in tree.set(parent, "reason")
+        symbol = tree.get_children(parent)[0]
+        sell_later, sell, cancelled = tree.get_children(symbol)
+        assert tree.set(cancelled, "display_signal") == "MẤT ENTRY"
+        assert tree.set(cancelled, "suggestion") == "Hủy chờ"
+        assert tree.set(sell, "suggestion") == "Chỉ tín hiệu"
+        assert tree.set(sell, "display_signal") == "EXIT · E"
+        assert tree.item(sell, "text").strip() == "14:00:01"
+        assert tree.item(sell_later, "text").strip() == "14:06:11"
+        assert rows == before
+    finally:
+        popup.close()

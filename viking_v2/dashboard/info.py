@@ -205,7 +205,9 @@ class InfoPopup:
         ]
         buy_conditions = " + ".join(
             label for enabled, label in (
-                (p.buy_signal_use_ema, f"EMA {p.buy_ema_fast}/{p.buy_ema_slow}"),
+                (p.buy_signal_use_ema,
+                 f"EMA {p.buy_ema_fast}/{p.buy_ema_slow} CẮT LÊN" if p.buy_signal_require_ema_cross
+                 else f"EMA{p.buy_ema_fast} > EMA{p.buy_ema_slow}"),
                 (p.buy_signal_use_rsi, f"RSI{p.rsi_period} ↑"),
             ) if enabled
         ) or "OFF"

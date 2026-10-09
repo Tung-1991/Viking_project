@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime
+from math import isfinite
 import re
+from pathlib import Path
 import tkinter as tk
 from tkinter import font as tkfont
-from tkinter import ttk
+from tkinter import ttk, filedialog, messagebox, simpledialog
 from typing import Any, Callable
 
 import customtkinter as ctk
 
 from ..branding import window_title
+from ..services.indicator_comparison import IndicatorComparisonStore, number_comparison
 
 # One palette for every popup, so the app cannot drift into four colour schemes.
 PALETTE = {
@@ -125,7 +128,7 @@ _SIGNAL_REASONS = {
     "BROKER_FAILED": "Gửi lệnh BUY tới broker thất bại",
     "CORPORATE_ACTION_BLOCK": "Đang chặn vì sự kiện quyền",
     "MARKET_STATE_UNKNOWN": "Chưa xác nhận trạng thái thị trường",
-    "NO_NEW_BUY_SIGNAL": "Chỉ là tín hiệu thoát, không mua",
+    "NO_NEW_BUY_SIGNAL": "Chưa có tín hiệu BUY mới",
     "BUY_CONFIRMATION_WAIT": "Đang giữ điều kiện BUY đủ số phút đã đặt",
     "BUY_WINDOW_WAIT": "Tín hiệu đang chờ đến khung giờ mua",
     "BUY_WINDOW_BROKEN": "Điều kiện BUY mất trong khi chờ giờ mua",
@@ -149,18 +152,27 @@ def signal_advice(row: dict[str, Any]) -> tuple[str, str]:
         held = str(row.get("confirmation_minutes", "0") or "0")
         required = str(row.get("confirmation_required", "") or "")
         return "CHỜ BUY", f"Xác nhận {held}/{required} phút"
+    if blocked == "BUY_WINDOW_WAIT":
+        window = str(row.get("buy_window", "") or "")
+        return "CHỜ GIỜ MUA", f"Chưa xếp lệnh; chờ khung {window}" if window else "Chưa xếp lệnh; chờ khung giờ mua"
+    if blocked in {"BUY_WINDOW_BROKEN", "BUY_CONFIRMATION_BROKEN"}:
+        return "HỦY CHỜ BUY", _SIGNAL_REASONS[blocked] + "; không phải BUY mới"
+    if blocked == "BUY_WINDOW_EXPIRED":
+        return "HẾT GIỜ MUA", _SIGNAL_REASONS[blocked]
+    if signal == "SELL" and acted == "WAIT" and blocked == "NO_NEW_BUY_SIGNAL":
+        return "CHỈ TÍN HIỆU SELL", "Ghi nhận tín hiệu SELL; không tạo lệnh bán"
     if blocked or acted == "WAIT":
-        suggestion = "KHÔNG MUA" if signal == "BUY" else "KHÔNG THOÁT"
+        suggestion = "BUY BỊ CHẶN" if signal == "BUY" else "CHƯA XẾP SELL" if signal == "SELL" else "CHỈ THÔNG BÁO"
         return suggestion, _SIGNAL_REASONS.get(blocked, blocked.replace("_", " ") or "Rule chưa cho phép")
     if signal == "BUY" and acted == "BUY":
-        return "CÓ THỂ MUA", "Đủ điều kiện tín hiệu BUY đang bật"
+        return "ĐÃ XẾP BUY", "Đã tạo yêu cầu BUY; chưa xác nhận broker đã nhận/khớp"
     if signal == "SELL" and acted == "SELL":
-        return "THOÁT VỊ THẾ", "Đủ điều kiện tín hiệu SELL đang bật"
+        return "ĐÃ XẾP SELL", "Đã tạo yêu cầu SELL; chưa xác nhận broker đã nhận/khớp"
     return "THEO DÕI", "Có tín hiệu nhưng chưa hành động"
 
 
 def signal_rows_by_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Group detailed signals by date while hiding exact restart duplicates."""
+    """Group events without hiding distinct times that happen to share prices."""
     days: dict[str, list[dict[str, Any]]] = {}
     seen: dict[str, dict[tuple[Any, ...], int]] = {}
     for raw in rows or []:
@@ -172,6 +184,7 @@ def signal_rows_by_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         day = timestamp[:10]
         signature = (
+            timestamp,
             str(raw.get("symbol", "") or "").upper(), signal,
             str(raw.get("execution_mode", "") or "").upper(),
             str(raw.get("price", "") or ""), str(raw.get("ema_fast", "") or ""),
@@ -179,23 +192,37 @@ def signal_rows_by_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             str(raw.get("market_state", "") or "").upper(),
             str(raw.get("acted", "") or "").upper(),
             str(raw.get("blocked_by", "") or "").upper(),
+            str(raw.get("rsi_previous", "") or ""),
+            str(raw.get("signal_cycle", "") or ""), str(raw.get("candle_key", "") or ""),
         )
         suggestion, reason = signal_advice(raw)
         detail = {
             **raw,
             "timestamp": timestamp,
             "time": timestamp[11:19] if len(timestamp) >= 19 else timestamp,
-            "symbol": signature[0],
+            "first_recorded_at": timestamp,
+            "symbol": str(raw.get("symbol", "") or "").upper(),
             "signal": signal,
+            "display_signal": (
+                "MẤT ENTRY" if str(raw.get("blocked_by", "") or "").upper()
+                in {"BUY_WINDOW_BROKEN", "BUY_CONFIRMATION_BROKEN"}
+                else "EXIT · E" if signal in {"SELL", "E ALERT"}
+                else "ENTRY" if signal == "BUY" else signal
+            ),
             "suggestion": suggestion,
             "reason": reason,
             "repeat_count": 1,
+            "ema_comparison": number_comparison(raw.get("ema_fast"), raw.get("ema_slow"), 4),
+            "rsi_comparison": number_comparison(raw.get("rsi"), raw.get("rsi_previous")),
+            "display_price": _signal_price(raw.get("price")),
         }
         previous = seen.setdefault(day, {}).get(signature)
         if previous is not None:
-            days[day][previous]["timestamp"] = timestamp
-            days[day][previous]["time"] = detail["time"]
-            days[day][previous]["repeat_count"] += 1
+            existing = days[day][previous]
+            existing["first_recorded_at"] = min(existing["first_recorded_at"], timestamp)
+            existing["timestamp"] = max(existing["timestamp"], timestamp)
+            existing["time"] = existing["timestamp"][11:19]
+            existing["repeat_count"] += 1
             continue
         seen[day][signature] = len(days.setdefault(day, []))
         days[day].append(detail)
@@ -206,12 +233,15 @@ def signal_rows_by_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         output.append({
             "date": day,
             "rows": details,
+            "symbols": sorted({row["symbol"] for row in details}),
+            "waiting_count": sum(row.get("blocked_by") in {"BUY_WINDOW_WAIT", "BUY_CONFIRMATION_WAIT"} for row in details),
+            "lost_count": sum(row.get("display_signal") == "MẤT ENTRY" for row in details),
             "buy_count": sum(str(row.get("signal", "")).upper() == "BUY" for row in details),
-            "sell_count": sum(str(row.get("signal", "")).upper() == "SELL" for row in details),
+            "sell_count": sum(str(row.get("signal", "")).upper() in {"SELL", "E ALERT"} for row in details),
             "allowed_count": sum(
                 str(row.get("signal", "") or "").upper() == "BUY"
                 and
-                str(row.get("acted", "") or "").upper() != "WAIT"
+                str(row.get("acted", "") or "").upper() == "BUY"
                 and not str(row.get("blocked_by", "") or "")
                 for row in details
             ),
@@ -221,10 +251,21 @@ def signal_rows_by_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     str(row.get("acted", "") or "").upper() == "WAIT"
                     or bool(str(row.get("blocked_by", "") or ""))
                 )
+                and row.get("blocked_by") not in {
+                    "BUY_WINDOW_WAIT", "BUY_CONFIRMATION_WAIT", "BUY_WINDOW_BROKEN", "BUY_CONFIRMATION_BROKEN",
+                }
                 for row in details
             ),
         })
     return sorted(output, key=lambda group: str(group.get("date", "")), reverse=True)
+
+
+def _signal_price(value: Any) -> str:
+    try:
+        number = float(value)
+        return f"{number * 1000:,.0f} đ" if isfinite(number) and number > 0 else "—"
+    except (TypeError, ValueError, OverflowError):
+        return "—"
 
 
 def install_fast_scroll(root: ctk.CTk, pixels: int = 300) -> None:
@@ -708,10 +749,16 @@ class HistoryPopup:
         initial_mode: str = "PAPER",
         on_visibility_changed: Callable[[bool], None] | None = None,
         signals_provider: Callable[[], list[dict[str, Any]]] | None = None,
+        indicator_comparison: IndicatorComparisonStore | None = None,
     ):
         self.parent = parent
         self.rows_provider = rows_provider
         self.signals_provider = signals_provider
+        if indicator_comparison is None:
+            from .. import config
+            indicator_comparison = IndicatorComparisonStore(config.RUNTIME_ROOT / "indicator_comparison")
+        self.indicator_comparison = indicator_comparison
+        self.indicator_basis = "DNSE"
         self.on_visibility_changed = on_visibility_changed
         parent.update_idletasks()
         screen_w = max(1100, int(parent.winfo_screenwidth() or 1100))
@@ -829,21 +876,43 @@ class HistoryPopup:
         ("execution_mode", "CHẾ ĐỘ", 95, "center"),
         ("watchlist_priority", "ƯU TIÊN FA", 125, "center"),
         ("slot_usage", "SLOT", 90, "center"),
-        ("suggestion", "GỢI Ý", 180, "center"),
-        ("signal", "TÍN HIỆU EMA", 150, "center"),
-        ("price", "GIÁ", 100, "center"),
-        ("ema_fast", "EMA NHANH", 150, "center"),
-        ("ema_slow", "EMA CHẬM", 150, "center"),
-        ("rsi", "RSI", 90, "center"),
+        ("display_signal", "SỰ KIỆN", 140, "center"),
+        ("suggestion", "XỬ LÝ", 140, "center"),
+        ("display_price", "GIÁ", 130, "center"),
+        ("ema_comparison", "EMA NHANH / CHẬM", 235, "center"),
+        ("rsi_comparison", "RSI HIỆN TẠI / TRƯỚC", 205, "center"),
+        ("rsi_previous_date", "PHIÊN RSI TRƯỚC", 170, "center"),
         ("market_state", "THỊ TRƯỜNG", 210, "center"),
-        ("reason", "LÝ DO", 360, "w"),
+        ("reason", "LÝ DO", 540, "w"),
     )
 
     def _build_signal_tab(self) -> None:
         """Every signal the rule produced, whether the bot could act or not."""
         frame = self.tabs.add("TÍN HIỆU")
         frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(0, weight=1)
+        frame.grid_rowconfigure(1, weight=1)
+        toolbar = ctk.CTkFrame(frame, fg_color="transparent")
+        toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=8, pady=4)
+        toolbar.grid_columnconfigure(0, weight=1)
+        self.signal_basis_status = ctk.CTkLabel(
+            toolbar, text="DNSE · SỐ BOT ĐÃ GHI", font=("Segoe UI", 12), anchor="w",
+        )
+        self.signal_basis_status.grid(row=0, column=0, sticky="w")
+        self.signal_basis_button = ctk.CTkSegmentedButton(
+            toolbar, values=["DNSE", "TRADINGVIEW"], command=self._change_indicator_basis,
+            font=("Segoe UI", 12, "bold"),
+        )
+        self.signal_basis_button.set("DNSE")
+        self.signal_basis_button.grid(row=0, column=1, padx=6)
+        _HoverHint(self.signal_basis_status, "DNSE: giữ số bot đã ghi. TradingView: tính lại từ CSV 1D đầy đủ + giá lúc ghi.\nChỉ đối chiếu, không sửa tín hiệu/lệnh cũ; không quy đổi RSI bằng một hệ số.")
+        ctk.CTkButton(
+            toolbar, text="NẠP CSV 1D", width=110, command=self._import_tradingview,
+            font=("Segoe UI", 11, "bold"),
+        ).grid(row=0, column=2, padx=6)
+        ctk.CTkButton(
+            toolbar, text="XUẤT EXCEL", width=110, command=self._export_signals,
+            font=("Segoe UI", 11, "bold"),
+        ).grid(row=0, column=3)
         keys = tuple(item[0] for item in self.SIGNAL_COLUMNS)
         tree = ttk.Treeview(
             frame, columns=keys, show="tree headings", selectmode="browse",
@@ -860,7 +929,7 @@ class HistoryPopup:
             foreground=PALETTE["TITLE"], font=FONT_TABLE_HEADING,
             relief="flat", padding=(10, 9),
         )
-        tree.heading("#0", text="NGÀY / GIỜ", anchor="w")
+        tree.heading("#0", text="NGÀY / MÃ / GIỜ GHI NHẬN", anchor="w")
         tree.column("#0", width=320, minwidth=270, anchor="w", stretch=True)
         for key, title, width_px, anchor in self.SIGNAL_COLUMNS:
             tree.heading(key, text=title, anchor=anchor)
@@ -875,11 +944,11 @@ class HistoryPopup:
             "signal_day", background=PALETTE["SURFACE_2"], foreground=PALETTE["TITLE"],
             font=("Segoe UI", 12, "bold"),
         )
-        tree.grid(row=0, column=0, sticky="nsew", padx=(5, 0), pady=(5, 0))
+        tree.grid(row=1, column=0, sticky="nsew", padx=(5, 0), pady=(5, 0))
         yscroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
         xscroll = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
-        yscroll.grid(row=0, column=1, sticky="ns", pady=(5, 0))
-        xscroll.grid(row=1, column=0, sticky="ew", padx=(5, 0))
+        yscroll.grid(row=1, column=1, sticky="ns", pady=(5, 0))
+        xscroll.grid(row=2, column=0, sticky="ew", padx=(5, 0))
 
         def update_xscroll(first: str, last: str) -> None:
             xscroll.set(first, last)
@@ -891,12 +960,16 @@ class HistoryPopup:
         tree.configure(yscrollcommand=yscroll.set, xscrollcommand=update_xscroll)
         self.signal_tree = tree
         footer = ctk.CTkFrame(frame, fg_color="transparent")
-        footer.grid(row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 4))
+        footer.grid(row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 4))
         footer.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             footer,
-            text="Chỉ hiện 7 ngày gần nhất · Excel tự lưu theo tháng trong excel_archive",
+            text=(
+                "ENTRY / MẤT ENTRY / EXIT (E) là tín hiệu, không phải đã khớp lệnh. Giờ ghi nhận, không phải giờ Telegram.\n"
+                "Chỉ hiện 7 ngày gần nhất · Excel tự lưu theo tháng trong excel_archive"
+            ),
             font=("Segoe UI", 11), text_color=PALETTE["MUTED"], anchor="w",
+            justify="left",
         ).grid(row=0, column=0, sticky="w")
         self.signal_empty = ctk.CTkLabel(
             frame, text="CHƯA GHI ĐƯỢC TÍN HIỆU NÀO", font=("Segoe UI", 12, "bold"),
@@ -906,8 +979,19 @@ class HistoryPopup:
         tree = getattr(self, "signal_tree", None)
         if tree is None or not tree.winfo_exists():
             return
+        opened = {}
+        for day_id in tree.get_children():
+            opened[day_id] = tree.item(day_id, "open")
+            for symbol_id in tree.get_children(day_id):
+                opened[symbol_id] = tree.item(symbol_id, "open")
         tree.delete(*tree.get_children())
         raw_rows = list(self.signals_provider() if self.signals_provider else [])
+        if self.indicator_basis == "TRADINGVIEW":
+            raw_rows = self.indicator_comparison.compare(raw_rows)
+            failures = sum(bool(row.get("comparison_error")) for row in raw_rows)
+            self.signal_basis_status.configure(text=f"TRADINGVIEW · ĐỐI CHIẾU · {failures} dòng thiếu dữ liệu/hệ số")
+        else:
+            self.signal_basis_status.configure(text="DNSE · SỐ BOT ĐÃ GHI · thiếu mốc RSI cũ hiện —")
         days = signal_rows_by_day(raw_rows)
         for index, group in enumerate(days):
             day = str(group.get("date", "") or "")
@@ -916,36 +1000,110 @@ class HistoryPopup:
             except ValueError:
                 day_label = day
             details = list(group.get("rows") or [])
-            raw_count = int(group.get("buy_count", 0)) + int(group.get("sell_count", 0))
-            group_values = (
-                "",
-                "", "", "",
-                f"{int(group.get('allowed_count', 0))} BUY ĐÃ XẾP",
-                (
-                    f"{int(group.get('blocked_count', 0))} BUY BỊ CHẶN"
-                    f" · {int(group.get('sell_count', 0))} SELL"
-                ),
-                "", "", "", "", "", "",
-            )
+            raw_count = len(details)
+            summary = (f"Xếp {group['allowed_count']} · Chờ {group['waiting_count']} · Chặn {group['blocked_count']}"
+                       f" · Mất ENTRY {group['lost_count']} · EXIT {group['sell_count']}")
             parent = tree.insert(
                 "", "end", text=f"  {day_label} · {raw_count} TÍN HIỆU",
-                open=index == 0, tags=("signal_day",),
-                values=group_values,
+                iid=f"day:{day}", open=opened.get(f"day:{day}", index == 0), tags=("signal_day",),
+                values=tuple(summary if key == "reason" else "" for key, *_ in self.SIGNAL_COLUMNS),
             )
+            symbol_parents = {}
+            for symbol in group["symbols"]:
+                iid = f"symbol:{day}:{symbol}"
+                count = sum(row["symbol"] == symbol for row in details)
+                symbol_parents[symbol] = tree.insert(
+                    parent, "end", iid=iid, text=f"  {symbol} · {count} sự kiện",
+                    open=opened.get(iid, False), tags=("signal_day",),
+                )
             for row in details:
                 signal = str(row.get("signal", "") or "").upper()
                 acted = str(row.get("acted", "") or "").upper()
                 blocked = str(row.get("blocked_by", "") or "")
                 tag = "blocked" if blocked or acted == "WAIT" else "buy" if signal == "BUY" else "sell"
                 values = dict(row)
+                values["suggestion"] = {
+                    "CHỜ GIỜ MUA": "Chờ giờ", "CHỜ BUY": "Chờ xác nhận", "HỦY CHỜ BUY": "Hủy chờ",
+                    "HẾT GIỜ MUA": "Hết giờ", "BUY BỊ CHẶN": "Chặn", "ĐÃ XẾP BUY": "Đã xếp",
+                    "ĐÃ XẾP SELL": "Đã xếp", "CHỈ TÍN HIỆU SELL": "Chỉ tín hiệu", "CHƯA XẾP SELL": "Chưa xếp",
+                }.get(values["suggestion"], values["suggestion"])
+                if row.get("comparison_error"):
+                    values["reason"] = row["comparison_error"]
+                elif row.get("comparison_source") == "TRADINGVIEW":
+                    values["reason"] = ("TV: đạt ENTRY" if row.get("comparison_entry") else "TV: chưa đạt ENTRY") + " · lệnh cũ không đổi"
+                    if row.get("comparison_periods_defaulted"):
+                        values["reason"] += " · đối chiếu EMA3/6, RSI14"
+                elif not row.get("rsi_previous") and row.get("rsi_previous") != 0:
+                    values["reason"] += " · Bản cũ thiếu mốc RSI"
+                recorded_time = str(row.get("time", "") or "")
+                if int(row.get("repeat_count", 1)) > 1:
+                    first_time = str(row.get("first_recorded_at", ""))[11:19]
+                    recorded_time = f"{first_time}–{recorded_time} (×{row['repeat_count']})"
                 tree.insert(
-                    parent, "end", text=f"    {row.get('time', '')}", tags=(tag,),
+                    symbol_parents[row["symbol"]], "end", text=f"    {recorded_time}", tags=(tag,),
                     values=tuple(values.get(key, "") for key, *_ in self.SIGNAL_COLUMNS),
                 )
         if days:
             self.signal_empty.place_forget()
         else:
             self.signal_empty.place(relx=0.5, rely=0.5, anchor="center")
+
+    def _change_indicator_basis(self, source: str) -> None:
+        self.indicator_basis = source
+        self._refresh_signals()
+
+    def _import_tradingview(self) -> None:
+        path = filedialog.askopenfilename(parent=self.top, title="TradingView · CSV 1D (giá VND)", filetypes=[("CSV", "*.csv")])
+        if not path:
+            return
+        match = re.search(r"(?:HOSE|HNX|UPCOM)[_: -]([A-Z0-9]+)", Path(path).stem.upper())
+        symbol = simpledialog.askstring("TradingView", "Mã của file CSV 1D:", parent=self.top,
+                                        initialvalue=match.group(1) if match else "")
+        if not symbol:
+            return
+        try:
+            count = self.indicator_comparison.import_daily(path, symbol.strip().upper())
+            self.indicator_basis = "TRADINGVIEW"
+            self.signal_basis_button.set("TRADINGVIEW")
+            self._refresh_signals()
+            messagebox.showinfo("TradingView", f"Đã nạp {count} nến 1D của {symbol.upper()}.\nChỉ đối chiếu phiên cuối của CSV; lệnh cũ không đổi.", parent=self.top)
+        except (ValueError, OSError, RuntimeError) as exc:
+            messagebox.showerror("TradingView", str(exc), parent=self.top)
+
+    def _export_signals(self) -> None:
+        path = filedialog.asksaveasfilename(parent=self.top, title="Xuất tín hiệu", defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")])
+        if not path:
+            return
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font
+            original = list(self.signals_provider() if self.signals_provider else [])
+            book = Workbook()
+            for index, (name, rows) in enumerate([
+                ("DNSE GỐC", original),
+                ("TRADINGVIEW ĐỐI CHIẾU", self.indicator_comparison.compare(original)),
+            ]):
+                sheet = book.active if index == 0 else book.create_sheet()
+                sheet.title = name
+                sheet.append(["GIỜ GHI NHẬN", *[title for _, title, *_ in self.SIGNAL_COLUMNS], "NGUỒN", "LỖI ĐỐI CHIẾU"])
+                for cell in sheet[1]:
+                    cell.font = Font(bold=True)
+                for day in signal_rows_by_day(rows):
+                    for row in day["rows"]:
+                        sheet.append([row["timestamp"], *[row.get(key, "") for key, *_ in self.SIGNAL_COLUMNS],
+                                      row.get("comparison_source", "DNSE"), row.get("comparison_error", "")])
+                sheet.freeze_panes = "A2"
+                sheet.auto_filter.ref = sheet.dimensions
+                for sheet_row in sheet.iter_rows():
+                    for cell in sheet_row:
+                        if isinstance(cell.value, str) and cell.value.startswith(("=", "+", "-", "@")):
+                            cell.data_type = "s"
+                for column in sheet.columns:
+                    sheet.column_dimensions[column[0].column_letter].width = min(65, max(16, max(len(str(cell.value or "")) for cell in column) + 2))
+            book.save(path)
+            book.close()
+        except (OSError, ValueError, ImportError) as exc:
+            messagebox.showerror("Xuất Excel", str(exc), parent=self.top)
     def show(self) -> None:
         self.top.deiconify()
         self.top.lift()

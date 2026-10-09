@@ -6,6 +6,7 @@ import pytest
 from viking_v2.config import AppSettings
 from viking_v2.dashboard.actions import DashboardActionsMixin
 from viking_v2.dashboard.panels import DashboardPanelsMixin
+from viking_v2.dashboard.view import COL_GREEN, COL_PREVIEW_TEXT, COL_RED, COL_TEXT
 
 
 class Value:
@@ -131,12 +132,18 @@ def test_rule_preview_keeps_current_money_in_hint_not_an_extra_row(budget):
     assert "MANUAL" in view._entry_capital_hint()
 
 
-@pytest.mark.parametrize("current,previous,expected", [
-    (67.2, None, "67.2"), (67.2, float("inf"), "67.2"),
-    (67.2, 65, "67.2 ↑"), (67.2, 70, "67.2 ↓"), (0, 0, "0.0 →"),
-    (float("nan"), 65, "--"), (float("inf"), 65, "--"), (101, 65, "--"),
+@pytest.mark.parametrize("signal", ["", "BUY", "SELL"])
+@pytest.mark.parametrize("current,previous,expected,color", [
+    (67.2, None, "-- → 67.20", COL_PREVIEW_TEXT),
+    (67.2, float("inf"), "-- → 67.20", COL_PREVIEW_TEXT),
+    (67.2, 65, "65.00 → 67.20 ↑", COL_GREEN),
+    (67.2, 70, "70.00 → 67.20 ↓", COL_RED),
+    (0, 0, "0.00 → 0.00 =", COL_TEXT),
+    (float("nan"), 65, "65.00 → --", COL_PREVIEW_TEXT),
+    (float("inf"), 65, "65.00 → --", COL_PREVIEW_TEXT),
+    (101, 65, "65.00 → --", COL_PREVIEW_TEXT),
 ])
-def test_rsi_current_value_does_not_depend_on_previous_value_or_imply_e_enabled(current, previous, expected):
+def test_rsi_preview_shows_daily_comparison_not_the_overall_signal_color(current, previous, expected, color, signal):
     view = subject()
     for name in ("market", "market_detail", "title", "ema", "sell_ema", "rsi",
                  "phase3", "phase3_detail", "phase3_guard", "reason",
@@ -144,18 +151,54 @@ def test_rsi_current_value_does_not_depend_on_previous_value_or_imply_e_enabled(
         setattr(view, f"preview_rule_{name}", Label())
     view._em_states = {"indicator_exit": False}
     view._render_exit_sell_preview = lambda *_args: None
-    status = {"execution_mode": "REAL", "decisions": {"AAA": {"details": {"indicators": {
+    status = {"execution_mode": "REAL", "decisions": {"AAA": {"signal": signal, "details": {"indicators": {
         "buy_ema_fast": 73.76, "buy_ema_slow": 72.7,
         "sell_ema_fast": float("nan"), "sell_ema_slow": 72.7,
         "rsi": current, "rsi_previous": previous,
     }}}}}
     view._refresh_rule_preview(status, "AAA")
     assert view.preview_rule_rsi.options["text"] == expected
+    assert view.preview_rule_rsi.options["text_color"] == color
     assert view.preview_rule_ema.options["text"] == "73.76 > 72.70"
     assert view.preview_rule_sell_ema.options["text"] == "-- / --"
     assert view.preview_rule_buy_ema_key.options["text"] == "EMA BUY 3/6:"
     assert view.preview_rule_rsi_key.options["text"] == "RSI14:"
     assert "công tắc tự mua/bán" in view._indicator_preview_hint()
+
+
+@pytest.mark.parametrize("enabled,crosses,expected", [
+    (True, 2, "WHIPSAW: 2/3 · 7 phiên · OK"),
+    (True, 3, "WHIPSAW: 3/3 · 7 phiên · KHÓA BUY"),
+    (True, 4, "WHIPSAW: 4/3 · 7 phiên · KHÓA BUY"),
+    (False, 3, "WHIPSAW: 3/3 · 7 phiên · OFF"),
+    (True, None, "WHIPSAW: --/3 · 7 phiên · CHỜ DỮ LIỆU"),
+])
+def test_whipsaw_preview_shows_actual_count_window_and_lock_without_mutating_rule(enabled, crosses, expected):
+    from copy import deepcopy
+    view = subject()
+    for name in ("market", "market_detail", "title", "ema", "sell_ema", "rsi",
+                 "phase3", "phase3_detail", "phase3_guard", "reason"):
+        setattr(view, f"preview_rule_{name}", Label())
+    view._em_states = {}
+    view._render_exit_sell_preview = lambda *_args: None
+    checks = {"whipsaw_enabled": enabled, "whipsaw_crossovers": crosses,
+              "whipsaw_limit": 3, "whipsaw_window": 7,
+              "loss_streak": 0, "loss_lock_count": 3}
+    status = {"execution_mode": "REAL", "decisions": {"AAA": {"action": "WAIT",
+              "details": {"entry_checks": checks}}}}
+    before = deepcopy(status)
+    settings_before = view.settings.to_dict()
+    view._refresh_rule_preview(status, "AAA")
+    assert view.preview_rule_phase3_detail.options["text"] == f"{expected} · LỖ: 0/3"
+    assert view.preview_rule_phase3_guard.options["text"].startswith(expected)
+    assert expected in view._entry_capital_hint()
+    assert "không cộng từng tick" in view._entry_capital_hint()
+    assert status == before
+    assert view.settings.to_dict() == settings_before
+    if enabled and crosses is not None and crosses >= 3:
+        assert view.preview_rule_phase3_detail.options["text_color"] == COL_RED
+    else:
+        assert view.preview_rule_phase3_detail.options["text_color"] == COL_PREVIEW_TEXT
 
 
 def test_preview_status_has_only_one_hover_handler(ui_root, monkeypatch):
@@ -211,6 +254,9 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
         view.execute_button = Label()
         status = {"execution_mode": "REAL", "decisions": {"AAA": {
             "market_state": "UPTREND", "details": {"exposure": .9,
+                "entry_checks": {"whipsaw_enabled": True, "whipsaw_crossovers": 3,
+                                 "whipsaw_limit": 3, "whipsaw_window": 7,
+                                 "loss_streak": 0, "loss_lock_count": 3},
                 "market": {"confirmation_pending": True, "candidate_state": "DOWNTREND",
                            "confirmation_count": 1, "confirmation_required": 3},
                 "indicators": {"buy_ema_fast": 7.159, "buy_ema_slow": 7.156,
@@ -227,7 +273,7 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
         ui_root.update_idletasks()
         card = view.preview_rule_market.master
         from tkinter import font as tkfont
-        for label in (view.preview_rule_market, view.preview_rule_phase3,
+        for label in (view.preview_rule_market, view.preview_rule_phase3, view.preview_rule_phase3_detail,
                       view.preview_rule_ema, view.preview_rule_sell_ema, view.preview_rule_rsi):
             rendered_font = tkfont.Font(root=ui_root, font=label._label.cget("font"))
             assert rendered_font.measure(label.cget("text")) <= label.winfo_width(), (
@@ -239,6 +285,7 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
             assert "TỶ TRỌNG CHỌN TAY" in view.preview_rule_market_detail.cget("text")
             assert view._market_confirmation_hint().startswith("TỶ TRỌNG CHỌN TAY:")
         assert "WHIPSAW:" in view.preview_rule_phase3_detail.cget("text")
+        assert "3/3 · 7 phiên · KHÓA BUY" in view.preview_rule_phase3_detail.cget("text")
         assert "E BẬT" not in view.preview_rule_rsi.cget("text")
         for name, value in (("buy_ema", view.preview_rule_ema), ("sell_ema", view.preview_rule_sell_ema),
                             ("rsi", view.preview_rule_rsi)):

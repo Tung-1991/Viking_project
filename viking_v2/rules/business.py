@@ -81,6 +81,7 @@ def crossover_signal(
     prefer: str = "BUY",
     buy_use_ema: bool = True,
     buy_use_rsi: bool = True,
+    buy_signal_require_ema_cross: bool = False,
     sell_use_ema: bool = True,
     sell_use_rsi: bool = True,
 ) -> str:
@@ -106,6 +107,7 @@ def crossover_signal(
         prefer=prefer,
         buy_use_ema=buy_use_ema,
         buy_use_rsi=buy_use_rsi,
+        buy_signal_require_ema_cross=buy_signal_require_ema_cross,
         sell_use_ema=sell_use_ema,
         sell_use_rsi=sell_use_rsi,
     )
@@ -118,13 +120,15 @@ def crossover_signal_from_snapshots(
     prefer: str = "BUY",
     buy_use_ema: bool = True,
     buy_use_rsi: bool = True,
+    buy_signal_require_ema_cross: bool = False,
     sell_use_ema: bool = True,
     sell_use_rsi: bool = True,
 ) -> str:
-    """Evaluate one EMA transition between two consecutive observations.
+    """Evaluate BUY levels (or an optional fresh cross) and the SELL transition.
 
     ``current`` may be an unfinished daily candle rebuilt from a live tick or
-    an intraday source bar.  Its EMA values must be compared with the preceding
+    an intraday source bar. BUY defaults to current fast EMA > slow EMA.
+    When its fresh-cross option is enabled, compare with the preceding
     observation of that same candle, not repeatedly with yesterday's close.
     RSI keeps the documented daily comparison through ``rsi_previous``.
     """
@@ -170,18 +174,22 @@ def crossover_signal_from_snapshots(
 
     buy_ready = side_ready(
         use_ema=buy_use_ema, use_rsi=buy_use_rsi, slow_period=buy_slow_period,
-        ema_values=(current_buy_fast, current_buy_slow, previous_buy_fast, previous_buy_slow),
+        ema_values=(
+            (current_buy_fast, current_buy_slow, previous_buy_fast, previous_buy_slow)
+            if buy_signal_require_ema_cross else (current_buy_fast, current_buy_slow)
+        ),
     )
     sell_ready = side_ready(
         use_ema=sell_use_ema, use_rsi=sell_use_rsi, slow_period=sell_slow_period,
         ema_values=(current_sell_fast, current_sell_slow, previous_sell_fast, previous_sell_slow),
     )
 
-    # Cold starts and period changes have no previous observation. Do not compare
-    # missing values; each side must be ready independently of the other side.
-    crossed_up = buy_ready and (
+    # BUY level mode needs only current EMAs. Fresh-cross mode and SELL still
+    # require a valid previous observation; never compare missing EMA values.
+    buy_ema_ok = buy_ready and (
         not buy_use_ema or (
-            previous_buy_fast <= previous_buy_slow and current_buy_fast > current_buy_slow
+            current_buy_fast > current_buy_slow
+            and (not buy_signal_require_ema_cross or previous_buy_fast <= previous_buy_slow)
         )
     )
     crossed_down = sell_ready and (
@@ -190,7 +198,7 @@ def crossover_signal_from_snapshots(
         )
     )
     buy_signal = buy_ready and bool(buy_use_ema or buy_use_rsi) and (
-        (not buy_use_ema or crossed_up)
+        (not buy_use_ema or buy_ema_ok)
         and (not buy_use_rsi or current_rsi > previous_daily_rsi)
     )
     sell_signal = sell_ready and bool(sell_use_ema or sell_use_rsi) and (
@@ -219,6 +227,7 @@ def indicator_snapshot(
     sell_slow: int | None = None,
 ) -> dict[str, Any]:
     """Return the exact latest values used by the static M/B rule."""
+    rows = list(rows)
     values = closes(rows)
     fast = max(1, int(fast or 3))
     slow = max(1, int(slow or 6))
@@ -249,6 +258,7 @@ def indicator_snapshot(
         "sell_ema_slow": sell_slow_values[-1] if sell_slow_values else None,
         "rsi": current_rsi,
         "rsi_previous": previous_rsi,
+        "rsi_previous_time": rows[-2].get("time", "") if len(rows) >= 2 else "",
     }
 
 def crossover_count(rows: Iterable[dict[str, Any]], fast: int = 3, slow: int = 6, window: int = 10) -> int:
@@ -307,6 +317,7 @@ class StaticRuleParameters:
     rsi_period: int = int(DEFAULT_RULE_PARAMETERS["rsi_period"])
     buy_signal_use_ema: bool = bool(DEFAULT_RULE_PARAMETERS["buy_signal_use_ema"])
     buy_signal_use_rsi: bool = bool(DEFAULT_RULE_PARAMETERS["buy_signal_use_rsi"])
+    buy_signal_require_ema_cross: bool = bool(DEFAULT_RULE_PARAMETERS["buy_signal_require_ema_cross"])
     buy_volume_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["buy_volume_enabled"])
     buy_volume_average_sessions: int = int(DEFAULT_RULE_PARAMETERS["buy_volume_average_sessions"])
     buy_volume_min_ratio: float = float(DEFAULT_RULE_PARAMETERS["buy_volume_min_ratio"])
@@ -373,6 +384,7 @@ class StaticRuleParameters:
         self.buy_confirmation_enabled = bool(self.buy_confirmation_enabled)
         self.buy_signal_use_ema = bool(self.buy_signal_use_ema)
         self.buy_signal_use_rsi = bool(self.buy_signal_use_rsi)
+        self.buy_signal_require_ema_cross = bool(self.buy_signal_require_ema_cross)
         self.buy_volume_enabled = bool(self.buy_volume_enabled)
         self.sell_signal_use_ema = bool(self.sell_signal_use_ema)
         self.sell_signal_use_rsi = bool(self.sell_signal_use_rsi)
@@ -973,6 +985,7 @@ class StaticRule:
                 prefer="SELL" if quantity > 0 else "BUY",
                 buy_use_ema=self.params.buy_signal_use_ema,
                 buy_use_rsi=self.params.buy_signal_use_rsi,
+                buy_signal_require_ema_cross=self.params.buy_signal_require_ema_cross,
                 sell_use_ema=self.params.sell_signal_use_ema,
                 sell_use_rsi=self.params.sell_signal_use_rsi,
             )
@@ -987,6 +1000,7 @@ class StaticRule:
                 prefer="SELL" if quantity > 0 else "BUY",
                 buy_use_ema=self.params.buy_signal_use_ema,
                 buy_use_rsi=self.params.buy_signal_use_rsi,
+                buy_signal_require_ema_cross=self.params.buy_signal_require_ema_cross,
                 sell_use_ema=self.params.sell_signal_use_ema,
                 sell_use_rsi=self.params.sell_signal_use_rsi,
             )

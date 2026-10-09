@@ -13,6 +13,7 @@ from ..branding import APP_NAME
 from ..config import load_settings
 from ..connections.dnse.paper import PaperBroker
 from ..connections.dnse.client import DNSEClient
+from ..connections.dnse.snapshot_health import account_poll_interval
 from ..connections.dnse.websocket import DNSEMarketWS
 from .runtime import setup_logging
 from ..trading.market import MarketDataService
@@ -205,7 +206,9 @@ def run(account_id: str | None = None) -> int:
     settings = load_settings(account_id)
     rule = StaticRule(StaticRuleParameters.from_dict(settings.rule_parameters))
     rule_state = RuleStateStore(bridge.rule_state_path)
-    rule_state.discard_buy_candidates()
+    rule_state.discard_buy_candidates(recheck_current_conditions=not (
+        rule.params.buy_signal_use_ema and rule.params.buy_signal_require_ema_cross
+    ))
     trades = TradeStateStore(bridge.trade_state_path)
     queue = OrderQueue(bridge.pending_orders_path)
     queue.discard_unsubmitted_bot_buys("Restart: bỏ BUY tự động chưa gửi")
@@ -279,6 +282,7 @@ def run(account_id: str | None = None) -> int:
     ticks: dict[str, dict] = {symbol: {**tick, "stale": True} for symbol, tick in (previous_runtime_status.get("ticks") or {}).items() if isinstance(tick, dict)}
     quote_health = QuoteHealthMonitor(logger)
     decisions: dict[str, dict] = {}
+    last_account_error_logs: dict[str, tuple] = {}
     # No calendar request has completed yet: loading is not a failed request.
     initial_phase = "CALENDAR_LOADING" if connected else "NOT_CONFIGURED"
     publish_status(
@@ -334,7 +338,14 @@ def run(account_id: str | None = None) -> int:
             settings = load_settings(account_id)
             next_fingerprint = repr(settings.rule_parameters)
             if next_fingerprint != settings_fingerprint:
-                rule = StaticRule(StaticRuleParameters.from_dict(settings.rule_parameters))
+                next_params = StaticRuleParameters.from_dict(settings.rule_parameters)
+                next_requires_cross = next_params.buy_signal_use_ema and next_params.buy_signal_require_ema_cross
+                current_requires_cross = rule.params.buy_signal_use_ema and rule.params.buy_signal_require_ema_cross
+                if next_requires_cross != current_requires_cross:
+                    rule_state.discard_buy_candidates(
+                        recheck_current_conditions=not next_requires_cross,
+                    )
+                rule = StaticRule(next_params)
                 settings_fingerprint = next_fingerprint
             execution_mode = "PAPER" if runtime.paper_mode else "REAL"
             priority_symbol_set = set(settings.priority_symbols)
@@ -422,6 +433,11 @@ def run(account_id: str | None = None) -> int:
                     )
                 )
             if connected:
+                configure_polling = getattr(client, "set_account_poll_interval", None)
+                if callable(configure_polling):
+                    configure_polling(account_poll_interval(
+                        phase, queue.list_all(), symbol_phases=symbol_phases,
+                    ))
                 live_phase = any(value in {"ATO", "OPEN", "ATC"} for value in symbol_phases.values())
                 now_ts = time.time()
                 cache_changed = exchange_cache_changed
@@ -518,8 +534,21 @@ def run(account_id: str | None = None) -> int:
                             "execution_mode": decision_mode, "stage": "ACCOUNT_SNAPSHOT",
                             "exception_type": type(exc).__name__,
                         }
-                        logger.warning("Account snapshot %s failed: %s", decision_mode, exc, exc_info=True)
+                        snapshot_errors = ((client.api_health() or {}).get("snapshot_errors") or {}) if decision_mode == "REAL" and hasattr(client, "api_health") else {}
+                        snapshot_error = next((
+                            error for error in snapshot_errors.values()
+                            if error.get("error") == str(exc)
+                        ), {})
+                        if snapshot_error:
+                            cycle_error_context["snapshot_error"] = snapshot_error
+                        signature = (type(exc).__name__, str(exc))
+                        if last_account_error_logs.get(decision_mode) != signature:
+                            logger.warning("Account snapshot %s failed: %s", decision_mode, exc,
+                                           exc_info=not bool(snapshot_error))
+                            last_account_error_logs[decision_mode] = signature
                         continue
+                    if last_account_error_logs.pop(decision_mode, None) is not None:
+                        logger.info("Account snapshot %s recovered", decision_mode)
                     cycle_decision_time = datetime.now(VN_TZ)
                     for symbol in symbols:
                         cycle_stage = "MARKET_DATA"

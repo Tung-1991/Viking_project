@@ -9,6 +9,7 @@ import requests
 
 from ..models import TradeCycle
 from ..branding import APP_NAME
+from ..trading.market import VN_TZ
 
 
 logger = logging.getLogger("VIKING_V2.telegram")
@@ -60,6 +61,27 @@ class SignalTelegramService:
         self._pending_buys: dict[str, dict[str, Any]] = {}
         self._buy_timer: threading.Timer | None = None
         self._buy_window_started: datetime | None = None
+        self._buy_generation = 0
+
+    def configure_buy_delivery(self, *, buy_batch_minutes: float) -> None:
+        """Keep queued notices when switching delivery; never block the UI on I/O."""
+        seconds = max(0.0, float(buy_batch_minutes or 0.0) * 60.0)
+        with self._buy_lock:
+            if seconds == self.buy_batch_seconds:
+                return
+            self.buy_batch_seconds = seconds
+            if self._buy_timer is not None:
+                self._buy_timer.cancel()
+                self._buy_timer = None
+            if self._pending_buys:
+                elapsed = (
+                    (datetime.now() - self._buy_window_started).total_seconds()
+                    if self._buy_window_started else 0.0
+                )
+                # A zero-delay timer flushes already queued notices in its worker.
+                self._buy_timer = threading.Timer(max(0.0, seconds - elapsed), self.flush_buys)
+                self._buy_timer.daemon = True
+                self._buy_timer.start()
 
     @staticmethod
     def _price(value: float) -> str:
@@ -100,6 +122,7 @@ class SignalTelegramService:
         price: float,
         market_state: str,
         execution_mode: str = "",
+        order_info: dict[str, Any] | None = None,
     ) -> bool:
         symbol = str(symbol or "").strip().upper()
         signal_id = str(signal_id or "").strip().upper()
@@ -111,17 +134,18 @@ class SignalTelegramService:
             "price": float(price),
             "market_state": str(market_state or "UNKNOWN").upper(),
             "execution_mode": str(execution_mode or "").upper(),
+            "order_info": dict(order_info or {}),
         }
-        if self.buy_batch_seconds <= 0:
-            return self._send(self._format_buys([item]))
         with self._buy_lock:
-            self._pending_buys[self._buy_key(item)] = item
-            if self._buy_timer is None:
-                self._buy_window_started = datetime.now()
-                self._buy_timer = threading.Timer(self.buy_batch_seconds, self.flush_buys)
-                self._buy_timer.daemon = True
-                self._buy_timer.start()
-        return True
+            if self.buy_batch_seconds > 0:
+                self._pending_buys[self._buy_key(item)] = item
+                if self._buy_timer is None:
+                    self._buy_window_started = datetime.now()
+                    self._buy_timer = threading.Timer(self.buy_batch_seconds, self.flush_buys)
+                    self._buy_timer.daemon = True
+                    self._buy_timer.start()
+                return True
+        return self._send(self._format_buys([item]))
 
     def _format_buys(
         self,
@@ -131,6 +155,8 @@ class SignalTelegramService:
     ) -> str:
         if len(items) == 1:
             item = items[0]
+            if item.get("order_info"):
+                return "\n".join([*self._compact_buy_lines(item), "⏳ Chưa xác nhận đã gửi/khớp."])
             return "\n".join(
                 (
                     f"🟢 BUY · {item['symbol']}"
@@ -149,14 +175,34 @@ class SignalTelegramService:
             f"{started:%H:%M}–{datetime.now():%H:%M}",
             "",
         ]
-        lines.extend(
-            f"{item['symbol']} · "
-            + (f"{item.get('execution_mode')} · " if item.get("execution_mode") else "")
-            + f"{self._price(item['price'])} · {item['market_state']} · {item['signal_id']}"
-            for item in sorted(items, key=lambda value: str(value.get("symbol", "")))
-        )
-        lines.append("Thông báo tạo yêu cầu; không xác nhận đã gửi/khớp.")
+        for item in sorted(items, key=lambda value: str(value.get("symbol", ""))):
+            if item.get("order_info"):
+                lines.extend(self._compact_buy_lines(item))
+            else:
+                lines.append(
+                    f"{item['symbol']} · "
+                    + (f"{item.get('execution_mode')} · " if item.get("execution_mode") else "")
+                    + f"{self._price(item['price'])} · {item['market_state']} · {item['signal_id']}"
+                )
+        lines.append("⏳ Chưa xác nhận đã gửi/khớp." if any(item.get("order_info") for item in items)
+                     else "Thông báo tạo yêu cầu; không xác nhận đã gửi/khớp.")
         return "\n".join(lines)
+
+    def _compact_buy_lines(self, item: dict[str, Any]) -> list[str]:
+        info = item["order_info"]
+        created = datetime.fromtimestamp(float(info["created_at"]), VN_TZ)
+
+        def amount(value: float) -> str:
+            return f"{value / 1_000_000:.2f} tr" if value >= 1_000_000 else f"{value / 1000:.1f}K"
+
+        fee = float(info["fee_vnd"])
+        gross = float(info["gross_vnd"])
+        budget = float(info["budget_vnd"])
+        return [
+            f"🟢 BUY · {item['symbol']} · {item['execution_mode']} · ĐÃ XẾP LỆNH · #{str(info['order_id'])[:8]}",
+            f"🕒 {created:%H:%M} · {info['order_type']} · {int(info['quantity'])} CP · Giá tín hiệu {self._price(item['price'])}",
+            f"💰 Dự trù {amount(gross)} (gồm phí {amount(fee)}) / vốn {amount(budget)} · Giá tính vốn {self._price(info['budget_price'])}",
+        ]
 
     @staticmethod
     def _buy_key(item: dict[str, Any]) -> str:
@@ -173,16 +219,18 @@ class SignalTelegramService:
             self._pending_buys.clear()
             started = self._buy_window_started
             self._buy_window_started = None
+            generation = self._buy_generation
         if not items:
             return False
         sent = self._send(self._format_buys(items, started=started))
         with self._buy_lock:
-            if not sent:
+            if not sent and generation == self._buy_generation:
                 for item in items:
                     self._pending_buys.setdefault(self._buy_key(item), item)
                 if self._buy_timer is None:
                     self._buy_window_started = started or datetime.now()
-                    self._buy_timer = threading.Timer(self.buy_batch_seconds, self.flush_buys)
+                    # Switching to immediate must not cause a zero-delay retry loop.
+                    self._buy_timer = threading.Timer(max(60.0, self.buy_batch_seconds), self.flush_buys)
                     self._buy_timer.daemon = True
                     self._buy_timer.start()
         return sent
@@ -190,6 +238,7 @@ class SignalTelegramService:
     def cancel_pending_buys(self) -> int:
         """Drop an unsent BUY digest when the operator turns that category OFF."""
         with self._buy_lock:
+            self._buy_generation += 1
             timer = self._buy_timer
             self._buy_timer = None
             if timer is not None:
@@ -241,6 +290,65 @@ class SignalTelegramService:
         else:
             lines.append("Chỉ có tín hiệu; chưa gửi lệnh.")
         return self._send(chr(10).join(lines))
+
+    def notify_technical_buy(
+        self, *, symbol: str, price: float, market_state: str,
+        indicators: dict[str, Any], ema_enabled: bool, rsi_enabled: bool,
+        execution_mode: str = "",
+    ) -> bool:
+        """Report the technical BUY candidate, never an execution outcome."""
+        lines = [
+            f"⚪ TÍN HIỆU BUY · {str(symbol).upper()}"
+            + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
+            f"Giá {self._price(price)} · {str(market_state).upper()}",
+        ]
+        if ema_enabled:
+            lines.append(
+                f"EMA {int(indicators['buy_ema_fast_period'])}/{int(indicators['buy_ema_slow_period'])}: "
+                f"{self._price(indicators['buy_ema_fast'])} > {self._price(indicators['buy_ema_slow'])}"
+            )
+        if rsi_enabled:
+            lines.append(
+                f"RSI{int(indicators['rsi_period'])}: "
+                f"{float(indicators['rsi_previous']):.2f} → {float(indicators['rsi']):.2f} · tăng"
+            )
+        lines.append("Chỉ báo kỹ thuật; không xác nhận đã gửi/khớp lệnh.")
+        return self._send("\n".join(lines))
+
+    @staticmethod
+    def _comparison(left: float, right: float, *, scale: float = 1.0) -> str:
+        """Compare unrounded values; expand precision if two labels collide."""
+        left, right = float(left), float(right)
+        relation = ">" if left > right else "<" if left < right else "="
+        for digits in range(2, 7):
+            first, second = f"{left * scale:,.{digits}f}", f"{right * scale:,.{digits}f}"
+            if first != second or relation == "=":
+                break
+        else:
+            first, second = repr(left * scale), repr(right * scale)
+        return f"{first} {relation} {second}"
+
+    def notify_buy_lost(
+        self, *, symbol: str, price: float, indicators: dict[str, Any],
+        ema_enabled: bool, rsi_enabled: bool, observed_at: str,
+        execution_mode: str = "",
+    ) -> bool:
+        lines = [
+            f"⚫ MẤT BUY · {str(symbol).upper()} · {str(execution_mode).upper()} · {observed_at[11:19]}",
+            f"Giá {self._price(price)}",
+        ]
+        if ema_enabled:
+            lines.append(
+                f"EMA {int(indicators['buy_ema_fast_period'])}/{int(indicators['buy_ema_slow_period'])}: "
+                + self._comparison(indicators["buy_ema_fast"], indicators["buy_ema_slow"], scale=1000)
+            )
+        if rsi_enabled:
+            lines.append(
+                f"RSI{int(indicators['rsi_period'])} nay / phiên trước: "
+                + self._comparison(indicators["rsi"], indicators["rsi_previous"])
+            )
+        lines.append("Chưa tạo lệnh.")
+        return self._send("\n".join(lines))
 
     def notify_protect_alert(
         self,
@@ -402,7 +510,7 @@ class SignalTelegramService:
         )
 
     def notify_system_alert(
-        self, *, summary: str, execution_mode: str = "",
+        self, *, summary: str, execution_mode: str = "", severity: str = "ERROR",
     ) -> bool:
         summary = str(summary or "").strip()
         if not summary:
@@ -410,7 +518,7 @@ class SignalTelegramService:
         return self._send(
             "\n".join(
                 (
-                    "🔴 HỆ THỐNG CẦN KIỂM TRA"
+                    ("🟡 HỆ THỐNG · CẢNH BÁO" if severity == "WARNING" else "🔴 HỆ THỐNG CẦN KIỂM TRA")
                     + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
                     summary,
                     f"Xem HEALTH và log {APP_NAME} để kiểm tra chi tiết.",

@@ -177,6 +177,7 @@ BACKTEST_RULE_KEYS = PHASE_PARAMETER_KEYS | {
     "volume_confirmation", "no_compound_enabled", "force_min_lot_enabled",
     "buy_volume_enabled", "buy_volume_average_sessions", "buy_volume_min_ratio",
     "buy_signal_use_ema", "buy_signal_use_rsi",
+    "buy_signal_require_ema_cross",
     "sell_signal_use_ema", "sell_signal_use_rsi",
     "buy_confirmation_enabled", "buy_confirmation_minutes",
     "buy_confirmation_require_ema", "buy_confirmation_require_rsi",
@@ -1377,6 +1378,7 @@ class BacktestPopup:
         signal_toggle_row.grid(row=3, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
         self.buy_signal_ema = ctk.BooleanVar(value=params.buy_signal_use_ema)
         self.buy_signal_rsi = ctk.BooleanVar(value=params.buy_signal_use_rsi)
+        self.buy_signal_require_ema_cross = ctk.BooleanVar(value=params.buy_signal_require_ema_cross)
         self._label(signal_toggle_row, "TÍN HIỆU BUY", 13, bold=True).grid(row=0, column=0, sticky="w", padx=(0, 14))
         for column, (label, variable) in enumerate((
             ("BUY EMA", self.buy_signal_ema),
@@ -1386,6 +1388,16 @@ class BacktestPopup:
                 signal_toggle_row, text=label, variable=variable, width=96,
                 font=(FONT, 11, "bold"), fg_color=COL_GREEN, text_color=COL_TEXT,
             ).grid(row=0, column=column, sticky="w", padx=(0, 12))
+
+        ctk.CTkSwitch(
+            signal_toggle_row, text="BUY CẦN EMA VỪA VƯỢT LÊN", variable=self.buy_signal_require_ema_cross,
+            font=(FONT, 12), progress_color=COL_GREEN, text_color=COL_TEXT,
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self._hint(
+            signal_toggle_row,
+            "TẮT (mặc định): EMA nhanh hiện tại > EMA chậm. BẬT: lần trước ≤, lần này > mới tạo BUY mới.\n"
+            "REALTIME so hai lần quan sát intraday; CLOSED so hai nến ngày đã đóng. RSI vẫn so phiên trước. Không đổi E/SELL hoặc các khóa vào lệnh.",
+        ).grid(row=1, column=3, padx=10, pady=(8, 0))
 
         rule_toggle_row = ctk.CTkFrame(card, fg_color="transparent")
         rule_toggle_row.grid(row=4, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
@@ -1567,6 +1579,7 @@ class BacktestPopup:
         self.force_min_lot.set(bool(params.get("force_min_lot_enabled", True)))
         self.buy_signal_ema.set(bool(params.get("buy_signal_use_ema", True)))
         self.buy_signal_rsi.set(bool(params.get("buy_signal_use_rsi", True)))
+        self.buy_signal_require_ema_cross.set(bool(params.get("buy_signal_require_ema_cross", False)))
         self.sell_signal_ema.set(bool(params.get("sell_signal_use_ema", True)))
         self.sell_signal_rsi.set(bool(params.get("sell_signal_use_rsi", True)))
         indicator_exit_policy = str(
@@ -1736,6 +1749,7 @@ class BacktestPopup:
             raise ValueError("TÍN HIỆU SELL phải bật ít nhất EMA hoặc RSI")
         params["buy_signal_use_ema"] = bool(self.buy_signal_ema.get())
         params["buy_signal_use_rsi"] = bool(self.buy_signal_rsi.get())
+        params["buy_signal_require_ema_cross"] = bool(self.buy_signal_require_ema_cross.get())
         params["sell_signal_use_ema"] = bool(self.sell_signal_ema.get())
         params["sell_signal_use_rsi"] = bool(self.sell_signal_rsi.get())
         params["indicator_exit_policy"] = self.indicator_exit_policy.get()

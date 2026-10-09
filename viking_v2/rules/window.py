@@ -424,6 +424,13 @@ class RuleSettingsPopup:
                 text_color=self.TEXT,
             ).pack(side="left", padx=(0, 12))
 
+        self.buy_signal_require_ema_cross = self._switch(
+            buy_group, "BUY CẦN EMA VỪA VƯỢT LÊN", self.params.buy_signal_require_ema_cross,
+            "TẮT (mặc định): EMA nhanh đang > EMA chậm là đạt phần EMA, kể cả lúc bật BOT.\n"
+            "BẬT: trước ≤, lần này > mới tạo BUY mới (REALTIME: hai lần quan sát; CLOSED: hai nến ngày).\n"
+            "RSI vẫn so với phiên trước; giờ mua, vốn và WHIPSAW vẫn kiểm tra. Không áp dụng khi DÙNG EMA tắt; không đổi E/SELL.",
+        )
+
         self.buy_rsi_period = self._field(
             buy_group, "RSI BUY / E", self.params.rsi_period,
             "Backend hiện dùng một chu kỳ RSI cho cả BUY và E. Ô này đồng bộ với ô RSI trong E/M.",
@@ -1318,6 +1325,7 @@ class RuleSettingsPopup:
             self.params.rsi_period = rsi_period
             self.params.buy_signal_use_ema = bool(self.buy_signal_ema.get())
             self.params.buy_signal_use_rsi = bool(self.buy_signal_rsi.get())
+            self.params.buy_signal_require_ema_cross = bool(self.buy_signal_require_ema_cross.get())
             self.params.buy_volume_enabled = bool(self.buy_volume_enabled.get())
             self.params.buy_volume_average_sessions = buy_volume_average
             self.params.buy_volume_min_ratio = buy_volume_minimum / 100.0

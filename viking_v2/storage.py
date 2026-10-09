@@ -302,6 +302,8 @@ class SignalLog:
         "trade_id", "indicator_exit_policy", "protect_mode", "protect_state", "mfe_pct", "peak_price",
         "effective_trail_pct", "atr_pct", "atr_multiplier", "protect_price",
         "sell_pct", "hypothetical_quantity",
+        "rsi_previous", "rsi_previous_date", "ema_fast_period", "ema_slow_period",
+        "rsi_period", "price_source", "indicator_source", "record_kind",
     )
     RECENT_CSV_ROWS = 500
 

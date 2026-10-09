@@ -75,7 +75,11 @@ def _exit_priority(event: str, triggered: list[str] | None = None) -> int:
 def _buy_rule_text(params: StaticRuleParameters) -> str:
     terms: list[str] = []
     if params.buy_signal_use_ema:
-        terms.append(f"EMA {params.buy_ema_fast}/{params.buy_ema_slow} cắt lên")
+        terms.append(
+            f"EMA {params.buy_ema_fast}/{params.buy_ema_slow} cắt lên"
+            if params.buy_signal_require_ema_cross
+            else f"EMA{params.buy_ema_fast} > EMA{params.buy_ema_slow}"
+        )
     if params.buy_signal_use_rsi:
         terms.append(f"RSI{params.rsi_period} tăng")
     return " + ".join(terms) or "OFF"

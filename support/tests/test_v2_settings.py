@@ -151,25 +151,27 @@ def test_telegram_settings_only_keep_connection_values():
     assert settings.telegram_enabled is True
     assert settings.telegram_chat_id == "123"
     assert settings.telegram_token_env == "TELE_BOT_KEY"
+    assert settings.telegram_buy_delivery_mode == "IMMEDIATE"
     assert settings.telegram_buy_batch_minutes == 30
     assert settings.telegram_notifications["protect"] is True
     assert settings.telegram_notifications["indicator_exit"] is True
     assert settings.telegram_notifications["blocked_buy"] is True
     assert settings.telegram_notifications["system"] is True
     assert settings.telegram_cooldown_minutes["indicator_exit"] == 30
-    assert settings.telegram_cooldown_minutes["system"] == 15
+    assert settings.telegram_cooldown_minutes["system"] == 30
     assert not hasattr(settings, "telegram_system_alerts")
 
 
-def test_telegram_defaults_enable_waiting_buy_without_changing_buy_window():
+def test_telegram_defaults_enable_technical_buy_without_changing_buy_window():
     settings = AppSettings().normalize()
     assert settings.telegram_notifications == {
         "buy_queued": True, "closed": True, "protect": True,
-        "indicator_exit": True, "blocked_buy": True,
+        "indicator_exit": True, "blocked_buy": True, "buy_lost": True,
         "corporate_action": True, "external_sell": True, "system": True,
     }
     assert settings.telegram_buy_batch_minutes == 30
-    assert settings.telegram_cooldown_minutes["blocked_buy"] == 30
+    assert settings.telegram_cooldown_minutes["blocked_buy"] == 60
+    assert settings.telegram_cooldown_minutes["buy_lost"] == 60
     assert settings.rule_parameters["buy_window_enabled"] is True
     assert settings.rule_parameters["buy_window_start"] == "14:00"
     # An existing explicit opt-out is not silently undone by app startup.
@@ -186,6 +188,25 @@ def test_legacy_telegram_alert_switch_migrates_to_explicit_categories():
     assert settings.telegram_notifications["blocked_buy"] is True
     assert settings.telegram_notifications["system"] is True
     assert not hasattr(settings, "telegram_signal_alerts")
+
+
+@pytest.mark.parametrize("mode,expected", [
+    ("IMMEDIATE", "IMMEDIATE"), ("BATCH", "BATCH"), (" batch ", "BATCH"),
+    (None, "IMMEDIATE"), ("UNKNOWN", "IMMEDIATE"), (0, "IMMEDIATE"),
+])
+def test_buy_delivery_mode_round_trips_and_keeps_remembered_batch_interval(mode, expected):
+    settings = AppSettings.from_dict({
+        "telegram_buy_delivery_mode": mode, "telegram_buy_batch_minutes": 7,
+    })
+    assert settings.telegram_buy_delivery_mode == expected
+    assert AppSettings.from_dict(settings.to_dict()).telegram_buy_delivery_mode == expected
+    assert settings.telegram_buy_batch_minutes == 7
+
+
+def test_existing_settings_without_delivery_choice_now_default_to_immediate():
+    settings = AppSettings.from_dict({"telegram_buy_batch_minutes": 30})
+    assert settings.telegram_buy_delivery_mode == "IMMEDIATE"
+    assert settings.telegram_buy_batch_minutes == 30  # Remembered if operator selects GOM.
 
 
 def test_official_2026_exchange_holidays_are_always_applied():
@@ -555,7 +576,7 @@ def test_signal_log_dedupe_keeps_paper_and_real_independent(tmp_path):
     assert [row["execution_mode"] for row in log.read_all()] == ["PAPER", "REAL"]
 
 
-def test_signal_history_groups_detailed_rows_by_day_and_hides_restart_duplicates():
+def test_signal_history_keeps_distinct_recording_times_even_when_values_repeat():
     from viking_v2.dashboard.windows import signal_rows_by_day
 
     def row(timestamp, symbol, *, acted="BUY", blocked=""):
@@ -584,15 +605,17 @@ def test_signal_history_groups_detailed_rows_by_day_and_hides_restart_duplicates
     days = signal_rows_by_day(rows)
     assert [group["date"] for group in days] == ["2026-08-22", "2026-08-21"]
     assert len(days[0]["rows"]) == 2
-    assert len(days[1]["rows"]) == 2
-    assert days[1]["allowed_count"] == 1
-    assert days[1]["blocked_count"] == 1
+    assert len(days[1]["rows"]) == 4
+    assert days[1]["allowed_count"] == 2
+    assert days[1]["blocked_count"] == 2
     vix = next(row for row in days[1]["rows"] if row["symbol"] == "VIX")
     qcg = next(row for row in days[1]["rows"] if row["symbol"] == "QCG")
-    assert vix["suggestion"] == "CÓ THỂ MUA"
-    assert vix["reason"] == "Đủ điều kiện tín hiệu BUY đang bật"
-    assert vix["repeat_count"] == 2
-    assert qcg["suggestion"] == "KHÔNG MUA"
+    assert vix["suggestion"] == "ĐÃ XẾP BUY"
+    assert "chưa xác nhận broker đã nhận/khớp" in vix["reason"]
+    assert vix["repeat_count"] == 1
+    assert vix["first_recorded_at"] == "2026-08-21 20:29:52"
+    assert vix["timestamp"] == "2026-08-21 20:29:52"
+    assert qcg["suggestion"] == "BUY BỊ CHẶN"
     assert qcg["reason"] == "EMA nhiễu, khóa mua"
 
 
@@ -610,6 +633,51 @@ def test_signal_history_does_not_count_observed_sell_as_blocked_buy():
     assert days[0]["sell_count"] == 1
     assert days[0]["allowed_count"] == 0
     assert days[0]["blocked_count"] == 0
+    assert days[0]["rows"][0]["suggestion"] == "CHỈ TÍN HIỆU SELL"
+    assert "không tạo lệnh bán" in days[0]["rows"][0]["reason"]
+
+
+def test_signal_history_distinguishes_waiting_cancelled_and_queued_buy():
+    from viking_v2.dashboard.windows import signal_advice, signal_rows_by_day
+
+    waiting = {"signal": "BUY", "acted": "WAIT", "blocked_by": "BUY_WINDOW_WAIT",
+               "buy_window": "14:00–14:45"}
+    assert signal_advice(waiting) == ("CHỜ GIỜ MUA", "Chưa xếp lệnh; chờ khung 14:00–14:45")
+    cancelled = {**waiting, "blocked_by": "BUY_WINDOW_BROKEN",
+                 "ema_fast": 22.4163, "ema_slow": 22.4031, "rsi": 56.79}
+    suggestion, reason = signal_advice(cancelled)
+    assert suggestion == "HỦY CHỜ BUY"
+    assert "không phải BUY mới" in reason
+    cancelled["timestamp"] = "2026-10-09 13:39:41"
+    display = signal_rows_by_day([cancelled])[0]["rows"][0]
+    assert display["signal"] == "BUY"  # Preserve the original record.
+    assert display["display_signal"] == "MẤT ENTRY"
+    assert signal_advice({**waiting, "blocked_by": "BUY_WINDOW_EXPIRED"})[0] == "HẾT GIỜ MUA"
+    assert signal_advice({"signal": "BUY", "acted": "BUY", "blocked_by": ""})[0] == "ĐÃ XẾP BUY"
+    assert signal_advice({"signal": "SELL", "acted": "SELL", "blocked_by": ""})[0] == "ĐÃ XẾP SELL"
+
+
+def test_signal_history_preserves_both_event_times_in_either_order():
+    from viking_v2.dashboard.windows import signal_rows_by_day
+    common = {"symbol": "HDB", "signal": "BUY", "acted": "WAIT", "blocked_by": "BUY_WINDOW_WAIT"}
+    rows = [{**common, "timestamp": "2026-10-09 13:40:53"},
+            {**common, "timestamp": "2026-10-09 13:39:31"}]
+    for ordered in (rows, list(reversed(rows))):
+        displayed = signal_rows_by_day(ordered)[0]["rows"]
+        assert len(displayed) == 2
+        row = displayed[0]
+        assert row["first_recorded_at"] == "2026-10-09 13:40:53"
+        assert row["timestamp"] == "2026-10-09 13:40:53"
+        assert row["time"] == "13:40:53"
+        assert row["repeat_count"] == 1
+
+
+def test_signal_history_unknown_action_is_not_reported_as_queued_buy():
+    from viking_v2.dashboard.windows import signal_rows_by_day
+    days = signal_rows_by_day([{"timestamp": "2026-10-09 14:00:00", "symbol": "HDB",
+                              "signal": "BUY", "acted": "", "blocked_by": ""}])
+    assert days[0]["allowed_count"] == 0
+    assert days[0]["rows"][0]["suggestion"] == "THEO DÕI"
 
 
 def test_signal_log_keeps_candle_dedupe_across_daemon_restart(tmp_path):
@@ -708,7 +776,7 @@ def test_history_is_archived_to_monthly_excel_without_manual_export(tmp_path):
     assert order_book["LỆNH"].max_row == 2
     order_book.close()
 
-    assert not hasattr(HistoryPopup, "_export_signals")
+    assert hasattr(HistoryPopup, "_export_signals")  # Optional export supplements, not replaces, monthly archiving.
 
 
 def test_signal_history_limit_reads_only_latest_rows(tmp_path):

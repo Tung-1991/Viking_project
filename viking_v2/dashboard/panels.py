@@ -10,6 +10,7 @@ from typing import Any
 import customtkinter as ctk
 
 from ..branding import APP_NAME
+from ..connections.dnse.snapshot_health import FAST_POLL_SECONDS, IDLE_POLL_SECONDS, snapshot_failure_summary
 from ..rules.business import average_true_range_pct, indicator_snapshot, protect_level
 from ..trading.market import VN_TZ, market_now, market_phase, merge_tick_into_daily_bars
 from ..trading.portfolio import (
@@ -149,6 +150,34 @@ def _preview_panel_height(viewport_pixels: int, widget_scaling: float) -> int:
     scaling = max(0.1, float(widget_scaling or 1.0))
     logical_height = int(round(max(0, viewport_pixels) / scaling))
     return max(300, logical_height - 4)
+
+
+def _rsi_comparison_preview(current: Any, previous: Any) -> tuple[str, str]:
+    """Show the rule's daily RSI baseline, not a previous-tick comparison."""
+    def valid(value: Any) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return number if math.isfinite(number) and 0 <= number <= 100 else None
+
+    current_number, previous_number = valid(current), valid(previous)
+    decimals = 2
+    if current_number is not None and previous_number is not None:
+        # Do not display two apparently equal numbers beside an up/down arrow.
+        while (current_number != previous_number and decimals < 6
+               and f"{current_number:.{decimals}f}" == f"{previous_number:.{decimals}f}"):
+            decimals += 1
+    current_text = "--" if current_number is None else f"{current_number:.{decimals}f}"
+    previous_text = "--" if previous_number is None else f"{previous_number:.{decimals}f}"
+    text = f"{previous_text} → {current_text}"
+    if current_number is None or previous_number is None:
+        return text, COL_PREVIEW_TEXT
+    if current_number > previous_number:
+        return f"{text} ↑", COL_GREEN
+    if current_number < previous_number:
+        return f"{text} ↓", COL_RED
+    return f"{text} =", COL_TEXT
 
 
 class DashboardPanelsMixin:
@@ -1156,12 +1185,14 @@ class DashboardPanelsMixin:
             self.preview_rule_phase3, base_font=("Segoe UI", 11), minimum_size=7), add="+")
         _HoverHint(self.preview_rule_phase3, self._entry_capital_hint, placement="inside")
         self.preview_rule_phase3_detail = ctk.CTkLabel(
-            phase3, text="AUTO --", height=16, font=("Segoe UI", 12),
+            phase3, text="AUTO --", width=1, height=16, font=("Segoe UI", 12),
             text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_phase3_detail.grid(
             row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 4)
         )
+        self.preview_rule_phase3_detail.bind("<Configure>", lambda _event: fit_label_text(
+            self.preview_rule_phase3_detail, base_font=("Segoe UI", 12), minimum_size=7), add="+")
         self.preview_rule_phase3_guard = ctk.CTkLabel(
             phase3, text="WHIPSAW -- · LOSS --", font=("Segoe UI", 11),
             text_color=COL_PREVIEW_TEXT, anchor="w",
@@ -1424,6 +1455,24 @@ class DashboardPanelsMixin:
             extra = f"Lỗi chu kỳ: {context.get('symbol') or '--'} · {stage} · {context.get('exception_type') or '--'}."
         else:
             extra = "API OK là DNSE đang trả lời; không bảo đảm giá từng mã còn mới."
+        health = status.get("api_health") if isinstance(status.get("api_health"), dict) else {}
+        daemon_rest = health.get("rest") or {}
+        ui_rest = self.real.api_health() if hasattr(getattr(self, "real", None), "api_health") else {}
+        failures = []
+        secrets = tuple(getattr(getattr(self, "real", None), key, "") for key in ("api_key", "api_secret", "trading_token"))
+        for rest in (ui_rest or {}, daemon_rest):
+            raw = rest.get("snapshot_errors") if isinstance(rest, dict) else None
+            for row in (raw.values() if isinstance(raw, dict) else ()):
+                if isinstance(row, dict):
+                    failures.append(snapshot_failure_summary(
+                        row, IDLE_POLL_SECONDS if rest.get("account_poll_seconds") == IDLE_POLL_SECONDS else FAST_POLL_SECONDS,
+                        secrets=secrets,
+                    ))
+        if failures:
+            keep_context = phase in {"CALENDAR_LOADING", "CALENDAR_UNKNOWN"} or (
+                bool(status.get("error")) and context.get("stage") != "ACCOUNT_SNAPSHOT"
+            )
+            extra = "\n".join(dict.fromkeys(([extra] if keep_context else []) + failures))
         return (
             self._quote_health_hint() + "\n" + extra
             + "\nOTP: cần khi gửi/sửa/hủy lệnh REAL; PAPER không cần OTP."
@@ -1528,10 +1577,21 @@ class DashboardPanelsMixin:
         preview = getattr(self, "_preview_indicator_source", {})
         source = preview.get("source", "MISSING")
         params = self.settings.rule_parameters
+        buy_ema_rule = (
+            "BUY cần EMA nhanh vừa vượt từ ≤ lên > EMA chậm."
+            if params.get("buy_signal_require_ema_cross", False)
+            else "BUY chỉ cần EMA nhanh hiện tại > EMA chậm, không bắt vừa vượt lên."
+        ) if params.get("buy_signal_use_ema", True) else "BUY không dùng điều kiện EMA."
+        rsi_basis = (
+            "RSI 1D: phiên trước đã đóng → phiên hiện tại theo giá realtime; không so với tick trước."
+            if str(self.settings.signal_mode).upper() == "REALTIME"
+            else "RSI 1D: hai phiên đã đóng liên tiếp, trái trước → phải sau; không so với tick trước."
+        )
         text = (
-            "EMA: nhanh so với chậm. Ví dụ 73,76 > 72,70; chưa đủ để tự mua, còn cần điểm cắt và các điều kiện khác.\n"
+            f"EMA: nhanh so với chậm. {buy_ema_rule} Vẫn kiểm tra các điều kiện vào lệnh khác.\n"
+            f"{rsi_basis}\n"
             f"Lọc RSI: BUY {'BẬT' if params.get('buy_signal_use_rsi', True) else 'TẮT'} / "
-            f"E {'BẬT' if params.get('sell_signal_use_rsi', True) else 'TẮT'}. ↑/↓ so với nến trước; đây không phải công tắc tự mua/bán.\n"
+            f"E {'BẬT' if params.get('sell_signal_use_rsi', True) else 'TẮT'}. BUY cần tăng, E cần giảm; bằng không đạt. Không phải công tắc tự mua/bán.\n"
             "Bot OFF vẫn tính chỉ số. Preview không tạo tín hiệu hoặc đặt lệnh."
         )
         if source == "MISSING":
@@ -1595,12 +1655,13 @@ class DashboardPanelsMixin:
 
     def _entry_capital_hint(self) -> str:
         summary = getattr(self, "_preview_entry_summary", "chờ dữ liệu")
+        whipsaw = getattr(self, "_preview_whipsaw_summary", "WHIPSAW: chờ dữ liệu")
         # The ticket hint already explains money; this hint explains slots.
         return (
             f"{summary}.\n"
             "Mã BOT 0/4 = đang giữ hoặc chờ mua 0 mã, tối đa 4 mã; không phải số lệnh.\n"
             "Vốn mua là gợi ý cho mã đang chọn, chưa phí. Ví dụ 50 triệu × 90% / 5 mã = 9 triệu/mã; Priority dùng hạn mức riêng.\n"
-            "WHIPSAW = khóa BUY khi EMA cắt qua lại quá nhiều; LỖ = chuỗi lỗ / ngưỡng khóa. Không chặn SELL.\n"
+            f"{whipsaw}. Đếm EMA BUY cắt lên/xuống trên nến ngày, không cộng từng tick; nến hôm nay còn thay đổi. LỖ = chuỗi lỗ / ngưỡng khóa. Không chặn SELL.\n"
             "MANUAL nhập KL tự chọn, vẫn kiểm tra tiền/phí và điều kiện lệnh; không dùng giới hạn số lần BUY BOT."
         )
 
@@ -2165,33 +2226,9 @@ class DashboardPanelsMixin:
         if not sell_ema_enabled:
             sell_ema_key, sell_ema_color = sell_ema_key.replace(":", " OFF:"), COL_MUTED
         rsi_period = int(indicators.get("rsi_period", 14) or 14)
-        current_rsi = indicators.get("rsi")
-        previous_rsi = indicators.get("rsi_previous")
-        try:
-            rsi_number = float(current_rsi)
-        except (TypeError, ValueError):
-            rsi_number = None
-        if rsi_number is not None and (not math.isfinite(rsi_number) or not 0 <= rsi_number <= 100):
-            rsi_number = None
-        try:
-            previous_number = float(previous_rsi)
-        except (TypeError, ValueError):
-            previous_number = None
-        if previous_number is not None and (not math.isfinite(previous_number) or not 0 <= previous_number <= 100):
-            previous_number = None
-        if rsi_number is None:
-            rsi_text, rsi_color = "--", COL_PREVIEW_TEXT
-        else:
-            arrow = ("" if previous_number is None else "↑" if rsi_number > previous_number
-                     else "↓" if rsi_number < previous_number else "→")
-            rsi_text = (
-                f"{rsi_number:.1f} {arrow}".strip()
-            )
-            rsi_color = COL_GREEN if signal == "BUY" else COL_RED if signal == "SELL" else (
-                COL_GREEN if previous_number is not None and rsi_number > previous_number
-                else COL_RED if previous_number is not None and rsi_number < previous_number
-                else COL_TEXT
-            )
+        rsi_text, rsi_color = _rsi_comparison_preview(
+            indicators.get("rsi"), indicators.get("rsi_previous"),
+        )
         for name, key, value, color, widget in (
             ("buy_ema", buy_ema_key, buy_ema_text, buy_ema_color, self.preview_rule_ema),
             ("sell_ema", sell_ema_key, sell_ema_text, sell_ema_color, self.preview_rule_sell_ema),
@@ -2215,9 +2252,12 @@ class DashboardPanelsMixin:
         open_positions = max(0, int(checks.get("open_positions", 0) or 0))
         max_positions = max(0, int(checks.get("max_positions", 0) or 0))
         capital = _number(checks.get("order_budget") or checks.get("available_capital"))
-        whipsaw_on = bool(checks.get("whipsaw_enabled", False))
+        rule_params = self.settings.rule_parameters or {}
+        whipsaw_on = bool(checks.get("whipsaw_enabled", rule_params.get("whipsaw_enabled", False)))
+        whipsaw_has_count = checks.get("whipsaw_crossovers") is not None
         crosses = max(0, int(checks.get("whipsaw_crossovers", 0) or 0))
-        whipsaw_limit = max(0, int(checks.get("whipsaw_limit", 0) or 0))
+        whipsaw_limit = max(0, int(checks.get("whipsaw_limit", rule_params.get("whipsaw_n", 0)) or 0))
+        whipsaw_window = max(0, int(checks.get("whipsaw_window", rule_params.get("whipsaw_x", 0)) or 0))
         losses = max(0, int(checks.get("loss_streak", 0) or 0))
         loss_limit = max(0, int(checks.get("loss_lock_count", 0) or 0))
         force_min_lot = bool(checks.get("force_min_lot_enabled", False))
@@ -2277,20 +2317,26 @@ class DashboardPanelsMixin:
         forced_minimum = phase3_sizing.used_minimum
         whipsaw_status = (
             "OFF" if not whipsaw_on
+            else "CHỜ DỮ LIỆU" if not whipsaw_has_count or not whipsaw_limit or not whipsaw_window
             else "KHÓA BUY" if whipsaw_locked
             else "OK"
         )
+        self._preview_whipsaw_summary = (
+            f"WHIPSAW: {crosses if whipsaw_has_count else '--'}/{whipsaw_limit or '--'}"
+            f" · {whipsaw_window or '--'} phiên · {whipsaw_status}"
+        )
         self.preview_rule_phase3_detail.configure(
             text=(
-                f"⚠ AUTO 100 · WHIPSAW: {whipsaw_status} · LỖ: {losses}/{loss_limit or '--'}"
+                f"⚠ AUTO 100 · {self._preview_whipsaw_summary} · LỖ: {losses}/{loss_limit or '--'}"
                 if forced_minimum
-                else f"WHIPSAW: {whipsaw_status} · LỖ: {losses}/{loss_limit or '--'}"
+                else f"{self._preview_whipsaw_summary} · LỖ: {losses}/{loss_limit or '--'}"
             ),
             text_color=COL_RED if guard_warn else COL_WARN if forced_minimum else COL_PREVIEW_TEXT,
         )
+        fit_label_text(self.preview_rule_phase3_detail, base_font=("Segoe UI", 12), minimum_size=7)
         self.preview_rule_phase3_guard.configure(
             text=(
-                f"WHIPSAW: {whipsaw_status} · LOSS: {losses}/{loss_limit or '--'}"
+                f"{self._preview_whipsaw_summary} · LOSS: {losses}/{loss_limit or '--'}"
                 f"{' · KHÓA MÃ' if loss_locked else ''}"
             ),
             text_color=COL_RED if guard_warn else COL_PREVIEW_TEXT,
@@ -2465,7 +2511,7 @@ class DashboardPanelsMixin:
             or not 200 <= row["last_status"] < 300
             or bool(row.get("last_error"))
             for row in observed_rest
-        )
+        ) or any(bool(row.get("snapshot_errors")) for row in rest_rows)
 
         heartbeat_age = max(0.0, time.time() - _number(status.get("heartbeat_at")))
         daemon_state = str(status.get("daemon_status") or "STARTING").upper()

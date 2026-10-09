@@ -1172,7 +1172,7 @@ class ConnectionPopup:
             body, "THÔNG BÁO TELEGRAM",
             "Chỉ điều khiển gửi tin; không thay đổi AUTO/ALERT hay hành vi đặt lệnh.\n"
             "GOM: chờ gom tin BUY, không trì hoãn đặt lệnh. GIÃN: cách giữa các thông báo mới cùng loại/mã.\n"
-            "0 phút = không chờ/không giãn thời gian, vẫn chống tin trùng. "
+            "BUY mặc định GỬI NGAY; chọn GOM TIN để gom theo số phút. GIÃN 0 = không giãn, vẫn chống trùng. "
             "Vị thế đóng gửi 1 tin tổng kết cho mỗi vị thế BOT đã bán hết, không phải giới hạn toàn bot một tin.\n"
             "Cần bật Telegram, bật loại tin và LƯU. GỬI THỬ kiểm tra token/chat ID; không đặt lệnh.",
         )
@@ -1239,7 +1239,7 @@ class ConnectionPopup:
             text_color=self.MUTED,
         ).grid(row=0, column=3, padx=4, pady=(5, 2))
         ctk.CTkLabel(
-            event_box, text="GOM / GIÃN TIN", font=("Segoe UI", 10, "bold"),
+            event_box, text="CÁCH GỬI / GIÃN TIN", font=("Segoe UI", 10, "bold"),
             text_color=self.MUTED,
         ).grid(row=0, column=4, columnspan=2, padx=4, pady=(5, 2))
         self.tele_event_labels: dict[str, Any] = {}
@@ -1248,15 +1248,21 @@ class ConnectionPopup:
         self.tele_cooldown_entries: dict[str, ctk.CTkEntry] = {}
         self.tele_event_time_controls: dict[str, Any] = {}
         rows = (
-            ("buy_queued", "BOT BUY ĐÃ XẾP LỆNH", "Báo BUY BOT đã tạo lệnh, không có nghĩa đã khớp. 30 phút = gom các BUY thành một tin; 0 = gửi ngay. Lệnh vẫn xử lý ngay, không chờ Telegram. MANUAL không gửi loại tin này.", "batch"),
+            ("buy_queued", "BOT BUY ĐÃ XẾP LỆNH", "GỬI NGAY: mỗi yêu cầu BUY BOT báo một tin. GOM TIN: báo chung sau số phút.\nChưa xác nhận đã gửi/khớp. LƯU để áp dụng; chuyển sang GỬI NGAY gửi cả tin đang chờ.", "batch"),
             (
-                "blocked_buy", "BUY CÓ TÍN HIỆU · CHƯA MUA",
-                "Báo BUY chưa đặt: chờ giờ mua, BOT OFF, thiếu vốn, đủ slot/khóa hoặc broker từ chối.\n"
-                "Tin đầu gửi ngay; phút = chống lặp cùng mã. Chỉ báo tin, không bỏ giờ mua hay khóa vốn.",
+                "blocked_buy", "BUY · TÍN HIỆU EMA/RSI",
+                "Báo điều kiện EMA/RSI đang bật, không lọc theo giờ mua, WHIPSAW, khóa lỗ hoặc vốn/slot.\n"
+                "Tin đầu gửi ngay; mặc định giãn 60 phút/mã/sổ. Chỉ báo kỹ thuật; đặt lệnh vẫn giữ mọi kiểm tra.",
                 "cooldown",
             ),
-            ("protect", "PROTECT CHẠM MỨC", "OFF ở đây chỉ tắt tin, PROTECT AUTO vẫn bán. ON = AUTO vừa bán vừa báo; PROTECT ALERT chỉ báo, không bán. Phút = giãn các tin mới cùng mã, không trì hoãn SELL.", "cooldown"),
-            ("indicator_exit", "E · EXIT ALERT", "Báo khi E phát tín hiệu ALERT; ALERT không đặt lệnh. Phút = giãn các tin mới cùng mã, không phải cứ mỗi khoảng này gửi một tin.", "cooldown"),
+            (
+                "buy_lost", "BUY · MẤT TÍN HIỆU",
+                "Báo EMA/RSI không còn đạt sau tin BUY đã gửi, nếu chưa tạo lệnh.\n"
+                "Hiện hai số và dấu so sánh; không hủy lệnh. Mặc định giãn 60 phút/mã/sổ; 0 vẫn chống trùng từng lần mất.",
+                "cooldown",
+            ),
+            ("protect", "PROTECT CHẠM MỨC", "AUTO báo đã tạo yêu cầu bán, chưa xác nhận khớp. ALERT chỉ báo, không bán. Tắt tin không tắt PROTECT. Phút = giãn tin mới cùng mã, không trì hoãn SELL.", "cooldown"),
+            ("indicator_exit", "E · EXIT ALERT", "Chỉ báo khi E ở ALERT: không đặt bán, nên cần chống lặp. E AUTO không gửi tin này; khi vị thế BOT bán hết sẽ báo CLOSED.", "cooldown"),
             ("closed", "VỊ THẾ BOT ĐÃ ĐÓNG", "Gửi 1 tin tổng kết khi vị thế BOT đã bán hết, không chờ phút. Ví dụ mua 1.000 CP: bán 500 chưa tổng kết; bán nốt 500 gửi 1 tin. Vị thế BOT tiếp theo có tin riêng. Cần bật Telegram + dòng này và LƯU.", "once"),
             ("external_sell", "SELL TRÊN DNSE APP", f"Báo khi {APP_NAME} phát hiện và đồng bộ một lệnh bán ngoài app {APP_NAME}. Phút = giãn các thông báo mới; 0 = không giãn thời gian, vẫn chống trùng theo lệnh.", "cooldown"),
             (
@@ -1267,7 +1273,7 @@ class ConnectionPopup:
             (
                 "system", "HỆ THỐNG",
                 "Báo lỗi thật của daemon, lịch giao dịch, DNSE API/WS hoặc xử lý lệnh; "
-                "không báo trạng thái chờ bình thường khi app vừa khởi động.",
+                "không báo chờ bình thường. Tin đầu gửi ngay; mặc định giãn 30 phút.",
                 "cooldown",
             ),
         )
@@ -1290,8 +1296,23 @@ class ConnectionPopup:
                 progress_color=self.GREEN, button_color=self.TEXT,
             ).grid(row=row_index, column=3, padx=6, pady=1)
             if timing_mode in {"batch", "cooldown"}:
+                timing_parent = event_box
+                if timing_mode == "batch":
+                    timing_parent = ctk.CTkFrame(event_box, fg_color="transparent")
+                    timing_parent.grid(row=row_index, column=4, columnspan=2, sticky="w", padx=(4, 8), pady=1)
+                    self.tele_buy_mode = tk.StringVar(value=(
+                        "GOM TIN" if self.settings.telegram_buy_delivery_mode == "BATCH" else "GỬI NGAY"
+                    ))
+                    self.tele_buy_mode_selector = ctk.CTkSegmentedButton(
+                        timing_parent, values=["GỬI NGAY", "GOM TIN"],
+                        variable=self.tele_buy_mode, width=150, height=26,
+                        dynamic_resizing=False, font=("Segoe UI", 10, "bold"),
+                        selected_color=self.BLUE, selected_hover_color="#245C92",
+                        command=self._telegram_buy_mode_changed,
+                    )
+                    self.tele_buy_mode_selector.grid(row=0, column=0)
                 entry = ctk.CTkEntry(
-                    event_box, width=58, height=26, justify="center",
+                    timing_parent, width=48 if timing_mode == "batch" else 58, height=26, justify="center",
                     font=("Segoe UI", 11, "bold"),
                 )
                 entry.insert(
@@ -1302,18 +1323,27 @@ class ConnectionPopup:
                         else cooldowns.get(key, 0)
                     ),
                 )
-                entry.grid(row=row_index, column=4, padx=(4, 2), pady=1)
+                entry.grid(
+                    row=0 if timing_mode == "batch" else row_index,
+                    column=1 if timing_mode == "batch" else 4, padx=(4, 2), pady=1,
+                )
                 self.tele_event_time_controls[key] = entry
                 if timing_mode == "batch":
                     self.tele_batch = entry
                 else:
                     self.tele_cooldown_entries[key] = entry
                 suffix = ctk.CTkLabel(
-                    event_box,
-                    text="ph · gom" if timing_mode == "batch" else "ph · giãn",
+                    timing_parent,
+                    text="ph" if timing_mode == "batch" else "ph · giãn",
                     font=("Segoe UI", 9), text_color=self.MUTED,
                 )
-                suffix.grid(row=row_index, column=5, sticky="w", padx=(0, 8))
+                suffix.grid(
+                    row=0 if timing_mode == "batch" else row_index,
+                    column=2 if timing_mode == "batch" else 5, sticky="w", padx=(0, 8),
+                )
+                if timing_mode == "batch":
+                    self.tele_batch_suffix = suffix
+                    self._telegram_buy_mode_changed()
             else:
                 timing = ctk.CTkLabel(
                     event_box, text="1 TIN/VỊ THẾ", font=("Segoe UI", 9, "bold"),
@@ -2127,27 +2157,35 @@ class ConnectionPopup:
             text="ĐÃ XÓA BOT TOKEN KHỎI .ENV VÀ RAM", text_color=self.WARN,
         )
 
+    def _telegram_buy_mode_changed(self, _value: str = "") -> None:
+        for widget in (self.tele_batch, self.tele_batch_suffix):
+            if self.tele_buy_mode.get() == "GOM TIN":
+                widget.grid()
+            else:
+                widget.grid_remove()
+
     def _save_telegram(self) -> None:
         token = self.tele_token.get().strip()
         chat_id = self.tele_chat.get().strip()
         if self.tele_enabled.get() and (not token or not chat_id):
             self.tele_status.configure(text="BẬT TELEGRAM CẦN ĐỦ BOT TOKEN VÀ CHAT ID", text_color=self.RED)
             return
-        self.settings.telegram_enabled = bool(self.tele_enabled.get())
-        self.settings.telegram_chat_id = chat_id
-        try:
-            batch_minutes = int(float(self.tele_batch.get().strip()))
-        except (TypeError, ValueError):
-            self.tele_status.configure(text="GOM BUY PHẢI LÀ SỐ PHÚT", text_color=self.RED)
-            return
-        if not 1 <= batch_minutes <= 120:
-            self.tele_status.configure(text="GOM BUY TỪ 1 ĐẾN 120 PHÚT", text_color=self.RED)
-            return
+        delivery_mode = "BATCH" if self.tele_buy_mode.get() == "GOM TIN" else "IMMEDIATE"
+        batch_minutes = self.settings.telegram_buy_batch_minutes
+        if delivery_mode == "BATCH":
+            try:
+                batch_minutes = int(float(self.tele_batch.get().strip()))
+            except (TypeError, ValueError, OverflowError):
+                self.tele_status.configure(text="GOM BUY PHẢI LÀ SỐ PHÚT", text_color=self.RED)
+                return
+            if not 1 <= batch_minutes <= 120:
+                self.tele_status.configure(text="GOM BUY TỪ 1 ĐẾN 120 PHÚT", text_color=self.RED)
+                return
         cooldowns: dict[str, int] = {}
         for key, entry in self.tele_cooldown_entries.items():
             try:
                 value = int(float(entry.get().strip()))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 self.tele_status.configure(
                     text="COOLDOWN PHẢI LÀ SỐ PHÚT", text_color=self.RED,
                 )
@@ -2158,6 +2196,9 @@ class ConnectionPopup:
                 )
                 return
             cooldowns[key] = value
+        self.settings.telegram_enabled = bool(self.tele_enabled.get())
+        self.settings.telegram_chat_id = chat_id
+        self.settings.telegram_buy_delivery_mode = delivery_mode
         self.settings.telegram_buy_batch_minutes = batch_minutes
         self.settings.telegram_notifications = {
             key: bool(variable.get())

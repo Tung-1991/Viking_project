@@ -89,6 +89,7 @@ TELEGRAM_NOTIFICATION_DEFAULTS: dict[str, bool] = {
     "protect": True,
     "indicator_exit": True,
     "blocked_buy": True,
+    "buy_lost": True,
     "corporate_action": True,
     "external_sell": True,
     "system": True,
@@ -96,10 +97,11 @@ TELEGRAM_NOTIFICATION_DEFAULTS: dict[str, bool] = {
 TELEGRAM_COOLDOWN_DEFAULTS: dict[str, int] = {
     "protect": 0,
     "indicator_exit": 30,
-    "blocked_buy": 30,
+    "blocked_buy": 60,
+    "buy_lost": 60,
     "corporate_action": 1440,
     "external_sell": 0,
-    "system": 15,
+    "system": 30,
 }
 
 # Canonical operating defaults shared by LIVE, PAPER and backtest.  Keep the
@@ -123,6 +125,7 @@ DEFAULT_RULE_PARAMETERS: dict[str, Any] = {
     "rsi_period": 14,
     "buy_signal_use_ema": True,
     "buy_signal_use_rsi": True,
+    "buy_signal_require_ema_cross": False,
     "buy_volume_enabled": False,
     "buy_volume_average_sessions": 20,
     "buy_volume_min_ratio": 1.0,
@@ -341,6 +344,7 @@ class AppSettings:
     telegram_enabled: bool = False
     telegram_chat_id: str = ""
     telegram_token_env: str = "TELE_BOT_KEY"
+    telegram_buy_delivery_mode: str = "IMMEDIATE"
     telegram_buy_batch_minutes: int = 30
     # Per-event delivery controls shared by PAPER and REAL.
     telegram_notifications: dict[str, bool] = field(
@@ -427,6 +431,11 @@ class AppSettings:
         self.skip_order_popups = self.skip_order_popups is True
         self.telegram_chat_id = str(self.telegram_chat_id or "").strip()
         self.telegram_token_env = str(self.telegram_token_env or "TELE_BOT_KEY").strip()
+        self.telegram_buy_delivery_mode = str(
+            self.telegram_buy_delivery_mode or "IMMEDIATE"
+        ).strip().upper()
+        if self.telegram_buy_delivery_mode not in {"IMMEDIATE", "BATCH"}:
+            self.telegram_buy_delivery_mode = "IMMEDIATE"
         try:
             self.telegram_buy_batch_minutes = max(
                 1, min(120, int(float(self.telegram_buy_batch_minutes or 30)))

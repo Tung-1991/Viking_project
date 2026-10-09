@@ -146,6 +146,162 @@ def test_telegram_batches_buy_signals_in_one_fixed_window():
     assert "HPG · 27,500đ · UPTREND · HPG1" in tele.sent[0][1]
 
 
+def test_single_buy_is_reported_after_batch_window_without_another_buy():
+    tele = Telegram()
+    service = SignalTelegramService(tele, chat_id="7", buy_batch_minutes=30)
+    assert service.notify_buy(
+        symbol="HDB", signal_id="HDB1", price=22.5, market_state="ACCUMULATION",
+    )
+    assert service._buy_timer is not None and tele.sent == []
+    assert service.flush_buys()
+    assert len(tele.sent) == 1 and "BUY · HDB" in tele.sent[0][1]
+    assert service._buy_timer is None
+    assert service.flush_buys() is False
+    assert len(tele.sent) == 1  # No empty periodic digests after this window.
+
+
+@pytest.fixture
+def buy_timers(monkeypatch):
+    timers = []
+
+    class Timer:
+        def __init__(self, interval, function):
+            self.interval, self.function = interval, function
+            self.canceled = False
+            self.started = False
+            timers.append(self)
+
+        def start(self):
+            self.started = True
+
+        def cancel(self):
+            self.canceled = True
+
+    monkeypatch.setattr("viking_v2.connections.telegram.threading.Timer", Timer)
+    return timers
+
+
+def test_immediate_buy_sends_each_order_without_batch_timer(buy_timers):
+    tele = Telegram()
+    service = SignalTelegramService(tele, chat_id="7", buy_batch_minutes=0)
+    for symbol in ("HDB", "MSN"):
+        assert service.notify_buy(symbol=symbol, signal_id=symbol + "1", price=22.5,
+                                  market_state="ACCUMULATION", execution_mode="REAL")
+    assert len(tele.sent) == 2
+    assert "BUY · HDB · REAL · ĐÃ XẾP LỆNH" in tele.sent[0][1]
+    assert "BUY · MSN · REAL · ĐÃ XẾP LỆNH" in tele.sent[1][1]
+    assert all("không xác nhận đã gửi/khớp" in message for _, message in tele.sent)
+    assert buy_timers == [] and service._pending_buys == {}
+
+
+def test_switch_to_immediate_flushes_existing_batch_once_in_worker(buy_timers):
+    tele = Telegram()
+    service = SignalTelegramService(tele, chat_id="7", buy_batch_minutes=30)
+    for symbol in ("HDB", "MSN"):
+        service.notify_buy(symbol=symbol, signal_id=symbol + "1", price=22.5,
+                           market_state="ACCUMULATION")
+    old_timer = service._buy_timer
+    service.configure_buy_delivery(buy_batch_minutes=0)
+    assert old_timer.canceled and tele.sent == []  # No network work in UI callback.
+    assert service._buy_timer.interval == 0 and service._buy_timer.started
+    service._buy_timer.function()
+    old_timer.function()  # Even a racing old callback cannot send the batch twice.
+    assert len(tele.sent) == 1 and "2 MÃ" in tele.sent[0][1]
+    assert service._pending_buys == {} and service._buy_timer is None
+    service.notify_buy(symbol="CTS", signal_id="CTS1", price=19.65, market_state="UPTREND")
+    assert len(tele.sent) == 2 and "BUY · CTS" in tele.sent[1][1]
+
+
+def test_failed_flush_after_immediate_switch_retries_without_zero_delay_loop(buy_timers):
+    class OfflineTelegram(Telegram):
+        def send_message(self, chat_id, text):
+            raise RuntimeError("offline")
+
+    service = SignalTelegramService(OfflineTelegram(), chat_id="7", buy_batch_minutes=30)
+    service.notify_buy(symbol="HDB", signal_id="HDB1", price=22.5, market_state="UPTREND")
+    service.configure_buy_delivery(buy_batch_minutes=0)
+    service._buy_timer.function()
+    assert len(service._pending_buys) == 1
+    assert service._buy_timer.interval >= 60
+    service.client = Telegram()
+    service._buy_timer.function()
+    assert len(service.client.sent) == 1 and service._pending_buys == {}
+
+
+def test_disabled_category_during_failed_flush_cannot_requeue_notices(buy_timers):
+    class TurnOffWhileSending(Telegram):
+        def send_message(self, chat_id, text):
+            service.cancel_pending_buys()
+            raise RuntimeError("offline")
+
+    service = SignalTelegramService(TurnOffWhileSending(), chat_id="7", buy_batch_minutes=30)
+    service.notify_buy(symbol="HDB", signal_id="HDB1", price=22.5, market_state="UPTREND")
+    assert service.flush_buys() is False
+    assert service._buy_timer is None and service._pending_buys == {}
+
+
+def _reload_subject(monkeypatch):
+    from viking_v2.config import AppSettings
+
+    tele = Telegram()
+    monkeypatch.setattr("viking_v2.dashboard.actions.TelegramClient", lambda _token: tele)
+    subject = DashboardActionsMixin()
+    subject.settings = AppSettings(telegram_enabled=True, telegram_chat_id="7").normalize()
+    subject.telegram = None
+    subject._telegram_signature = None
+    subject._telegram_session_token = "fake-test-token"
+    subject.logs = []
+    subject._log = subject.logs.append
+    return subject, tele
+
+
+def test_reload_telegram_defaults_immediate_and_only_changes_delivery(monkeypatch, buy_timers):
+    subject, tele = _reload_subject(monkeypatch)
+    original_rules = dict(subject.settings.rule_parameters)
+    original_categories = dict(subject.settings.telegram_notifications)
+    subject._reload_telegram()
+    assert subject.telegram.buy_batch_seconds == 0
+    assert "BUY gửi ngay" in subject.logs[-1]
+    subject.telegram.notify_buy(symbol="HDB", signal_id="HDB1", price=22.5, market_state="UPTREND")
+    assert len(tele.sent) == 1 and buy_timers == []
+    service = subject.telegram
+    subject.settings.telegram_buy_delivery_mode = "BATCH"
+    subject.settings.telegram_buy_batch_minutes = 7
+    subject._reload_telegram()
+    assert subject.telegram is service and service.buy_batch_seconds == 420
+    assert "BUY gom 7 phút" in subject.logs[-1]
+    service.notify_buy(symbol="MSN", signal_id="MSN1", price=74.2, market_state="UPTREND")
+    assert len(tele.sent) == 1
+    subject.settings.telegram_buy_delivery_mode = "IMMEDIATE"
+    subject._reload_telegram()
+    assert subject.telegram is service and service.buy_batch_seconds == 0
+    service._buy_timer.function()
+    assert len(tele.sent) == 2 and "BUY · MSN" in tele.sent[-1][1]
+    assert subject.settings.rule_parameters == original_rules
+    assert subject.settings.telegram_notifications == original_categories
+
+
+@pytest.mark.parametrize("disabled", ["master", "category", "recipient"])
+def test_reload_drops_pending_buy_if_off_or_destination_changes(monkeypatch, buy_timers, disabled):
+    subject, tele = _reload_subject(monkeypatch)
+    subject.settings.telegram_buy_delivery_mode = "BATCH"
+    subject._reload_telegram()
+    service = subject.telegram
+    service.notify_buy(symbol="HDB", signal_id="HDB1", price=22.5, market_state="UPTREND")
+    timer = service._buy_timer
+    subject.settings.telegram_buy_delivery_mode = "IMMEDIATE"
+    if disabled == "master":
+        subject.settings.telegram_enabled = False
+    elif disabled == "category":
+        subject.settings.telegram_notifications["buy_queued"] = False
+    else:
+        subject.settings.telegram_chat_id = "8"
+    subject._reload_telegram()
+    assert timer.canceled and service._pending_buys == {}
+    timer.function()
+    assert tele.sent == []
+
+
 def test_telegram_waiting_for_buy_window_never_claims_a_sent_order():
     tele = Telegram()
     service = SignalTelegramService(tele, chat_id="7")
@@ -172,8 +328,12 @@ def test_telegram_blocked_buy_explains_whipsaw_without_internal_reason_code():
 @pytest.mark.parametrize("reason,text", [
     ("BUY_WINDOW_WAIT", "CHỜ GIỜ MUA · TỪ 14:00"),
     ("NO_AVAILABLE_CAPITAL", "KHÔNG ĐỦ VỐN"),
+    ("WHIPSAW_LOCK", "WHIPSAW KHÓA BUY"),
+    ("LOCKED_AFTER_LOSSES", "KHÓA SAU LỖ"),
+    ("BOT_OFF", "BOT OFF"),
+    ("MAX_POSITIONS", "ĐỦ SLOT"),
 ])
-def test_default_waiting_buy_alert_is_immediate_deduplicated_and_creates_no_order(
+def test_default_technical_buy_alert_ignores_entry_locks_and_creates_no_order(
     monkeypatch, tmp_path, mode, reason, text,
 ):
     from viking_v2.config import AppSettings
@@ -200,24 +360,32 @@ def test_default_waiting_buy_alert_is_immediate_deduplicated_and_creates_no_orde
     settings_before = subject.settings.to_dict()
     decision = StrategyDecision("WAIT", "MSN", reason, signal="BUY", details={
         "signal_cycle": "SIGNAL1", "status_text": text,
+        "indicators": {"buy_ema_fast": 74.4, "buy_ema_slow": 73.0,
+                       "rsi": 55.0, "rsi_previous": 50.0},
     })
     for _ in range(10):
         subject._notify_rule_signal("MSN", decision, {"price": 74.4}, execution_mode=mode)
     assert len(tele.sent) == 1
     assert f"TÍN HIỆU BUY · MSN · {mode}" in tele.sent[0][1]
-    assert f"CHƯA GỬI: {text}" in tele.sent[0][1]
+    assert "EMA 3/6" in tele.sent[0][1]
+    assert "RSI14: 50.00 → 55.00" in tele.sent[0][1]
+    assert "CHƯA GỬI" not in tele.sent[0][1]
+    assert text not in tele.sent[0][1]
     assert "ĐÃ XẾP LỆNH" not in tele.sent[0][1]
     assert subject.telegram._buy_timer is None  # No 30-minute BUY batching delay.
     decision.details["signal_cycle"] = "SIGNAL2"
     now[0] += 60
     subject._notify_rule_signal("MSN", decision, {"price": 74.4}, execution_mode=mode)
     assert len(tele.sent) == 1
-    now[0] = 2800.0
+    now[0] = 4599.0
+    subject._notify_rule_signal("MSN", decision, {"price": 74.4}, execution_mode=mode)
+    assert len(tele.sent) == 1
+    now[0] = 4600.0
     subject._notify_rule_signal("MSN", decision, {"price": 74.4}, execution_mode=mode)
     assert len(tele.sent) == 2
     subject.settings.telegram_notifications["blocked_buy"] = False
     decision.details["signal_cycle"] = "SIGNAL3"
-    now[0] += 1800
+    now[0] += 3600
     subject._notify_rule_signal("MSN", decision, {"price": 74.4}, execution_mode=mode)
     assert len(tele.sent) == 2  # Explicit opt-out still works.
     subject.settings.telegram_notifications["blocked_buy"] = True
@@ -225,6 +393,188 @@ def test_default_waiting_buy_alert_is_immediate_deduplicated_and_creates_no_orde
     assert subject.queue.list_all() == []
     assert subject.trade_state.list_cycles() == []
     assert subject.rule_state.active_telegram_signal("MSN", mode) is None
+
+
+def _technical_subject(monkeypatch, tmp_path):
+    from viking_v2.config import AppSettings
+
+    class ImmediateThread:
+        def __init__(self, *, target, kwargs, daemon):
+            self.target, self.kwargs = target, kwargs
+
+        def start(self):
+            self.target(**self.kwargs)
+
+    monkeypatch.setattr("viking_v2.dashboard.actions.threading.Thread", ImmediateThread)
+    tele = Telegram()
+    subject = DashboardActionsMixin()
+    subject.settings = AppSettings(telegram_enabled=True).normalize()
+    subject.telegram = SignalTelegramService(tele, chat_id="7")
+    subject.rule_state = RuleStateStore(tmp_path / "rules.json")
+    return subject, tele
+
+
+def test_technical_alert_and_successful_buy_notification_are_separate(monkeypatch, tmp_path):
+    subject, tele = _technical_subject(monkeypatch, tmp_path)
+    decision = StrategyDecision("BUY", "HDB", "BUY_SIGNAL", signal="BUY", details={
+        "signal_cycle": "CROSS1", "candle_key": "DAY1",
+        "indicators": {"buy_ema_fast": 22.5, "buy_ema_slow": 22.2,
+                       "rsi": 55.0, "rsi_previous": 50.0},
+    })
+    subject._notify_rule_signal(
+        "HDB", decision, {"price": 22.5}, signal_id="T1", execution_mode="REAL",
+    )
+    assert len(tele.sent) == 2
+    assert "TÍN HIỆU BUY" in tele.sent[0][1] and "ĐÃ XẾP LỆNH" not in tele.sent[0][1]
+    assert "ĐÃ XẾP LỆNH" in tele.sent[1][1]
+    assert "không xác nhận đã gửi/khớp" in tele.sent[1][1]
+
+
+@pytest.mark.parametrize("mode,fee_rate", [("REAL", .0012), ("PAPER", .00045)])
+@pytest.mark.parametrize("order_type,budget_price", [("MARKET", 79.3), ("LO", 74.2)])
+def test_compact_buy_uses_actual_intent_quantity_and_reserved_price_not_signal_price(
+    monkeypatch, tmp_path, mode, fee_rate, order_type, budget_price,
+):
+    from datetime import datetime
+    from viking_v2.trading.market import VN_TZ
+
+    subject, tele = _technical_subject(monkeypatch, tmp_path)
+    subject.settings.telegram_notifications["blocked_buy"] = False
+    intent = OrderIntent(
+        id="abc12345-rest", symbol="MSN", side="BUY", quantity=200, order_type=order_type,
+        source="BOT", execution_mode=mode, trade_id="T1",
+        created_at=datetime(2026, 10, 9, 14, 5, tzinfo=VN_TZ).timestamp(),
+        entry_budget=16_000_000 / (1 + fee_rate), details={"reservation_price": budget_price},
+    )
+    before = intent.to_dict()
+    decision = StrategyDecision("BUY", "MSN", "BUY_SIGNAL", signal="BUY", details={
+        "signal_cycle": "CROSS1", "entry_checks": {"buy_fee_rate": fee_rate},
+    })
+    subject._notify_rule_signal(
+        "MSN", decision, {"price": 74.2}, signal_id="T1", entry_id=intent.id,
+        execution_mode=mode, order_intent=intent,
+    )
+    assert len(tele.sent) == 1
+    message = tele.sent[0][1]
+    assert f"BUY · MSN · {mode} · ĐÃ XẾP LỆNH · #abc12345" in message
+    assert f"14:05 · {order_type} · 200 CP · Giá tín hiệu 74,200đ" in message
+    assert f"Giá tính vốn {budget_price * 1000:,.0f}đ" in message
+    assert f"{200 * budget_price * 1000 * (1 + fee_rate) / 1_000_000:.2f} tr" in message
+    assert f"gồm phí {200 * budget_price * fee_rate:.1f}K" in message
+    assert "/ vốn 16.00 tr" in message
+    assert "Chưa xác nhận đã gửi/khớp" in message
+    assert len(message.splitlines()) == 4 and len(message) < 330
+    assert intent.to_dict() == before  # Notification cannot mutate the actual order.
+
+
+def test_batched_buy_keeps_compact_order_information_and_original_creation_time(buy_timers):
+    from datetime import datetime
+    from viking_v2.trading.market import VN_TZ
+
+    tele = Telegram()
+    service = SignalTelegramService(tele, chat_id="7", buy_batch_minutes=30)
+    info = {
+        "order_id": "abcdef123", "quantity": 200, "order_type": "MARKET",
+        "created_at": datetime(2026, 10, 9, 14, 5, tzinfo=VN_TZ).timestamp(),
+        "budget_price": 79.3, "gross_vnd": 15_879_032, "fee_vnd": 19_032,
+        "budget_vnd": 16_000_000,
+    }
+    for mode in ("REAL", "PAPER"):
+        service.notify_buy(symbol="MSN", signal_id=mode, price=74.2, market_state="UPTREND",
+                           execution_mode=mode, order_info=info)
+    info["quantity"] = 100  # Queued payloads must be snapshots, not mutable UI drafts.
+    assert tele.sent == [] and service.flush_buys()
+    message = tele.sent[0][1]
+    assert "2 LỆNH · 1 MÃ" in message
+    assert "BUY · MSN · REAL" in message and "BUY · MSN · PAPER" in message
+    assert message.count("14:05 · MARKET · 200 CP") == 2
+    assert message.count("gồm phí 19.0K") == 2
+    assert message.count("Chưa xác nhận đã gửi/khớp") == 1
+
+
+@pytest.mark.parametrize("changes", [
+    {"buy_ema_fast": 22.1}, {"rsi": 49.0}, {"rsi": None},
+    {"buy_ema_slow": float("nan")}, {"rsi": float("inf")},
+])
+def test_lost_or_invalid_conditions_do_not_alert_or_consume_cooldown(monkeypatch, tmp_path, changes):
+    subject, tele = _technical_subject(monkeypatch, tmp_path)
+    indicators = {"buy_ema_fast": 22.5, "buy_ema_slow": 22.2,
+                  "rsi": 55.0, "rsi_previous": 50.0}
+    decision = StrategyDecision("WAIT", "HDB", "BUY_WINDOW_BROKEN", signal="BUY", details={
+        "signal_cycle": "CROSS1", "indicators": {**indicators, **changes},
+    })
+    subject._notify_rule_signal("HDB", decision, {"price": 22.5}, execution_mode="REAL")
+    assert tele.sent == []
+    decision.details["indicators"] = indicators
+    decision.reason = "WHIPSAW_LOCK"
+    subject._notify_rule_signal("HDB", decision, {"price": 22.5}, execution_mode="REAL")
+    assert len(tele.sent) == 1  # Bad data must not suppress the next valid candidate.
+
+
+@pytest.mark.parametrize("ema_enabled,rsi_enabled,expected", [
+    (True, False, "EMA 3/6"), (False, True, "RSI14"),
+])
+def test_technical_alert_only_requires_selected_ema_rsi(monkeypatch, tmp_path, ema_enabled, rsi_enabled, expected):
+    subject, tele = _technical_subject(monkeypatch, tmp_path)
+    subject.settings.rule_parameters.update(
+        buy_signal_use_ema=ema_enabled, buy_signal_use_rsi=rsi_enabled,
+    )
+    marks = ({"buy_ema_fast": 22.5, "buy_ema_slow": 22.2} if ema_enabled
+             else {"rsi": 55.0, "rsi_previous": 50.0})
+    decision = StrategyDecision("WAIT", "HDB", "WHIPSAW_LOCK", signal="BUY", details={
+        "signal_cycle": "CROSS1", "indicators": marks,
+    })
+    subject._notify_rule_signal("HDB", decision, {"price": 22.5}, execution_mode="REAL")
+    assert len(tele.sent) == 1 and expected in tele.sent[0][1]
+    assert ("EMA 3/6" in tele.sent[0][1]) is ema_enabled
+    assert ("RSI14" in tele.sent[0][1]) is rsi_enabled
+
+
+def test_changing_block_reason_does_not_duplicate_the_same_technical_signal(monkeypatch, tmp_path):
+    subject, tele = _technical_subject(monkeypatch, tmp_path)
+    subject.settings.telegram_cooldown_minutes["blocked_buy"] = 0
+    decision = StrategyDecision("WAIT", "HDB", "BUY_WINDOW_WAIT", signal="BUY", details={
+        "signal_cycle": "CROSS1", "indicators": {
+            "buy_ema_fast": 22.5, "buy_ema_slow": 22.2,
+            "rsi": 55.0, "rsi_previous": 50.0,
+        },
+    })
+    for reason in ("BUY_WINDOW_WAIT", "WHIPSAW_LOCK", "LOCKED_AFTER_LOSSES", "BOT_OFF"):
+        decision.reason = reason
+        subject._notify_rule_signal("HDB", decision, {"price": 22.5}, execution_mode="REAL")
+    assert len(tele.sent) == 1
+
+
+@pytest.mark.parametrize("reason,portfolio,whipsaw_count", [
+    ("WHIPSAW_LOCK", {"available_capital": 100_000_000}, 3),
+    ("LOCKED_AFTER_LOSSES", {"available_capital": 100_000_000, "loss_streak": 3}, 0),
+    ("NO_AVAILABLE_CAPITAL", {"available_capital": 0}, 0),
+])
+def test_technical_notification_does_not_open_entry_guards_after_14h(
+    monkeypatch, tmp_path, reason, portfolio, whipsaw_count,
+):
+    from datetime import datetime
+    from viking_v2.rules.business import StaticRule
+    from viking_v2.rules.entry_filters import apply_buy_filters
+    from viking_v2.trading.market import VN_TZ
+
+    subject, tele = _technical_subject(monkeypatch, tmp_path)
+    monkeypatch.setattr("viking_v2.rules.business.crossover_count", lambda *_args: whipsaw_count)
+    bars = [{"close": value, "volume": 1_000_000, "closed": True}
+            for value in ([100] * 15 + [99, 98, 97, 98, 100])]
+    context = {"symbol": "HDB", "bars": bars, "previous_market_state": "UPTREND", "signal_mode": "REALTIME"}
+    rule = StaticRule()
+    original = rule.evaluate(context, portfolio)
+    _, decision = apply_buy_filters(
+        rule, original, context, portfolio, {},
+        observed_at=datetime(2026, 10, 9, 14, 1, tzinfo=VN_TZ), exchange="HOSE",
+    )
+    decision.details["signal_cycle"] = "CROSS1"
+    assert decision.action == "WAIT" and decision.reason == reason
+    subject._notify_rule_signal("HDB", decision, {"price": 22.5}, execution_mode="REAL")
+    assert len(tele.sent) == 1 and "TÍN HIỆU BUY" in tele.sent[0][1]
+    assert decision.action == "WAIT" and decision.reason == reason
+    assert subject.rule_state.active_telegram_signal("HDB", "REAL") is None
 
 
 def test_closed_flushes_queued_buy_before_summary():
@@ -399,6 +749,27 @@ def test_rejected_bot_buy_is_written_back_to_signal_history(tmp_path):
     assert (row["acted"], row["blocked_by"], row["candle_key"]) == (
         "WAIT", "BROKER_REJECTED", "D1",
     )
+
+
+@pytest.mark.parametrize("broker_status", ["REJECTED", "FAILED", "EXPIRED"])
+def test_failed_buy_reports_system_error_not_a_new_technical_signal(monkeypatch, tmp_path, broker_status):
+    subject, tele = _technical_subject(monkeypatch, tmp_path)
+    subject.signal_log = SignalLog(tmp_path / "signal_log.csv")
+    subject.snapshots = {"REAL": ({}, [], [])}
+    subject.queue = SimpleNamespace(list_all=lambda: [])
+    subject._shared_tick = lambda _symbol: {"price": 22.5}
+    subject._symbol_exchange = lambda _symbol: "HOSE"
+    intent = OrderIntent.create(
+        "HDB", "BUY", 100, "MARKET", execution_mode="REAL",
+        source="BOT", trade_id="T1", signal="BUY", candle_key="D1",
+    )
+    for _ in range(2):
+        subject._record_failed_buy_execution("REAL", intent, BrokerOrderResult(False, broker_status))
+    assert len(tele.sent) == 1
+    assert "HỆ THỐNG CẦN KIỂM TRA · REAL" in tele.sent[0][1]
+    assert f"REAL BUY HDB: {broker_status}" in tele.sent[0][1]
+    assert "TÍN HIỆU BUY" not in tele.sent[0][1]
+    assert len(subject.signal_log.read_all()) == 1
 
 
 def test_telegram_does_not_report_a_partial_exit_as_closed():

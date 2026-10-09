@@ -24,6 +24,11 @@ from ..branding import APP_NAME
 from ..config import AppSettings, save_settings
 from ..connections.telegram import SignalTelegramService, TelegramClient
 from ..connections.window import ConnectionPopup
+from ..connections.dnse.snapshot_health import (
+    FAST_POLL_SECONDS, IDLE_ALERT_SECONDS, IDLE_POLL_SECONDS,
+    account_poll_interval, error_summary, snapshot_failure_summary,
+    safe_detail,
+)
 from ..exit_modes import EXIT_MODE_LABELS
 from ..models import OrderIntent, RuntimeConfig, StrategyDecision, TradeCycle
 from ..rules.window import RuleSettingsPopup
@@ -34,6 +39,7 @@ from ..services.signal_coordinator import (
     decision_signal_time,
     is_terminal_buy_block,
 )
+from ..services.indicator_comparison import IndicatorComparisonStore
 from ..storage import CSVOrderJournal
 from ..trading.market import VN_TZ, market_phase, market_session_clock, normalize_exchange
 from ..trading.portfolio import PortfolioContextBuilder, sell_quantity_for_fraction, validate_quantity
@@ -485,7 +491,7 @@ class DashboardActionsMixin:
         self._refresh_main_quote_display()
         symbol = self.symbol.get().strip().upper() or "---"
         self.lbl_quote_symbol.configure(text=symbol)
-        status = self.bridge.read_status() if hasattr(self, "bridge") else {}
+        status = (self.bridge.read_status() or {}) if hasattr(self, "bridge") else {}
         tick = (status.get("ticks") or {}).get(symbol) or {}
         order_type = self.order_type.get().upper()
         live_price = float(getattr(self, "_current_tick_price", 0.0) or 0.0)
@@ -605,6 +611,7 @@ class DashboardActionsMixin:
             self._history_popup = HistoryPopup(
                 self, self._history_popup_groups, initial_mode=self.mode.get(),
                 signals_provider=self._signal_log_rows,
+                indicator_comparison=IndicatorComparisonStore(self.bridge.root / "indicator_comparison"),
                 on_visibility_changed=lambda visible: self.history_button.configure(
                     fg_color=COL_GREEN if visible else COL_GRAY,
                     hover_color="#16A34A" if visible else "#4B515B",
@@ -1211,6 +1218,7 @@ class DashboardActionsMixin:
             bool(self.settings.telegram_enabled),
             str(self.settings.telegram_chat_id or "").strip(),
             str(token or "").strip(),
+            str(self.settings.telegram_buy_delivery_mode),
             int(self.settings.telegram_buy_batch_minutes),
         )
         if not force and signature == self._telegram_signature:
@@ -1220,18 +1228,29 @@ class DashboardActionsMixin:
                 self.telegram.cancel_pending_buys()
             return
         previous = self.telegram
-        if previous:
+        previous_signature = self._telegram_signature
+        enabled, chat_id, token, delivery_mode, batch_minutes = signature
+        effective_batch_minutes = batch_minutes if delivery_mode == "BATCH" else 0
+        same_connection = (
+            previous is not None and previous_signature is not None
+            and previous_signature[:3] == signature[:3]
+        )
+        if previous and not same_connection:
             previous.cancel_pending_buys()
-        self.telegram = None
         self._telegram_signature = signature
-        enabled, chat_id, token, batch_minutes = signature
+        self.telegram = previous if same_connection else None
         if enabled and chat_id and token:
-            self.telegram = SignalTelegramService(
-                TelegramClient(token),
-                chat_id=chat_id,
-                buy_batch_minutes=batch_minutes,
-            )
-            self._log(f"Telegram gom BUY {batch_minutes} phút; CLOSED gửi ngay đã áp dụng.")
+            if same_connection:
+                if not DashboardActionsMixin._telegram_notification_enabled(self, "buy_queued"):
+                    self.telegram.cancel_pending_buys()
+                self.telegram.configure_buy_delivery(buy_batch_minutes=effective_batch_minutes)
+            else:
+                self.telegram = SignalTelegramService(
+                    TelegramClient(token), chat_id=chat_id,
+                    buy_batch_minutes=effective_batch_minutes,
+                )
+            delivery = f"gom {batch_minutes} phút" if delivery_mode == "BATCH" else "gửi ngay"
+            self._log(f"Telegram BUY {delivery}; CLOSED gửi ngay đã áp dụng.")
 
     def _telegram_notification_enabled(self, key: str) -> bool:
         values = getattr(self.settings, "telegram_notifications", {})
@@ -1263,6 +1282,7 @@ class DashboardActionsMixin:
         signal_id: str = "",
         entry_id: str = "",
         execution_mode: str = "",
+        order_intent: OrderIntent | None = None,
     ) -> dict[str, Any] | None:
         service = self.telegram
         details = decision.details if isinstance(decision.details, dict) else {}
@@ -1281,6 +1301,24 @@ class DashboardActionsMixin:
         )
         price = _price_unit(raw_price)
         signal = str(decision.signal or "").upper()
+
+        technical = DashboardActionsMixin._technical_buy_snapshot(self, decision, price)
+        settings = getattr(self, "settings", None)
+        rules = getattr(settings, "rule_parameters", {}) or {}
+        session_key = "|".join(str(value) for value in (
+            datetime.now(VN_TZ).date().isoformat(),
+            getattr(settings, "telegram_chat_id", ""),
+            rules.get("buy_signal_use_ema", True), rules.get("buy_signal_use_rsi", True),
+            rules.get("buy_ema_fast", 3), rules.get("buy_ema_slow", 6), rules.get("rsi_period", 14),
+        ))
+        watch, lost = self.rule_state.observe_telegram_buy(
+            symbol, execution_mode, technical["valid"] if technical else None,
+            session_key=session_key, snapshot=technical,
+            queued=bool(order_intent or (decision.action == "BUY" and signal_id)
+                        or decision.reason == "BUY_ALREADY_PENDING"),
+        )
+        if lost:
+            DashboardActionsMixin._notify_buy_lost(self, lost)
 
         event = str(decision.event or "").upper()
         triggered_events = {
@@ -1390,10 +1428,14 @@ class DashboardActionsMixin:
 
         if not service:
             return None
+        # Technical information is independent of entry permission. It is
+        # delivered for both blocked candidates and successfully planned BUYs;
+        # the queue and every trading guard remain untouched by this alert.
+        self._notify_signal_only(
+            service, symbol, signal, decision, price, execution_mode,
+            watch_id=str(watch.get("id", "")),
+        )
         if decision.action != "BUY" or signal != "BUY" or not signal_id:
-            self._notify_signal_only(
-                service, symbol, signal, decision, price, execution_mode,
-            )
             return None
         if not (
             DashboardActionsMixin._telegram_notification_enabled(self, "buy_queued")
@@ -1416,6 +1458,20 @@ class DashboardActionsMixin:
                     or not DashboardActionsMixin._claim_telegram_event(self, f"buy_entry|{execution_mode}", symbol, entry_id)):
                 return record
         if DashboardActionsMixin._telegram_notification_enabled(self, "buy_queued"):
+            order_info = None
+            if order_intent is not None:
+                checks = details.get("entry_checks") or {}
+                fee_rate = max(0.0, float(checks.get("buy_fee_rate", 0.0) or 0.0))
+                budget_price = float(order_intent.details.get("reservation_price", 0.0) or 0.0)
+                if budget_price > 0:
+                    value = order_intent.quantity * budget_price * 1000.0
+                    order_info = {
+                        "order_id": order_intent.id, "created_at": order_intent.created_at,
+                        "order_type": order_intent.order_type, "quantity": order_intent.quantity,
+                        "budget_price": budget_price, "fee_vnd": value * fee_rate,
+                        "gross_vnd": value * (1.0 + fee_rate),
+                        "budget_vnd": order_intent.entry_budget * (1.0 + fee_rate),
+                    }
             threading.Thread(
                 target=service.notify_buy,
                 kwargs={
@@ -1424,39 +1480,103 @@ class DashboardActionsMixin:
                     "price": price,
                     "market_state": decision.market_state,
                     "execution_mode": execution_mode,
+                    "order_info": order_info,
                 },
                 daemon=True,
             ).start()
         return record
 
+    def _technical_buy_snapshot(self, decision: Any, price: float) -> dict[str, Any] | None:
+        """Evaluate selected EMA/RSI only; bad/missing data cannot cancel BUY."""
+        details = decision.details if isinstance(decision.details, dict) else {}
+        marks = details.get("indicators")
+        if not isinstance(marks, dict) or not math.isfinite(price) or price <= 0:
+            return None
+        rules = getattr(self.settings, "rule_parameters", {}) or {}
+        ema_enabled = bool(rules.get("buy_signal_use_ema", True))
+        rsi_enabled = bool(rules.get("buy_signal_use_rsi", True))
+        if not (ema_enabled or rsi_enabled):
+            return None
+        keys = (["buy_ema_fast", "buy_ema_slow"] if ema_enabled else []) + (
+            ["rsi", "rsi_previous"] if rsi_enabled else []
+        )
+        try:
+            values = {key: float(marks[key]) for key in keys}
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        if any(not math.isfinite(value) for value in values.values()):
+            return None
+        if (ema_enabled and min(values["buy_ema_fast"], values["buy_ema_slow"]) <= 0
+                or rsi_enabled and not all(0 <= values[key] <= 100 for key in ("rsi", "rsi_previous"))):
+            return None
+        values.update({
+            "buy_ema_fast_period": marks.get("buy_ema_fast_period") or rules.get("buy_ema_fast", 3),
+            "buy_ema_slow_period": marks.get("buy_ema_slow_period") or rules.get("buy_ema_slow", 6),
+            "rsi_period": marks.get("rsi_period") or rules.get("rsi_period", 14),
+        })
+        return {
+            "valid": (not ema_enabled or values["buy_ema_fast"] > values["buy_ema_slow"])
+                     and (not rsi_enabled or values["rsi"] > values["rsi_previous"]),
+            "price": price, "indicators": values,
+            "ema_enabled": ema_enabled, "rsi_enabled": rsi_enabled,
+            "observed_at": datetime.now(VN_TZ).isoformat(),
+        }
+
+    def _notify_buy_lost(self, watch: dict[str, Any]) -> None:
+        service = self.telegram
+        snapshot = watch.get("lost_snapshot") or {}
+        if (not service or not snapshot or watch.get("queued") or not watch.get("announced")
+                or not DashboardActionsMixin._telegram_notification_enabled(self, "buy_lost")):
+            return
+        symbol, mode = str(watch.get("symbol", "")), str(watch.get("execution_mode", ""))
+        if not DashboardActionsMixin._claim_telegram_event(self, f"buy_lost|{mode}", symbol, str(watch["id"])):
+            return
+        threading.Thread(
+            target=service.notify_buy_lost,
+            kwargs={"symbol": symbol, "execution_mode": mode,
+                    **{key: snapshot[key] for key in (
+                        "price", "indicators", "ema_enabled", "rsi_enabled", "observed_at",
+                    )}},
+            daemon=True,
+        ).start()
+
     def _notify_signal_only(
         self, service: Any, symbol: str, signal: str, decision: Any, price: float,
-        execution_mode: str,
+        execution_mode: str, *, watch_id: str = "",
     ) -> None:
-        """Tell Telegram about signals the bot could not act on, once each."""
+        """Notify EMA/RSI BUY candidates without bypassing trading guards."""
         if not DashboardActionsMixin._telegram_notification_enabled(self, "blocked_buy") or signal != "BUY":
             return
         details = decision.details if isinstance(decision.details, dict) else {}
+        snapshot = DashboardActionsMixin._technical_buy_snapshot(self, decision, price)
+        if not snapshot or not snapshot["valid"]:
+            return
         occurrence = "|".join(
             (
                 signal,
-                str(details.get("signal_cycle") or details.get("candle_key", "") or ""),
-                str(decision.reason or ""),
+                str(details.get("signal_cycle") or details.get("candle_key") or decision.timestamp),
             )
         )
         if not DashboardActionsMixin._claim_telegram_event(
             self,
-            f"blocked_buy|{str(execution_mode or '').upper()}", symbol, occurrence,
+            f"blocked_buy|{str(execution_mode or '').upper()}|TECHNICAL", symbol, occurrence,
         ):
             return
+        def send_notice(**kwargs: Any) -> None:
+            if service.notify_technical_buy(**kwargs) and watch_id:
+                lost = self.rule_state.mark_telegram_buy_announced(symbol, execution_mode, watch_id)
+                if lost:
+                    DashboardActionsMixin._notify_buy_lost(self, lost)
+
         threading.Thread(
-            target=service.notify_signal_only,
+            target=send_notice,
             kwargs={
                 "symbol": symbol,
-                "signal": signal,
                 "price": price,
                 "market_state": decision.market_state,
-                "blocked_by": str(details.get("status_text") or decision.reason),
+                "indicators": snapshot["indicators"],
+                "ema_enabled": snapshot["ema_enabled"],
+                "rsi_enabled": snapshot["rsi_enabled"],
                 "execution_mode": execution_mode,
             },
             daemon=True,
@@ -2919,6 +3039,12 @@ class DashboardActionsMixin:
             priority = self.settings.watchlist.index(symbol) + 1
         except ValueError:
             priority = 0
+        reference_date = str(marks.get("rsi_previous_date", "") or "")
+        if not reference_date and marks.get("rsi_previous_time"):
+            try:
+                reference_date = datetime.fromtimestamp(float(marks["rsi_previous_time"]), VN_TZ).date().isoformat()
+            except (TypeError, ValueError, OverflowError, OSError):
+                pass
         self.signal_log.record({
             "timestamp": datetime.now(VN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
             "execution_mode": mode, "symbol": symbol,
@@ -2927,13 +3053,20 @@ class DashboardActionsMixin:
                 else decision.signal
             ),
             "price": _price_unit(raw_price),
-            "ema_fast": round(float(marks.get(
-                "sell_ema_fast" if indicator_alert else "buy_ema_fast"
-            ) or 0.0), 4),
-            "ema_slow": round(float(marks.get(
-                "sell_ema_slow" if indicator_alert else "buy_ema_slow"
-            ) or 0.0), 4),
-            "rsi": round(float(marks.get("rsi") or 0.0), 2),
+            "ema_fast": marks.get(
+                "sell_ema_fast" if indicator_alert else "buy_ema_fast", "",
+            ),
+            "ema_slow": marks.get(
+                "sell_ema_slow" if indicator_alert else "buy_ema_slow", "",
+            ),
+            "rsi": marks.get("rsi", ""),
+            "rsi_previous": marks.get("rsi_previous", ""),
+            "rsi_previous_date": reference_date,
+            "ema_fast_period": marks.get("sell_ema_fast_period" if indicator_alert else "buy_ema_fast_period", ""),
+            "ema_slow_period": marks.get("sell_ema_slow_period" if indicator_alert else "buy_ema_slow_period", ""),
+            "rsi_period": marks.get("rsi_period", ""),
+            "price_source": tick.get("source", ""), "indicator_source": "DNSE",
+            "record_kind": "SIGNAL",
             "market_state": decision.market_state, "acted": decision.action,
             "blocked_by": "" if decision.action != "WAIT" else decision.reason,
             "candle_key": (
@@ -2988,6 +3121,14 @@ class DashboardActionsMixin:
             str(decision.signal or "").upper() != "BUY"
             or not is_terminal_buy_block(decision.reason)
         ):
+            return
+        params = getattr(getattr(self, "settings", None), "rule_parameters", {}) or {}
+        requires_cross = bool(params.get("buy_signal_use_ema", True)
+                              and params.get("buy_signal_require_ema_cross", False))
+        if (decision.reason in {"BOT_OFF", "MANUAL_SELL_PAUSE"}
+                and not requires_cross):
+            # Level mode must recheck current conditions after operator arming
+            # or a pause. No order is planned while the operating gate is off.
             return
         details = decision.details if isinstance(decision.details, dict) else {}
         self.rule_state.claim_signal(
@@ -3212,6 +3353,7 @@ class DashboardActionsMixin:
                 self._notify_rule_signal(
                     symbol, decision, tick,
                     signal_id=intent.trade_id, entry_id=intent.id, execution_mode=mode,
+                    order_intent=intent,
                 )
             else:
                 self._claim_terminal_buy(final, mode)
@@ -3315,8 +3457,9 @@ class DashboardActionsMixin:
         execution_mode: str,
         *,
         occurrence: str = "",
+        severity: str = "ERROR",
     ) -> bool:
-        service = self.telegram
+        service = getattr(self, "telegram", None)
         if (
             not service
             or not DashboardActionsMixin._telegram_notification_enabled(self, "system")
@@ -3334,12 +3477,12 @@ class DashboardActionsMixin:
             occurrence,
         ):
             return False
+        kwargs = {"summary": summary, "execution_mode": execution_mode}
+        if severity != "ERROR":
+            kwargs["severity"] = severity
         threading.Thread(
             target=service.notify_system_alert,
-            kwargs={
-                "summary": summary,
-                "execution_mode": execution_mode,
-            },
+            kwargs=kwargs,
             daemon=True,
         ).start()
         return True
@@ -3388,16 +3531,46 @@ class DashboardActionsMixin:
             issues.append(f"DAEMON {daemon_status}")
         if market_status == "CALENDAR_UNKNOWN":
             issues.append("KHÔNG ĐỌC ĐƯỢC LỊCH GIAO DỊCH")
-        if str(status.get("error") or "").strip():
+        health = status.get("api_health") if isinstance(status.get("api_health"), dict) else {}
+        rest = health.get("rest") if isinstance(health.get("rest"), dict) else {}
+        context = status.get("cycle_error_context") if isinstance(status.get("cycle_error_context"), dict) else {}
+        raw_errors = rest.get("snapshot_errors") or {}
+        snapshot_errors = [row for row in raw_errors.values() if isinstance(row, dict)] if isinstance(raw_errors, dict) else []
+        snapshot_context = context.get("snapshot_error")
+        structured_cycle = bool(
+            str(status.get("error") or "").strip()
+            and context.get("stage") == "ACCOUNT_SNAPSHOT"
+            and context.get("execution_mode") == "REAL"
+            and isinstance(snapshot_context, dict) and snapshot_context.get("error")
+        )
+        if structured_cycle and not any(row.get("error") == snapshot_context["error"] for row in snapshot_errors):
+            snapshot_errors.append(snapshot_context)
+        if str(status.get("error") or "").strip() and not structured_cycle:
             issues.append(DashboardActionsMixin._cycle_error_summary(
                 status, retrying=daemon_status not in {"STOPPED", "STALE"},
             ))
 
-        health = status.get("api_health") if isinstance(status.get("api_health"), dict) else {}
-        rest = health.get("rest") if isinstance(health.get("rest"), dict) else {}
+        orders = self.queue.list_all() if hasattr(self, "queue") else []
+        idle_account = bool(
+            rest.get("account_poll_seconds") == IDLE_POLL_SECONDS
+            and account_poll_interval(market_status, orders, symbol_phases=status.get("symbol_phases")) == IDLE_POLL_SECONDS
+        )
+        account_issues = []
+        secrets = tuple(getattr(getattr(self, "real", None), key, "") for key in ("api_key", "api_secret", "trading_token"))
+        for failure in snapshot_errors:
+            since = _number(failure.get("first_error_at"))
+            if idle_account and since > 0 and time.time() - since < IDLE_ALERT_SECONDS:
+                continue
+            account_issues.append(snapshot_failure_summary(
+                failure, IDLE_POLL_SECONDS if idle_account else FAST_POLL_SECONDS, secrets=secrets,
+            ))
         total_requests = int(rest.get("total_requests", 0) or 0)
         last_status = rest.get("last_status")
-        if total_requests > 0 and (
+        last_is_snapshot = any(
+            row.get("endpoint") == rest.get("last_endpoint") and row.get("status") == last_status
+            for row in snapshot_errors
+        )
+        if not last_is_snapshot and total_requests > 0 and (
             not isinstance(last_status, (int, float))
             or not 200 <= int(last_status) < 300
         ):
@@ -3414,7 +3587,7 @@ class DashboardActionsMixin:
         ) and not bool(ws.get("running")):
             issues.append("DNSE WS MẤT KẾT NỐI")
 
-        signature = "|".join(issues)
+        signature = "|".join(issues + account_issues)
         if signature == str(getattr(self, "_telegram_system_health_signature", "") or ""):
             return
         if not signature:
@@ -3422,10 +3595,11 @@ class DashboardActionsMixin:
             return
         scheduled = DashboardActionsMixin._notify_system_event(
             self,
-            "HEALTH",
-            " · ".join(issues),
-            execution_mode,
+            "HEALTH" if issues else "ACCOUNT_REFRESH",
+            "\n".join(issues + account_issues),
+            execution_mode if issues else "REAL",
             occurrence=f"{signature}|{int(time.time())}",
+            **({"severity": "WARNING"} if account_issues and idle_account and not issues else {}),
         )
         if scheduled:
             self._telegram_system_health_signature = signature
@@ -3470,9 +3644,24 @@ class DashboardActionsMixin:
         )
         tick = self._shared_tick(intent.symbol) or {}
         self._record_signal_decision(decision, tick, mode, allocator)
-        self._notify_rule_signal(
-            intent.symbol, decision, tick, execution_mode=mode,
+        # Technical BUY alerts deliberately ignore execution outcomes. Keep
+        # rejected/failed BUYs visible through the dedicated system category.
+        DashboardActionsMixin._notify_system_event(
+            self,
+            "ORDER_FAILURE",
+            DashboardActionsMixin._broker_failure_summary(self, mode, intent, broker_result),
+            mode,
+            occurrence=f"{intent.id}|{status or 'FAILED'}",
         )
+
+    def _broker_failure_summary(self, mode: str, intent: OrderIntent, result: Any) -> str:
+        broker = getattr(self, "real", None)
+        secrets = tuple(getattr(broker, name, "") for name in ("api_key", "api_secret", "trading_token"))
+        status = str(getattr(result, "status", "") or "FAILED").upper()
+        cause = safe_detail(
+            getattr(result, "error", "") or getattr(result, "message", ""), secrets=secrets,
+        )
+        return f"{mode} {intent.side} {intent.symbol}: {status}" + (f" · {cause}" if cause else " · Broker không trả chi tiết lỗi")
 
     def _process_orders(self) -> None:
         if not self.running:
@@ -3515,7 +3704,9 @@ class DashboardActionsMixin:
                 error = ""
             except Exception as exc:
                 rows = []
-                error = str(exc)
+                error = error_summary(exc, secrets=tuple(getattr(self.real, name, "") for name in (
+                    "api_key", "api_secret", "trading_token",
+                )))
 
             def apply() -> None:
                 self._order_worker_busy = False
@@ -3526,7 +3717,7 @@ class DashboardActionsMixin:
                     DashboardActionsMixin._notify_system_event(
                         self,
                         "EXECUTION_WORKER",
-                        "Luồng xử lý lệnh bị lỗi.",
+                        f"Luồng xử lý lệnh: {error}",
                         str(self.mode.get() or "").upper(),
                     )
                 for selected_mode, intent, broker_result in rows:
@@ -3542,8 +3733,7 @@ class DashboardActionsMixin:
                         DashboardActionsMixin._notify_system_event(
                             self,
                             "ORDER_FAILURE",
-                            f"{selected_mode} {intent.side} {intent.symbol}: "
-                            f"{broker_status or 'FAILED'}.",
+                            DashboardActionsMixin._broker_failure_summary(self, selected_mode, intent, broker_result),
                             selected_mode,
                             occurrence=f"{intent.id}|{broker_status or 'FAILED'}",
                         )
@@ -3561,26 +3751,44 @@ class DashboardActionsMixin:
             self.after(1000, self._refresh_snapshots)
             return
         self._snapshot_busy = True
+        status = self.bridge.read_status() if hasattr(self, "bridge") else {}
+        orders = self.queue.list_all() if hasattr(self, "queue") else None
+        poll_seconds = account_poll_interval(
+            str(status.get("market_status", "UNKNOWN")), orders,
+            symbol_phases=status.get("symbol_phases"),
+        )
+        fault = (getattr(self, "_account_snapshot_faults", {}) or {}).get("REAL") or {}
+        if fault.get("stage") in {"RECONCILE", "WORKER"}:
+            poll_seconds = FAST_POLL_SECONDS
+        configure_polling = getattr(self.real, "set_account_poll_interval", None)
+        if callable(configure_polling):
+            configure_polling(poll_seconds)
 
         def work() -> tuple[
             dict[str, tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]],
             list[dict[str, Any]],
-            dict[str, str],
+            dict[str, tuple[Exception, str]],
         ]:
             values = {}
-            errors: dict[str, str] = {}
+            errors: dict[str, tuple[Exception, str]] = {}
             try:
                 values["PAPER"] = self.execution.account_snapshot("PAPER")
             except Exception as exc:
-                errors["PAPER"] = str(exc)
+                errors["PAPER"] = (exc, "ACCOUNT_SNAPSHOT")
             external_sells: list[dict[str, Any]] = []
             if self.real.configured():
-                try:
-                    snapshot = self.execution.account_snapshot("REAL")
-                    external_sells = self.execution.reconcile_external_sells(snapshot[1], snapshot[2])
-                    values["REAL"] = snapshot
-                except Exception as exc:
-                    errors["REAL"] = str(exc)
+                now = time.time()
+                previous_attempt = getattr(self, "_last_real_snapshot_attempt", None)
+                if previous_attempt is None or now - previous_attempt >= poll_seconds:
+                    self._last_real_snapshot_attempt = now
+                    stage = "ACCOUNT_SNAPSHOT"
+                    try:
+                        snapshot = self.execution.account_snapshot("REAL")
+                        stage = "RECONCILE"
+                        external_sells = self.execution.reconcile_external_sells(snapshot[1], snapshot[2])
+                        values["REAL"] = snapshot
+                    except Exception as exc:
+                        errors["REAL"] = (exc, stage)
             # A failed REAL refresh/reconciliation must not throw away PAPER's
             # successful balance (and vice versa). Failed books keep their
             # previous snapshot; we never fabricate a zero balance.
@@ -3594,20 +3802,54 @@ class DashboardActionsMixin:
             except Exception as exc:
                 values = {}
                 external_sells = []
-                errors = {"": str(exc)}
+                errors = {"": (exc, "WORKER")}
 
             def apply() -> None:
                 self._snapshot_busy = False
                 if not self.running:
                     return
-                for failed_book, error in errors.items():
+                faults = getattr(self, "_account_snapshot_faults", {})
+                self._account_snapshot_faults = faults
+                last_good = getattr(self, "_account_snapshot_last_good", {})
+                self._account_snapshot_last_good = last_good
+                now = time.time()
+                for book in values:
+                    last_good[book] = now
+                    if faults.pop(book, None) is not None:
+                        self.logger.info("[%s] Account refresh recovered", book)
+                        log = getattr(self, "_log", None)
+                        if callable(log):
+                            log(f"[{book}] Đã đồng bộ lại tiền/vị thế/lệnh.", "bot")
+                secrets = tuple(getattr(self.real, key, "") for key in ("api_key", "api_secret", "trading_token"))
+                for failed_book, (error, stage) in errors.items():
                     failed_book = failed_book or str(self.mode.get() or "").upper()
-                    self.logger.warning("[%s] Account refresh failed: %s", failed_book, error)
+                    detail = error_summary(error, secrets=secrets)
+                    previous = faults.get(failed_book) or {}
+                    idle = failed_book == "REAL" and stage == "ACCOUNT_SNAPSHOT" and poll_seconds == IDLE_POLL_SECONDS
+                    faults[failed_book] = {
+                        "since": previous.get("since", now), "detail": detail, "stage": stage,
+                        "last_success_at": last_good.get(failed_book, 0.0),
+                    }
+                    step = "đối soát giao dịch ngoài app" if stage == "RECONCILE" else "đọc tiền/vị thế/lệnh" if stage == "ACCOUNT_SNAPSHOT" else "luồng đồng bộ tài khoản"
+                    summary = f"Lỗi {step}: {detail}"
+                    if detail != previous.get("detail"):
+                        self.logger.warning("[%s] Account refresh failed: %s", failed_book, summary)
+                        log = getattr(self, "_log", None)
+                        if callable(log):
+                            log(f"[{failed_book}] {summary}", "bot")
+                    if idle and now - faults[failed_book]["since"] < IDLE_ALERT_SECONDS:
+                        continue  # Transient idle errors stay visible in logs, not Telegram.
+                    if failed_book == "REAL" and stage == "ACCOUNT_SNAPSHOT":
+                        summary = snapshot_failure_summary(
+                            {"error": detail, "last_success_at": last_good.get(failed_book, 0.0)},
+                            poll_seconds, secrets=secrets,
+                        )
                     DashboardActionsMixin._notify_system_event(
                         self,
                         "ACCOUNT_REFRESH",
-                        f"Không làm mới được tài khoản/vị thế {failed_book}.",
+                        summary,
                         failed_book,
+                        severity="WARNING" if idle else "ERROR",
                     )
                 self.snapshots.update(values)
                 if "PAPER" in values:

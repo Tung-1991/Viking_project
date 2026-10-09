@@ -415,7 +415,8 @@ def test_scenario_accepts_runtime_callbacks_without_putting_them_in_config(tmp_p
     assert progress
 
 
-def test_mode2_replay_catches_intraday_daily_ema_cross_and_fills_next_bar(tmp_path):
+@pytest.mark.parametrize("require_cross", [False, True])
+def test_mode2_replay_catches_intraday_daily_ema_cross_and_fills_next_bar(tmp_path, require_cross):
     start = datetime(2025, 12, 1, tzinfo=VN_TZ)
     values = [8.0] * 221
     test_day = (start + timedelta(days=220)).date().isoformat()
@@ -441,6 +442,7 @@ def test_mode2_replay_catches_intraday_daily_ema_cross_and_fills_next_bar(tmp_pa
         fill_session="CONTINUOUS", simulation_mode="REPLAY",
         rule_parameters=_rules_without_buy_window(
             buy_ema_fast=2, buy_ema_slow=3, rsi_period=2,
+            buy_signal_require_ema_cross=require_cross,
             max_positions=1, no_compound_enabled=False,
         ),
     )
@@ -451,6 +453,14 @@ def test_mode2_replay_catches_intraday_daily_ema_cross_and_fills_next_bar(tmp_pa
     assert datetime.fromisoformat(buys[0].fill_time).strftime("%H:%M") == "09:16"
     assert buys[0].source_resolution == "1"
     assert result.data_quality["signal_resolution"] == "1D_REALTIME"
+    first_buy = next(row for row in result.signals if row["action"] == "BUY")
+    live_marks = first_buy["details"]["indicators"]
+    # 220 completed daily closes at 8 plus today's provisional close at 9.
+    # These are not EMA(2/3) over the minute bars, which would lack this history.
+    assert live_marks["sample_count"] == 221
+    assert live_marks["buy_ema_fast"] == pytest.approx(8 + 2 / 3)
+    assert live_marks["buy_ema_slow"] == pytest.approx(8.5)
+    assert datetime.fromisoformat(first_buy["time"]).strftime("%H:%M") == "09:15"
     report = export_run_excel(result, tmp_path / "exports", mode="MODE 2", stamp="replay")
     from openpyxl import load_workbook
     workbook = load_workbook(report, read_only=True)
@@ -466,6 +476,7 @@ def test_mode2_replay_catches_intraday_daily_ema_cross_and_fills_next_bar(tmp_pa
         simulation_mode="DAILY",
         rule_parameters=_rules_without_buy_window(
             buy_ema_fast=2, buy_ema_slow=3, rsi_period=2,
+            buy_signal_require_ema_cross=require_cross,
             max_positions=1, no_compound_enabled=False,
         ),
     ), save=False)
@@ -511,6 +522,49 @@ def test_replay_confirms_buy_for_five_exchange_minutes_then_fills_next_bar(tmp_p
     assert datetime.fromisoformat(buy.decision_time).strftime("%H:%M") == "09:20"
     assert datetime.fromisoformat(buy.fill_time).strftime("%H:%M") == "09:21"
     assert any(row["reason"] == "BUY_CONFIRMATION_WAIT" for row in result.signals)
+
+
+@pytest.mark.parametrize("require_cross", [False, True])
+def test_replay_uses_intraday_price_at_1400_and_daily_baseline_for_optional_buy_cross(tmp_path, require_cross):
+    from viking_v2.rules.business import indicator_snapshot
+    start = datetime(2025, 12, 1, tzinfo=VN_TZ)
+    completed_closes = [8.0] * 216 + [7.8, 8.1, 8.0, 8.2]
+    day = (start + timedelta(days=len(completed_closes))).date().isoformat()
+    # Deliberately different final daily close: it must not leak into 14:00.
+    payload = _payload([*completed_closes, 80.0], start)
+    store = HistoricalDataStore(root=tmp_path / "data",
+                                fetcher=lambda _symbol, resolution, *_args: payload if resolution == "1D" else None)
+    replay = ReplayDataStore(store.root / "replay")
+    source = tmp_path / "HOSE_DLY_FPT, 1.csv"
+    source.write_text("time,open,high,low,close,Volume\n" + "\n".join(
+        f"{day}T{at}Z,8.3,8.3,8.3,8.3,100"
+        for at in ("02:15:00", "06:59:00", "07:00:00", "07:01:00", "07:45:00")
+    ) + "\n", encoding="utf-8")
+    replay.import_file(source, price_scale=1)
+    params = dict(buy_window_enabled=True, buy_window_start="14:00",
+                  buy_signal_require_ema_cross=require_cross, buy_ema_fast=2, buy_ema_slow=3, rsi_period=2,
+                  max_positions=1, no_compound_enabled=False)
+    result = BacktestEngine(store, replay).run(BacktestConfig(
+        ["FPT"], day, day, initial_capital=100_000_000, fixed_market_phase="UPTREND", fixed_exposure_pct=100,
+        fill_session="CONTINUOUS", simulation_mode="REPLAY", rule_parameters=params, export_signals=True,
+    ), save=False)
+    completed = [{"close": value} for value in completed_closes]
+    baseline = indicator_snapshot(completed, 2, 3, 2)
+    expected = indicator_snapshot([*completed, {"close": 8.3}], 2, 3, 2)
+    assert baseline["buy_ema_fast"] > baseline["buy_ema_slow"]
+    assert expected["buy_ema_fast"] > expected["buy_ema_slow"]
+    assert expected["rsi"] > baseline["rsi"]
+    assert all(row["details"]["indicators"]["rsi_previous"] == baseline["rsi"] for row in result.signals)
+    buys = [event for event in result.events if event.side == "BUY"]
+    if require_cross:
+        assert buys == []  # EMA was already above throughout the replay.
+    else:
+        assert len(buys) == 1
+        assert datetime.fromisoformat(buys[0].decision_time).strftime("%H:%M") == "14:00"
+        assert datetime.fromisoformat(buys[0].fill_time).strftime("%H:%M") == "14:01"
+        approved = next(row for row in result.signals if row["action"] == "BUY")
+        for key in ("buy_ema_fast", "buy_ema_slow", "rsi", "rsi_previous"):
+            assert approved["details"]["indicators"][key] == pytest.approx(expected[key])
 
 
 @pytest.mark.parametrize("window_on,confirmation_on,expected_fill", [
