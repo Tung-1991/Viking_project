@@ -56,6 +56,8 @@ def export_trace(rows: list[dict], path: str | Path) -> None:
         ("ema_fast_period", "Chu kỳ EMA nhanh"), ("ema_slow_period", "Chu kỳ EMA chậm"), ("rsi_period", "Chu kỳ RSI"),
         ("rsi_previous_date", "Phiên RSI trước"), ("rsi_comparison", "So RSI"),
         ("entry", "ENTRY EMA/RSI"), ("ema_cross_required", "Cần vừa cắt EMA"),
+        ("ema_cross_state", "Trạng thái cắt EMA"), ("ema_cross_at", "Giờ cắt lên"),
+        ("ema_previous_fast", "EMA nhanh lần trước"), ("ema_previous_slow", "EMA chậm lần trước"),
         ("fresh_cross_entry", "ENTRY nếu cần vừa cắt"), ("baseline_source", "Nguồn nền 1D"),
         ("exit_e", "EXIT E"), ("rule_action", "Xử lý APP"), ("reason", "Mã lý do"),
         ("bot_on", "BOT ON"), ("otp_ok", "OTP còn hạn"), ("pause_active", "Tạm khóa BUY"),
@@ -195,7 +197,17 @@ class SignalTraceStore:
                     "ema_slow_period": marks.get("buy_ema_slow_period", marks.get("ema_slow_period")),
                     "rsi_period": marks.get("rsi_period"),
                     "rsi_previous_date": prior_date, "entry": entry,
-                    "ema_cross_required": bool(settings.rule_parameters.get("buy_signal_require_ema_cross", True)),
+                    "ema_cross_required": bool(settings.rule_parameters.get("buy_signal_use_ema", True)
+                                               and settings.rule_parameters.get("buy_signal_require_ema_cross", True)),
+                    "ema_cross_state": ((details.get("ema_cross") or {}).get("state", "")
+                                        if fresh and quote["valid"] else ""),
+                    "ema_cross_at": ((details.get("buy_window") or {}).get("signal_time", "")
+                                     if (details.get("ema_cross") or {}).get("required")
+                                     and (details.get("buy_window") or {}).get("state") in {"WAITING", "ALLOWED"}
+                                     and ((details.get("buy_window") or {}).get("ema_cross") or {}).get("crossed_up") is True
+                                     else (details.get("ema_cross") or {}).get("cross_at", "")),
+                    "ema_previous_fast": (details.get("ema_cross") or {}).get("previous_fast"),
+                    "ema_previous_slow": (details.get("ema_cross") or {}).get("previous_slow"),
                     "exit_e": raw.get("signal") == "SELL" if fresh and quote["valid"] else None,
                     "rule_action": raw.get("action", "WAIT") if fresh else "WAIT",
                     "reason": raw.get("reason", "") if fresh else "NO_FRESH_DECISION",

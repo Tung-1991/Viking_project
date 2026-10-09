@@ -606,6 +606,7 @@ def run(account_id: str | None = None) -> int:
                                     portfolio_tick["daily_bar_closed"] = bool(bars[-1].get("closed", False))
                                 context = dict(tick)
                                 context["market_phase"] = symbol_phase
+                                context["observation_time"] = cycle_decision_time.isoformat()
                                 context["max_observation_gap_seconds"] = MAX_DECISION_AGE
                                 context["exchange"] = symbol_exchange
                                 context["bars"] = bars_by_symbol.get(symbol, [])

@@ -15,6 +15,7 @@ import customtkinter as ctk
 from ..branding import window_title
 from ..services.indicator_comparison import IndicatorComparisonStore, number_comparison
 from ..services.signal_trace import SignalTraceStore, export_trace
+from ..rules.observations import ema_cross_caption
 from ..trading.market import VN_TZ
 
 # One palette for every popup, so the app cannot drift into four colour schemes.
@@ -134,6 +135,7 @@ _SIGNAL_REASONS = {
     "NO_NEW_BUY_SIGNAL": "Chưa có tín hiệu BUY mới",
     "NO_FRESH_DECISION": "Chưa có quyết định mới",
     "BUY_SIGNAL": "Đạt ENTRY của rule",
+    "ENTRY_CONDITIONS_LOST": "Điều kiện ENTRY không còn đạt",
     "BUY_CONFIRMATION_WAIT": "Đang giữ điều kiện BUY đủ số phút đã đặt",
     "BUY_WINDOW_WAIT": "Tín hiệu đang chờ đến khung giờ mua",
     "BUY_WINDOW_BROKEN": "Điều kiện BUY mất trong khi chờ giờ mua",
@@ -160,6 +162,8 @@ def signal_advice(row: dict[str, Any]) -> tuple[str, str]:
     if blocked == "BUY_WINDOW_WAIT":
         window = str(row.get("buy_window", "") or "")
         return "CHỜ GIỜ MUA", f"Chưa xếp lệnh; chờ khung {window}" if window else "Chưa xếp lệnh; chờ khung giờ mua"
+    if blocked == "ENTRY_CONDITIONS_LOST":
+        return "MẤT ENTRY", "EMA/RSI không còn đạt; không phải lệnh bán"
     if blocked in {"BUY_WINDOW_BROKEN", "BUY_CONFIRMATION_BROKEN"}:
         return "HỦY CHỜ BUY", _SIGNAL_REASONS[blocked] + "; không phải BUY mới"
     if blocked == "BUY_WINDOW_EXPIRED":
@@ -176,11 +180,41 @@ def signal_advice(row: dict[str, Any]) -> tuple[str, str]:
     return "THEO DÕI", "Có tín hiệu nhưng chưa hành động"
 
 
-def signal_rows_by_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def compact_signal_events(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse consecutive legacy repeats for display only, preserving raw audit.
+
+    Modern event IDs and distinct ENTRY cycles are retained. Different prices
+    alone do not constitute a new legacy E event; capture is a separate view.
+    """
+    output: list[dict[str, Any]] = []
+    last: dict[tuple[str, str, str], tuple[tuple, int]] = {}
+    for raw in sorted((row for row in rows if isinstance(row, dict)),
+                      key=lambda row: str(row.get("timestamp", ""))):
+        row = dict(raw)
+        signal = str(row.get("signal", "")).upper()
+        if signal not in {"BUY", "SELL", "E ALERT"}:
+            continue
+        key = (str(row.get("timestamp", ""))[:10], str(row.get("execution_mode", "")).upper(),
+               str(row.get("symbol", "")).upper())
+        signature = (signal, row.get("acted", ""), row.get("blocked_by", ""),
+                     row.get("buy_window_state", ""), row.get("signal_cycle", ""),
+                     row.get("signal_event", ""))
+        previous = last.get(key)
+        if row.get("record_kind") != "SIGNAL_EVENT" and previous and previous[0] == signature:
+            original = output[previous[1]]
+            original["legacy_repeat_count"] = original.get("legacy_repeat_count", 1) + 1
+            original["legacy_last_seen"] = row.get("timestamp", "")
+            continue
+        last[key] = (signature, len(output))
+        output.append(row)
+    return output
+
+
+def signal_rows_by_day(rows: list[dict[str, Any]], *, compact: bool = False) -> list[dict[str, Any]]:
     """Group events without hiding distinct times that happen to share prices."""
     days: dict[str, list[dict[str, Any]]] = {}
     seen: dict[str, dict[tuple[Any, ...], int]] = {}
-    for raw in rows or []:
+    for raw in compact_signal_events(rows or []) if compact else rows or []:
         if not isinstance(raw, dict):
             continue
         timestamp = str(raw.get("timestamp", "") or "")
@@ -209,8 +243,10 @@ def signal_rows_by_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "symbol": str(raw.get("symbol", "") or "").upper(),
             "signal": signal,
             "display_signal": (
-                "MẤT ENTRY" if str(raw.get("blocked_by", "") or "").upper()
-                in {"BUY_WINDOW_BROKEN", "BUY_CONFIRMATION_BROKEN"}
+                "LỖI LỆNH" if raw.get("signal_event") == "ORDER_RESULT"
+                else "MẤT ENTRY" if raw.get("signal_event") == "ENTRY_LOST"
+                or str(raw.get("blocked_by", "") or "").upper()
+                in {"BUY_WINDOW_BROKEN", "BUY_CONFIRMATION_BROKEN", "ENTRY_CONDITIONS_LOST"}
                 else "EXIT · E" if signal in {"SELL", "E ALERT"}
                 else "ENTRY" if signal == "BUY" else signal
             ),
@@ -220,6 +256,14 @@ def signal_rows_by_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "ema_comparison": number_comparison(raw.get("ema_fast"), raw.get("ema_slow"), 4),
             "rsi_comparison": number_comparison(raw.get("rsi"), raw.get("rsi_previous")),
             "display_price": _signal_price(raw.get("price")),
+            "ema_cross_display": (ema_cross_caption({
+                "state": ("CROSSED_UP" if raw.get("ema_cross_at")
+                          and str(raw.get("ema_cross_required", "")).lower() == "true"
+                          and raw.get("buy_window_state") in {"WAITING", "ALLOWED"}
+                          else raw.get("ema_cross_state", "UNKNOWN")),
+                "required": str(raw.get("ema_cross_required", "")).lower() == "true",
+                "cross_at": raw.get("ema_cross_at", ""),
+            })[0].removeprefix("CẮT EMA · ") if raw.get("ema_cross_state") else "—"),
         }
         previous = seen.setdefault(day, {}).get(signature)
         if previous is not None:
@@ -258,6 +302,7 @@ def signal_rows_by_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 )
                 and row.get("blocked_by") not in {
                     "BUY_WINDOW_WAIT", "BUY_CONFIRMATION_WAIT", "BUY_WINDOW_BROKEN", "BUY_CONFIRMATION_BROKEN",
+                    "ENTRY_CONDITIONS_LOST",
                 }
                 for row in details
             ),
@@ -756,6 +801,8 @@ class HistoryPopup:
         signals_provider: Callable[[], list[dict[str, Any]]] | None = None,
         indicator_comparison: IndicatorComparisonStore | None = None,
         trace_store: SignalTraceStore | None = None,
+        trace_settings_provider: Callable[[], Any] | None = None,
+        on_trace_toggle: Callable[[bool], None] | None = None,
     ):
         self.parent = parent
         self.rows_provider = rows_provider
@@ -765,6 +812,8 @@ class HistoryPopup:
             indicator_comparison = IndicatorComparisonStore(config.RUNTIME_ROOT / "indicator_comparison")
         self.indicator_comparison = indicator_comparison
         self.trace_store = trace_store or SignalTraceStore(indicator_comparison.root.parent / "signal_trace.sqlite3")
+        self.trace_settings_provider = trace_settings_provider
+        self.on_trace_toggle = on_trace_toggle
         self.indicator_basis = "DNSE"
         self.on_visibility_changed = on_visibility_changed
         parent.update_idletasks()
@@ -874,7 +923,6 @@ class HistoryPopup:
                 text_color=PALETTE["DIM"], fg_color=PALETTE["SURFACE"],
             )
         self._build_signal_tab()
-        self._build_trace_tab()
         self.tabs.set("CKCS REAL" if str(initial_mode).upper() == "REAL" else "CKCS PAPER")
         self.refresh()
         self.show()
@@ -888,6 +936,7 @@ class HistoryPopup:
         ("suggestion", "XỬ LÝ", 140, "center"),
         ("display_price", "GIÁ", 130, "center"),
         ("ema_comparison", "EMA NHANH / CHẬM", 235, "center"),
+        ("ema_cross_display", "CẮT EMA", 225, "center"),
         ("rsi_comparison", "RSI HIỆN TẠI / TRƯỚC", 205, "center"),
         ("rsi_previous_date", "PHIÊN RSI TRƯỚC", 170, "center"),
         ("market_state", "THỊ TRƯỜNG", 210, "center"),
@@ -897,6 +946,7 @@ class HistoryPopup:
     TRACE_COLUMNS = (
         ("execution_mode", "MODE", 90), ("priority", "ƯU TIÊN", 90),
         ("display_price", "GIÁ / NGUỒN", 170), ("ema_comparison", "EMA NHANH / CHẬM", 240),
+        ("ema_cross_display", "CẮT EMA", 210),
         ("rsi_comparison", "RSI HIỆN TẠI / TRƯỚC", 230), ("rsi_previous_date", "PHIÊN RSI TRƯỚC", 170),
         ("display_entry", "ENTRY", 110), ("display_exit", "EXIT E", 100),
         ("display_whipsaw", "WHIPSAW", 180), ("slot_usage", "SLOT", 90),
@@ -904,8 +954,8 @@ class HistoryPopup:
         ("display_reason", "XỬ LÝ / LÝ DO", 430), ("queue_summary", "LỆNH ĐÃ GHI", 440),
     )
 
-    def _build_trace_tab(self) -> None:
-        frame = self.tabs.add("TRACE")
+    def _build_trace_view(self, parent: ctk.CTkFrame) -> None:
+        frame = self.trace_frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(2, weight=1)
         bar = ctk.CTkFrame(frame, fg_color="transparent")
@@ -946,6 +996,12 @@ class HistoryPopup:
 
     def _refresh_trace(self) -> None:
         try:
+            if self.trace_settings_provider is not None:
+                settings = self.trace_settings_provider()
+                self.trace_capture_enabled.set(bool(settings.signal_trace_enabled))
+                self.trace_schedule_label.configure(text=(
+                    f"{settings.signal_trace_start}–{settings.signal_trace_end} · "
+                    f"{settings.signal_trace_interval_minutes} phút/lần"))
             today = datetime.now(VN_TZ).date().isoformat()
             self.trace_day_menu.configure(values=list(dict.fromkeys([today, *self.trace_store.days()])))
             day_rows = self.trace_store.read(day=self.trace_day.get(), limit=5000)
@@ -962,6 +1018,15 @@ class HistoryPopup:
                     view = dict(row)
                     view["display_price"] = f"{row['price_vnd']:,.0f} · {row['price_source']}" if row.get("price_vnd") is not None else "—"
                     view["display_entry"] = "ĐẠT" if row["entry"] is True else "CHƯA ĐẠT" if row["entry"] is False else "—"
+                    view["ema_cross_display"] = (ema_cross_caption({
+                        "required": row.get("ema_cross_required"),
+                        "state": ("CROSSED_UP" if row.get("ema_cross_at")
+                                  and row.get("ema_cross_required") is True
+                                  and row.get("buy_window_state") in {"WAITING", "ALLOWED"}
+                                  else row.get("ema_cross_state", "UNKNOWN")),
+                        "cross_at": row.get("ema_cross_at", ""),
+                    }, {"state": row.get("buy_window_state"), "signal_time": row.get("ema_cross_at")})[0]
+                        .removeprefix("CẮT EMA · ") if row.get("ema_cross_state") else "—")
                     view["display_exit"] = "CÓ" if row["exit_e"] is True else "—"
                     view["display_whipsaw"] = (f"{row['whipsaw_count']}/{row['whipsaw_limit']} · {row['whipsaw_window']} phiên"
                                                    if row.get("whipsaw_count") is not None else "—") + (" · OFF" if row.get("whipsaw_on") is False else "")
@@ -996,10 +1061,31 @@ class HistoryPopup:
     def _build_signal_tab(self) -> None:
         """Every signal the rule produced, whether the bot could act or not."""
         frame = self.tabs.add("TÍN HIỆU")
+        self.signal_view = "SỰ KIỆN"
         frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(1, weight=1)
+        frame.grid_rowconfigure(1, weight=0)
+        frame.grid_rowconfigure(2, weight=1)
+        switchbar = ctk.CTkFrame(frame, fg_color="transparent")
+        switchbar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=8, pady=4)
+        ctk.CTkLabel(switchbar, text="XEM TÍN HIỆU", font=("Segoe UI", 12, "bold")).pack(side="left", padx=4)
+        self.signal_view_button = ctk.CTkSegmentedButton(
+            switchbar, values=["SỰ KIỆN", "CAPTURE ĐỊNH KỲ"],
+            command=self._change_signal_view, font=("Segoe UI", 12, "bold"))
+        self.signal_view_button.set("SỰ KIỆN")
+        self.signal_view_button.pack(side="left", padx=8)
+        self.trace_capture_enabled = tk.BooleanVar(value=False)
+        self.trace_schedule_label = ctk.CTkLabel(switchbar, text="", font=("Segoe UI", 11))
+        if self.trace_settings_provider is not None:
+            self.trace_schedule_label.pack(side="right", padx=8)
+            ctk.CTkSwitch(switchbar, text="GHI CAPTURE", variable=self.trace_capture_enabled,
+                          font=("Segoe UI", 11, "bold"), command=self._toggle_trace_capture,
+                          width=120).pack(side="right", padx=8)
+        _HoverHint(switchbar, "SỰ KIỆN: ENTRY xuất hiện/mất, EXIT E hoặc xử lý đổi. Không ghi từng tick.\n"
+                   "CAPTURE: ảnh chụp chỉ báo định kỳ, mặc định 2 phút/lần từ 14:00 đến 14:30.\n"
+                   "Bật/tắt lịch capture trong RULE → PHASE 2 → TRACE TÍN HIỆU; không tạo lệnh/tin Telegram.")
         toolbar = ctk.CTkFrame(frame, fg_color="transparent")
-        toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=8, pady=4)
+        toolbar.grid(row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=4)
+        self.signal_toolbar = toolbar
         toolbar.grid_columnconfigure(0, weight=1)
         self.signal_basis_status = ctk.CTkLabel(
             toolbar, text="DNSE · SỐ BOT ĐÃ GHI", font=("Segoe UI", 12), anchor="w",
@@ -1051,15 +1137,16 @@ class HistoryPopup:
             "signal_day", background=PALETTE["SURFACE_2"], foreground=PALETTE["TITLE"],
             font=("Segoe UI", 12, "bold"),
         )
-        tree.grid(row=1, column=0, sticky="nsew", padx=(5, 0), pady=(5, 0))
+        tree.grid(row=2, column=0, sticky="nsew", padx=(5, 0), pady=(5, 0))
         yscroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
         xscroll = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
-        yscroll.grid(row=1, column=1, sticky="ns", pady=(5, 0))
-        xscroll.grid(row=2, column=0, sticky="ew", padx=(5, 0))
+        yscroll.grid(row=2, column=1, sticky="ns", pady=(5, 0))
+        xscroll.grid(row=3, column=0, sticky="ew", padx=(5, 0))
+        self.signal_yscroll, self.signal_xscroll = yscroll, xscroll
 
         def update_xscroll(first: str, last: str) -> None:
             xscroll.set(first, last)
-            if float(first) <= 0.0 and float(last) >= 0.999:
+            if self.signal_view != "SỰ KIỆN" or (float(first) <= 0.0 and float(last) >= 0.999):
                 xscroll.grid_remove()
             else:
                 xscroll.grid()
@@ -1067,7 +1154,8 @@ class HistoryPopup:
         tree.configure(yscrollcommand=yscroll.set, xscrollcommand=update_xscroll)
         self.signal_tree = tree
         footer = ctk.CTkFrame(frame, fg_color="transparent")
-        footer.grid(row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 4))
+        footer.grid(row=4, column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 4))
+        self.signal_footer = footer
         footer.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             footer,
@@ -1082,6 +1170,35 @@ class HistoryPopup:
             frame, text="CHƯA GHI ĐƯỢC TÍN HIỆU NÀO", font=("Segoe UI", 12, "bold"),
             text_color=PALETTE["DIM"], fg_color=PALETTE["SURFACE"],
         )
+        self._build_trace_view(frame)
+
+    def _change_signal_view(self, view: str) -> None:
+        self.signal_view = view
+        self.signal_view_button.set(view)
+        widgets = (self.signal_toolbar, self.signal_tree, self.signal_yscroll,
+                   self.signal_xscroll, self.signal_footer)
+        if view == "CAPTURE ĐỊNH KỲ":
+            for widget in widgets:
+                widget.grid_remove()
+            self.signal_empty.place_forget()
+            self.trace_frame.grid(row=1, column=0, rowspan=4, columnspan=2, sticky="nsew")
+            self._refresh_trace()
+        else:
+            self.trace_frame.grid_remove()
+            for widget in widgets:
+                widget.grid()
+            self._refresh_signals()
+
+    def _toggle_trace_capture(self) -> None:
+        if self.on_trace_toggle is None:
+            return
+        try:
+            self.on_trace_toggle(bool(self.trace_capture_enabled.get()))
+            self._refresh_trace()
+        except (OSError, ValueError, RuntimeError) as exc:
+            self._refresh_trace()
+            messagebox.showerror("Capture", str(exc), parent=self.top)
+
     def _refresh_signals(self) -> None:
         tree = getattr(self, "signal_tree", None)
         if tree is None or not tree.winfo_exists():
@@ -1099,7 +1216,7 @@ class HistoryPopup:
             self.signal_basis_status.configure(text=f"TRADINGVIEW · ĐỐI CHIẾU · {failures} dòng thiếu dữ liệu/hệ số")
         else:
             self.signal_basis_status.configure(text="DNSE · SỐ BOT ĐÃ GHI · thiếu mốc RSI cũ hiện —")
-        days = signal_rows_by_day(raw_rows)
+        days = signal_rows_by_day(raw_rows, compact=True)
         for index, group in enumerate(days):
             day = str(group.get("date", "") or "")
             try:
@@ -1133,6 +1250,7 @@ class HistoryPopup:
                     "CHỜ GIỜ MUA": "Chờ giờ", "CHỜ BUY": "Chờ xác nhận", "HỦY CHỜ BUY": "Hủy chờ",
                     "HẾT GIỜ MUA": "Hết giờ", "BUY BỊ CHẶN": "Chặn", "ĐÃ XẾP BUY": "Đã xếp",
                     "ĐÃ XẾP SELL": "Đã xếp", "CHỈ TÍN HIỆU SELL": "Chỉ tín hiệu", "CHƯA XẾP SELL": "Chưa xếp",
+                    "MẤT ENTRY": "Chỉ tín hiệu",
                 }.get(values["suggestion"], values["suggestion"])
                 if row.get("comparison_error"):
                     values["reason"] = row["comparison_error"]
@@ -1146,11 +1264,13 @@ class HistoryPopup:
                 if int(row.get("repeat_count", 1)) > 1:
                     first_time = str(row.get("first_recorded_at", ""))[11:19]
                     recorded_time = f"{first_time}–{recorded_time} (×{row['repeat_count']})"
+                if row.get("legacy_repeat_count", 1) > 1:
+                    recorded_time += f" (×{row['legacy_repeat_count']} cũ)"
                 tree.insert(
                     symbol_parents[row["symbol"]], "end", text=f"    {recorded_time}", tags=(tag,),
                     values=tuple(values.get(key, "") for key, *_ in self.SIGNAL_COLUMNS),
                 )
-        if days:
+        if days or self.signal_view != "SỰ KIỆN":
             self.signal_empty.place_forget()
         else:
             self.signal_empty.place(relx=0.5, rely=0.5, anchor="center")
@@ -1195,7 +1315,7 @@ class HistoryPopup:
                 sheet.append(["GIỜ GHI NHẬN", *[title for _, title, *_ in self.SIGNAL_COLUMNS], "NGUỒN", "LỖI ĐỐI CHIẾU"])
                 for cell in sheet[1]:
                     cell.font = Font(bold=True)
-                for day in signal_rows_by_day(rows):
+                for day in signal_rows_by_day(rows, compact=True):
                     for row in day["rows"]:
                         sheet.append([row["timestamp"], *[row.get(key, "") for key, *_ in self.SIGNAL_COLUMNS],
                                       row.get("comparison_source", "DNSE"), row.get("comparison_error", "")])

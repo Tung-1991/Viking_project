@@ -12,6 +12,7 @@ import customtkinter as ctk
 from ..branding import APP_NAME
 from ..connections.dnse.snapshot_health import FAST_POLL_SECONDS, IDLE_POLL_SECONDS, snapshot_failure_summary
 from ..rules.business import average_true_range_pct, indicator_snapshot, protect_level
+from ..rules.observations import ema_cross_caption
 from ..trading.market import VN_TZ, market_now, market_phase, merge_tick_into_daily_bars
 from ..trading.portfolio import (
     nav_from_balance, position_quantity as holding_quantity,
@@ -1132,6 +1133,29 @@ class DashboardPanelsMixin:
             self._indicator_preview_hint,
         )
         phase2._viking_title_widget.grid(columnspan=2)
+        phase2.grid_columnconfigure(1, weight=2)
+        phase2.grid_columnconfigure(2, weight=1)
+        self.preview_rule_cross_title = ctk.CTkLabel(
+            phase2, text="CẮT EMA · BẬT", width=1, height=18,
+            font=("Segoe UI", 10, "bold"), text_color=COL_PREVIEW_TEXT, anchor="w",
+        )
+        self.preview_rule_cross_title.grid(row=0, column=2, sticky="ew", padx=(8, 8), pady=4)
+        self.preview_rule_cross = ctk.CTkLabel(
+            phase2, text="CHƯA ĐỦ DỮ LIỆU", width=1, height=28,
+            font=("Segoe UI", 11, "bold"), text_color=COL_MUTED, anchor="w",
+        )
+        self.preview_rule_cross.grid(row=1, column=2, rowspan=2, sticky="ew", padx=8)
+        self.preview_rule_cross_detail = ctk.CTkLabel(
+            phase2, text="TRƯỚC: —", width=1, height=14,
+            font=("Segoe UI", 10), text_color=COL_PREVIEW_TEXT, anchor="w",
+        )
+        self.preview_rule_cross_detail.grid(row=3, column=2, sticky="ew", padx=8, pady=(0, 3))
+        for widget, font in ((self.preview_rule_cross_title, ("Segoe UI", 10, "bold")),
+                             (self.preview_rule_cross, ("Segoe UI", 11, "bold")),
+                             (self.preview_rule_cross_detail, ("Segoe UI", 10))):
+            widget.bind("<Configure>", lambda _event, value=widget, base=font: fit_label_text(
+                value, base_font=base, minimum_size=7), add="+")
+            _HoverHint(widget, self._indicator_preview_hint, placement="inside")
         for row, name in ((1, "buy_ema"), (2, "sell_ema"), (3, "rsi")):
             key = ctk.CTkLabel(
                 phase2, text="--:", width=1, height=14,
@@ -1168,6 +1192,35 @@ class DashboardPanelsMixin:
             value.bind("<Configure>", lambda _event, widget=value: fit_label_text(
                 widget, base_font=("Cascadia Mono", 12), minimum_size=7), add="+")
             _HoverHint(value, self._indicator_preview_hint, placement="inside")
+
+        def fit_phase2_row(_event=None):
+            narrow = phase2.winfo_width() / phase2._get_widget_scaling() < 440
+            if getattr(phase2, "_viking_cross_narrow", None) != narrow:
+                phase2._viking_cross_narrow = narrow
+                phase2.grid_columnconfigure(1, weight=1 if narrow else 2)
+                phase2.grid_columnconfigure(2, weight=0 if narrow else 1)
+                phase2._viking_title_widget.grid(columnspan=1 if narrow else 2)
+                phase2._viking_title_widget.configure(text="P2 · BUY/E  ⓘ" if narrow else "P2 · BUY / E  ⓘ")
+                for value in (self.preview_rule_ema, self.preview_rule_sell_ema, self.preview_rule_rsi):
+                    value.grid(padx=(0, 4) if narrow else (0, 8))
+                if narrow:
+                    self.preview_rule_cross_title.grid_remove()
+                    self.preview_rule_cross_detail.grid_remove()
+                    self.preview_rule_cross.grid(row=0, column=1, rowspan=1, pady=4)
+                else:
+                    self.preview_rule_cross_title.grid()
+                    self.preview_rule_cross_detail.grid()
+                    self.preview_rule_cross.grid(row=1, column=2, rowspan=2, pady=0)
+            full = getattr(self.preview_rule_cross, "_viking_full_cross_text", "CHƯA ĐỦ DỮ LIỆU")
+            shown = ("CẮT · " + ("—" if full == "CHƯA ĐỦ DỮ LIỆU" else
+                                  "ĐÃ LÊN" if full.startswith("ĐÃ LÊN") else full)) if narrow else full
+            if self.preview_rule_cross.cget("text") != shown:
+                self.preview_rule_cross.configure(text=shown)
+            for value in (self.preview_rule_ema, self.preview_rule_sell_ema, self.preview_rule_rsi):
+                fit_label_text(value, base_font=("Cascadia Mono", 12), minimum_size=7)
+            fit_label_text(self.preview_rule_cross, base_font=("Segoe UI", 11, "bold"), minimum_size=7)
+        self._fit_phase2_row = fit_phase2_row
+        phase2.bind("<Configure>", fit_phase2_row, add="+")
 
         phase3 = phase_card(
             3,
@@ -1566,6 +1619,8 @@ class DashboardPanelsMixin:
                 details["atr14_daily_pct"] = average_true_range_pct(completed)
                 details["atr14_daily_asof"] = completed[-1]["time"]
         details["indicators"] = {**expected_periods, **indicators}
+        if source != "DECISION":
+            details.pop("ema_cross", None)  # A price-only fallback cannot prove an observed crossing.
         atr = _number(details.get("atr14_daily_pct"))
         details["dynamic_start_pct"] = atr * params.normal_atr_activation_multiplier if params.normal_atr_activation_enabled else 0.0
         details["dynamic_trail_pct"] = atr * params.normal_atr_multiplier if params.normal_atr_trail_enabled else 0.0
@@ -1593,10 +1648,40 @@ class DashboardPanelsMixin:
             f"Lọc RSI: BUY {'BẬT' if params.get('buy_signal_use_rsi', True) else 'TẮT'} / "
             f"E {'BẬT' if params.get('sell_signal_use_rsi', True) else 'TẮT'}. BUY cần tăng, E cần giảm; bằng không đạt. Không phải công tắc tự mua/bán.\n"
             "Bot OFF vẫn tính chỉ số. Preview không tạo tín hiệu hoặc đặt lệnh."
+            "\nCẮT EMA: CHỜ XUỐNG = đang ở trên từ trước; CHỜ LÊN = đang ≤. "
+            "ĐÃ LÊN = backend ghi nhận lần vượt lên. RSI phải đạt cùng lúc; còn các khóa/vốn. "
+            "Tín hiệu chờ giờ còn hiệu lực không cần cắt lại đúng 14h."
         )
         if source == "MISSING":
             return text + "\nDấu --: chưa đủ nến; chờ daemon tải lịch sử."
         return text + f"\nNguồn: {'quyết định bot' if source == 'DECISION' else 'preview nến'} · {preview.get('symbol', '')} · {preview.get('asof', '')}."
+
+    def _render_ema_cross_preview(self, details: dict[str, Any]) -> None:
+        widget = getattr(self, "preview_rule_cross", None)
+        if widget is None:
+            return
+        params = self.settings.rule_parameters
+        required = bool(params.get("buy_signal_use_ema", True)
+                        and params.get("buy_signal_require_ema_cross", True))
+        evidence = dict(details.get("ema_cross") or {})
+        if not required:
+            evidence.update(required=False, state="OFF")
+        caption, role = ema_cross_caption(evidence, details.get("buy_window"))
+        self._preview_ema_cross_evidence = (caption, evidence)
+        widget._viking_full_cross_text = caption.removeprefix("CẮT EMA · ")
+        self.preview_rule_cross_title.configure(text="CẮT EMA · " + ("BẬT" if required else "OFF"))
+        widget.configure(text=caption.removeprefix("CẮT EMA · "),
+                         text_color={"ok": COL_GREEN, "wait": COL_WARN}.get(role, COL_MUTED))
+        from ..services.indicator_comparison import number_comparison
+        self.preview_rule_cross_detail.configure(
+            text="TRƯỚC: " + number_comparison(evidence.get("previous_fast"), evidence.get("previous_slow")))
+        for label, font in ((widget, ("Segoe UI", 11, "bold")),
+                            (self.preview_rule_cross_title, ("Segoe UI", 10, "bold")),
+                            (self.preview_rule_cross_detail, ("Segoe UI", 10))):
+            fit_label_text(label, base_font=font, minimum_size=7)
+        fit = getattr(self, "_fit_phase2_row", None)
+        if callable(fit) and widget.master.winfo_width() > 1:
+            fit()
 
     def _atr_preview_hint(self) -> str:
         from datetime import datetime
@@ -2239,6 +2324,8 @@ class DashboardPanelsMixin:
                 key_widget.configure(text=key)
             widget.configure(text=value if key_widget is not None else f"{key} {value}", text_color=color)
             fit_label_text(widget, base_font=("Cascadia Mono", 12), minimum_size=7)
+
+        self._render_ema_cross_preview(details)
 
         checks = details.get("entry_checks") if isinstance(details.get("entry_checks"), dict) else {}
         budget_fn = getattr(self, "_preview_entry_checks", None)

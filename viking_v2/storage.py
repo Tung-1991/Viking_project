@@ -304,6 +304,8 @@ class SignalLog:
         "sell_pct", "hypothetical_quantity",
         "rsi_previous", "rsi_previous_date", "ema_fast_period", "ema_slow_period",
         "rsi_period", "price_source", "indicator_source", "record_kind",
+        "signal_event", "ema_cross_required", "ema_cross_state", "ema_cross_at",
+        "ema_previous_fast", "ema_previous_slow",
     )
     RECENT_CSV_ROWS = 500
 
@@ -321,6 +323,72 @@ class SignalLog:
         self._ensure_schema()
         self.excel_archive = MonthlyExcelArchive(self.path, self.FIELDS, "TÍN HIỆU")
         self._recent_count: int | None = None
+        self.observations = AtomicJSONStore(
+            self.path.with_name(f"{self.path.stem}_observations.json"), default={}
+        )
+
+    def observe(self, row: dict[str, Any], *, entry_condition: bool | None,
+                exit_condition: bool | None) -> list[str]:
+        """Record semantic edges, not a transient NONE or a changing price.
+
+        ENTRY persists while the selected EMA/RSI conditions remain valid.
+        E rearms only when its actual conditions cease to hold. Missing data
+        is unknown, not signal loss. This state is account/book/session local
+        and survives restart, without claiming or changing trading signals.
+        """
+        symbol = str(row.get("symbol", "") or "").upper()
+        if not symbol:
+            return []
+        key = f"{str(row.get('execution_mode', '')).upper()}|{symbol}"
+        session = str(row.get("timestamp", ""))[:10]
+        profile = str(row.get("observation_profile", "") or "")
+        with self._lock:
+            saved = self.observations.read()
+            saved = saved if isinstance(saved, dict) else {}
+            previous = dict(saved.get(key) or {})
+            current = (dict(previous) if previous.get("session") == session
+                       and previous.get("profile", "") == profile else {})
+            current.update(session=session, profile=profile)
+            events = []
+            reason = str(row.get("blocked_by", "") or "")
+            broken = reason in {"BUY_WINDOW_BROKEN", "BUY_CONFIRMATION_BROKEN"}
+            signal = str(row.get("signal", "") or "").upper()
+            if entry_condition is False or broken:
+                if current.get("entry_active"):
+                    lost = {**row, "signal": "BUY", "signal_event": "ENTRY_LOST",
+                            "acted": "WAIT", "blocked_by": reason if broken else "ENTRY_CONDITIONS_LOST"}
+                    if self.record(lost):
+                        events.append("ENTRY_LOST")
+                current["entry_active"] = False
+                current.pop("entry_outcome", None)
+            elif entry_condition is True and signal == "BUY" and not broken:
+                outcome = [str(row.get("acted", "")), reason, str(row.get("buy_window_state", ""))]
+                if not current.get("entry_active") or current.get("entry_outcome") != outcome:
+                    if self.record({**row, "signal_event": "ENTRY"}):
+                        events.append("ENTRY")
+                current["entry_active"] = True
+                current["entry_outcome"] = outcome
+            if exit_condition is False:
+                current["exit_active"] = False
+                current.pop("exit_outcome", None)
+            elif exit_condition is True and signal in {"SELL", "E ALERT"}:
+                outcome = [str(row.get("acted", "")), reason]
+                if not current.get("exit_active") or current.get("exit_outcome") != outcome:
+                    exit_row = {**row, "signal_event": "EXIT_E",
+                                "signal_cycle": "E|" + str(row.get("decision_time") or row.get("timestamp", ""))}
+                    for name in ("ema_fast", "ema_slow", "ema_fast_period", "ema_slow_period"):
+                        if row.get("exit_" + name) is not None:
+                            exit_row[name] = row["exit_" + name]
+                    if self.record(exit_row):
+                        events.append("EXIT_E")
+                current["exit_active"] = True
+                current["exit_outcome"] = outcome
+            # Never clear/rearm on an empty raw signal when EMA/RSI still
+            # describe the same state. A minute counter is TRACE data only.
+            if current != previous:
+                saved[key] = current
+                self.observations.write(saved)
+            return events
 
     def record(self, row: dict[str, Any]) -> bool:
         """Write once per symbol/signal/candle, including across daemon restarts."""
@@ -334,7 +402,9 @@ class SignalLog:
             str(row.get("execution_mode", "") or "").upper(), symbol,
         ))
         state_key = "|".join(value for value in (
-            signal, signal_cycle or candle_key, confirmation_state, confirmation_minutes,
+            str(row.get("signal_event", "") or ""),
+            signal, signal_cycle or candle_key, confirmation_state,
+            "" if row.get("record_kind") == "SIGNAL_EVENT" else confirmation_minutes,
             str(row.get("buy_window_state", "") or ""),
             str(row.get("acted", "") or ""),
             str(row.get("blocked_by", "") or ""),

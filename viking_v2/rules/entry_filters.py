@@ -74,13 +74,15 @@ def apply_buy_filters(
                 return waiting("BUY_WINDOW_EXPIRED", "HẾT KHUNG GIỜ MUA", {})
             return {}, decision
         if not window and trigger and phase in {"ATO", "OPEN", "ATC"}:
-            window = {**window_info, "signal_time": now.isoformat(), "released": False}
+            window = {**window_info, "signal_time": now.isoformat(), "released": False,
+                      "ema_cross": dict(details.get("ema_cross") or {})}
         if not window:
             if trigger:
                 details["buy_window"] = {**window_info, "state": "CLOSED"}
                 return waiting("BUY_WINDOW_MARKET_CLOSED", "CHỜ PHIÊN GIAO DỊCH", {})
             return {}, decision
         window_info["signal_time"] = window["signal_time"]
+        window_info["ema_cross"] = dict(window.get("ema_cross") or {})
         checks = buy_confirmation_conditions(details.get("indicators"), params)
         # Before release, keep exactly the base BUY conditions selected in
         # settings. After release the independent X-minute filter follows its

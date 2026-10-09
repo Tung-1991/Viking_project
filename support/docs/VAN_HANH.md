@@ -88,6 +88,8 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Đủ chỉ báo chưa phải đã gửi lệnh: còn giờ mua, bộ lọc/WHIPSAW/khóa lỗ, vốn/slot, BOT và token REAL.
   Bật lại BOT/hết khóa bán tay không phục hồi lệnh cũ. Khi cần vừa cắt, EMA đã nằm trên không tự sinh ENTRY mới;
   chỉ khi OFF mới xét lại điều kiện hiện tại không cần lần cắt mới. Cập nhật giữ OFF đã lưu; nạp preset VA bật ON.
+  P2 có vùng **CẮT EMA** bên phải: CHỜ XUỐNG / CHỜ LÊN / ĐÃ LÊN + giờ,
+  kèm phép so sánh EMA lần quan sát trước. Số lấy từ backend; preview nến đơn lẻ không tự đoán giao cắt.
   Lệnh bị chặn vốn/slot và tín hiệu chờ có quy tắc riêng; xem lý do, không coi Telegram là xác nhận đã mua.
 - BLOCK phải **MỞ BLOCK** đúng mã/sổ. ↻ reset thống kê/khóa chờ, không mở BLOCK,
   không xóa vị thế. THEO NGÀY chốt đúng giờ GMT+7; CỘNG DỒN từ lần ↻ gần nhất.
@@ -109,6 +111,14 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 - TÍN HIỆU xổ **ngày → mã → giờ ghi nhận**; giữ sổ REAL/PAPER, ưu tiên và slot lúc ghi.
   ENTRY, MẤT ENTRY, EXIT · E là sự kiện chỉ báo; ĐÃ XẾP chỉ là tạo yêu cầu, không phải khớp.
   Kết quả gửi/khớp/hủy xem tab lịch sử giao dịch. Không gộp các giờ khác nhau chỉ vì giá giống nhau.
+- Trong **TÍN HIỆU**, chọn **SỰ KIỆN / CAPTURE ĐỊNH KỲ**, không có tab TRACE riêng.
+  SỰ KIỆN ghi khi ENTRY xuất hiện/mất, EXIT E xuất hiện hoặc xử lý/lý do đổi;
+  giá thay đổi, phút xác nhận tăng hay raw signal NONE không tự sinh thêm sự kiện.
+  Thiếu dữ liệu không coi là mất ENTRY. E chỉ được ghi lại sau khi điều kiện E đã mất rồi xuất hiện lại.
+  Bản cũ lặp cùng trạng thái được gộp khi xem (×N cũ), giữ bản ghi đầu và nhật ký gốc,
+  không xóa dữ liệu hoặc gộp các chu kỳ ENTRY mới. PROTECT không trộn vào bảng tín hiệu ENTRY/E.
+- Cột **CẮT EMA** dùng chứng cứ backend lúc ghi; bản cũ thiếu hiện —.
+  Tín hiệu chờ giờ còn hiệu lực giữ giờ cắt ban đầu, không đòi cắt lại đúng 14h.
 - EMA/RSI hiện phép so sánh số gốc; bản ghi mới giữ RSI tham chiếu, phiên tham chiếu và chu kỳ chỉ báo.
   Bản cũ thiếu mốc RSI hiện **—**, không lấy RSI cuối ngày hôm nay điền ngược.
 - Mặc định **DNSE** giữ nguyên số bot đã ghi. **TRADINGVIEW** tính lại để đối chiếu, không đổi bot/lệnh.
@@ -128,7 +138,9 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 - App phải đang mở. Ghi tất cả mã theo dõi, kể cả không có ENTRY, giá lỗi hay daemon chưa sẵn sàng.
   Mỗi mốc chỉ ghi một lần/mã/sổ; restart không ghi trùng, không bù các mẫu quá khứ đã bỏ lỡ.
   Giờ ghi thực tế và mốc lấy mẫu được lưu riêng. Bao gồm mẫu 14:30; ngày nghỉ không ghi.
-- **LỊCH SỬ → TRACE**: lọc ngày/mã/REAL–PAPER, xổ theo mã. XUẤT EXCEL xuất bộ lọc đang chọn,
+- **LỊCH SỬ → TÍN HIỆU → CAPTURE ĐỊNH KỲ**: lọc ngày/mã/REAL–PAPER, xổ theo mã.
+  Công tắc **GHI CAPTURE** trong TÍN HIỆU bật/tắt ghi và hiện giờ/nhịp đang cấu hình;
+  chỉ đổi quan sát, không bật BOT hay tạo tin Telegram. XUẤT EXCEL xuất bộ lọc đang chọn,
   có sheet TRACE (số gốc) và SETTING (setting lúc ghi, không token/chat). Trace lưu SQLite riêng 30 ngày;
   chỉ dọn các mẫu TRACE cũ, không xóa tín hiệu, nhật ký lệnh hay danh mục.
 - Mẫu có giá/nguồn/tuổi dữ liệu, EMA/RSI hiện tại và phiên trước, chu kỳ, ENTRY/EXIT E,

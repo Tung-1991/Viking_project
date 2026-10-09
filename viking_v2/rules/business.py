@@ -9,6 +9,7 @@ from ..config import DEFAULT_RULE_PARAMETERS, merge_rule_parameters
 from ..models import StrategyDecision
 from ..exit_modes import normalize_indicator_exit_policy, normalize_normal_policy
 from ..trading.market import active_trading_minutes, normalize_exchange, validate_buy_window
+from .observations import ema_cross_evidence
 
 
 def closes(rows: Iterable[dict[str, Any]]) -> list[float]:
@@ -978,6 +979,14 @@ class StaticRule:
             )
         )
         previous_indicators = context.get("previous_indicators")
+        cross_previous = (previous_indicators if isinstance(previous_indicators, dict)
+                          else indicator_snapshot(bars[:-1], self.params.buy_ema_fast,
+                                                  self.params.buy_ema_slow, self.params.rsi_period))
+        cross_evidence = ema_cross_evidence(
+            indicators, cross_previous, required=self.params.buy_signal_require_ema_cross,
+            use_ema=self.params.buy_signal_use_ema,
+            observed_at=str(context.get("observation_time", "") or ""),
+        )
         if signal_mode.upper() == "REALTIME" and isinstance(previous_indicators, dict):
             signal = crossover_signal_from_snapshots(
                 indicators,
@@ -1031,6 +1040,7 @@ class StaticRule:
                 ) or 0.0
             ),
             "indicators": indicators,
+            "ema_cross": cross_evidence,
             "indicator_interval": str(context.get("indicator_interval", "") or ""),
             "buy_confirmation_forced": bool(context.get("confirmed_buy")),
             "entry_checks": {

@@ -124,12 +124,15 @@ def test_excel_keeps_original_numbers_settings_and_no_formulas(tmp_path):
         book.close()
 
 
-def test_trace_tab_is_separate_filtered_and_exportable(ui_root, tmp_path, monkeypatch):
+def test_capture_is_a_view_inside_signals_filtered_and_exportable(ui_root, tmp_path, monkeypatch):
     from viking_v2.dashboard.windows import HistoryPopup
     store = SignalTraceStore(tmp_path / "trace.sqlite3")
     store.capture(status(), settings(), active_mode="REAL", now=NOW)
     popup = HistoryPopup(ui_root, lambda _mode: [], trace_store=store)
     try:
+        assert set(popup.tabs._tab_dict) == {"CKCS REAL", "CKCS PAPER", "TÍN HIỆU"}
+        assert popup.signal_view == "SỰ KIỆN"
+        popup._change_signal_view("CAPTURE ĐỊNH KỲ")
         popup.trace_day.set("2026-10-09")
         popup.trace_symbol.set("IDC")
         popup._refresh_trace()
@@ -140,6 +143,8 @@ def test_trace_tab_is_separate_filtered_and_exportable(ui_root, tmp_path, monkey
         monkeypatch.setattr("viking_v2.dashboard.windows.filedialog.asksaveasfilename", lambda **_kw: str(tmp_path / "out.xlsx"))
         popup._export_trace()
         assert (tmp_path / "out.xlsx").exists()
+        popup._change_signal_view("SỰ KIỆN")
+        assert popup.trace_frame.winfo_manager() == ""
     finally:
         popup.close()
 

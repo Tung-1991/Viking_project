@@ -127,7 +127,7 @@ def main() -> int:
         print(f"[HE THONG] Gian canh bao {settings.telegram_cooldown_minutes['system']} phut.")
         print("[PROTECT] Bat tin cham muc; khong thay doi cong tac bao ve hay AUTO/ALERT.")
         print("[ENTRY] Bat EMA vua cat len + RSI phien truoc; khong ep mua khi EMA da o tren.")
-        print("[TRACE] ON, 2 phut/lan tu 14:00 den 14:30; lich su -> TRACE -> Excel.")
+        print("[TRACE] ON, 2 phut/lan tu 14:00 den 14:30; lich su -> TIN HIEU -> CAPTURE DINH KY -> Excel.")
         print("[GIU] API, token, chat ID, cong tac Telegram tong, cac gian tin khac, chu ky EMA/RSI, SL/PROTECT/TP, gio mua va giao dich.")
         print(f"[GIO MUA] {'Tu ' + str(settings.rule_parameters['buy_window_start']) if settings.rule_parameters['buy_window_enabled'] else 'Trong phien, theo tin hieu'}")
         if not args.yes and input("Nap vao dung tai khoan nay? [y/N]: ").strip().lower() != "y":

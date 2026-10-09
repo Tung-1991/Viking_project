@@ -40,7 +40,8 @@ from ..services.signal_coordinator import (
     is_terminal_buy_block,
 )
 from ..services.indicator_comparison import IndicatorComparisonStore
-from ..services.signal_trace import SignalTraceStore
+from ..services.signal_trace import SignalTraceStore, compare_entry
+from ..rules.observations import exit_conditions
 from ..storage import CSVOrderJournal
 from ..trading.market import VN_TZ, market_phase, market_session_clock, normalize_exchange
 from ..trading.portfolio import PortfolioContextBuilder, sell_quantity_for_fraction, validate_quantity
@@ -614,12 +615,21 @@ class DashboardActionsMixin:
                 signals_provider=self._signal_log_rows,
                 indicator_comparison=IndicatorComparisonStore(self.bridge.root / "indicator_comparison"),
                 trace_store=SignalTraceStore(self.bridge.root / "signal_trace.sqlite3"),
+                trace_settings_provider=lambda: self.settings,
+                on_trace_toggle=self._set_signal_trace_enabled,
                 on_visibility_changed=lambda visible: self.history_button.configure(
                     fg_color=COL_GREEN if visible else COL_GRAY,
                     hover_color="#16A34A" if visible else "#4B515B",
                 ),
             )
         self._refresh_real_history_on_demand()
+
+    def _set_signal_trace_enabled(self, enabled: bool) -> None:
+        # Capture is an observation setting, not the BOT/trading switch.
+        updated = config.load_settings(self.account_id)
+        updated.signal_trace_enabled = bool(enabled)
+        save_settings(updated, self.account_id)
+        self.settings = updated
 
     def _open_info_popup(self) -> None:
         popup = self._info_popup
@@ -3087,7 +3097,8 @@ class DashboardActionsMixin:
                 reference_date = datetime.fromtimestamp(float(marks["rsi_previous_time"]), VN_TZ).date().isoformat()
             except (TypeError, ValueError, OverflowError, OSError):
                 pass
-        self.signal_log.record({
+        cross = details.get("ema_cross") if isinstance(details.get("ema_cross"), dict) else {}
+        row = {
             "timestamp": datetime.now(VN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
             "execution_mode": mode, "symbol": symbol,
             "signal": (
@@ -3108,7 +3119,15 @@ class DashboardActionsMixin:
             "ema_slow_period": marks.get("sell_ema_slow_period" if indicator_alert else "buy_ema_slow_period", ""),
             "rsi_period": marks.get("rsi_period", ""),
             "price_source": tick.get("source", ""), "indicator_source": "DNSE",
-            "record_kind": "SIGNAL",
+            "record_kind": "SIGNAL_EVENT",
+            "ema_cross_required": cross.get("required", ""),
+            "ema_cross_state": cross.get("state", ""),
+            "ema_cross_at": (window.get("signal_time", "")
+                             if window.get("state") in {"WAITING", "ALLOWED"} and cross.get("required")
+                             and (window.get("ema_cross") or {}).get("crossed_up") is True
+                             else cross.get("cross_at", "")),
+            "ema_previous_fast": cross.get("previous_fast", ""),
+            "ema_previous_slow": cross.get("previous_slow", ""),
             "market_state": decision.market_state, "acted": decision.action,
             "blocked_by": "" if decision.action != "WAIT" else decision.reason,
             "candle_key": (
@@ -3156,7 +3175,27 @@ class DashboardActionsMixin:
                     float(details.get("sell_share_pct", 0.0) or 0.0) / 100.0,
                 ) if protect_alert else ""
             ),
-        })
+        }
+        if protect_alert:
+            self.signal_log.record(row)
+        else:
+            params = self.settings.rule_parameters
+            if details.get("execution_failure") or decision.reason in {"BROKER_REJECTED", "BROKER_FAILED"}:
+                self.signal_log.record({**row, "signal_event": "ORDER_RESULT"})
+                return
+            row.update(
+                exit_ema_fast=marks.get("sell_ema_fast"), exit_ema_slow=marks.get("sell_ema_slow"),
+                exit_ema_fast_period=marks.get("sell_ema_fast_period"),
+                exit_ema_slow_period=marks.get("sell_ema_slow_period"),
+            )
+            row["observation_profile"] = json.dumps({
+                key: params.get(key) for key in (
+                    "buy_signal_use_ema", "buy_signal_use_rsi", "buy_signal_require_ema_cross",
+                    "sell_signal_use_ema", "sell_signal_use_rsi", "buy_ema_fast", "buy_ema_slow",
+                    "sell_ema_fast", "sell_ema_slow", "rsi_period",
+                )}, sort_keys=True)
+            self.signal_log.observe(row, entry_condition=compare_entry(marks, params)[2],
+                                    exit_condition=exit_conditions(marks, params))
 
     def _claim_terminal_buy(self, decision: StrategyDecision, mode: str) -> None:
         if (
@@ -3672,6 +3711,7 @@ class DashboardActionsMixin:
             details={
                 "candle_key": intent.candle_key,
                 "signal_cycle": intent.candle_key,
+                "execution_failure": True,
             },
         )
         mode = str(execution_mode or intent.execution_mode).upper()

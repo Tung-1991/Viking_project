@@ -1239,13 +1239,12 @@ def test_signal_history_ui_names_cancellations_and_recording_time_without_creati
         parent = tree.get_children()[0]
         assert "Xếp 0" in tree.set(parent, "reason")
         symbol = tree.get_children(parent)[0]
-        sell_later, sell, cancelled = tree.get_children(symbol)
+        sell, cancelled = tree.get_children(symbol)
         assert tree.set(cancelled, "display_signal") == "MẤT ENTRY"
         assert tree.set(cancelled, "suggestion") == "Hủy chờ"
         assert tree.set(sell, "suggestion") == "Chỉ tín hiệu"
         assert tree.set(sell, "display_signal") == "EXIT · E"
-        assert tree.item(sell, "text").strip() == "14:00:01"
-        assert tree.item(sell_later, "text").strip() == "14:06:11"
+        assert tree.item(sell, "text").strip() == "14:00:01 (×2 cũ)"
         assert rows == before
     finally:
         popup.close()
