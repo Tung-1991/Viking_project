@@ -134,16 +134,18 @@ class SignalTelegramService:
             return "\n".join(
                 (
                     f"🟢 BUY · {item['symbol']}"
-                    + (f" · {item['execution_mode']}" if item.get("execution_mode") else ""),
+                    + (f" · {item['execution_mode']}" if item.get("execution_mode") else "")
+                    + " · ĐÃ XẾP LỆNH",
                     f"ID: {item['signal_id']}",
                     f"Giá tín hiệu: {self._price(item['price'])}",
                     f"VNINDEX: {item['market_state']}",
+                    "Thông báo tạo yêu cầu; không xác nhận đã gửi/khớp.",
                 )
             )
         started = started or self._buy_window_started or datetime.now()
         codes = len({item["symbol"] for item in items})
         lines = [
-            f"🟢 BUY SIGNAL · {len(items)} MÃ" if codes == len(items) else f"🟢 BUY SIGNAL · {len(items)} LỆNH · {codes} MÃ",
+            f"🟢 BUY ĐÃ XẾP LỆNH · {len(items)} MÃ" if codes == len(items) else f"🟢 BUY ĐÃ XẾP LỆNH · {len(items)} LỆNH · {codes} MÃ",
             f"{started:%H:%M}–{datetime.now():%H:%M}",
             "",
         ]
@@ -153,6 +155,7 @@ class SignalTelegramService:
             + f"{self._price(item['price'])} · {item['market_state']} · {item['signal_id']}"
             for item in sorted(items, key=lambda value: str(value.get("symbol", "")))
         )
+        lines.append("Thông báo tạo yêu cầu; không xác nhận đã gửi/khớp.")
         return "\n".join(lines)
 
     @staticmethod
@@ -216,13 +219,27 @@ class SignalTelegramService:
         if not symbol or signal not in {"BUY", "SELL"}:
             return False
         why = str(blocked_by or "").strip()
+        why = {
+            "BOT_OFF": "BOT đang tắt quyền mua.",
+            "NO_AVAILABLE_CAPITAL": "Không đủ vốn được phép dùng.",
+            "MAX_POSITIONS": "Đã đủ số mã BOT.",
+            "MAX_SYMBOL_ORDERS": "Đã đủ số lần BUY của mã.",
+            "WHIPSAW_LOCK": "WHIPSAW đang khóa BUY.",
+            "LOCKED_AFTER_LOSSES": "Đang khóa BUY sau chuỗi lỗ.",
+            "BUY_WINDOW_WAIT": "Chờ khung giờ mua đã cài.",
+            "BUY_WINDOW_MARKET_CLOSED": "Chờ phiên giao dịch.",
+            "BUY_WINDOW_EXPIRED": "Đã hết khung giờ mua.",
+            "BUY_CONFIRMATION_WAIT": "Chờ tín hiệu giữ đủ thời gian xác nhận.",
+        }.get(why, why)
         lines = [
             f"⚪ TÍN HIỆU {signal} · {symbol}"
             + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
             f"Giá {self._price(price)} · {str(market_state or 'UNKNOWN').upper()}",
         ]
         if why:
-            lines.append(f"Bot không vào: {why}")
+            lines.append(f"CHƯA GỬI: {why}")
+        else:
+            lines.append("Chỉ có tín hiệu; chưa gửi lệnh.")
         return self._send(chr(10).join(lines))
 
     def notify_protect_alert(

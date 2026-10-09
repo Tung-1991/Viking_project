@@ -11,6 +11,18 @@ from .. import config
 MAX_QUOTE_AGE = max(20.0, float(config.REST_TICK_TTL_SECONDS) + 5.0)
 MAX_DECISION_AGE = max(20.0, float(config.HEARTBEAT_SECONDS) * 4.0)
 
+QUOTE_ISSUES = {
+    "NO_QUOTE": "Chưa nhận được giá mới.",
+    "SYMBOL_MISMATCH": "Giá nhận được không đúng mã.",
+    "SOURCE_ERROR": "Nguồn giá đang báo lỗi.",
+    "FROZEN": "Giá lưu/ngoài phiên, không dùng để giao dịch trong phiên.",
+    "MISSING_TIMESTAMP": "Thiếu thời điểm nhận giá.",
+    "INVALID_TIMESTAMP": "Thời điểm nhận giá không hợp lệ.",
+    "QUOTE_TOO_OLD": "Giá quá thời gian cho phép.",
+    "CLOCK_SKEW": "Thời điểm nhận giá đi trước đồng hồ máy.",
+    "MARKED_STALE": "Nguồn đang đánh dấu dữ liệu cũ.",
+}
+
 
 def decisions_for_mode(status: Any, mode: str, *, default_paper: bool = True) -> dict[str, Any]:
     """Read one book; an absent/malformed book never falls back to the other."""
@@ -60,6 +72,50 @@ def quote_is_fresh(quote: Any, symbol: str, *, now: float | None = None, require
     if not observed:
         return not require_timestamp
     return math.isfinite(observed) and -2 <= checked - observed <= MAX_QUOTE_AGE
+
+
+def quote_diagnostics(quote: Any, symbol: str, *, now: float | None = None) -> dict[str, Any]:
+    """Explain the existing quote guard; never grant permission to trade."""
+    checked = time.time() if now is None else now
+    row = quote if isinstance(quote, dict) else {}
+    raw_observed = row.get("received_at", row.get("timestamp"))
+    observed = timestamp_value(raw_observed)
+    age = checked - observed if observed and math.isfinite(observed) else None
+    source = str(row.get("source") or "").upper()
+    if source not in {"WS", "REST", "CLOSE"}:
+        source = "UNKNOWN"
+    valid = quote_is_fresh(quote, symbol, now=checked)
+    reason = ""
+    if not valid:
+        # The daemon keeps the failed observation's reason when marking the
+        # display snapshot stale. Do not reduce every failure to that marker.
+        saved_reason = str(row.get("quote_issue") or "")
+        if saved_reason in QUOTE_ISSUES:
+            reason = saved_reason
+        elif not row:
+            reason = "NO_QUOTE"
+        elif str(row.get("symbol", symbol)).upper() != str(symbol).upper():
+            reason = "SYMBOL_MISMATCH"
+        elif str(row.get("health", "OK")).upper() not in {"", "OK", "HEALTHY"}:
+            reason = "SOURCE_ERROR"
+        elif row.get("frozen"):
+            reason = "FROZEN"
+        elif not math.isfinite(observed):
+            reason = "INVALID_TIMESTAMP"
+        elif not observed:
+            reason = "MISSING_TIMESTAMP" if raw_observed in (None, "", 0) else "INVALID_TIMESTAMP"
+        elif age is not None and age > MAX_QUOTE_AGE:
+            reason = "QUOTE_TOO_OLD"
+        elif age is not None and age < -2:
+            reason = "CLOCK_SKEW"
+        else:
+            reason = "MARKED_STALE"
+    return {
+        "valid": valid, "source": source,
+        "observed_at": observed if observed and math.isfinite(observed) else None,
+        "age_seconds": age, "max_age_seconds": MAX_QUOTE_AGE,
+        "reason": reason, "reason_text": QUOTE_ISSUES.get(reason, "Giá hợp lệ."),
+    }
 
 
 def decision_is_fresh(raw: Any, symbol: str, mode: str, *, now: float | None = None) -> bool:

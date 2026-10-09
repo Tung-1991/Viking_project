@@ -1456,7 +1456,7 @@ class DashboardActionsMixin:
                 "signal": signal,
                 "price": price,
                 "market_state": decision.market_state,
-                "blocked_by": decision.reason,
+                "blocked_by": str(details.get("status_text") or decision.reason),
                 "execution_mode": execution_mode,
             },
             daemon=True,

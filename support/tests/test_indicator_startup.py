@@ -131,7 +131,7 @@ def test_initialising_ema_does_not_disable_existing_position_exits(position, eve
     assert decision.quantity_fraction == 1.0
 
 
-def _run_two_daemon_cycles(monkeypatch, tmp_path, *, mode="REAL", phase="OPEN", interval="TICK", fault=""):
+def _run_two_daemon_cycles(monkeypatch, tmp_path, *, mode="REAL", phase="OPEN", interval="TICK", fault="", cached_tick=None, source="WS"):
     from viking_v2 import config
     from viking_v2.models import RuntimeConfig
     from viking_v2.services import daemon
@@ -143,6 +143,11 @@ def _run_two_daemon_cycles(monkeypatch, tmp_path, *, mode="REAL", phase="OPEN", 
     bridge = RuntimeBridge("COLD_START")
     symbols = ["MSN", "CTS", "HDB", "IDC"]
     bridge.write_config(RuntimeConfig(symbols, mode == "PAPER", False))
+    if cached_tick is not None:
+        bridge.status_store.write({"ticks": {
+            symbol: {"symbol": symbol, "price": 99, "timestamp": 1, **cached_tick}
+            for symbol in symbols
+        }})
     settings = config.AppSettings(
         watchlist=symbols, priority_symbols=[], paper_mode=mode == "PAPER",
         signal_mode="REALTIME", realtime_indicator_interval=interval,
@@ -190,14 +195,27 @@ def _run_two_daemon_cycles(monkeypatch, tmp_path, *, mode="REAL", phase="OPEN", 
             return {"stock": {"availableCash": 100_000_000}}
 
     class Market:
-        def __init__(self, *args): pass
+        def __init__(self, *args): self.observations = {}
         def start(self, symbols): pass
         def set_symbols(self, symbols): pass
         def stop(self): pass
         def health(self): return {}
         def get_daily_bars(self, symbol, **kwargs): return [dict(row) for row in rows]
         def get_tick(self, symbol):
-            return {"symbol": symbol, "price": 100, "bid": 100, "ask": 100, "timestamp": time.time()}
+            self.observations[symbol] = self.observations.get(symbol, 0) + 1
+            tick = {"symbol": symbol, "price": 100, "bid": 100, "ask": 100, "timestamp": time.time(), "source": source}
+            if symbol == "HDB" and self.observations[symbol] == 1:
+                if fault == "NO_QUOTE":
+                    return None
+                tick.update({
+                    "QUOTE_TOO_OLD": {"timestamp": 1},
+                    "MARKED_STALE": {"stale": True},
+                    "FROZEN": {"frozen": True},
+                    "SOURCE_ERROR": {"health": "REST_UNAVAILABLE"},
+                    "SYMBOL_MISMATCH": {"symbol": "CTS"},
+                    "MISSING_TIMESTAMP": {"timestamp": None},
+                }.get(fault, {}))
+            return tick
         def frozen_tick_from_bars(self, symbol, bars):
             return {**self.get_tick(symbol), "frozen": True}
 
@@ -255,3 +273,44 @@ def test_real_daemon_publishes_error_context_traceback_and_clears_after_recovery
     log = (bridge.log_dir / "daemon.log").read_text(encoding="utf-8")
     assert "Traceback" in log
     assert "offline" in log
+
+
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+@pytest.mark.parametrize("source", ["WS", "REST"])
+def test_daemon_restart_with_failed_cached_ticks_resumes_decisions(monkeypatch, tmp_path, mode, source):
+    statuses, bridge = _run_two_daemon_cycles(
+        monkeypatch, tmp_path, mode=mode, source=source,
+        cached_tick={"stale": True, "frozen": True, "received_at": 1,
+                     "health": "REST_UNAVAILABLE", "quote_issue": "SOURCE_ERROR"},
+    )
+    completed = [status for status in statuses if status["daemon_status"] == "RUNNING" and status["decisions"]]
+    assert len(completed) == 2
+    for status in completed:
+        assert set(status["decisions"]) == {"MSN", "CTS", "HDB", "IDC"}
+        assert status["error"] == ""
+        for tick in status["ticks"].values():
+            assert tick["source"] == source
+            assert not tick.get("stale") and not tick.get("frozen")
+            assert "health" not in tick and "quote_issue" not in tick and "received_at" not in tick
+    assert "BỊ LOẠI" not in (bridge.log_dir / "daemon.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("fault", [
+    "QUOTE_TOO_OLD", "MARKED_STALE", "FROZEN", "SOURCE_ERROR", "NO_QUOTE",
+    "SYMBOL_MISMATCH", "MISSING_TIMESTAMP",
+])
+def test_daemon_rejects_bad_live_quote_then_recovers_and_logs_once(monkeypatch, tmp_path, fault):
+    statuses, bridge = _run_two_daemon_cycles(monkeypatch, tmp_path, fault=fault)
+    completed = [status for status in statuses if status["daemon_status"] == "RUNNING" and status["decisions"]]
+    assert len(completed) == 2
+    assert set(completed[0]["decisions"]) == {"MSN", "CTS", "IDC"}
+    if fault == "NO_QUOTE":
+        assert "HDB" not in completed[0]["ticks"]
+    else:
+        assert completed[0]["ticks"]["HDB"]["stale"]
+        assert completed[0]["ticks"]["HDB"]["quote_issue"] == fault
+    assert set(completed[1]["decisions"]) == {"MSN", "CTS", "HDB", "IDC"}
+    assert not completed[1]["ticks"]["HDB"].get("stale")
+    log = (bridge.log_dir / "daemon.log").read_text(encoding="utf-8")
+    assert log.count("BỊ LOẠI") == 1
+    assert log.count("PHỤC HỒI") == 1

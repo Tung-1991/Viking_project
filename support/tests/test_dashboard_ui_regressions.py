@@ -460,6 +460,106 @@ def test_health_uses_received_quote_time_not_last_match_time():
     assert subject.preview_health_trade.options["text"] == "GIÁ MỞ"
 
 
+def test_health_hint_explains_quote_loss_and_updates_after_actual_recovery(monkeypatch):
+    from viking_v2.services.daemon import merge_live_tick
+    from viking_v2.trading.validation import MAX_QUOTE_AGE
+    monkeypatch.setattr(time, "time", lambda: 1000.0)
+    subject = DashboardPanelsMixin()
+    subject.real, subject.mode, subject.symbol = _Real(), _Value("REAL"), _Value("MSN")
+    for name in ("title", "daemon", "core", "ws", "rest", "token", "trade"):
+        setattr(subject, f"preview_health_{name}", _Label())
+    status = {
+        "heartbeat_at": 1000, "daemon_status": "RUNNING", "market_status": "OPEN",
+        "api_health": {"websocket": {"connected": True, "authenticated": True}},
+        "ticks": {"MSN": {"symbol": "MSN", "source": "REST", "price": 74.2,
+                          "timestamp": 1000 - MAX_QUOTE_AGE - 1, "stale": True}},
+    }
+    subject.bridge = SimpleNamespace(read_status=lambda: status)
+    subject._refresh_api_health_panel(status)
+    before = subject._api_health_hint()
+    assert "MSN · nguồn: REST (API dự phòng)" in before
+    assert "BỊ LOẠI: Giá quá thời gian cho phép" in before
+    assert "WS OK chỉ là kết nối" in before
+    assert subject.preview_health_title.options["text"] == "HEALTH LỖI"
+    status["ticks"]["MSN"] = merge_live_tick(
+        {"symbol": "MSN", "source": "WS", "price": 74.4, "timestamp": 1000},
+        status["ticks"]["MSN"], None,
+    )
+    subject._refresh_api_health_panel(status)
+    after = subject._api_health_hint()
+    assert "MSN · nguồn: WS (WebSocket)" in after and "HỢP LỆ" in after
+    assert "0.0s trước" in after and "BỊ LOẠI" not in after
+    assert subject.preview_health_title.options["text"] == "HEALTH OK"
+
+
+def test_quote_hint_reads_current_selected_symbol_and_receipt_age(monkeypatch):
+    monkeypatch.setattr(time, "time", lambda: 1000.0)
+    subject = DashboardPanelsMixin()
+    subject.symbol = _Value("CTS")
+    subject.bridge = SimpleNamespace(read_status=lambda: {
+        "market_status": "OPEN", "ticks": {
+            "CTS": {"source": "WS", "timestamp": 1, "received_at": 999},
+            "MSN": {"source": "REST", "timestamp": 1, "stale": True},
+        },
+    })
+    hint = subject._quote_health_hint()
+    assert hint.startswith("CTS · nguồn: WS") and "1.0s trước" in hint
+    assert "HỢP LỆ" in hint and "MSN" not in hint
+    subject.symbol.value = "MSN"
+    assert "BỊ LOẠI" in subject._quote_health_hint()
+
+
+@pytest.mark.parametrize("phase", ["CLOSED", "LUNCH", "BREAK", "OFFLINE"])
+def test_quote_hint_does_not_call_closed_session_a_live_quote_failure(phase):
+    subject = DashboardPanelsMixin()
+    subject.symbol = _Value("MSN")
+    subject._preview_health_status = {"market_status": phase, "ticks": {
+        "MSN": {"source": "CLOSE", "timestamp": 1, "frozen": True},
+    }}
+    hint = subject._quote_health_hint()
+    assert "Ngoài phiên" in hint and "BỊ LOẠI" not in hint
+
+
+def test_quote_hint_uses_selected_symbols_session_not_another_open_exchange():
+    subject = DashboardPanelsMixin()
+    subject.symbol = _Value("MSN")
+    subject._preview_health_status = {
+        "market_status": "OPEN", "symbol_phases": {"MSN": "CLOSED"},
+        "ticks": {"MSN": {"source": "CLOSE", "timestamp": 1, "frozen": True}},
+    }
+    hint = subject._quote_health_hint()
+    assert "Ngoài phiên" in hint and "BỊ LOẠI" not in hint
+
+
+def test_health_hint_explains_cycle_stage_without_raw_exception_or_credentials():
+    subject = DashboardPanelsMixin()
+    subject.symbol = _Value("MSN")
+    subject._preview_health_status = {
+        "market_status": "OPEN", "error": "raw error with SECRET",
+        "cycle_error_context": {
+            "symbol": "MSN", "stage": "INDICATORS", "exception_type": "TypeError",
+        },
+    }
+    hint = subject._api_health_hint()
+    assert "MSN · tính EMA/RSI/ATR · TypeError" in hint
+    assert "daemon.log" in hint and "không ghi mỗi tick" in hint
+    assert "SECRET" not in hint
+
+
+def test_rule_and_order_hints_distinguish_waiting_queue_sent_and_partial_fill():
+    subject = DashboardPanelsMixin()
+    subject._preview_rule_decision = {
+        "reason": "BUY_WINDOW_WAIT", "details": {"buy_window": {"start": "14:00"}},
+    }
+    assert "Có tín hiệu; chờ từ 14:00" in subject._rule_decision_hint()
+    assert "Có tín hiệu ≠ đã gửi lệnh" in subject._rule_decision_hint()
+    hint = subject._order_lifecycle_hint()
+    assert "CACHE / CHỜ GỬI / CHỜ OTP" in hint
+    assert "DNSE đã nhận; chưa có nghĩa đã khớp" in hint
+    assert "x < y là khớp một phần" in hint
+    assert "Telegram BUY báo đã xếp yêu cầu" in hint
+
+
 @pytest.mark.parametrize("ui,daemon,label", [
     ({"total_requests": 1, "last_status": 500}, {"total_requests": 1000, "last_status": 200}, "API LỖI"),
     ({"total_requests": 1000, "last_status": 200}, {"total_requests": 1, "last_status": 500}, "API LỖI"),

@@ -613,7 +613,8 @@ def test_journal_io_failure_never_rolls_back_manual_sell_fill_or_cooldown(tmp_pa
     assert engine.database.pending_events()
 
 
-def test_daemon_keeps_removed_real_symbol_managed_while_paper_selected(tmp_path, monkeypatch):
+@pytest.mark.parametrize("cached", [False, True])
+def test_daemon_keeps_removed_real_symbol_managed_while_paper_selected(tmp_path, monkeypatch, cached):
     from viking_v2 import config
     from viking_v2.services import daemon
     from viking_v2.models import RuntimeConfig
@@ -622,6 +623,11 @@ def test_daemon_keeps_removed_real_symbol_managed_while_paper_selected(tmp_path,
     monkeypatch.setattr(config, "ACCOUNTS_ROOT", tmp_path / "accounts")
     bridge = RuntimeBridge("AUDIT")
     bridge.write_config(RuntimeConfig(["VIX"], True, False))
+    if cached:
+        bridge.status_store.write({"ticks": {"FPT": {
+            "symbol": "FPT", "price": 99, "timestamp": 1, "received_at": 1,
+            "stale": True, "health": "REST_UNAVAILABLE", "quote_issue": "SOURCE_ERROR",
+        }}})
     trades = TradeStateStore(bridge.trade_state_path)
     trades.create("FPT", "REAL", trade_id="REAL-FPT")
     trades.record_buy_fill("REAL-FPT", 100, 100)

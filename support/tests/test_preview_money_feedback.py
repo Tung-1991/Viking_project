@@ -430,10 +430,13 @@ def money_ticket(tmp_path, mode="REAL", quantity="200", kind="MARKET"):
 @pytest.mark.parametrize("mode", ["REAL", "PAPER"])
 @pytest.mark.parametrize("kind", ["MARKET", "LO", "ATO", "ATC"])
 @pytest.mark.parametrize("quantity", ["", "100", "200"])
-def test_money_and_fee_use_same_basis_as_priority_guard_in_both_ticket_views(tmp_path, mode, kind, quantity):
+@pytest.mark.parametrize("phase", ["OPEN", "CLOSED"])
+def test_money_and_fee_use_same_basis_as_priority_guard_in_both_ticket_views(tmp_path, monkeypatch, mode, kind, quantity, phase):
     from viking_v2.dashboard.view import _compact_vnd
 
     view, _status = money_ticket(tmp_path, mode, quantity, kind)
+    monkeypatch.setattr("viking_v2.dashboard.panels.market_phase", lambda **kwargs: (phase, phase))
+    _status["market_status"] = phase
     settings_before = view.settings.to_dict()
     view._update_order_preview()
     actual_quantity = int(quantity) if quantity else (200 if kind == "LO" else 100)
@@ -455,7 +458,13 @@ def test_money_and_fee_use_same_basis_as_priority_guard_in_both_ticket_views(tmp
     if kind != "LO":
         assert f"{actual_quantity * 74200 * (1 + rate):,.0f} đ gồm phí" in view._ticket_money_hint()
     assert view.preview_tp_detail.options["text"] == "+" + _compact_vnd(actual_quantity * 74200 * .07)
-    assert view.preview_status_badge.options["text"] == ("CHẶN" if actual_quantity == 200 and kind != "LO" else "THEO VỐN" if not quantity else "CACHE")
+    expected_badge = (
+        "CHẶN" if actual_quantity == 200 and kind != "LO"
+        else "THEO VỐN" if not quantity
+        else "READY" if phase == "OPEN" and kind in {"MARKET", "LO"}
+        else "CACHE"
+    )
+    assert view.preview_status_badge.options["text"] == expected_badge
     assert view.settings.to_dict() == settings_before
     assert not view.queue.list_all() and not view.trade_state.list_cycles()
 

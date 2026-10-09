@@ -9,6 +9,7 @@ import pytest
 
 STARTUP_SMOKE = r'''
 import os
+import time
 import socket
 import tempfile
 from pathlib import Path
@@ -196,6 +197,34 @@ with tempfile.TemporaryDirectory(prefix="money-hunter-startup-") as directory:
         hint._show()
         assert hint.popup is not None
         hint._hide()
+        # The new diagnostics use existing labels only. Exercise native hover
+        # text at both CTk scalings without live services or account credentials.
+        saved_read_status = app.bridge.read_status
+        app.bridge.read_status = lambda: {
+            "market_status": "OPEN", "ticks": {"MSN": {
+                "symbol": "MSN", "price": 74.4, "timestamp": time.time(), "source": "WS",
+            }},
+        }
+        app.symbol.set("MSN")
+        health_cells = len(app.preview_health_trade.master.grid_slaves())
+        assert health_cells == 7
+        for widget, callback in (
+            (app.preview_health_hint, app._api_health_hint),
+            (app.preview_health_trade, app._quote_health_hint),
+            (app.preview_live_value, app._quote_health_hint),
+            (app.preview_route_value, app._order_lifecycle_hint),
+            (app.preview_rule_reason, app._rule_decision_hint),
+        ):
+            hint = _HoverHint(widget, callback, placement="inside")
+            hint._show()
+            assert hint.popup is not None and hint.popup.cget("text")
+            app.update_idletasks()
+            assert hint.popup.winfo_x() >= 0 and hint.popup.winfo_y() >= 0
+            assert hint.popup.winfo_width() <= app.winfo_width()
+            assert hint.popup.winfo_height() <= app.winfo_height()
+            hint._hide()
+        assert len(app.preview_health_trade.master.grid_slaves()) == health_cells
+        app.bridge.read_status = saved_read_status
         popups.append(RuleSettingsPopup(app, app.settings, app.account_id, lambda: None))
         popups.append(ConnectionPopup(app, app.settings, app.account_id, app.real, lambda: None))
         popups.append(BacktestPopup(app, app.settings, None))

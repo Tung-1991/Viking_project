@@ -113,6 +113,8 @@ def test_telegram_sends_one_buy_and_only_its_matching_closed_summary():
 
     assert len(tele.sent) == 2
     assert "BUY · FPT" in tele.sent[0][1]
+    assert "ĐÃ XẾP LỆNH" in tele.sent[0][1]
+    assert "không xác nhận đã gửi/khớp" in tele.sent[0][1]
     assert "ABCDEF1234" in tele.sent[0][1]
     assert "CLOSED · FPT · REAL" in tele.sent[1][1]
     assert "ABCDEF1234" in tele.sent[1][1]
@@ -137,9 +139,32 @@ def test_telegram_batches_buy_signals_in_one_fixed_window():
 
     assert service.flush_buys()
     assert len(tele.sent) == 1
-    assert "BUY SIGNAL · 2 MÃ" in tele.sent[0][1]
+    assert "BUY ĐÃ XẾP LỆNH · 2 MÃ" in tele.sent[0][1]
+    assert "không xác nhận đã gửi/khớp" in tele.sent[0][1]
     assert "FPT · 69,200đ · UPTREND · FPT1" in tele.sent[0][1]
     assert "HPG · 27,500đ · UPTREND · HPG1" in tele.sent[0][1]
+
+
+def test_telegram_waiting_for_buy_window_never_claims_a_sent_order():
+    tele = Telegram()
+    service = SignalTelegramService(tele, chat_id="7")
+    assert service.notify_signal_only(
+        symbol="MSN", signal="BUY", price=74.4, market_state="UPTREND",
+        blocked_by="CHỜ GIỜ MUA · TỪ 14:00", execution_mode="REAL",
+    )
+    assert "CHƯA GỬI: CHỜ GIỜ MUA · TỪ 14:00" in tele.sent[0][1]
+    assert "ĐÃ XẾP LỆNH" not in tele.sent[0][1]
+
+
+def test_telegram_blocked_buy_explains_whipsaw_without_internal_reason_code():
+    tele = Telegram()
+    service = SignalTelegramService(tele, chat_id="7")
+    assert service.notify_signal_only(
+        symbol="MSN", signal="BUY", price=74.4, market_state="UPTREND",
+        blocked_by="WHIPSAW_LOCK",
+    )
+    assert "CHƯA GỬI: WHIPSAW đang khóa BUY" in tele.sent[0][1]
+    assert "WHIPSAW_LOCK" not in tele.sent[0][1]
 
 
 def test_closed_flushes_queued_buy_before_summary():

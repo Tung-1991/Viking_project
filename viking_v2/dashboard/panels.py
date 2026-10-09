@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import math
 import tkinter as tk
+from datetime import datetime
 from tkinter import ttk
 from typing import Any
 
@@ -15,7 +16,7 @@ from ..trading.portfolio import (
     nav_from_balance, position_quantity as holding_quantity,
     size_buy_order, stock_exposure_limit, validate_quantity,
 )
-from ..trading.validation import decision_is_fresh, decisions_for_mode, quote_is_fresh
+from ..trading.validation import decision_is_fresh, decisions_for_mode, quote_diagnostics, quote_is_fresh
 from .view import (
     COL_BORDER, COL_GRAY, COL_GREEN, COL_MUTED, COL_SETTLEMENT_BG, COL_SETTLEMENT_TEXT,
     COL_PREVIEW_TEXT, COL_RED, COL_SURFACE, COL_SURFACE_2, COL_TEXT, COL_WARN, FONT_BOLD,
@@ -882,7 +883,8 @@ class DashboardPanelsMixin:
         metrics.grid(row=1, column=0, sticky="ew", padx=6, pady=(3, 2))
         metrics.grid_propagate(False)
         for column in range(6):
-            metrics.grid_columnconfigure(column, weight=1, uniform="preview_metrics")
+            # Give the longer money value room without adding a second row.
+            metrics.grid_columnconfigure(column, weight=2 if column == 3 else 1, uniform="preview_metrics")
 
         def metric_card(
             column: int,
@@ -898,26 +900,26 @@ class DashboardPanelsMixin:
                 font=("Segoe UI", 12, "bold", "italic"),
                 text_color=title_color, anchor="w",
             )
-            title_widget.grid(row=0, column=0, sticky="ew", padx=9, pady=(6, 0))
+            title_widget.grid(row=0, column=0, sticky="ew", padx=2, pady=(6, 0))
             if title == "KL":
                 self.preview_qty_title = title_widget
             if hint:
                 _HoverHint(title_widget, hint, placement="inside")
             title_widget.bind("<Configure>", lambda _event, widget=title_widget: fit_label_text(
-                widget, base_font=("Segoe UI", 12, "bold", "italic"), minimum_size=7), add="+")
+                widget, base_font=("Segoe UI", 12, "bold", "italic"), minimum_size=5), add="+")
             value = ctk.CTkLabel(
                 card, text="NA", width=1, height=30,
                 font=("Cascadia Mono", 13), text_color=COL_TEXT,
                 anchor="w", justify="left", wraplength=0,
             )
-            value.grid(row=1, column=0, sticky="ew", padx=9, pady=(1, 6))
+            value.grid(row=1, column=0, sticky="ew", padx=2, pady=(1, 6))
             value.bind("<Configure>", lambda _event, widget=value: fit_label_text(
-                widget, base_font=("Cascadia Mono", 13), minimum_size=7), add="+")
+                widget, base_font=("Cascadia Mono", 13), minimum_size=5), add="+")
             if hint:
                 _HoverHint(value, hint, placement="inside")
             return value
 
-        self.preview_live_value = metric_card(0, "GIÁ TT", hint="Giá gần nhất bot nhận được; màu vàng là giá đang đứng hoặc ngoài phiên. Không bảo đảm đây là giá khớp.")
+        self.preview_live_value = metric_card(0, "GIÁ TT", hint=self._quote_health_hint)
         self.preview_entry_value = metric_card(1, "GIÁ VÀO", hint="Giá ước tính khớp để preview TP/SL; LO dùng giá nhập.\nKhi giữ vốn Priority, VỐN + PHÍ dự trù theo giá trần, không phải giá khớp chắc chắn.")
         self.preview_qty_value = metric_card(2, "KL", hint=self._auto_quantity_hint)
         self.preview_cash_value = metric_card(3, "VỐN + PHÍ", hint=self._ticket_money_hint)
@@ -926,8 +928,7 @@ class DashboardPanelsMixin:
             5,
             "LỆNH",
             "#60A5FA",
-            "ĐẶT: lệnh đủ điều kiện gửi trong phiên hiện tại.\n"
-            "CACHE: giữ local, chờ đúng phiên hoặc OTP.",
+            self._order_lifecycle_hint,
         )
 
         management = ctk.CTkFrame(order_group, height=84, fg_color="transparent")
@@ -1093,7 +1094,7 @@ class DashboardPanelsMixin:
                 note = self.preview_rule_market_detail.cget("text").removeprefix("P1 · ")
                 self.preview_rule_market_detail.configure(text=f"P1 · {note}" if narrow else note)
             fit_label_text(self.preview_rule_market, base_font=("Segoe UI", 12))
-            fit_label_text(self.preview_rule_market_detail, base_font=("Segoe UI", 10))
+            fit_label_text(self.preview_rule_market_detail, base_font=("Segoe UI", 10), minimum_size=7)
         phase1.bind("<Configure>", fit_p1_row, add="+")
 
         phase2 = phase_card(
@@ -1136,7 +1137,7 @@ class DashboardPanelsMixin:
         )
         for value in (self.preview_rule_ema, self.preview_rule_sell_ema, self.preview_rule_rsi):
             value.bind("<Configure>", lambda _event, widget=value: fit_label_text(
-                widget, base_font=("Cascadia Mono", 12)), add="+")
+                widget, base_font=("Cascadia Mono", 12), minimum_size=7), add="+")
             _HoverHint(value, self._indicator_preview_hint, placement="inside")
 
         phase3 = phase_card(
@@ -1152,7 +1153,7 @@ class DashboardPanelsMixin:
             row=0, column=1, sticky="ew", padx=(0, 8), pady=4
         )
         self.preview_rule_phase3.bind("<Configure>", lambda _event: fit_label_text(
-            self.preview_rule_phase3, base_font=("Segoe UI", 11)), add="+")
+            self.preview_rule_phase3, base_font=("Segoe UI", 11), minimum_size=7), add="+")
         _HoverHint(self.preview_rule_phase3, self._entry_capital_hint, placement="inside")
         self.preview_rule_phase3_detail = ctk.CTkLabel(
             phase3, text="AUTO --", height=16, font=("Segoe UI", 12),
@@ -1174,6 +1175,7 @@ class DashboardPanelsMixin:
             anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_reason.grid(row=4, column=0, sticky="ew", padx=8, pady=(2, 6))
+        _HoverHint(self.preview_rule_reason, self._rule_decision_hint, placement="inside")
 
         health_group = ctk.CTkFrame(
             panel, fg_color=COL_SURFACE, corner_radius=7, height=36,
@@ -1204,10 +1206,7 @@ class DashboardPanelsMixin:
         self.preview_health_hint.grid(row=0, column=1, sticky="e", padx=(1, 3), pady=2)
         _HoverHint(
             self.preview_health_hint,
-            "API OK: DNSE đang trả lời bình thường.\n"
-            "LỊCH CHỜ: đang tải lịch khi mở app, chưa phải lỗi. LỊCH LỖI: không có lịch giao dịch dùng được.\n"
-            "OTP: chưa xác thực trading token; chỉ cần khi gửi, sửa hoặc hủy lệnh REAL.\n"
-            "PRICE: ATO / OPEN / ATC / CLOSED theo phiên hiện tại.",
+            self._api_health_hint,
             placement="inside",
         )
 
@@ -1226,6 +1225,7 @@ class DashboardPanelsMixin:
         self.preview_health_rest = health_cell(4, "REST --")
         self.preview_health_token = health_cell(5, "TOKEN --")
         self.preview_health_trade = health_cell(6, "GIÁ --")
+        _HoverHint(self.preview_health_trade, self._quote_health_hint, placement="inside")
 
     @staticmethod
     def _preview_level_details(
@@ -1337,6 +1337,98 @@ class DashboardPanelsMixin:
         if reason == feedback.get("reason"):
             return str(feedback.get("hint") or reason)
         return reason or "Chờ tính preview; chưa gửi lệnh."
+
+    @staticmethod
+    def _order_lifecycle_hint() -> str:
+        return (
+            "PREVIEW / ĐẶT: mới kiểm tra, chưa gửi lệnh.\n"
+            "CACHE / CHỜ GỬI / CHỜ OTP: yêu cầu còn trong app.\n"
+            "ĐÃ GỬI: DNSE đã nhận; chưa có nghĩa đã khớp.\n"
+            "KHỚP x/y: đã mua/bán x trên y CP đặt; x < y là khớp một phần.\n"
+            "Telegram BUY báo đã xếp yêu cầu, không xác nhận khớp."
+        )
+
+    def _rule_decision_hint(self) -> str:
+        decision = getattr(self, "_preview_rule_decision", {})
+        decision = decision if isinstance(decision, dict) else {}
+        details = decision.get("details") if isinstance(decision.get("details"), dict) else {}
+        window = details.get("buy_window") if isinstance(details.get("buy_window"), dict) else {}
+        status_text = str(details.get("status_text") or "")
+        if decision.get("reason") == "BUY_WINDOW_WAIT":
+            status_text = f"Có tín hiệu; chờ từ {window.get('start') or 'giờ mua đã cài'} và kiểm tra lại điều kiện."
+        elif not decision:
+            status_text = "Chưa có quyết định mới; xem hint GIÁ/HEALTH để biết dữ liệu có hợp lệ không."
+        return "\n".join(filter(None, (
+            status_text,
+            "Có tín hiệu ≠ đã gửi lệnh. Bị chặn/chờ giờ: chưa gửi.",
+            "BUY đủ điều kiện vẫn cần BOT ON, vốn và OTP REAL hợp lệ.",
+            "Đã gửi/khớp: xem cột Trạng thái và KL KHỚP trong bảng lệnh.",
+        )))
+
+    def _health_hint_status(self) -> dict[str, Any]:
+        bridge = getattr(self, "bridge", None)
+        if bridge is not None:
+            try:
+                status = bridge.read_status()
+                if isinstance(status, dict):
+                    return status
+            except (OSError, ValueError):
+                pass
+        status = getattr(self, "_preview_health_status", {})
+        return status if isinstance(status, dict) else {}
+
+    def _quote_health_hint(self) -> str:
+        status = self._health_hint_status()
+        symbol = self.symbol.get().strip().upper()
+        ticks = status.get("ticks") if isinstance(status.get("ticks"), dict) else {}
+        tick = ticks.get(symbol)
+        details = quote_diagnostics(tick, symbol)
+        source = {"WS": "WS (WebSocket)", "REST": "REST (API dự phòng)",
+                  "CLOSE": "giá đóng cửa", "UNKNOWN": "chưa rõ"}[details["source"]]
+        try:
+            received = datetime.fromtimestamp(details["observed_at"], VN_TZ).strftime("%H:%M:%S")
+        except (TypeError, ValueError, OverflowError, OSError):
+            received = "--"
+        age = details["age_seconds"]
+        age_text = f"{age:.1f}s trước" if age is not None and age >= 0 else "không hợp lệ" if age is not None else "--"
+        phases = status.get("symbol_phases") if isinstance(status.get("symbol_phases"), dict) else {}
+        phase = str(phases.get(symbol) or status.get("market_status") or "").upper()
+        if phase in {"CLOSED", "LUNCH", "BREAK", "OFFLINE"}:
+            state = "Ngoài phiên: giá chỉ để xem, không đánh giá chậm."
+        else:
+            state = "HỢP LỆ" if details["valid"] else f"BỊ LOẠI: {details['reason_text']}"
+        return (
+            f"{symbol} · nguồn: {source}\n"
+            f"Nhận lúc {received} (giờ VN) · {age_text}\n"
+            f"{state} · giới hạn {details['max_age_seconds']:g}s trong phiên.\n"
+            "WS OK chỉ là kết nối; giá từng mã được kiểm tra riêng. Giá này không bảo đảm khớp."
+        )
+
+    def _api_health_hint(self) -> str:
+        status = self._health_hint_status()
+        phase = str(status.get("market_status") or "").upper()
+        context = status.get("cycle_error_context") if isinstance(status.get("cycle_error_context"), dict) else {}
+        if phase == "CALENDAR_LOADING":
+            extra = "LỊCH CHỜ: đang tải lịch, chưa phải lỗi."
+        elif phase == "CALENDAR_UNKNOWN":
+            extra = "LỊCH LỖI: chưa có lịch giao dịch dùng được."
+        elif status.get("error"):
+            stage = {
+                "ACCOUNT_SNAPSHOT": "đọc tiền/danh mục",
+                "MARKET_DATA": "đọc giá",
+                "INDICATORS": "tính EMA/RSI/ATR",
+                "PORTFOLIO": "tính vốn",
+                "RULE_EVALUATION": "kiểm tra rule",
+                "RULE_STATE": "lưu trạng thái rule",
+            }.get(str(context.get("stage") or ""), "chưa rõ bước lỗi")
+            extra = f"Lỗi chu kỳ: {context.get('symbol') or '--'} · {stage} · {context.get('exception_type') or '--'}."
+        else:
+            extra = "API OK là DNSE đang trả lời; không bảo đảm giá từng mã còn mới."
+        return (
+            self._quote_health_hint() + "\n" + extra
+            + "\nOTP: cần khi gửi/sửa/hủy lệnh REAL; PAPER không cần OTP."
+            + "\nMất/phục hồi giá: có ghi trong daemon.log, không ghi mỗi tick."
+        )
 
     def _ticket_money_hint(self) -> str:
         return str(getattr(self, "_preview_ticket_money", {}).get("hint") or "Chờ tính vốn và phí của lệnh đang xem.")
@@ -1676,7 +1768,7 @@ class DashboardPanelsMixin:
         )
         self.preview_rule_market_detail.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=(0, 3))
         fit_label_text(self.preview_rule_market, base_font=("Segoe UI", 12))
-        fit_label_text(self.preview_rule_market_detail, base_font=("Segoe UI", 10))
+        fit_label_text(self.preview_rule_market_detail, base_font=("Segoe UI", 10), minimum_size=7)
 
     def _refresh_full_order_preview(self, status: dict[str, Any] | None = None) -> None:
         if not hasattr(self, "preview_order_title"):
@@ -1866,12 +1958,12 @@ class DashboardPanelsMixin:
                 "CHỜ GIÁ" if money["waiting_price"] else "CHỜ PHÍ" if money["gross"] > 0 else "--"
             )
         )
-        fit_label_text(self.preview_cash_value, base_font=("Cascadia Mono", 13), minimum_size=7)
+        fit_label_text(self.preview_cash_value, base_font=("Cascadia Mono", 13), minimum_size=5)
         self.preview_fee_value.configure(
             text=fee_value,
             text_color=COL_WARN,
         )
-        fit_label_text(self.preview_fee_value, base_font=("Cascadia Mono", 13), minimum_size=7)
+        fit_label_text(self.preview_fee_value, base_font=("Cascadia Mono", 13), minimum_size=5)
         self.preview_tp_value.configure(
             text=(
                 tp_value.split('·')[-1].strip()
@@ -2021,6 +2113,7 @@ class DashboardPanelsMixin:
         status = self._book_preview_status(status)
         decisions = status.get("decisions") if isinstance(status.get("decisions"), dict) else {}
         decision = decisions.get(symbol) if isinstance(decisions.get(symbol), dict) else {}
+        self._preview_rule_decision = decision
         details = self._preview_indicator_details(status, symbol)
         indicators = details.get("indicators") if isinstance(details.get("indicators"), dict) else {}
         rule_params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
@@ -2108,7 +2201,7 @@ class DashboardPanelsMixin:
             if key_widget is not None:
                 key_widget.configure(text=key)
             widget.configure(text=value if key_widget is not None else f"{key} {value}", text_color=color)
-            fit_label_text(widget, base_font=("Cascadia Mono", 12))
+            fit_label_text(widget, base_font=("Cascadia Mono", 12), minimum_size=7)
 
         checks = details.get("entry_checks") if isinstance(details.get("entry_checks"), dict) else {}
         budget_fn = getattr(self, "_preview_entry_checks", None)
@@ -2160,7 +2253,7 @@ class DashboardPanelsMixin:
             text=f"Mã: {slot_used}/{slot_max or '--'} · {phase3_parts[-1]}",
             text_color=COL_WARN if guard_warn else COL_TEXT,
         )
-        fit_label_text(self.preview_rule_phase3, base_font=("Segoe UI", 11))
+        fit_label_text(self.preview_rule_phase3, base_font=("Segoe UI", 11), minimum_size=7)
         symbol_tick = (status.get("ticks") or {}).get(symbol) or {}
         phase3_price = _number(
             symbol_tick.get("price")
@@ -2358,6 +2451,7 @@ class DashboardPanelsMixin:
         if not hasattr(self, "preview_health_core"):
             return
         status = status if isinstance(status, dict) else self.bridge.read_status()
+        self._preview_health_status = status
         daemon_health = status.get("api_health") if isinstance(status.get("api_health"), dict) else {}
         ws = daemon_health.get("websocket") if isinstance(daemon_health.get("websocket"), dict) else {}
         daemon_rest = daemon_health.get("rest") if isinstance(daemon_health.get("rest"), dict) else {}

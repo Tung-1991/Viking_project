@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pytest
+
 from viking_v2.trading.market import MarketDataService, VN_TZ, merge_tick_into_daily_bars
 from viking_v2.services.daemon import merge_live_tick
+from viking_v2.trading.validation import quote_is_fresh
 
 
 class Client:
@@ -121,6 +124,54 @@ def test_zero_reference_from_ws_does_not_erase_daily_reference():
         {"symbol": "FPT", "price": 69.2, "reference": 70.8},
     )
     assert merged["reference"] == 70.8
+
+
+@pytest.mark.parametrize("source", ["WS", "REST"])
+@pytest.mark.parametrize("previous", [
+    {"stale": True},
+    {"health": "REST_UNAVAILABLE", "stale": True},
+    {"received_at": 1, "frozen": True, "quote_issue": "FROZEN"},
+])
+def test_new_quote_recovers_from_restart_and_failed_source(source, previous):
+    old = {"symbol": "MSN", "price": 74.2, "timestamp": 1, **previous}
+    live = {"symbol": "MSN", "price": 74.4, "timestamp": 1000, "source": source}
+    merged = merge_live_tick(live, old, {"frozen": True, "received_at": 1})
+    assert quote_is_fresh(merged, "MSN", now=1001)
+    assert merged["price"] == 74.4
+    assert merged["source"] == source
+    assert "quote_issue" not in merged
+    assert old == {"symbol": "MSN", "price": 74.2, "timestamp": 1, **previous}
+
+
+@pytest.mark.parametrize("updates", [
+    {"stale": True}, {"frozen": True}, {"health": "REST_UNAVAILABLE"},
+    {"timestamp": 1}, {"timestamp": "bad"}, {"timestamp": float("nan")},
+    {"timestamp": 1100}, {"symbol": "CTS"},
+])
+def test_merge_never_makes_a_bad_new_quote_tradable(updates):
+    live = {"symbol": "MSN", "price": 74.4, "timestamp": 1000, "source": "WS", **updates}
+    merged = merge_live_tick(live, {"symbol": "MSN", "price": 74.2, "timestamp": 1000}, None)
+    assert not quote_is_fresh(merged, "MSN", now=1001)
+
+
+def test_partial_quote_cannot_borrow_cached_receipt_time():
+    merged = merge_live_tick(
+        {"symbol": "MSN", "bid": 74.3, "source": "WS"},
+        {"symbol": "MSN", "price": 74.2, "timestamp": 1000, "received_at": 1000},
+        None,
+    )
+    assert merged["price"] == 74.2  # Preview may still show the old price.
+    assert not quote_is_fresh(merged, "MSN", now=1001)
+
+
+def test_fresh_receipt_time_from_new_quote_is_kept():
+    merged = merge_live_tick(
+        {"symbol": "MSN", "price": 74.4, "timestamp": 1, "received_at": 1000},
+        {"symbol": "MSN", "price": 74.2, "stale": True, "received_at": 1},
+        None,
+    )
+    assert quote_is_fresh(merged, "MSN", now=1001)
+    assert merged["received_at"] == 1000
 
 
 def test_live_tick_updates_current_daily_bar_without_refetching_history():

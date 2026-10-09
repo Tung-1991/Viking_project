@@ -23,7 +23,7 @@ from ..trading.portfolio import PortfolioContextBuilder, sell_quantity_for_fract
 from .runtime import RuntimeBridge
 from ..storage import AtomicJSONStore
 from ..rules.state import RuleStateStore
-from ..trading.validation import MAX_DECISION_AGE, quote_is_fresh
+from ..trading.validation import MAX_DECISION_AGE, quote_diagnostics
 from ..rules.business import (
     StaticRule,
     StaticRuleParameters,
@@ -41,31 +41,78 @@ def merge_live_tick(
     previous_tick: dict | None,
     fallback_tick: dict | None,
 ) -> dict:
-    """Keep the last tradable price when WS only publishes bid/ask updates."""
+    """Keep price context, but take receipt/health only from this observation."""
     live = dict(live_tick or {})
     previous = dict(previous_tick or {})
     fallback = dict(fallback_tick or {})
     merged = dict(fallback)
+    observation_fields = {
+        "stale", "frozen", "health", "timestamp", "received_at", "source", "quote_issue",
+    }
+    for key in observation_fields:
+        merged.pop(key, None)
     positive_price_fields = {
         "price", "lastPrice", "matchPrice", "expected_price", "expectedPrice",
         "reference", "referencePrice", "high", "low", "open", "bid", "ask",
     }
     for source in (previous, live):
         for key, value in source.items():
+            if source is previous and key in observation_fields:
+                continue
             if key in positive_price_fields:
                 try:
-                    if float(value or 0.0) <= 0:
+                    if not math.isfinite(float(value or 0.0)) or float(value or 0.0) <= 0:
                         continue
                 except (TypeError, ValueError):
                     continue
             merged[key] = value
-    live_has_price = any(
-        float(live.get(key, 0.0) or 0.0) > 0
-        for key in ("price", "lastPrice", "matchPrice", "expected_price", "expectedPrice")
-    )
-    merged["frozen"] = False
+    def positive_live_price(key: str) -> bool:
+        try:
+            value = float(live.get(key) or 0.0)
+            return math.isfinite(value) and value > 0
+        except (TypeError, ValueError):
+            return False
+
+    live_has_price = any(positive_live_price(key) for key in (
+        "price", "lastPrice", "matchPrice", "expected_price", "expectedPrice",
+    ))
+    # Never overwrite flags carried by an unhealthy NEW quote. Cached flags
+    # above are discarded; quote validation still checks the new timestamp.
+    merged["frozen"] = bool(live.get("frozen", not bool(live)))
     merged["price_frozen"] = not live_has_price
     return merged
+
+
+class QuoteHealthMonitor:
+    """One loss/recovery log per symbol episode, shared across REAL/PAPER."""
+
+    def __init__(self, logger: Any):
+        self.logger = logger
+        self._issues: dict[str, str] = {}
+
+    def observe(self, symbol: str, quote: Any, *, now: float | None = None) -> dict:
+        details = quote_diagnostics(quote, symbol, now=now)
+        reason = details["reason"]
+        previous = self._issues.get(symbol, "")
+        if (reason and not previous) or (not reason and previous):
+            age = details["age_seconds"]
+            age_text = f"{age:.1f}s" if age is not None else "--"
+            try:
+                received = datetime.fromtimestamp(details["observed_at"], VN_TZ).isoformat(timespec="seconds")
+            except (TypeError, ValueError, OverflowError, OSError):
+                received = "--"
+            log = self.logger.warning if reason else self.logger.info
+            log(
+                "[GIÁ] %s · %s · %s · nhận %s · tuổi %s · %s",
+                symbol, details["source"], "BỊ LOẠI" if reason else "PHỤC HỒI",
+                received, age_text, details["reason_text"],
+            )
+        self._issues[symbol] = reason
+        return details
+
+    def pause(self, symbol: str) -> None:
+        """A closed session is not a lost live feed."""
+        self._issues.pop(symbol, None)
 
 
 def tick_with_price_bound(tick: dict, secdef: dict | None) -> dict:
@@ -230,6 +277,7 @@ def run(account_id: str | None = None) -> int:
     last_symbols: list[str] = []
     previous_runtime_status = bridge.read_status()
     ticks: dict[str, dict] = {symbol: {**tick, "stale": True} for symbol, tick in (previous_runtime_status.get("ticks") or {}).items() if isinstance(tick, dict)}
+    quote_health = QuoteHealthMonitor(logger)
     decisions: dict[str, dict] = {}
     # No calendar request has completed yet: loading is not a failed request.
     initial_phase = "CALENDAR_LOADING" if connected else "NOT_CONFIGURED"
@@ -492,16 +540,24 @@ def run(account_id: str | None = None) -> int:
                                         fallback_tick,
                                     )
                             else:
+                                quote_health.pause(symbol)
                                 tick = ticks.get(symbol)
                                 if tick:
                                     tick = {**tick, "frozen": True}
                                 else:
                                     tick = market.frozen_tick_from_bars(symbol, bars_by_symbol.get(symbol, []))
-                            if tick and str(tick.get("symbol", symbol)).upper() != symbol:
-                                tick = None
-                            if tick and symbol_live and not quote_is_fresh(tick, symbol):
-                                ticks[symbol] = {**tick, "stale": True}
-                                rule_state.save_buy_confirmation(symbol, decision_mode, {})
+                            if symbol_live:
+                                quote_details = quote_health.observe(symbol, tick)
+                                if not quote_details["valid"]:
+                                    rejected = tick or ticks.get(symbol)
+                                    if rejected:
+                                        ticks[symbol] = {
+                                            **rejected, "stale": True,
+                                            "quote_issue": quote_details["reason"],
+                                        }
+                                    rule_state.save_buy_confirmation(symbol, decision_mode, {})
+                                    tick = None
+                            elif tick and str(tick.get("symbol", symbol)).upper() != symbol:
                                 tick = None
                             if not tick:
                                 decisions.pop(symbol, None)
