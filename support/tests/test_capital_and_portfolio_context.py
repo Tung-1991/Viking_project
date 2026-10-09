@@ -21,6 +21,37 @@ def test_budget_is_nav_exposure_divided_by_max_positions_and_capped_by_remaining
     assert affordable_quantity(100_000_000, 95) == 1000
 
 
+def test_manual_spending_uses_free_cash_and_reduces_bot_p1_room_without_resizing_priority(tmp_path):
+    builder = PortfolioContextBuilder(
+        OrderQueue(tmp_path / "manual-room-orders.json"),
+        TradeStateStore(tmp_path / "manual-room-trades.json"),
+        RuleStateStore(tmp_path / "manual-room-rules.json"),
+    )
+    allocations = {
+        symbol: {"limit_vnd": 30_000_000, "use_pct": 100, "max_orders": 1}
+        for symbol in ("FPT", "SSI")
+    }
+    for spent in (0, 10_000_000, 40_000_000):
+        positions = [{"symbol": "MBB", "source": "MANUAL",
+                      "openQuantity": spent // 100_000, "tradeQuantity": spent // 100_000,
+                      "costPrice": 100, "marketPrice": 100}] if spent else []
+        common = dict(
+            execution_mode="PAPER",
+            balance={"equity": 100_000_000, "availableCash": 100_000_000 - spent},
+            positions=positions, tick={"ask": 100, "ceiling_price": 107},
+            exposure=.6, max_positions=5, priority_symbols=["FPT", "SSI"],
+            priority_capital_enabled=True, priority_total_capital=60_000_000,
+            priority_allocations=allocations, budget_only=True,
+        )
+        manual = builder.build("MBB", manual_buy=True, **common)
+        assert manual["order_budget"] == 40_000_000 - spent
+        bot = builder.build("FPT", **common)
+        assert bot["exposure_room"] == 60_000_000 - spent
+        assert bot["priority_capital"]["limit_vnd"] == 30_000_000
+        assert bot["order_budget"] == min(30_000_000, 60_000_000 - spent)
+        assert allocations["FPT"]["limit_vnd"] == allocations["SSI"]["limit_vnd"] == 30_000_000
+
+
 def test_shared_buy_sizing_uses_budget_then_explicit_minimum_fallback():
     normal = size_buy_order(
         budget_vnd=100_000_000,

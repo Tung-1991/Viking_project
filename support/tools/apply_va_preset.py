@@ -76,9 +76,18 @@ def main() -> int:
     try:
         settings = prepared_settings(account)
         print(f"[VA] Tai khoan tren MAY NAY: {account} | so {'PAPER' if settings.paper_mode else 'REAL'}")
-        print("[VA] MSN 15 / CTS 15 / HDB 15 / IDC 5 trieu; moi ma dung 100%, MAX LENH 1.")
-        print("[VA] Tong 50 trieu; P1 override 100%; toi da 4 ma. Chi thay setting bo thu.")
-        print("[IDC] 5 trieu = 50 - 15 - 15 - 15; khong muon ngan sach 3 ma dau.")
+        caps = {
+            symbol: settings.priority_allocations[symbol]["limit_vnd"] / 1_000_000
+            for symbol in settings.priority_symbols
+        }
+        allocation_review = " / ".join(f"{symbol} {cap:g}" for symbol, cap in caps.items())
+        total_millions = settings.priority_total_capital / 1_000_000
+        print(f"[VA] {allocation_review} trieu; moi ma dung 100%, MAX LENH 1.")
+        print(f"[VA] Tong {total_millions:g} trieu; P1 override {settings.market_phase_override_exposure_pct:g}%; "
+              f"toi da {settings.rule_parameters['max_positions']} ma. Chi thay setting bo thu.")
+        other_caps = " - ".join(f"{cap:g}" for symbol, cap in caps.items() if symbol != "IDC")
+        print(f"[IDC] {caps['IDC']:g} trieu = {total_millions:g} - {other_caps}; "
+              "khong muon ngan sach cac ma khac.")
         print("[E] AUTO: tu tao SELL 100% khi du dieu kien. Bat E mac dinh cho trade BOT moi.")
         print("[E] Vi the dang co chi ap dung AUTO neu E da bat; khong tu gan E vao vi the cu.")
         print("[GIU] API, token, Telegram, EMA/RSI, SL/PROTECT/TP, gio mua va toan bo giao dich.")

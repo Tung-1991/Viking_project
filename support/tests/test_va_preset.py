@@ -8,7 +8,7 @@ from viking_v2 import config
 from viking_v2.rules.state import RuleStateStore
 from viking_v2.trading.durable import AccountLease
 from viking_v2.trading.orders import OrderQueue
-from viking_v2.trading.portfolio import PortfolioContextBuilder
+from viking_v2.trading.portfolio import PortfolioContextBuilder, size_buy_order
 from viking_v2.trading.state import TradeStateStore
 
 
@@ -49,8 +49,8 @@ def test_preset_changes_only_agreed_allocation_and_e_fields_and_backup_is_exact(
     assert "IND_EXIT" in current["bot_em_modes"]
     assert current["priority_allocations"] == {
         symbol: {"limit_vnd": cap, "use_pct": 100, "max_orders": 1}
-        for symbol, cap in (("MSN", 15_000_000), ("CTS", 15_000_000),
-                            ("HDB", 15_000_000), ("IDC", 5_000_000))
+        for symbol, cap in (("MSN", 16_000_000), ("CTS", 12_000_000),
+                            ("HDB", 15_000_000), ("IDC", 7_000_000))
     }
     for key, value in old.items():
         if key not in tool.PRESET_FIELDS:
@@ -105,7 +105,8 @@ def test_preset_details_are_reviewed_before_confirmation_without_writes(workspac
 
     def review_then_cancel(prompt):
         review = capsys.readouterr().out
-        assert "MSN 15 / CTS 15 / HDB 15 / IDC 5 trieu" in review
+        assert "MSN 16 / CTS 12 / HDB 15 / IDC 7 trieu" in review
+        assert "[IDC] 7 trieu = 50 - 16 - 12 - 15" in review
         assert "MAX LENH 1" in review and "P1 override 100%" in review
         assert "[E] AUTO" in review and "[GIU] API, token, Telegram" in review
         assert "[y/N]" in prompt
@@ -120,8 +121,8 @@ def test_preset_details_are_reviewed_before_confirmation_without_writes(workspac
 
 @pytest.mark.parametrize("mode", ["PAPER", "REAL"])
 @pytest.mark.parametrize("capital", [50_000_000, 100_000_000])
-@pytest.mark.parametrize("symbol,envelope", [("MSN", 15_000_000), ("CTS", 15_000_000),
-                                              ("HDB", 15_000_000), ("IDC", 5_000_000)])
+@pytest.mark.parametrize("symbol,envelope", [("MSN", 16_000_000), ("CTS", 12_000_000),
+                                              ("HDB", 15_000_000), ("IDC", 7_000_000)])
 def test_preset_budgets_use_existing_real_and_paper_calculator(workspace, mode, capital, symbol, envelope):
     root, _old, _env = workspace
     settings = tool.prepared_settings("PARTNER")
@@ -142,7 +143,7 @@ def test_preset_budgets_use_existing_real_and_paper_calculator(workspace, mode, 
     assert result["minimum_order_room"] <= envelope
 
 
-@pytest.mark.parametrize("cash,expected", [(50_000_000, 5_000_000), (47_000_000, 2_000_000),
+@pytest.mark.parametrize("cash,expected", [(50_000_000, 7_000_000), (47_000_000, 4_000_000),
                                          (40_000_000, 0)])
 def test_idc_only_uses_cash_left_after_reserving_first_three_symbols(workspace, cash, expected):
     root, _old, _env = workspace
@@ -158,6 +159,49 @@ def test_idc_only_uses_cash_left_after_reserving_first_three_symbols(workspace, 
                            priority_capital_enabled=True, priority_total_capital=50_000_000,
                            priority_allocations=settings.priority_allocations, budget_only=True)
     assert result["order_budget"] == pytest.approx(expected / 1.00045)
+
+
+@pytest.mark.parametrize("mode,fee", [("PAPER", .00045), ("REAL", .0012)])
+@pytest.mark.parametrize("ceiling,quantity", [(79.3, 200), (80.0, 100)])
+def test_new_msn_cap_sizes_market_shares_by_ceiling_including_fee(workspace, mode, fee, ceiling, quantity):
+    root, _old, _env = workspace
+    settings = tool.prepared_settings("PARTNER")
+    builder = PortfolioContextBuilder(OrderQueue(root / "msn_orders.json"),
+                                      TradeStateStore(root / "msn_trades.json"),
+                                      RuleStateStore(root / "msn_rules.json"), lambda: fee)
+    context = builder.build("MSN", execution_mode=mode,
+                            balance={"equity": 50_000_000, "availableCash": 50_000_000},
+                            positions=[], tick={"ask": 74.2, "ceiling_price": ceiling},
+                            exposure=1, max_positions=4,
+                            priority_symbols=settings.priority_symbols,
+                            priority_capital_enabled=True, priority_total_capital=50_000_000,
+                            priority_allocations=settings.priority_allocations, budget_only=True)
+    sizing = size_buy_order(budget_vnd=context["order_budget"],
+                            price_board=context["buy_budget_price"],
+                            available_cash=context["available_cash"], nav=context["nav"],
+                            minimum_order_room_vnd=context["minimum_order_room"], buy_fee_rate=fee)
+    assert sizing.quantity == quantity
+    assert sizing.quantity * ceiling * 1000 * (1 + fee) <= 16_000_000
+    assert context["priority_capital"]["reserved_cash"] == 34_000_000
+
+
+def test_review_reads_allocation_from_preset_instead_of_stale_fixed_text(workspace, monkeypatch, tmp_path, capsys):
+    root, _old, _env = workspace
+    raw = json.loads(tool.PRESET_PATH.read_text(encoding="utf-8"))
+    raw["priority_allocations"]["MSN"]["limit_vnd"] = 17_000_000
+    raw["priority_allocations"]["CTS"]["limit_vnd"] = 11_000_000
+    preset = tmp_path / "adjusted-preset.json"
+    preset.write_text(json.dumps(raw), encoding="utf-8")
+    monkeypatch.setattr(tool, "PRESET_PATH", preset)
+    monkeypatch.setattr("sys.argv", ["apply_va_preset.py", "--account", "PARTNER"])
+    monkeypatch.setattr("builtins.input", lambda *_args: "n")
+    original = (root / "settings.json").read_bytes()
+    assert tool.main() == 0
+    review = capsys.readouterr().out
+    assert "MSN 17 / CTS 11 / HDB 15 / IDC 7 trieu" in review
+    assert "[IDC] 7 trieu = 50 - 17 - 11 - 15" in review
+    assert (root / "settings.json").read_bytes() == original
+    assert not list(root.glob("*.bak"))
 
 
 @pytest.mark.parametrize("old_modes", [[], ["TP"], ["NORMAL"], ["TP", "NORMAL", "IND_EXIT"]])
