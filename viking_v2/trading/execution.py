@@ -407,7 +407,7 @@ class ExecutionService:
                     continue
                 raw_sellable = sellable
                 if cycle:
-                    reserved = sum(item.remaining_quantity for item in self.queue.list_all()
+                    reserved = sum(max(item.remaining_quantity, int((item.details.get("requested_replace") or {}).get("quantity", 0)) - item.filled_quantity) for item in self.queue.list_all()
                                    if item.id != intent.id and item.trade_id == intent.trade_id
                                    and item.side == "SELL" and item.status in {"WORKING", "PARTIAL", "UNKNOWN", "CANCEL_PENDING", "REPLACE_PENDING"})
                     sellable = min(sellable, max(0, cycle.open_quantity - reserved))
@@ -847,7 +847,7 @@ class ExecutionService:
             intent
             for intent in self.queue.list_all()
             if intent.execution_mode == mode
-            and (intent.status in {"WORKING", "PARTIAL", "UNKNOWN", "CANCEL_PENDING", "REPLACE_PENDING", "SENDING"} or bool(intent.broker_order_id))
+            and (intent.status in {"WORKING", "PARTIAL", "UNKNOWN", "CANCEL_PENDING", "REPLACE_PENDING", "SENDING"} or bool(intent.broker_order_id) or bool(intent.broker_order_ids))
         ]
         # Do not poll DNSE /orders when Viking has nothing to reconcile.
         if not active:
@@ -878,9 +878,23 @@ class ExecutionService:
                     continue
                 if intent.loan_package_id and str(match.get("loanPackageId", "")) != intent.loan_package_id:
                     continue
-                key = "reconcile:" + intent.id + ":" + hashlib.sha256(json.dumps(match, sort_keys=True).encode()).hexdigest()
-                payload = {"kind": "reconcile", "intent": intent.to_dict(), "broker": match}
-                self.database.put_result(key, payload)
+                digest = hashlib.sha256(json.dumps(match, sort_keys=True).encode()).hexdigest()
+                broker_id = str(match.get("orderId", match.get("id", "")))
+                # Deduplicate the current snapshot, not every snapshot ever
+                # seen. A later fee correction may legitimately return to A
+                # after A -> B, and must still have its own durable event.
+                with self.database:
+                    current = self.queue.get(intent.id)
+                    if not current:
+                        continue
+                    progress = (current.details.get("broker_progress") or {}).get(broker_id) or {}
+                    if progress.get("snapshot_digest") == digest:
+                        continue
+                    revision = int(progress.get("snapshot_revision", 0)) + 1
+                    key = f"reconcile:{intent.id}:{broker_id}:{revision}:{digest}"
+                    payload = {"kind": "reconcile", "intent": current.to_dict(), "broker": match,
+                               "snapshot_digest": digest, "snapshot_revision": revision}
+                    self.database.put_result(key, payload)
                 reconciled = self._apply_broker_row(key, payload)
                 if reconciled:
                     updated.append(reconciled)
@@ -946,6 +960,14 @@ class ExecutionService:
                 fee_delta, tax_delta = fee - float(progress.get("fee", 0)), tax - float(progress.get("tax", 0))
                 self._deferred_events = notifications
                 reconciled, delta = self.queue.reconcile_broker(intent, match)
+                if reconciled and payload.get("snapshot_digest"):
+                    details = dict(reconciled.details)
+                    recorded = dict(details.get("broker_progress") or {})
+                    recorded[broker_id] = {**recorded.get(broker_id, {}),
+                        "snapshot_digest": payload["snapshot_digest"],
+                        "snapshot_revision": payload["snapshot_revision"]}
+                    details["broker_progress"] = recorded
+                    reconciled = self.queue._update(intent.id, details=details)
                 if delta:
                     delta_raw = {**match, "price_unit": "VND", "fillQuantity": delta, "averagePrice": (notional - float(progress.get("notional", 0))) / delta, "fee": max(0, fee_delta + tax_delta), "tax": 0}
                     result = BrokerOrderResult(True, str(match.get("orderStatus", "")), order_id=broker_id, raw=delta_raw)

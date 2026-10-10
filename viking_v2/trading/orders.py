@@ -351,11 +351,23 @@ class OrderQueue:
             elif status not in FINAL_STATUSES | {"PARTIAL", "WORKING", "CANCEL_PENDING", "REPLACE_PENDING"}:
                 status = "WORKING"
         reset_broker_costs = status == "WAITING_SETTLEMENT"
+        details = dict(intent.details)
+        aliases = list(intent.broker_order_ids)
+        if reset_broker_costs and result.order_id:
+            aliases = list(dict.fromkeys([*aliases, result.order_id]))
+            progress = dict(details.get("broker_progress") or {})
+            progress[result.order_id] = {
+                "filled": filled_now, "notional": self._broker_notional(fill_body),
+                "fee": broker_fee, "tax": broker_tax, "status": "FILLED",
+            }
+            details["broker_progress"] = progress
         return self._update(
             intent.id,
             status=status,
             result=result.message or result.error,
             broker_order_id="" if reset_broker_costs else result.order_id,
+            broker_order_ids=aliases,
+            details=details,
             request_tag="" if reset_broker_costs else intent.request_tag,
             filled_quantity=filled_total,
             remaining_quantity=remaining,
@@ -417,7 +429,7 @@ class OrderQueue:
         # replacement estimate. It is money spent, never an ignorable excess.
         logical_quantity = max(logical_quantity, filled_total)
         remaining = max(0, logical_quantity - filled_total)
-        progress[broker_id] = {"filled": absolute_filled, "notional": self._broker_notional(broker_order), "fee": broker_fee, "tax": broker_tax, "status": normalized}
+        progress[broker_id] = {**previous, "filled": absolute_filled, "notional": self._broker_notional(broker_order), "fee": broker_fee, "tax": broker_tax, "status": normalized}
         details["broker_progress"] = progress
         changes: dict[str, Any] = {
             "quantity": logical_quantity,
@@ -444,6 +456,7 @@ class OrderQueue:
             changes["broker_order_id"] = "" if reset_broker else (intent.broker_order_id or broker_id)
             changes["request_tag"] = "" if reset_broker else intent.request_tag
             if reset_broker:
+                changes["broker_order_ids"] = list(dict.fromkeys([*intent.broker_order_ids, broker_id]))
                 changes["attempt"] = intent.attempt + 1
                 changes["settlement_waited"] = True
                 changes["broker_filled_quantity"] = 0
@@ -454,7 +467,7 @@ class OrderQueue:
         elif normalized in {"CANCELLED", "REJECTED", "EXPIRED"}:
             changes["working_quantity"] = 0
             changes["status"] = normalized
-        if broker_id != intent.broker_order_id and intent.broker_order_id:
+        if broker_id != intent.broker_order_id and (intent.broker_order_id or broker_id in intent.broker_order_ids):
             # A replaced OLD ID can still report fills; its cancellation must
             # not terminate the NEW active ID.
             for key in ("status", "broker_order_id", "request_tag", "attempt", "working_quantity", "broker_filled_quantity", "broker_notional_logged", "broker_fee_logged", "broker_tax_logged", "handed_off_at"):

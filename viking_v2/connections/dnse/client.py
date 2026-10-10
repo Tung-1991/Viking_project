@@ -465,7 +465,7 @@ class DNSEClient:
         except (BrokerSnapshotError, ValueError, TypeError) as exc:
             raise self._snapshot_error("Invalid/incomplete DNSE order history response", path, status, "INVALID_RESPONSE") from exc
 
-    def get_order_detail(self, order_id: str) -> dict[str, Any] | None:
+    def get_order_detail(self, order_id: str, *, force: bool = False) -> dict[str, Any] | None:
         def load():
             ok, data, _status, _message = self._request(
                 "GET", f"/accounts/{self.account_no}/orders/{order_id}",
@@ -473,7 +473,7 @@ class DNSEClient:
             )
             value = _unwrap(data)
             return {**value, "price_unit": "VND"} if ok and isinstance(value, dict) else None
-        return self._cached(f"order_detail:{order_id}", config.ORDERS_TTL_SECONDS, load)
+        return self._cached(f"order_detail:{order_id}", config.ORDERS_TTL_SECONDS, load, force=force)
 
     def get_executions(self, order_id: str) -> dict[str, Any] | list[Any] | None:
         ok, data, _status, _message = self._request(

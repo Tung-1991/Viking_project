@@ -151,6 +151,7 @@ class StrategyOrderPlanner:
                 }
                 requested_reason = str(decision.event or decision.reason or "").upper()
                 requested_priority = priority.get(requested_reason, 0)
+                broker_reserved = 0
                 for existing in active_sell:
                     existing_reasons = [
                         value for value in str(existing.reason or "").upper().split("+") if value
@@ -164,8 +165,19 @@ class StrategyOrderPlanner:
                     ):
                         replace_sell_ids.append(existing.id)
                         continue
+                    if (
+                        requested_priority > existing_priority
+                        and existing.status.upper() in {"WORKING", "PARTIAL"}
+                    ):
+                        # Keep the accepted order. A stronger exit only needs
+                        # the shares it does not already cover.
+                        broker_reserved += existing.remaining_quantity
+                        continue
                     return PlanResult(None, "SELL_ALREADY_PENDING")
-                if not replace_sell_ids:
+                if broker_reserved:
+                    target = remaining if float(decision.quantity_fraction or 1.0) >= 1 else quantity
+                    quantity = sell_quantity_for_fraction(max(0, target - broker_reserved), 1.0)
+                if quantity <= 0:
                     return PlanResult(None, "SELL_ALREADY_PENDING")
             if (
                 decision.event == "INDICATOR_EXIT"

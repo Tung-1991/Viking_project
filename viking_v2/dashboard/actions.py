@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from dataclasses import replace
 from collections import deque
 import csv
 import json
@@ -32,7 +33,7 @@ from ..connections.dnse.snapshot_health import (
     safe_detail,
 )
 from ..exit_modes import EXIT_MODE_LABELS
-from ..models import OrderIntent, RuntimeConfig, StrategyDecision, TradeCycle
+from ..models import BrokerOrderResult, OrderIntent, RuntimeConfig, StrategyDecision, TradeCycle
 from ..rules.window import RuleSettingsPopup
 from ..services.signal_coordinator import (
     BuyAttempt,
@@ -46,7 +47,10 @@ from ..services.signal_trace import SignalTraceStore, compare_entry
 from ..rules.observations import exit_conditions
 from ..storage import CSVOrderJournal
 from ..trading.market import VN_TZ, market_phase, market_session_clock, normalize_exchange
-from ..trading.portfolio import PortfolioContextBuilder, sell_quantity_for_fraction, validate_quantity
+from ..trading.portfolio import (
+    PortfolioContextBuilder, account_price, available_to_sell, cash_from_balance,
+    position_quantity, sell_quantity_for_fraction, validate_quantity,
+)
 from ..trading.validation import decision_is_fresh, decisions_for_mode, quote_is_fresh
 from .view import (
     COL_GRAY, COL_GREEN, COL_MUTED, COL_PREVIEW_TEXT, COL_RED, COL_SURFACE_2,
@@ -1584,9 +1588,14 @@ class DashboardActionsMixin:
                     return
                 if current_service is not service:
                     return  # A reconfigured service may retry this retained notice.
-                method = (service.notify_technical_buy if notice["category"] == "blocked_buy"
-                          else service.notify_buy_lost)
-                sent = bool(method(**notice["payload"]))
+                if notice["category"] == "closed":
+                    payload = notice["payload"]
+                    sent = bool(service.notify_closed(
+                        cycle=TradeCycle.from_dict(payload["cycle"]), reason=payload["reason"]))
+                else:
+                    method = (service.notify_technical_buy if notice["category"] == "blocked_buy"
+                              else service.notify_buy_lost)
+                    sent = bool(method(**notice["payload"]))
             except Exception as exc:
                 logger = getattr(self, "logger", None)
                 if logger:
@@ -1682,18 +1691,25 @@ class DashboardActionsMixin:
                 return
         elif event != "CLOSED" or cycle.source != "BOT":
             return
-        record = self.rule_state.claim_closed_telegram_signal(cycle.symbol, cycle.id, cycle.execution_mode)
-        if (
-            not record
-            or not self.telegram
-            or not DashboardActionsMixin._telegram_notification_enabled(self, "closed")
-        ):
+        if (cycle.status != "CLOSED" or cycle.open_quantity != 0 or not self.telegram
+                or not DashboardActionsMixin._telegram_notification_enabled(self, "closed")):
             return
-        threading.Thread(
-            target=self.telegram.notify_closed,
-            kwargs={"cycle": cycle, "reason": intent.reason},
-            daemon=True,
-        ).start()
+        # Claiming the BUY record and persisting CLOSED must commit together.
+        # Delivery happens afterwards; a failed send retains the notice across
+        # restarts in the same outbox already used for technical notifications.
+        with self.rule_state.store.database:
+            record = self.rule_state.claim_closed_telegram_signal(cycle.symbol, cycle.id, cycle.execution_mode)
+            if not record:
+                return
+            identity = self.rule_state.queue_telegram_notice(
+                f"TELEGRAM|CLOSED|{cycle.execution_mode}|{cycle.symbol}", cycle.id,
+                {"category": "closed", "symbol": cycle.symbol,
+                 "execution_mode": cycle.execution_mode,
+                 "destination": str(getattr(self.telegram, "chat_id", self.settings.telegram_chat_id)),
+                 "payload": {"cycle": cycle.to_dict(), "reason": intent.reason}},
+            )
+        if identity:
+            DashboardActionsMixin._dispatch_telegram_notice(self, identity, self.telegram)
 
     def _show_order_notice(self, title: str, explanation: str, *, warning: bool = False) -> None:
         """Report manual order failures inline; popup preference changes no guard."""
@@ -2025,6 +2041,121 @@ class DashboardActionsMixin:
         selected.remove(mode_name) if mode_name in selected else selected.add(mode_name)
         self._set_position_modes(action, sorted(selected))
 
+    def _reserve_running_order_replace(self, action: dict[str, Any], quantity: int, price: float) -> None:
+        """Validate fresh broker data, then reserve the edit before its PUT."""
+        local_id = str(action.get("local_id", "") or "")
+        current = self.queue.get(local_id) if local_id else None
+        if current and current.status not in {"WORKING", "PARTIAL"}:
+            raise ValueError("Lệnh đang đối soát hoặc đã kết thúc; chưa gửi sửa.")
+        broker_id = str(action.get("broker_order_id", "") or "")
+        row = self.real.get_order_detail(broker_id, force=True) or {}
+        symbol = str(action.get("symbol", "") or "").upper()
+        side = str(action.get("side", "") or "").upper()
+        broker_filled = int(row.get("fillQuantity", row.get("filledQuantity", 0)) or 0)
+        if (str(row.get("symbol", "")).upper() != symbol
+                or str(row.get("side", "")).upper() not in ({"NB", "BUY"} if side == "BUY" else {"NS", "SELL"})
+                or self.queue._normalized_broker_status(row.get("orderStatus", row.get("status", ""))) not in {"WORKING", "PARTIAL"}):
+            raise ValueError("Chưa xác minh được lệnh DNSE đang chạy; chưa gửi sửa.")
+        if current and (current.broker_order_id != broker_id
+                        or broker_filled != current.broker_filled_quantity):
+            raise ValueError("Lệnh vừa thay đổi/khớp thêm; chờ đối soát rồi sửa lại.")
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError("Cần giá LO hợp lệ để sửa lệnh DNSE.")
+        positions = self.real.get_positions(force=True)
+        candidate = (replace(current, quantity=current.filled_quantity + quantity, limit_price=price, order_type="LO")
+                     if current else OrderIntent.create(symbol, side, quantity, "LO", limit_price=price,
+                                                       execution_mode="REAL"))
+        package_id = str(row.get("loanPackageId", "") or "")
+        if not package_id or (current and current.loan_package_id and package_id != current.loan_package_id):
+            raise ValueError("Gói giao dịch không khớp; chưa gửi sửa.")
+        balance, quote = None, {}
+        if side == "BUY":
+            package = self.real.cash_package(symbol)
+            if str(package["id"]) != package_id:
+                raise ValueError("Lệnh không thuộc gói tiền mặt đã xác minh; chưa gửi sửa.")
+            fee_rate = max(0.0, float(package.get("brokerFirmBuyingFeeRate", 0) or 0))
+            old_price = account_price(row, row.get("price", 0))
+            old_quantity = max(0, int(row.get("quantity", 0) or 0) - broker_filled)
+            if old_price <= 0:
+                raise ValueError("Chưa xác minh được tiền giữ chỗ của lệnh cũ; chưa gửi sửa.")
+            old_cost = old_quantity * old_price * 1000 * (1 + fee_rate)
+            original_balance = self.real.get_balance(force=True)
+            if not original_balance:
+                raise ValueError("Chưa có snapshot tiền khả dụng hợp lệ; chưa gửi sửa.")
+            # availableCash already reserves the accepted order. Credit only
+            # its verified outstanding amount when evaluating the replacement.
+            balance = {**original_balance, "stock": {**(original_balance.get("stock") or {}),
+                "availableCash": cash_from_balance(original_balance) + old_cost}}
+            quote = {"buy_fee_rate": fee_rate}
+            power = self.real.get_buying_power(symbol, str(package["id"]), price)
+            additional = max(0.0, quantity * price * 1000 * (1 + fee_rate) - old_cost)
+            if additional > int(power["qmaxBuy"]) * price * 1000 * (1 + fee_rate) + .01:
+                raise ValueError("Không đủ sức mua tiền mặt cho phần tăng thêm; chưa gửi sửa.")
+        with self.queue.store.database:
+            latest = self.queue.get(local_id) if local_id else None
+            if current and (not latest or latest.to_dict() != current.to_dict()):
+                raise ValueError("Lệnh vừa thay đổi; chờ đối soát rồi sửa lại.")
+            if side == "BUY":
+                if any(item.id != local_id and item.execution_mode == "REAL" and item.side == "BUY"
+                       and item.status in {"UNKNOWN", "REPLACE_PENDING", "SENDING"}
+                       for item in self.queue.list_all()):
+                    raise ValueError("Chờ đối soát BUY chưa rõ kết quả; chưa gửi sửa.")
+                if candidate.source == "BOT":
+                    blocked = self._check_bot_entry_limits(candidate, quote, balance=balance,
+                                                          positions=positions, replacement=True)
+                    blocked = {
+                        "PRIORITY_CAPITAL_LIMIT": "Khối lượng/giá sửa vượt vốn Priority.",
+                        "PORTFOLIO_EXPOSURE_LIMIT": "Khối lượng/giá sửa vượt vốn phân bổ.",
+                        "LOCKED_AFTER_LOSSES": "Đang khóa mua sau thua lỗ; chưa gửi sửa.",
+                        "DECISION_POLL_UNAVAILABLE": "Chờ dữ liệu quyết định mới; chưa gửi sửa.",
+                        "FILL_ACCOUNTING_RECONCILE_REQUIRED": "Chờ đối soát số cổ đã khớp; chưa gửi sửa.",
+                    }.get(blocked, blocked)
+                else:
+                    feedback = self._manual_buy_capital_feedback(symbol, "REAL", quantity, "LO", price,
+                        tick=quote, balance=balance, positions=positions, exclude_intent_id=local_id,
+                        fee_rate=quote["buy_fee_rate"])
+                    blocked = str(feedback.get("reason", ""))
+                pending_cash = 0.0
+                for item in self.queue.list_all():
+                    if (item.id == local_id or item.execution_mode != "REAL" or item.side != "BUY"
+                            or item.status in {"FILLED", "CANCELLED", "EXPIRED", "FAILED", "REJECTED"}
+                            or item.broker_order_id or item.handed_off_at):
+                        continue
+                    reserve_price = item.limit_price or float(item.details.get("reservation_price", 0))
+                    if reserve_price <= 0:
+                        raise ValueError(f"Chưa có giá giữ vốn của {item.symbol}; chưa gửi sửa.")
+                    pending_cash += item.remaining_quantity * reserve_price * 1000 * (1 + quote["buy_fee_rate"])
+                needed = quantity * price * 1000 * (1 + quote["buy_fee_rate"])
+                if blocked:
+                    raise ValueError(str(blocked))
+                if needed > cash_from_balance(balance) - pending_cash + .01:
+                    raise ValueError("Không đủ tiền khả dụng gồm phí và lệnh chờ; chưa gửi sửa.")
+                allocation = self.settings.priority_allocations.get(symbol, {})
+                if self.settings.priority_capital_enabled and symbol in self.settings.priority_symbols:
+                    progress = (current.details.get("broker_progress") or {}) if current else {}
+                    filled_cost = sum(float(part.get("notional", 0)) + float(part.get("fee", 0))
+                                      + float(part.get("tax", 0)) for part in progress.values())
+                    if current and current.broker_order_id not in progress:
+                        filled_cost += current.broker_notional_logged + current.broker_fee_logged + current.broker_tax_logged
+                    per_order_limit = float(allocation.get("limit_vnd", 0)) * float(allocation.get("use_pct", 100)) / 100
+                    if filled_cost + needed > per_order_limit + .01:
+                        raise ValueError("Phần đã khớp và phần sửa vượt hạn mức mỗi lệnh Priority.")
+            else:
+                rows = [pos for pos in positions if not package_id or str(pos.get("loanPackageId", "")) == package_id]
+                cycle = self.trade_state.get(current.trade_id) if current and current.trade_id else None
+                owned = cycle.open_quantity if cycle else sum(position_quantity(pos) for pos in rows
+                    if str(pos.get("symbol", "")).upper() == symbol)
+                reserved = sum(max(item.remaining_quantity, int((item.details.get("requested_replace") or {}).get("quantity", 0)) - item.filled_quantity)
+                    for item in self.queue.list_all() if item.id != local_id and item.symbol == symbol
+                    and item.execution_mode == "REAL" and item.side == "SELL"
+                    and item.status not in {"FILLED", "CANCELLED", "EXPIRED", "FAILED", "REJECTED"}
+                    and (not package_id or not item.loan_package_id or item.loan_package_id == package_id))
+                if quantity > min(available_to_sell(rows, symbol), max(0, owned - reserved)):
+                    raise ValueError("Khối lượng sửa vượt số cổ bán được sau khi giữ lệnh SELL khác.")
+            if local_id:
+                self.queue.mark_broker_replaced(local_id, quantity=candidate.quantity, broker_quantity=quantity,
+                    limit_price=price, result="Yêu cầu sửa đang gửi DNSE")
+
     def _edit_running_order(self, action: dict[str, Any]) -> None:
         local_id = str(action.get("local_id", "") or "")
         item = self.queue.get(local_id) if local_id else None
@@ -2250,13 +2381,19 @@ class DashboardActionsMixin:
                 status.configure(text="Đang gửi yêu cầu sửa DNSE…", text_color=COL_WARN)
 
                 def replace_broker() -> None:
-                    current_item = self.queue.get(local_id) if local_id else None
-                    if current_item and current_item.status in {"CANCEL_PENDING", "REPLACE_PENDING", "UNKNOWN"}:
+                    try:
+                        self._reserve_running_order_replace(action, quantity, price)
+                    except Exception as exc:
+                        explanation = safe_detail(str(exc))
+                        self._post_ui(lambda: status.configure(text=explanation, text_color=COL_RED))
                         return
+                    current_item = self.queue.get(local_id) if local_id else None
                     logical_quantity = (current_item.filled_quantity if current_item else 0) + quantity
-                    if local_id:
-                        self.queue.mark_broker_replaced(local_id, quantity=logical_quantity, broker_quantity=quantity, limit_price=price, result="Yêu cầu sửa đang gửi DNSE")
-                    result = self.real.replace_order(broker_order_id, price=price, quantity=quantity)
+                    try:
+                        result = self.real.replace_order(broker_order_id, price=price, quantity=quantity)
+                    except Exception:
+                        result = BrokerOrderResult(False, "UNKNOWN", error="ORDER_STATUS_UNKNOWN",
+                            message="Chưa rõ kết quả sửa DNSE; giữ lệnh để đối soát.")
                     uncertain = result.status == "UNKNOWN" or result.error == "ORDER_STATUS_UNKNOWN"
                     if (result.ok or uncertain) and local_id:
                         self.queue.mark_broker_replaced(
@@ -3120,7 +3257,8 @@ class DashboardActionsMixin:
         )
         return str(feedback.get("hint", "")) if feedback.get("reason") else ""
 
-    def _check_bot_entry_limits(self, intent: OrderIntent, quote: dict[str, Any]) -> str:
+    def _check_bot_entry_limits(self, intent: OrderIntent, quote: dict[str, Any], *,
+                              balance=None, positions=None, replacement: bool = False) -> str:
         """Final check of the new policies, without changing MANUAL or exits."""
         params = self.settings.rule_parameters
         if getattr(self, "_decision_poll_fault", False):
@@ -3136,10 +3274,11 @@ class DashboardActionsMixin:
         ):
             return "LOCKED_AFTER_LOSSES"
         broker = self.paper if intent.execution_mode == "PAPER" else self.real
-        if intent.execution_mode == "REAL":
-            balance, positions = broker.get_balance(force=True), broker.get_positions(force=True)
-        else:
-            balance, positions = broker.get_balance(), broker.get_positions()
+        if balance is None or positions is None:
+            if intent.execution_mode == "REAL":
+                balance, positions = broker.get_balance(force=True), broker.get_positions(force=True)
+            else:
+                balance, positions = broker.get_balance(), broker.get_positions()
         from ..rules.business import StaticRuleParameters
         policy = StaticRuleParameters.from_dict(params)
         exposure = (self.settings.market_phase_override_exposure_pct / 100.0
@@ -3150,12 +3289,12 @@ class DashboardActionsMixin:
         context = self._build_entry_limits(intent.symbol, intent.execution_mode, quote,
                                          balance, positions, exposure, intent.id,
                                          fee_rate=quote.get("buy_fee_rate"))
-        if not context["entry_orders_available"]:
+        if not replacement and not context["entry_orders_available"]:
             return "MAX_SYMBOL_ORDERS"
         active_cycle = self.trade_state.active_for(intent.symbol, intent.execution_mode)
-        if active_cycle and active_cycle.open_quantity > 0 and not context["scale_in_allowed"]:
+        if not replacement and active_cycle and active_cycle.open_quantity > 0 and not context["scale_in_allowed"]:
             return "POSITION_NOT_READY_FOR_ADD"
-        if not context["entry_slot_available"]:
+        if not replacement and not context["entry_slot_available"]:
             return "MAX_POSITIONS"
         priority = bool(context.get("priority_capital"))
         price = intent.limit_price if intent.order_type == "LO" else _price_unit(

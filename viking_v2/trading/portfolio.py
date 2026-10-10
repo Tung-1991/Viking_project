@@ -447,10 +447,12 @@ class PortfolioContextBuilder:
         }
         fee_rate = max(0.0, float(self.buy_fee_rate() or 0.0))
         for item in pending_buys:
-            reservation_quantity = item.remaining_quantity + min(
+            requested = item.details.get("requested_replace") or {}
+            reservation_quantity = max(item.remaining_quantity, int(requested.get("quantity", 0)) - item.filled_quantity) + min(
                 item.filled_quantity, int(item.details.get("unaccounted_fill_quantity", 0) or 0),
             )
-            price = item.limit_price or float(item.details.get("reservation_price", 0) or 0)
+            price = max(item.limit_price or float(item.details.get("reservation_price", 0) or 0),
+                        float(requested.get("price", 0) or 0))
             if not price and item.symbol == symbol:
                 price = float(tick.get("ask", tick.get("price", 0.0)) or 0.0)
             if price:

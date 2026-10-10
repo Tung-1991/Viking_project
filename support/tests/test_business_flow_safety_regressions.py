@@ -328,7 +328,13 @@ def test_replace_request_outcome_is_recoverable_in_actual_ui_handler(tmp_path, m
     monkeypatch.setattr(actions_module.tk, 'BooleanVar', lambda **kwargs: SimpleNamespace(
         get=lambda: kwargs['value'], set=lambda _value: None))
 
-    broker = OfflineBroker()
+    # Replacement now validates fresh account/order data before the gateway.
+    # Keep the outcome assertions below, and supply a valid funded cash order.
+    broker = OfflineCashBroker(90e6)
+    broker.orders = [dict(id='B1', symbol='FPT', side='NB', orderStatus='New',
+        quantity=100, price=100000, fillQuantity=0, price_unit='VND', loanPackageId=1)]
+    broker.get_order_detail = lambda order_id, **_kwargs: next(
+        (deepcopy(row) for row in broker.orders if row['id'] == order_id), None)
     service, queue, trades, rules = engine(tmp_path, broker)
     app = DashboardActionsMixin()
     app.queue, app.trade_state, app.rule_state, app.real = queue, trades, rules, broker
