@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 import customtkinter as ctk
 
-from ..config import AppSettings, save_settings
+from ..config import AppSettings, account_root, load_settings, save_settings
 from ..branding import APP_NAME, window_title
 from ..dashboard.windows import FONT_KEY, FONT_VALUE, PALETTE, _HoverHint, _window
 from .business import StaticRuleParameters
@@ -555,17 +555,6 @@ class RuleSettingsPopup:
             buy_volume, "Tối thiểu (%)", self.params.buy_volume_min_ratio * 100.0,
             "100% nghĩa volume hiện tại phải ít nhất bằng trung bình các phiên trước. Nếu chưa đủ lịch sử, BUY bị chặn rõ lý do.",
         )
-        trace = self._card(body, "TRACE TÍN HIỆU", "Ghi mẫu định kỳ mọi mã, kể cả không đạt ENTRY. Không đổi cách tính hay thời điểm đặt lệnh.", 3, 0, span=2)
-        self.signal_trace_enabled = self._switch(
-            trace, "LƯU TRACE", self.settings.signal_trace_enabled,
-            "Mặc định ON, 2 phút/lần từ 14:00–14:30 giờ Việt Nam. Có cả mẫu không đạt tín hiệu/giá lỗi.\n"
-            "Lịch sử → TRACE để xem và xuất Excel. Lưu riêng 30 ngày; không gửi Telegram và không tạo lệnh.\n"
-            "App phải đang mở. Restart không ghi trùng mẫu, không bù mẫu đã bỏ lỡ.",
-        )
-        self.signal_trace_interval = self._field(trace, "Nhịp ghi (phút)", self.settings.signal_trace_interval_minutes, "1–30 phút; độc lập nhịp EMA/RSI.")
-        self.signal_trace_start = self._field(trace, "Từ giờ", self.settings.signal_trace_start, "HH:MM, giờ Việt Nam.")
-        self.signal_trace_end = self._field(trace, "Đến giờ", self.settings.signal_trace_end, "HH:MM, bao gồm phút cuối của khung đã chọn; không ghi ngày nghỉ.")
-
     def _phase3(self, frame: ctk.CTkFrame) -> None:
         body = self._content(frame)
         self._summary(
@@ -606,38 +595,43 @@ class RuleSettingsPopup:
             "Một vị thế có nhiều lần khớp vẫn chỉ tính một lần lỗ. Có lãi thì reset chuỗi đếm, không mở khóa tay.")
         self.loss_lock_hours = self._field(
             stops,
-            "Tự mở (giờ)",
+            "Khóa trong (giờ)",
             self.params.loss_lock_hours,
-            "Chế độ TỰ MỞ: BOT được mua lại sau số giờ này, tính từ lần đóng lỗ đủ ngưỡng.\n"
-            "Có tính đêm và ngày nghỉ. Chọn MỞ TAY thì không dùng thời gian này.",
+            "THEO GIỜ: BOT được mua lại sau số giờ này, tính từ lần đóng lỗ đủ ngưỡng.\n"
+            "Có tính đêm và ngày nghỉ. KHÓA HẲN giữ khóa đến khi mở tay, không dùng số giờ.",
         )
         lock_mode_row = ctk.CTkFrame(stops, fg_color="transparent")
         lock_mode_row.pack(fill="x", padx=12, pady=6)
         lock_mode_row.grid_columnconfigure(0, weight=1)
         self.loss_block = tk.BooleanVar(value=self.params.loss_lock_mode == "BLOCK")
         self.loss_lock_mode_selector = ctk.CTkSegmentedButton(
-            lock_mode_row, values=["TỰ MỞ", "MỞ TAY"], height=28,
+            lock_mode_row, values=["THEO GIỜ", "KHÓA HẲN"], height=28,
             font=("Segoe UI", 12, "bold"), selected_color=self.BLUE,
             selected_hover_color="#245C92", unselected_color="#3A3F47",
             unselected_hover_color="#4B515B",
-            command=lambda value: self.loss_block.set(value == "MỞ TAY"),
+            command=lambda value: self.loss_block.set(value == "KHÓA HẲN"),
         )
         self.loss_lock_mode_selector.grid(row=0, column=0, sticky="ew", padx=(0, 5))
         self._hint_icon(lock_mode_row,
-            "TỰ MỞ: hết số giờ đã đặt thì BOT được mua lại.\n"
-            "MỞ TAY: khóa đến khi chọn mã và bấm MỞ KHÓA, kể cả sau khi khởi động lại.\n"
-            "Chọn TỰ MỞ không xóa khóa tay đã có; các mã đó vẫn phải mở tay."
+            "THEO GIỜ: hết số giờ đã đặt thì BOT được mua lại.\n"
+            "KHÓA HẲN: khóa đến khi chọn mã và bấm MỞ KHÓA, kể cả sau khi khởi động lại.\n"
+            "Đổi sang THEO GIỜ không xóa khóa hẳn đã có; các mã đó vẫn phải mở tay."
         ).grid(row=0, column=1)
 
         def refresh_lock_hours(*_args: Any) -> None:
             blocked = self.loss_block.get()
             self.loss_lock_hours.configure(state="disabled" if blocked else "normal")
-            self.loss_lock_mode_selector.set("MỞ TAY" if blocked else "TỰ MỞ")
+            self.loss_lock_mode_selector.set("KHÓA HẲN" if blocked else "THEO GIỜ")
+            if blocked:
+                self.loss_lock_hours.master.pack_forget()
+            else:
+                self.loss_lock_hours.master.pack(fill="x", padx=12, pady=3, before=lock_mode_row)
 
         self._setting_traces.append((self.loss_block, self.loss_block.trace_add("write", refresh_lock_hours)))
         refresh_lock_hours()
         if self.trade_state:
             row = ctk.CTkFrame(stops, fg_color="transparent")
+            self.loss_unlock_row = row
             row.pack(fill="x", padx=12, pady=6)
             row.grid_columnconfigure(1, weight=1)
             self.block_book = tk.StringVar(value="PAPER" if self.settings.paper_mode else "REAL")
@@ -1181,6 +1175,12 @@ class RuleSettingsPopup:
             state="normal" if values else "disabled",
             text="MỞ KHÓA MÃ" if values else "CHƯA CÓ MÃ KHÓA TAY",
         )
+        # Only show the book/symbol selector when there is a permanent lock
+        # to manage. Keep both books reachable even if the selected one is empty.
+        if self.trade_state.loss_blocks("REAL") or self.trade_state.loss_blocks("PAPER"):
+            self.loss_unlock_row.pack(fill="x", padx=12, pady=6)
+        else:
+            self.loss_unlock_row.pack_forget()
 
     def _unlock_block(self) -> None:
         mode, symbol = self.block_book.get(), self.block_symbol.get()
@@ -1227,7 +1227,8 @@ class RuleSettingsPopup:
             if max_positions < len(set(self.settings.priority_symbols)):
                 raise ValueError("Tối đa mã BOT phải đủ số mã Priority đã lưu")
             loss_lock = int(self._number(self.loss_lock, "Lỗ liên tiếp"))
-            loss_lock_hours = int(self._number(self.loss_lock_hours, "Tự mở (giờ)"))
+            loss_lock_hours = (self.params.loss_lock_hours if self.loss_block.get()
+                               else int(self._number(self.loss_lock_hours, "Khóa trong (giờ)")))
             manual_sell_pause = int(self._number(
                 self.manual_sell_pause, "Dừng BUY sau bán tay",
             ))
@@ -1313,16 +1314,6 @@ class RuleSettingsPopup:
             if self.buy_confirmation_enabled.get() and self.signal_mode.get() != "REALTIME":
                 raise ValueError("Xác nhận BUY theo phút cần CÁCH ĐỌC NẾN = REALTIME")
             window_start = self.buy_window_start.get().strip()
-            trace_interval = self._number(self.signal_trace_interval, "Nhịp TRACE")
-            if not trace_interval.is_integer():
-                raise ValueError("Nhịp TRACE phải là số phút nguyên")
-            trace_interval = int(trace_interval)
-            if not 1 <= trace_interval <= 30:
-                raise ValueError("Nhịp TRACE phải từ 1 đến 30 phút")
-            trace_start = datetime.strptime(self.signal_trace_start.get().strip(), "%H:%M").strftime("%H:%M")
-            trace_end = datetime.strptime(self.signal_trace_end.get().strip(), "%H:%M").strftime("%H:%M")
-            if trace_start > trace_end:
-                raise ValueError("Giờ TRACE kết thúc phải từ giờ bắt đầu trở đi")
             validate_buy_window(window_start, "15:00")
             if self.buy_window_enabled.get() and self.signal_mode.get() != "REALTIME":
                 raise ValueError("Khung giờ mua cần CÁCH ĐỌC NẾN = REALTIME")
@@ -1360,9 +1351,6 @@ class RuleSettingsPopup:
             self.params.buy_window_start = window_start
             self.settings.signal_mode = self.signal_mode.get()
             self.settings.realtime_indicator_interval = self.realtime_indicator_interval.get()
-            self.settings.signal_trace_enabled = bool(self.signal_trace_enabled.get())
-            self.settings.signal_trace_interval_minutes = trace_interval
-            self.settings.signal_trace_start, self.settings.signal_trace_end = trace_start, trace_end
             self.params.max_positions = max_positions
             self.params.no_compound_enabled = bool(self.no_compound.get())
             self.params.force_min_lot_enabled = bool(self.force_min_lot.get())
@@ -1416,6 +1404,13 @@ class RuleSettingsPopup:
             )
             self.settings.corporate_actions = [dict(item) for item in self._corporate_draft]
             self.settings.rule_parameters = self.params.to_dict()
+            # Recording has one owner: History. A RULE popup may have been
+            # opened before History saved a new schedule, so retain that schedule.
+            if (account_root(self.account_id) / "settings.json").exists():
+                recording = load_settings(self.account_id)
+                for key in ("signal_trace_enabled", "signal_trace_interval_minutes",
+                            "signal_trace_start", "signal_trace_end"):
+                    setattr(self.settings, key, getattr(recording, key))
             save_settings(self.settings, self.account_id)
             self._saved_execution_preview = self._execution_preview_values()
             self._saved_execution_flags = {"SL": self.bot_sl_enabled.get(), **{key: value.get() for key, value in self.bot_em_vars.items()}}

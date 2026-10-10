@@ -43,14 +43,16 @@ def _block(trades, symbol, mode):
 @pytest.mark.parametrize("state", [True, False])
 def test_loss_modes_construct_sync_and_save_without_changing_thresholds(make_rule, mode, state):
     rule = make_rule(mode=mode, state=state)
-    assert rule.loss_lock_mode_selector.get() == ("MỞ TAY" if mode == "BLOCK" else "TỰ MỞ")
+    assert rule.loss_lock_mode_selector.get() == ("KHÓA HẲN" if mode == "BLOCK" else "THEO GIỜ")
     assert rule.loss_lock_hours.cget("state") == ("disabled" if mode == "BLOCK" else "normal")
+    assert rule.loss_lock_hours.master.winfo_manager() == ("" if mode == "BLOCK" else "pack")
 
-    for choice, expected in [("MỞ TAY", "BLOCK"), ("TỰ MỞ", "TIMED")]:
+    for choice, expected in [("KHÓA HẲN", "BLOCK"), ("THEO GIỜ", "TIMED")]:
         # Invoke the native segmented control's user callback, not only the BooleanVar.
         rule.loss_lock_mode_selector.set(choice, from_button_callback=True)
         assert rule.loss_block.get() == (expected == "BLOCK")
         assert rule.loss_lock_hours.cget("state") == ("disabled" if expected == "BLOCK" else "normal")
+        assert rule.loss_lock_hours.master.winfo_manager() == ("" if expected == "BLOCK" else "pack")
         assert rule.loss_lock_hours.get() == "24"
         rule.save()
         assert "ĐÃ LƯU" in rule.status.cget("text")
@@ -60,7 +62,7 @@ def test_loss_modes_construct_sync_and_save_without_changing_thresholds(make_rul
         assert saved.rule_parameters["loss_lock_hours"] == 24
 
     rule.loss_block.set(True)
-    assert rule.loss_lock_mode_selector.get() == "MỞ TAY"
+    assert rule.loss_lock_mode_selector.get() == "KHÓA HẲN"
 
 
 def test_empty_book_and_existing_manual_locks_remain_clear_in_timed_mode(make_rule, monkeypatch):
@@ -70,6 +72,7 @@ def test_empty_book_and_existing_manual_locks_remain_clear_in_timed_mode(make_ru
     assert rule.block_symbol.cget("state") == "disabled"
     assert rule.block_unlock.cget("text") == "CHƯA CÓ MÃ KHÓA TAY"
     assert rule.block_unlock.cget("state") == "disabled"
+    assert rule.loss_unlock_row.winfo_manager() == ""
     monkeypatch.setattr("viking_v2.rules.window.messagebox.askyesno",
                         lambda *_a, **_kw: pytest.fail("Empty book must not prompt"))
     rule._unlock_block()
@@ -82,6 +85,7 @@ def test_empty_book_and_existing_manual_locks_remain_clear_in_timed_mode(make_ru
     assert rule.block_symbol.cget("state") == "normal"
     assert rule.block_unlock.cget("text") == "MỞ KHÓA MÃ"
     assert rule.block_unlock.cget("state") == "normal"
+    assert rule.loss_unlock_row.winfo_manager() == "pack"
     rule.block_symbol.set("SSI")
     rule._refresh_blocks()
     assert rule.block_symbol.get() == "SSI"
@@ -94,6 +98,12 @@ def test_empty_book_and_existing_manual_locks_remain_clear_in_timed_mode(make_ru
     assert rule.block_symbol.get() == "MSN"
     assert rule.block_symbol.cget("values") == ["MSN"]
 
+    # The other book's locks keep its selector reachable when this book is empty.
+    trades.unlock_loss_block("MSN", "REAL")
+    rule._refresh_blocks()
+    assert rule.block_unlock.cget("state") == "disabled"
+    assert rule.loss_unlock_row.winfo_manager() == "pack"
+
 
 def test_timed_cooldown_is_not_mislabeled_as_manual_lock(make_rule):
     rule = make_rule()
@@ -104,6 +114,23 @@ def test_timed_cooldown_is_not_mislabeled_as_manual_lock(make_rule):
     rule._refresh_blocks()
     assert rule.block_symbol.get() == "Không có mã"
     assert rule.block_unlock.cget("state") == "disabled"
+    assert rule.loss_unlock_row.winfo_manager() == ""
+
+
+def test_permanent_mode_does_not_validate_hidden_duration(make_rule):
+    rule = make_rule()
+    rule.loss_lock_hours.delete(0, "end")
+    rule.loss_lock_hours.insert(0, "invalid")
+    rule.loss_lock_mode_selector.set("KHÓA HẲN", from_button_callback=True)
+    rule.save()
+    saved = load_settings(rule.account_id)
+    assert "ĐÃ LƯU" in rule.status.cget("text")
+    assert saved.rule_parameters["loss_lock_mode"] == "BLOCK"
+    assert saved.rule_parameters["loss_lock_hours"] == 24
+    rule.loss_lock_mode_selector.set("THEO GIỜ", from_button_callback=True)
+    rule.save()
+    assert "KHÔNG THỂ LƯU" in rule.status.cget("text")
+    assert load_settings(rule.account_id).rule_parameters["loss_lock_mode"] == "BLOCK"
 
 
 def test_unlock_cancel_success_and_stale_book_selection(make_rule, monkeypatch):
@@ -168,15 +195,15 @@ def test_loss_card_controls_stay_inside_card_at_small_width_and_dpi(make_rule, u
         rows = [child for child in card.winfo_children() if isinstance(child, ctk.CTkFrame)]
         assert len(rows) == 5
         for row in rows:
+            if not row.winfo_manager():
+                continue
             assert row.winfo_x() + row.winfo_width() <= card.winfo_width() + 2
             for child in row.winfo_children():
                 if isinstance(child, (ctk.CTkLabel, ctk.CTkEntry, ctk.CTkOptionMenu,
                                       ctk.CTkButton, ctk.CTkSegmentedButton)):
                     assert child.winfo_x() >= -2
                     assert child.winfo_x() + child.winfo_width() <= row.winfo_width() + 2
-        empty_label = rule.block_symbol._text_label
-        assert empty_label.winfo_reqwidth() <= empty_label.winfo_width() + 2
-        assert rule.block_unlock._text_label.winfo_reqwidth() <= rule.block_unlock.winfo_width()
+        assert rule.loss_unlock_row.winfo_manager() == ""
     finally:
         ctk.set_widget_scaling(1.0)
         ctk.set_window_scaling(1.0)

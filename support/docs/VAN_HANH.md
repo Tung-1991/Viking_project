@@ -103,6 +103,9 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Không dùng số nền phiên trước hay giá chờ cũ để BUY/E; SL/TP/PROTECT vẫn xét giá mới.
   Giờ cắt EMA là mốc hoàn tất mẫu, không đổi theo mỗi lần poll. TRACE lưu riêng giá/mốc mẫu và giá tick mới.
   Lệnh bị chặn vốn/slot và tín hiệu chờ có quy tắc riêng; xem lý do, không coi Telegram là xác nhận đã mua.
+- Khóa sau lỗ có hai chế độ: **THEO GIỜ** tự hết sau số giờ đã đặt;
+  **KHÓA HẲN** giữ đến khi mở tay. Ô giờ chỉ hiện ở THEO GIỜ.
+  Bộ chọn REAL/PAPER và mã chỉ hiện khi có khóa hẳn để mở, không phải chế độ khóa thứ ba.
 - BLOCK phải **MỞ BLOCK** đúng mã/sổ. ↻ reset thống kê/khóa chờ, không mở BLOCK,
   không xóa vị thế. THEO NGÀY chốt đúng giờ GMT+7; CỘNG DỒN từ lần ↻ gần nhất.
 - Telegram: GOM chờ gom tin BUY, không chờ đặt lệnh; GIÃN hạn chế tin mới cùng mã/loại.
@@ -179,6 +182,8 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 
 - **LỊCH SỬ → TÍN HIỆU → ⚙ GHI TÍN HIỆU**: mặc định ON, 2 phút/lần, 14:00–14:30 giờ Việt Nam.
   Có thể tắt, chỉnh nhịp 1–30 phút và giờ bắt đầu/kết thúc. Độc lập nhịp EMA/RSI, không tạo lệnh hay tin Telegram.
+  Đây là nơi duy nhất chỉnh lịch TRACE. Lưu RULE giữ lịch đã chỉnh tại Lịch sử,
+  kể cả khi cửa sổ RULE được mở trước đó.
 - App phải đang mở. Ghi tất cả mã theo dõi, kể cả không có ENTRY, giá lỗi hay daemon chưa sẵn sàng.
   Mỗi mốc chỉ ghi một lần/mã/sổ; restart không ghi trùng, không bù các mẫu quá khứ đã bỏ lỡ.
   Giờ ghi thực tế và mốc lấy mẫu được lưu riêng. Bao gồm mẫu 14:30; ngày nghỉ không ghi.

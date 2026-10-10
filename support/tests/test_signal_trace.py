@@ -183,22 +183,47 @@ def test_capture_is_in_the_same_symbol_tree_as_events_and_exportable(ui_root, tm
         popup.close()
 
 
-def test_trace_rule_fields_save_without_modifying_indicator_interval(ui_root, tmp_path, monkeypatch):
+@pytest.mark.parametrize("save_from_history", [False, True])
+def test_trace_settings_have_one_owner_and_rule_save_preserves_them(ui_root, tmp_path, monkeypatch,
+                                                                 save_from_history):
     from viking_v2 import config
+    from viking_v2.dashboard.windows import SignalRecordingPopup
     from viking_v2.rules.window import RuleSettingsPopup
     monkeypatch.setattr(config, "ACCOUNTS_ROOT", tmp_path)
     initial = settings(signal_trace_enabled=False, realtime_indicator_interval="TICK")
+    config.save_settings(initial, "TRACE_TEST")
     popup = RuleSettingsPopup(ui_root, initial, "TRACE_TEST", lambda: None)
+    form = None
     try:
-        popup.signal_trace_enabled.set(True)
-        popup.signal_trace_interval.delete(0, "end")
-        popup.signal_trace_interval.insert(0, "3")
+        assert not hasattr(popup, "signal_trace_enabled")
+        assert not hasattr(popup, "signal_trace_interval")
+        if save_from_history:
+            def save_recording(options):
+                updated = config.load_settings("TRACE_TEST")
+                for key, value in options.items():
+                    setattr(updated, key, value)
+                config.save_settings(updated, "TRACE_TEST")
+
+            form = SignalRecordingPopup(ui_root, config.load_settings("TRACE_TEST"), save_recording)
+            form.enabled.set(True)
+            for key, value in (("interval", "3"), ("start", "14:05"), ("end", "14:25")):
+                form.entries[key].delete(0, "end")
+                form.entries[key].insert(0, value)
+            form.save()
+            # The existing RULE popup still holds the old settings object.
+            assert initial.signal_trace_enabled is False
+            popup.hide()
+            popup.show()
         popup.save()
         saved = config.load_settings("TRACE_TEST")
-        assert saved.signal_trace_enabled and saved.signal_trace_interval_minutes == 3
-        assert saved.signal_trace_start == "14:00" and saved.signal_trace_end == "14:30"
+        assert saved.signal_trace_enabled is save_from_history
+        assert saved.signal_trace_interval_minutes == (3 if save_from_history else 2)
+        assert saved.signal_trace_start == ("14:05" if save_from_history else "14:00")
+        assert saved.signal_trace_end == ("14:25" if save_from_history else "14:30")
         assert saved.realtime_indicator_interval == "TICK"
     finally:
+        if form and form.top.winfo_exists():
+            form.top.destroy()
         popup._close()
 
 
