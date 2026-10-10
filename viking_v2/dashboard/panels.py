@@ -618,7 +618,9 @@ class DashboardPanelsMixin:
         _HoverHint(
             self.running_legend_button,
             "Bấm xem chú thích màu và trạng thái lệnh.\n"
-            "Màu chờ xử lý ưu tiên hơn màu lãi/lỗ; CHỜ KHỚP chưa phải đã mua.",
+            "Bấm mũi tên bên vị thế để bung/gọn lệnh đang chờ.\n"
+            "CHỜ KHỚP chưa mua được; CHỜ VỀ đã khớp nhưng chưa bán được.\n"
+            "Nút ✖ trên lệnh con yêu cầu hủy phần chưa khớp.",
             placement="inside",
         )
         self.info_button = ctk.CTkButton(
@@ -690,7 +692,7 @@ class DashboardPanelsMixin:
             frame = self.tabs.add(mode)
             frame.grid_columnconfigure(0, weight=1)
             frame.grid_rowconfigure(0, weight=1)
-            tree = ttk.Treeview(frame, show="headings", selectmode="extended", style="Running.Treeview")
+            tree = ttk.Treeview(frame, show="tree headings", selectmode="extended", style="Running.Treeview")
             tree.tag_configure("buy_row", background="#193524", foreground=COL_TEXT)
             tree.tag_configure("sell_row", background="#3A2024", foreground=COL_TEXT)
             tree.tag_configure("pending_order", background="#42351B", foreground="#FDE68A")

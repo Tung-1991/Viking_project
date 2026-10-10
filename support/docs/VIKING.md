@@ -71,6 +71,11 @@ Preset VA 50 triệu: MSN/CTS/HDB 15 triệu, IDC 5 triệu, 100%, MAX=1; IDC kh
 - Bảng vị thế chọn decision đúng sổ/trade còn mới, TP theo giá trigger thật (không theo
   PNL sau phí); vị thế chưa nhận quản lý không hiện SL tự động. Log UI theo snapshot
   queue đã lưu, fingerprint trạng thái/khớp/còn lại; không gọi broker hoặc phát lại khi restart.
+- Bảng lệnh app gom dưới vị thế khi cùng sổ/mã/trade và gói phù hợp, có đúng một vị thế
+  tương ứng; không đoán liên kết chỉ theo mã. Render đọc cả lệnh con khi vị thế đang gọn,
+  giữ selection/open, đưa lệnh còn hoạt động về dòng riêng trước khi xóa vị thế mất khỏi
+  snapshot. Nhãn KHỚP/CÒN và BÁN ĐƯỢC/CHỜ VỀ tách tiến độ lệnh khỏi cổ chờ thanh toán;
+  metadata hủy/sửa vẫn gắn ID lệnh gốc. Kiểm thử: `test_running_order_groups.py`.
 - Refresh tài khoản xử lý lỗi riêng REAL/PAPER; không bỏ kết quả sổ đã đọc được.
   HEALTH kiểm tra cả hai REST client và dùng `quote_is_fresh`, không lấy số request làm mốc mới nhất.
 - Secdef dùng chung cache 60 giây trong mỗi client; 429 nghỉ toàn endpoint 60 giây.

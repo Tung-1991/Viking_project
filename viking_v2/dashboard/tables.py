@@ -117,7 +117,9 @@ class DashboardTablesMixin:
 
     @staticmethod
     def _configure_tree(tree: ttk.Treeview, columns: tuple[str, ...]) -> None:
-        tree.configure(columns=columns)
+        tree.configure(columns=columns, show="tree headings")
+        tree.heading("#0", text="")
+        tree.column("#0", width=40, minwidth=40, stretch=False)
         for column in columns:
             width = DashboardTablesMixin._running_column_width(tree, column)
             tree.heading(
@@ -132,6 +134,30 @@ class DashboardTablesMixin:
                 anchor=RUNNING_ANCHORS.get(column, "w"),
                 stretch=False,
             )
+
+    @staticmethod
+    def _running_rows(tree: ttk.Treeview, parent: str = "") -> tuple[str, ...]:
+        """Read all rows, including children of collapsed positions."""
+        rows: list[str] = []
+        for iid in tree.get_children(parent):
+            rows.append(iid)
+            rows.extend(DashboardTablesMixin._running_rows(tree, iid))
+        return tuple(rows)
+
+    @staticmethod
+    def _running_position_parent(actions: dict[str, dict[str, Any]], intent: Any) -> str:
+        """Group only an order with one explicitly linked position in this book."""
+        if not intent.trade_id:
+            return ""
+        candidates = [
+            iid for iid, action in actions.items()
+            if action.get("kind") == "position"
+            and action.get("symbol") == intent.symbol
+            and action.get("trade_id") == intent.trade_id
+            and (not intent.loan_package_id
+                 or action.get("loan_package_id") == intent.loan_package_id)
+        ]
+        return candidates[0] if len(candidates) == 1 else ""
 
     @staticmethod
     def _update_running_row(
@@ -183,9 +209,11 @@ class DashboardTablesMixin:
             )
             selected_before = tuple(tree.selection())
             yview_before = tree.yview()
-            previous_order = tuple(tree.get_children())
+            previous_order = self._running_rows(tree)
+            previous_parents = {tree.parent(iid) for iid in previous_order if tree.parent(iid)}
             existing = {iid: tree.item(iid) for iid in previous_order}
             row_order: list[str] = []
+            row_parents: dict[str, str] = {}
             self._running_row_actions[mode] = {}
             if tuple(tree["columns"]) != columns:
                 self._configure_tree(tree, columns)
@@ -418,6 +446,9 @@ class DashboardTablesMixin:
                         if pending_close and pending_close.status.upper() == "WAITING_SETTLEMENT"
                         else f"T+·{settle_short or '--'}·{pending}CP"
                     )
+                settlement_status = (
+                    f"BÁN ĐƯỢC {sellable} CP · CHỜ VỀ {pending} CP · {settlement_status}"
+                )
                 stored_entry_state = str(
                     cycle.entry_market_state if cycle else ""
                 ).strip().upper()
@@ -522,6 +553,7 @@ class DashboardTablesMixin:
                 self._running_row_actions[mode][iid] = {
                     "kind": "position", "mode": mode, "symbol": symbol,
                     "trade_id": trade_id, "position": row,
+                    "loan_package_id": str(row.get("loanPackageId", cycle.loan_package_id if cycle else "") or ""),
                     "local_id": pending_close.id if pending_close else "",
                     "broker_order_id": pending_close.broker_order_id if pending_close else "",
                     "cancellable": bool(pending_close and (
@@ -581,6 +613,11 @@ class DashboardTablesMixin:
                     if item.action == "OPEN" else "--"
                 )
                 status_upper = item.status.upper()
+                remaining_label = f"CÒN {item.remaining_quantity}"
+                if status_upper in {"WORKING", "PARTIAL"}:
+                    remaining_label += " CHỜ KHỚP"
+                elif status_upper == "WAITING_SETTLEMENT":
+                    remaining_label += " CHỜ CỔ VỀ ĐỂ BÁN"
                 is_working = status_upper in {"WORKING", "PARTIAL", "UNKNOWN", "CANCEL_PENDING", "REPLACE_PENDING"}
                 cancellable = status_upper in LOCALLY_CONTROLLABLE_STATUSES or (
                     mode == "REAL" and bool(item.broker_order_id) and is_working
@@ -630,7 +667,8 @@ class DashboardTablesMixin:
                         f"FEE {fee_text}" if gross > 0 else f"HẾT HẠN {self._row_time(item.expires_at)}",
                         f"R {risk_text} · E {reward_text}" if item.action == "OPEN" else "--",
                         f"-- · -- · -- · Khớp {item.filled_quantity}/{item.quantity}",
-                        f"{status_label} · {em_text} · {item.result or item.reason or 'ĐANG CHỜ'}",
+                        f"{status_label} · Khớp {item.filled_quantity}/{item.quantity} · "
+                        f"{remaining_label} · {em_text} · {item.result or item.reason or 'ĐANG CHỜ'}",
                         "✖" if cancellable else "",
                     ),
                 )
@@ -645,6 +683,9 @@ class DashboardTablesMixin:
                     "result": item.result, "reason": item.reason,
                     "expires_at": item.expires_at,
                 }
+                parent = self._running_position_parent(self._running_row_actions[mode], item)
+                if parent:
+                    row_parents[iid] = parent
 
             for index, row in enumerate(reversed(broker_orders)):
                 order_id = str(row.get("orderId", row.get("id", "")) or "")
@@ -686,7 +727,9 @@ class DashboardTablesMixin:
                         f"FEE {_compact_vnd(fee)}",
                         "--",
                         f"-- · -- · -- · Khớp {filled}/{quantity}",
-                        f"[DNSE][{pending_ack or ('PARTIAL' if partial else 'WORKING')}] · CÒN {remaining}",
+                        f"[DNSE][{pending_ack or ('PARTIAL' if partial else 'WORKING')}] · "
+                        f"Khớp {filled}/{quantity} · CÒN {remaining}"
+                        + (" CHỜ KHỚP" if not pending_ack else ""),
                         "✖" if mode == "REAL" and bool(order_id) and not pending_ack else "",
                     ),
                 )
@@ -698,16 +741,31 @@ class DashboardTablesMixin:
                     "cancellable": mode == "REAL" and bool(order_id) and not pending_ack,
                 }
             current_ids = set(row_order)
+            root_order = [iid for iid in row_order if iid not in row_parents]
+            child_order: dict[str, list[str]] = {}
+            for iid in row_order:
+                if iid in row_parents:
+                    child_order.setdefault(row_parents[iid], []).append(iid)
+            # Move live rows before deleting an obsolete parent. Treeview
+            # deletes descendants too; a lagging position snapshot must not
+            # hide its still-working order or lose the operator's selection.
+            if tuple(tree.get_children()) != tuple(root_order):
+                for index, iid in enumerate(root_order):
+                    tree.move(iid, "", index)
+            for parent, children in child_order.items():
+                if tuple(tree.get_children(parent)) != tuple(children):
+                    for index, iid in enumerate(children):
+                        tree.move(iid, parent, index)
+                if parent not in previous_parents:
+                    tree.item(parent, open=True)
             removed = [iid for iid in previous_order if iid not in current_ids]
             if removed:
-                tree.delete(*removed)
-            if tuple(tree.get_children()) != tuple(row_order):
-                for index, iid in enumerate(row_order):
-                    tree.move(iid, "", index)
+                removed_ids = set(removed)
+                tree.delete(*(iid for iid in removed if tree.parent(iid) not in removed_ids))
             restored = tuple(iid for iid in selected_before if iid in current_ids)
             if tuple(tree.selection()) != restored:
                 tree.selection_set(restored)
-            if yview_before and previous_order != tuple(row_order):
+            if yview_before and previous_order != self._running_rows(tree):
                 tree.yview_moveto(yview_before[0])
         self._sync_cancel_button()
 

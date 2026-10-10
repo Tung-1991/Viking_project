@@ -84,6 +84,12 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Log Bot/Manual ghi đúng sổ, ID, KL đã khớp/còn lại; CHỜ KHỚP không phải đã mua xong.
   Chỉ ghi khi trạng thái/KL đổi, không phát lại log cũ khi restart. Vị thế ngoài app
   chưa nhận quản lý hiển thị SL OFF; PROTECT CHỜ DỮ LIỆU không phải mức lùi bằng 0.
+- Bảng LỆNH ĐANG CHẠY: bấm mũi tên ở vị thế để bung/gọn các lệnh app đã liên kết
+  với vị thế đó. Dòng cha là số cổ đang nắm giữ; dòng con là lượng đặt và tiến độ lệnh,
+  ví dụ `Khớp 400/500 · CÒN 100 CHỜ KHỚP`. Lệnh chưa có vị thế tương ứng vẫn hiện riêng.
+  `BÁN ĐƯỢC 400 CP · CHỜ VỀ 100 CP` nghĩa là đã nắm giữ 500 CP, khác với 100 chưa khớp.
+  Nút ✖ trên lệnh con yêu cầu hủy phần chưa khớp; cần token REAL và xác nhận của broker.
+  Làm mới bảng giữ trạng thái bung/gọn và lệnh đang chọn.
 - Mặc định BUY xét EMA nhanh > EMA chậm và RSI hiện tại > RSI phiên trước theo các công tắc RULE.
   RSI hiện tại là nến 1D tạm tính từ giá mới; mốc so sánh là nến 1D phiên trước, không phải tick trước.
   Tùy chọn **PHẢI VỪA CẮT EMA** mặc định ON theo VA: lần quan sát trước nhanh ≤ chậm, lần này nhanh > chậm.
