@@ -1,5 +1,6 @@
 from copy import deepcopy
 from datetime import datetime, timedelta
+import gc
 import json
 import tkinter as tk
 
@@ -9,6 +10,15 @@ import pytest
 from viking_v2.rules.business import indicator_snapshot
 from viking_v2.services.indicator_comparison import DNSEIndicatorNormalizer, number_comparison, rsi_observation_display
 from viking_v2.trading.market import VN_TZ
+
+
+@pytest.fixture(autouse=True)
+def collect_closed_tk_objects_on_the_ui_thread():
+    # Tk variables from closed fixture windows must not be finalized by a later
+    # normalization worker's cyclic-GC pass (Windows requires the UI thread).
+    gc.collect()
+    yield
+    gc.collect()
 
 
 def daily_history(count=260, final_price=99.0):
@@ -39,16 +49,27 @@ def event(**changes):
 
 def settle(popup, root):
     finished = tk.BooleanVar(master=root, value=False)
+    poll = None
     def check():
+        nonlocal poll
+        poll = None
         if popup._normalization_future is None:
             finished.set(True)
         else:
-            root.after(10, check)
+            poll = root.after(10, check)
     timeout = root.after(3000, lambda: finished.set(True))
-    check()
-    if not finished.get():
-        root.wait_variable(finished)
-    root.after_cancel(timeout)
+    try:
+        check()
+        if not finished.get():
+            root.wait_variable(finished)
+    finally:
+        root.after_cancel(timeout)
+        if poll is not None:
+            root.after_cancel(poll)
+        # Break the recursive callback closure on the UI thread, not during a
+        # later worker's GC or interpreter shutdown.
+        check = None
+        finished = None
     assert popup._normalization_future is None, "Normalization worker did not finish"
 
 
@@ -198,6 +219,38 @@ def test_rsi_display_keeps_valid_side_without_guessing_missing_baseline(current,
     assert rsi_observation_display(current, previous) == (text, issue)
 
 
+@pytest.mark.parametrize("current,previous,text", [
+    (52.29, "", "52.29 · Trước: chưa lưu"),
+    (None, 56.79, "Chưa lưu · Trước: 56.79"),
+    (None, None, "Bản cũ chưa lưu"),
+    (52.29, 56.79, "52.29 < 56.79"),
+])
+def test_missing_legacy_fields_are_not_reported_as_missing_runtime_data(current, previous, text):
+    assert rsi_observation_display(current, previous, legacy=True)[0] == text
+
+
+def test_legacy_and_current_missing_evidence_have_distinct_labels(ui_root, tmp_path, monkeypatch):
+    rows = [event(), event(timestamp="2026-10-09 14:02:01", record_kind="SIGNAL_EVENT", signal_event="EXIT_E")]
+    popup = popup_for(ui_root, tmp_path / "missing.json", rows)
+    try:
+        tree = popup.signal_tree
+        modern, legacy = tree.get_children("symbol:2026-10-09:HDB")
+        assert tree.set(legacy, "ema_cross_display") == "Bản cũ chưa lưu"
+        assert tree.set(legacy, "rsi_previous_date") == "Bản cũ chưa lưu"
+        assert "Thiếu RSI" not in tree.set(legacy, "reason")
+        assert "Bản cũ chưa lưu" not in tree.set(legacy, "reason")  # Do not pollute the short trading reason.
+        assert tree.set(modern, "ema_cross_display") == "Chưa có dữ liệu"
+        assert "Thiếu RSI trước" in tree.set(modern, "reason")
+        shown = []
+        monkeypatch.setattr("viking_v2.dashboard.windows.messagebox.showinfo", lambda *args, **_: shown.append(args[1]))
+        tree.selection_set(legacy)
+        popup._show_signal_details()
+        assert "Không đồng nghĩa bot thiếu dữ liệu lúc chạy" in shown[0]
+        assert "EMA lần quan sát trước: Bản cũ chưa lưu" in shown[0]
+    finally:
+        popup.close()
+
+
 def test_single_normalize_button_preserves_events_selection_and_raw_values(ui_root, tmp_path):
     path = tmp_path / "market_bars.json"
     cache(path)
@@ -211,20 +264,77 @@ def test_single_normalize_button_preserves_events_selection_and_raw_values(ui_ro
         leaf = tree.get_children(hdb)[0]
         tree.item(hdb, open=True)
         tree.selection_set(leaf)
+        values_before = tree.item(leaf, "values")
+        headings_before = {column: tree.heading(column, "text") for column in tree["columns"]}
         assert tree.set(leaf, "rsi_comparison") == "52.29 < 56.79"
         popup.normalization_button.invoke()
         settle(popup, ui_root)
         expected = indicator_snapshot([*daily_history()[:-1], {"close": 22.2}])
-        assert tree.set(leaf, "rsi_comparison") == number_comparison(expected["rsi"], expected["rsi_previous"])
+        assert tree.item(leaf, "values") == values_before
+        assert {column: tree.heading(column, "text") for column in tree["columns"]} == headings_before
+        assert number_comparison(expected["rsi"], expected["rsi_previous"]) in popup.normalization_detail.cget("text")
+        assert "Đã ghi: EMA 22.3163 < 22.3459 · RSI 52.29 < 56.79" in popup.normalization_detail.cget("text")
         assert tree.set(leaf, "display_signal") == "ENTRY" and tree.set(leaf, "suggestion") == "Chờ giờ"
         assert tree.item(hdb, "open") and tree.selection() == (leaf,)
-        assert tree.heading("suggestion", "text") == "XỬ LÝ ĐÃ GHI"
+        assert tree.heading("suggestion", "text") == "XỬ LÝ"
         msn = tree.get_children("symbol:2026-10-09:MSN")[0]
-        assert tree.set(msn, "rsi_comparison") == "52.29 · Trước: —"
-        assert "1 dòng giữ số gốc" in popup.signal_status.cget("text")
+        assert tree.set(msn, "rsi_comparison") == "52.29 · Trước: chưa lưu"
+        assert "1 dòng chưa tính lại được" in popup.signal_status.cget("text")
         popup.normalization_button.invoke()
         assert tree.set(leaf, "rsi_comparison") == "52.29 < 56.79"
         assert raw == before and path.read_bytes() == cache_before
+    finally:
+        popup.close()
+
+
+def test_exit_never_looks_like_a_recalculated_entry_and_preview_tracks_selection(ui_root, tmp_path, monkeypatch):
+    path = tmp_path / "market_bars.json"
+    cache(path)
+    sources = [event(execution_mode="REAL"), event(symbol="MSN", timestamp="2026-10-09 14:02:01")]
+    before = deepcopy(sources)
+    popup = popup_for(ui_root, path, sources)
+    try:
+        tree = popup.signal_tree
+        leaf = tree.get_children("symbol:2026-10-09:HDB")[0]
+        tree.item("symbol:2026-10-09:HDB", open=True)
+        tree.selection_set(leaf)
+        tree.xview_moveto(0.4)
+        ui_root.update()
+        saved_values, saved_scroll = tree.item(leaf, "values"), tree.xview()
+        popup._toggle_normalization()
+        settle(popup, ui_root)
+        ui_root.update()
+        assert tree.item(leaf, "values") == saved_values and tree.xview() == saved_scroll
+        assert tree.set(leaf, "display_signal") == "EXIT · E"
+        assert tree.set(leaf, "ema_comparison") == "22.3163 < 22.3459"
+        assert tree.set(leaf, "ema_cross_display") == "Bản cũ chưa lưu"
+        result = popup._normalization_for(popup._selected_signal_rows()[0])
+        assert result["normalization_condition"] is True
+        detail = popup.normalization_detail.cget("text")
+        assert "Đã ghi: EMA 22.3163 < 22.3459" in detail
+        assert "Tính lại DNSE: EMA" in detail and "Không đổi sự kiện" in detail
+        copied = []
+        monkeypatch.setattr(popup.top, "clipboard_clear", lambda: None)
+        monkeypatch.setattr(popup.top, "clipboard_append", copied.append)
+        popup._copy_signal_rows()
+        assert "22.3163 < 22.3459" in copied[0] and "52.29" in copied[0]
+        shown = []
+        monkeypatch.setattr("viking_v2.dashboard.windows.messagebox.showinfo", lambda *args, **_: shown.append(args[1]))
+        popup._show_signal_details()
+        assert "EXIT · E" in shown[0].split("ĐỐI CHIẾU")[0]
+        msn = tree.get_children("symbol:2026-10-09:MSN")[0]
+        tree.selection_set(msn)
+        ui_root.update()
+        assert "MSN" in popup.normalization_title.cget("text")
+        assert "Tính lại DNSE: Lịch sử DNSE" in popup.normalization_detail.cget("text")
+        assert "Tính lại DNSE: EMA" not in popup.normalization_detail.cget("text")
+        tree.selection_set("day:2026-10-09")
+        ui_root.update()
+        assert "Chọn một dòng giờ" in popup.normalization_detail.cget("text")
+        popup._toggle_normalization()
+        ui_root.update()
+        assert not popup.normalization_preview.winfo_ismapped()
+        assert sources == before
     finally:
         popup.close()
 
@@ -252,7 +362,8 @@ def test_periodic_processing_is_recorded_not_a_new_decision(ui_root, tmp_path, m
         monkeypatch.setattr("viking_v2.dashboard.windows.messagebox.showinfo", lambda *args, **_: shown.append(args[1]))
         tree.selection_set(leaf)
         popup._show_signal_details()
-        assert "DNSE đã ghi:" in shown[0] and "không phải quyết định mới hay số TradingView" in shown[0]
+        assert "EMA 22.3163 < 22.3459" in shown[0].split("ĐỐI CHIẾU")[0]
+        assert "ĐỐI CHIẾU · DNSE TÍNH LẠI" in shown[0] and "không phải quyết định mới hay số TradingView" in shown[0]
     finally:
         popup.close()
 
@@ -265,27 +376,27 @@ def test_legacy_rsi_survives_copy_excel_and_restore(ui_root, tmp_path, monkeypat
     try:
         tree, hdb = popup.signal_tree, "symbol:2026-10-09:HDB"
         leaf = tree.get_children(hdb)[0]
-        assert tree.set(leaf, "rsi_comparison") == "52.29 · Trước: —"
+        assert tree.set(leaf, "rsi_comparison") == "52.29 · Trước: chưa lưu"
         tree.selection_set(leaf)
         copied = []
         monkeypatch.setattr(popup.top, "clipboard_clear", lambda: None)
         monkeypatch.setattr(popup.top, "clipboard_append", copied.append)
         popup._copy_signal_rows()
-        assert "52.29 · Trước: —" in copied[0]
+        assert "52.29 · Trước: chưa lưu" in copied[0]
         target = tmp_path / "legacy.xlsx"
         monkeypatch.setattr("viking_v2.dashboard.windows.filedialog.asksaveasfilename", lambda **_: str(target))
         popup._export_signals(selected_only=True)
         book = load_workbook(target)
         try:
             assert book.sheetnames == ["DNSE GỐC"]
-            assert "52.29 · Trước: —" in [cell.value for cell in book["DNSE GỐC"][2]]
+            assert "52.29 · Trước: chưa lưu" in [cell.value for cell in book["DNSE GỐC"][2]]
         finally:
             book.close()
         monkeypatch.setattr("viking_v2.dashboard.windows.messagebox.askyesno", lambda *_, **__: True)
         popup._delete_signal_rows()
         assert not tree.get_children()
         popup._restore_signal_rows()
-        assert tree.set(tree.get_children(hdb)[0], "rsi_comparison") == "52.29 · Trước: —"
+        assert tree.set(tree.get_children(hdb)[0], "rsi_comparison") == "52.29 · Trước: chưa lưu"
         assert original == before and "rsi_previous" not in original[0]
     finally:
         popup.close()
@@ -307,13 +418,17 @@ def test_refresh_recalculates_from_updated_cache_without_modifying_old_events(ui
         popup._toggle_normalization()
         settle(popup, ui_root)
         leaf = popup.signal_tree.get_children("symbol:2026-10-09:HDB")[0]
-        before = popup.signal_tree.set(leaf, "rsi_comparison")
+        popup.signal_tree.selection_set(leaf)
+        ui_root.update()
+        before = popup.normalization_detail.cget("text")
+        values_before = popup.signal_tree.item(leaf, "values")
         cache(path, [{**bar, "close": bar["close"] * 0.5} for bar in daily_history()])
         popup._refresh_signals()
         settle(popup, ui_root)
-        assert popup.signal_tree.set(leaf, "rsi_comparison") != before
+        assert popup.normalization_detail.cget("text") != before
+        assert popup.signal_tree.item(leaf, "values") == values_before
         popup._toggle_normalization()
-        assert popup.signal_tree.set(leaf, "rsi_comparison") == "52.29 · Trước: —"
+        assert popup.signal_tree.set(leaf, "rsi_comparison") == "52.29 · Trước: chưa lưu"
     finally:
         popup.close()
 
@@ -340,13 +455,21 @@ def test_excel_exports_raw_and_normalized_only_when_enabled_and_blocks_formula_i
                 unsafe = next(row for row in sheet.iter_rows() if row[1].value == "=DANGEROUS()")
                 assert unsafe[1].data_type == "s"
             assert rows == before
-            assert any("52.29 · Trước: —" == cell.value for row in book["DNSE GỐC"].iter_rows() for cell in row)
+            assert any("52.29 · Trước: chưa lưu" == cell.value for row in book["DNSE GỐC"].iter_rows() for cell in row)
             assert any("DNSE · Tính lại" == cell.value for row in book["CHUẨN HOÁ"].iter_rows() for cell in row)
             normalized = book["CHUẨN HOÁ"]
             headers = [cell.value for cell in normalized[1]]
             hdb = next(row for row in normalized.iter_rows(min_row=2) if row[1].value == "HDB")
             assert hdb[headers.index("LỊCH SỬ ĐẾN")].value == "2026-10-08"
             assert hdb[headers.index("CHU KỲ TÍNH")].value == "3/6/14"
+            assert hdb[headers.index("EMA ĐÃ GHI")].value == "22.3163 < 22.3459"
+            assert hdb[headers.index("RSI ĐÃ GHI")].value == "52.29 · Trước: chưa lưu"
+            expected = indicator_snapshot([*daily_history()[:-1], {"close": 22.2}])
+            assert hdb[headers.index("RSI TÍNH LẠI")].value == number_comparison(expected["rsi"], expected["rsi_previous"])
+            assert hdb[headers.index("CẮT EMA ĐÃ GHI")].value == "Bản cũ chưa lưu"
+            failed = next(row for row in normalized.iter_rows(min_row=2) if row[1].value == "=DANGEROUS()")
+            assert failed[headers.index("EMA TÍNH LẠI")].value == "Chưa tính lại"
+            assert failed[headers.index("LỖI CHUẨN HOÁ")].value
         finally:
             book.close()
     finally:
@@ -371,7 +494,7 @@ def test_off_and_close_during_background_calculation_ignore_late_results(ui_root
         assert popup._normalization_after is None and not popup._normalization_rows
         popup._poll_normalization(generation, [event()])
         assert not popup._normalization_rows
-        assert popup.signal_tree.set(popup.signal_tree.get_children("symbol:2026-10-09:HDB")[0], "rsi_comparison") == "52.29 · Trước: —"
+        assert popup.signal_tree.set(popup.signal_tree.get_children("symbol:2026-10-09:HDB")[0], "rsi_comparison") == "52.29 · Trước: chưa lưu"
     finally:
         popup.close()
 
@@ -397,6 +520,14 @@ def test_normalized_toolbar_fits_and_has_only_one_normalization_control(ui_root,
         assert popup.normalization_button.cget("text") == "CHUẨN HOÁ · ON"
         assert "không cần CSV" in popup.normalization_hint.text
         assert "Không tự suy đoán hệ số" in popup.normalization_hint.text
+        leaf = popup.signal_tree.get_children("symbol:2026-10-09:HDB")[0]
+        popup.signal_tree.selection_set(leaf)
+        ui_root.update()
+        preview = popup.normalization_preview
+        assert preview.winfo_ismapped()
+        assert preview.winfo_x() + preview.winfo_width() <= preview.master.winfo_width()
+        assert preview.winfo_y() + preview.winfo_height() <= preview.master.winfo_height()
+        assert popup.normalization_detail.winfo_height() > 0
         popup.top.geometry("1600x820+0+0")
         popup.signal_tree.item("symbol:2026-10-09:HDB", open=True)
         _capture_ui(ui_root, popup.top, f"signal-normalized-{scaling}")

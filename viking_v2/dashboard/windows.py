@@ -241,7 +241,8 @@ def signal_rows_by_day(rows: list[dict[str, Any]], *, compact: bool = False) -> 
             str(raw.get("signal_cycle", "") or ""), str(raw.get("candle_key", "") or ""),
         )
         suggestion, reason = signal_advice(raw)
-        rsi_text, rsi_issue = rsi_observation_display(raw.get("rsi"), raw.get("rsi_previous"))
+        legacy = not (raw.get("record_kind") or raw.get("signal_event"))
+        rsi_text, rsi_issue = rsi_observation_display(raw.get("rsi"), raw.get("rsi_previous"), legacy=legacy)
         detail = {
             **raw,
             "timestamp": timestamp,
@@ -263,6 +264,8 @@ def signal_rows_by_day(rows: list[dict[str, Any]], *, compact: bool = False) -> 
             "ema_comparison": number_comparison(raw.get("ema_fast"), raw.get("ema_slow"), 4),
             "rsi_comparison": rsi_text,
             "_rsi_issue": rsi_issue,
+            "_legacy_record": legacy,
+            "rsi_previous_date": raw.get("rsi_previous_date") or ("Bản cũ chưa lưu" if legacy else "—"),
             "display_price": _signal_price(raw.get("price")),
             "ema_cross_display": (ema_cross_caption({
                 "state": ("CROSSED_UP" if raw.get("ema_cross_at")
@@ -271,7 +274,8 @@ def signal_rows_by_day(rows: list[dict[str, Any]], *, compact: bool = False) -> 
                           else raw.get("ema_cross_state", "UNKNOWN")),
                 "required": str(raw.get("ema_cross_required", "")).lower() == "true",
                 "cross_at": raw.get("ema_cross_at", ""),
-            })[0].removeprefix("CẮT EMA · ") if raw.get("ema_cross_state") else "—"),
+            })[0].removeprefix("CẮT EMA · ") if raw.get("ema_cross_state")
+                else "Bản cũ chưa lưu" if legacy else "Chưa có dữ liệu"),
         }
         previous = seen.setdefault(day, {}).get(signature)
         if previous is not None:
@@ -1108,7 +1112,8 @@ class HistoryPopup:
             font=("Segoe UI", 12, "bold"), fg_color=PALETTE["SLATE"], hover_color=PALETTE["SLATE_HOVER"])
         self.normalization_button.grid(row=1, column=1, padx=8)
         self.normalization_hint = _HoverHint(self.normalization_button,
-            "OFF: số DNSE bot đã ghi. ON: tự tính lại từ lịch sử DNSE có sẵn, không cần CSV.\n"
+            "Bảng luôn giữ số và sự kiện bot đã ghi. ON: mở khung đối chiếu riêng dưới bảng.\n"
+            "Chọn một dòng giờ để xem số tính lại từ lịch sử DNSE có sẵn, không cần CSV.\n"
             "Một nến 1D/phiên + giá tick tại giờ ghi; EMA chuẩn, RSI Wilder. Không làm tròn giá đầu vào.\n"
             "Thiếu dữ liệu: giữ số gốc. Chu kỳ cũ thiếu: dùng 3/6/14 và ghi rõ trong Chi tiết.\n"
             "Sự kiện, xử lý và cắt EMA vẫn là những gì bot đã ghi; không tính lại lệnh hay gửi Telegram.\n"
@@ -1150,6 +1155,7 @@ class HistoryPopup:
         tree.bind("<Button-3>", self._signal_context_menu)
         tree.bind("<Delete>", lambda _event: self._delete_signal_rows())
         tree.bind("<Double-1>", self._signal_double_click, add="+")
+        tree.bind("<<TreeviewSelect>>", lambda _event: self._refresh_normalization_preview(), add="+")
         self.signal_menu = tk.Menu(self.top, tearoff=False)
         self.signal_menu.add_command(label="Chi tiết", command=self._show_signal_details)
         self.signal_menu.add_command(label="Sao chép", command=self._copy_signal_rows)
@@ -1157,11 +1163,26 @@ class HistoryPopup:
         self.signal_menu.add_separator()
         self.signal_menu.add_command(label="Xóa khỏi lịch sử", command=self._delete_signal_rows)
         self.signal_menu.add_command(label="Khôi phục các dòng đã xóa", command=self._restore_signal_rows)
+        self.normalization_preview = ctk.CTkFrame(frame, fg_color=PALETTE["SURFACE_2"],
+                                                 border_color=PALETTE["BORDER"], border_width=1)
+        self.normalization_preview.grid(row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 0))
+        self.normalization_preview.grid_columnconfigure(0, weight=1)
+        self.normalization_title = ctk.CTkLabel(
+            self.normalization_preview, text="ĐỐI CHIẾU · DNSE TÍNH LẠI", anchor="w",
+            font=("Segoe UI", 11, "bold"), text_color=PALETTE["TITLE"])
+        self.normalization_title.grid(row=0, column=0, sticky="ew", padx=12, pady=(6, 0))
+        self.normalization_detail = ctk.CTkLabel(
+            self.normalization_preview, text="", anchor="w", justify="left", wraplength=850,
+            font=("Segoe UI", 12), text_color=PALETTE["TEXT"])
+        self.normalization_detail.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 6))
+        self.normalization_preview.bind("<Configure>", lambda event: self.normalization_detail.configure(
+            wraplength=max(120, int(self.normalization_preview._reverse_widget_scaling(event.width)) - 30)), add="+")
+        self.normalization_preview.grid_remove()
         ctk.CTkLabel(
             frame, text="ENTRY / MẤT ENTRY / EXIT E: sự kiện · ĐỊNH KỲ: mẫu, không gửi Telegram\n"
                         "7 ngày gần nhất · Chuột phải: chi tiết / xóa / khôi phục · Không xóa lệnh giao dịch",
             font=("Segoe UI", 11), text_color=PALETTE["MUTED"], anchor="w", justify="left",
-        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 4))
+        ).grid(row=4, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 4))
         self.signal_empty = ctk.CTkLabel(frame, text="CHƯA CÓ DỮ LIỆU TÍN HIỆU",
                                        text_color=PALETTE["DIM"], fg_color=PALETTE["SURFACE"])
 
@@ -1190,11 +1211,16 @@ class HistoryPopup:
         samples = [periodic_history_row(row) for row in self.trace_store.read(limit=100000)]
         return self.history_trash.visible([*events, *samples])
 
-    def _history_views(self, rows: list[dict[str, Any]], normalized: bool = False) -> list[dict[str, Any]]:
-        if normalized:
-            rows = [dict(self._normalization_rows.get(observation_id(row), {
-                **row, "normalization_error": "Đang chuẩn hoá" if self._normalization_future else "Chưa tính lại; giữ số gốc",
-            }), _history_ids=list(row.get("_history_ids") or [observation_id(row)])) for row in rows]
+    def _normalization_for(self, row: dict[str, Any]) -> dict[str, Any]:
+        """Look up a projection by original IDs, never by recalculated numbers."""
+        for identity in row.get("_history_ids") or [observation_id(row)]:
+            result = self._normalization_rows.get(identity)
+            if result is not None:
+                return result
+        return {"normalization_error": "Đang tính lại" if self._normalization_future else "Chưa tính lại được"}
+
+    def _history_views(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The main grid, clipboard and journal sheet always show saved evidence."""
         events = [row for row in rows if row.get("record_kind") != "PERIODIC"]
         views = [row for day in signal_rows_by_day(events, compact=True) for row in day["rows"]]
         for sample in (row for row in rows if row.get("record_kind") == "PERIODIC"):
@@ -1217,13 +1243,9 @@ class HistoryPopup:
             code = str(row.get("blocked_by") or row.get("reason") or "")
             row["reason"] = short_signal_reason(code, row)
             if row.get("_rsi_issue"):
-                row["reason"] += " · " + row["_rsi_issue"]
-            if normalized:
-                if row.get("normalization_error"):
-                    row["reason"] += " · Giữ số gốc"
-                    row["_reason_detail"] += " · " + str(row["normalization_error"])
-                elif row.get("normalization_ok"):
-                    row["_reason_detail"] += " · Chỉ báo DNSE tính lại; sự kiện/xử lý/cắt EMA giữ nguyên"
+                row["_reason_detail"] += "\n" + row["_rsi_issue"]
+                if not row.get("_legacy_record"):
+                    row["reason"] += " · " + row["_rsi_issue"]
         return sorted(views, key=history_sort_key, reverse=True)
 
     def _refresh_signals(self) -> None:
@@ -1239,17 +1261,16 @@ class HistoryPopup:
             sources = [row for row in sources if str(row.get("timestamp", ""))[:10] in days]
             if self.normalization_enabled:
                 self._request_normalization(sources)
-            views = self._history_views(sources, self.normalization_enabled)
+            views = self._history_views(sources)
             self._visible_history_sources = sources
             status = "DNSE · Số đã ghi · 7 ngày gần nhất"
             if self.normalization_enabled:
-                failures = sum(bool(row.get("normalization_error")) for row in views)
-                status = ("DNSE · Đang chuẩn hoá; tạm giữ số đã ghi" if self._normalization_future
-                          else f"DNSE · Chuẩn hoá {len(views) - failures}/{len(views)} dòng · Xử lý/cắt EMA đã ghi")
+                failures = sum(not self._normalization_for(row).get("normalization_ok") for row in views)
+                status = ("DNSE · Bảng giữ số đã ghi · Đang tính đối chiếu" if self._normalization_future
+                          else f"DNSE · Bảng giữ số đã ghi · Đối chiếu {len(views) - failures}/{len(views)} dòng")
                 if failures and not self._normalization_future:
-                    status += f" · {failures} dòng giữ số gốc (Chi tiết)"
+                    status += f" · {failures} dòng chưa tính lại được"
             self.signal_status.configure(text=status)
-            tree.heading("suggestion", text="XỬ LÝ ĐÃ GHI" if self.normalization_enabled else "XỬ LÝ")
         except (OSError, ValueError, KeyError, sqlite3.Error) as exc:
             self.signal_status.configure(text=f"Không đọc được tín hiệu: {type(exc).__name__}")
             return
@@ -1284,10 +1305,35 @@ class HistoryPopup:
                                        values=tuple(row.get(key, "") for key, *_ in self.SIGNAL_COLUMNS))
                     self._history_node_rows[leaf] = [row]
         tree.selection_set([iid for iid in selected if tree.exists(iid)])
+        self._refresh_normalization_preview()
         if tree.get_children():
             self.signal_empty.place_forget()
         else:
             self.signal_empty.place(relx=0.5, rely=0.5, anchor="center")
+
+    def _refresh_normalization_preview(self) -> None:
+        if not self.normalization_enabled:
+            self.normalization_preview.grid_remove()
+            return
+        self.normalization_preview.grid()
+        rows = self._selected_signal_rows()
+        self.normalization_title.configure(text="ĐỐI CHIẾU · DNSE TÍNH LẠI")
+        if len(rows) != 1:
+            self.normalization_detail.configure(text="Chọn một dòng giờ để đối chiếu. Bảng bên trên luôn giữ số đã ghi.")
+            return
+        row = rows[0]
+        result = self._normalization_for(row)
+        self.normalization_title.configure(
+            text=f"ĐỐI CHIẾU · {row['symbol']} · {row.get('execution_mode') or '—'} · {row.get('time') or '—'}")
+        text = f"Đã ghi: EMA {row['ema_comparison']} · RSI {row['rsi_comparison']}"
+        if result.get("normalization_ok"):
+            text += ("\nTính lại DNSE: EMA " + number_comparison(result.get("ema_fast"), result.get("ema_slow"), 4)
+                     + " · RSI " + rsi_observation_display(result.get("rsi"), result.get("rsi_previous"))[0]
+                     + " · Phiên trước " + str(result.get("rsi_previous_date") or "—"))
+            text += "\nChỉ đối chiếu · Không đổi sự kiện, cắt EMA hoặc lệnh."
+        else:
+            text += "\nTính lại DNSE: " + str(result.get("normalization_error") or "Chưa tính lại được")
+        self.normalization_detail.configure(text=text)
 
     def _selected_signal_rows(self) -> list[dict[str, Any]]:
         result, seen = [], set()
@@ -1344,25 +1390,33 @@ class HistoryPopup:
             f"RSI {row.get('rsi_comparison')} · Phiên trước {row.get('rsi_previous_date') or '—'}",
             f"Cắt EMA: {row.get('ema_cross_display')}",
             f"Lý do: {row.get('_reason_detail')}"])
+        previous_ema = number_comparison(row.get("ema_previous_fast"), row.get("ema_previous_slow"), 4)
+        text += "\nEMA lần quan sát trước: " + ("Bản cũ chưa lưu" if row.get("_legacy_record") and previous_ema == "—" else previous_ema)
+        if row.get("_legacy_record") and (row.get("_rsi_issue") or not row.get("ema_cross_state")):
+            text += ("\nBản cũ chưa lưu đủ trường đối chiếu. Không đồng nghĩa bot thiếu dữ liệu lúc chạy."
+                     "\nKhông suy ra lần cắt EMA từ một cặp EMA hoặc điền RSI tính lại thành số đã ghi.")
         if self.normalization_enabled:
-            original = row.get("dnse_indicators") or row
-            text += "\n\nDNSE đã ghi: EMA " + number_comparison(original.get("ema_fast"), original.get("ema_slow"), 4)
-            text += " · RSI " + rsi_observation_display(original.get("rsi"), original.get("rsi_previous"))[0]
-            text += "\nPhiên RSI trước đã ghi: " + str(original.get("rsi_previous_date") or "—")
-            if row.get("normalization_ok"):
-                periods = row["normalization_periods"]
+            result = self._normalization_for(row)
+            text += "\n\nĐỐI CHIẾU · DNSE TÍNH LẠI (không phải số đã ghi)"
+            if result.get("normalization_ok"):
+                text += "\nEMA " + number_comparison(result.get("ema_fast"), result.get("ema_slow"), 4)
+                text += " · RSI " + rsi_observation_display(result.get("rsi"), result.get("rsi_previous"))[0]
+                text += "\nPhiên RSI trước tính lại: " + str(result.get("rsi_previous_date") or "—")
+                periods = result["normalization_periods"]
                 text += (f"\nTính lại: EMA {periods[0]}/{periods[1]}, RSI {periods[2]} · "
-                         f"{row['normalization_bars']} nến trước phiên"
-                         f"\nLịch sử: {row['normalization_history_start']} → {row['normalization_history_end']}"
-                         f"\nCache DNSE: {row.get('normalization_cache_at') or 'không có mốc lưu'}"
+                         f"{result['normalization_bars']} nến trước phiên"
+                         f"\nLịch sử: {result['normalization_history_start']} → {result['normalization_history_end']}"
+                         f"\nCache DNSE: {result.get('normalization_cache_at') or 'không có mốc lưu'}"
                          "\nDùng giá tại giờ ghi, không lấy giá đóng cửa ngày đó."
                          "\nLịch sử hiện có có thể đã được cập nhật; đây không phải quyết định mới hay số TradingView.")
-                if row.get("normalization_defaults"):
+                if result.get("normalization_defaults"):
                     text += "\nBản cũ thiếu chu kỳ: dùng mặc định cho " + ", ".join(
                         {"ema_fast_period": "EMA nhanh", "ema_slow_period": "EMA chậm", "rsi_period": "RSI"}.get(key, key)
-                        for key in row["normalization_defaults"])
+                        for key in result["normalization_defaults"])
                 if row.get("record_kind") == "PERIODIC":
-                    text += "\nEMA/RSI tính lại: " + ("Đạt" if row.get("normalization_condition") else "Chưa đạt")
+                    text += "\nEMA/RSI tính lại: " + ("Đạt" if result.get("normalization_condition") else "Chưa đạt")
+            else:
+                text += "\n" + str(result.get("normalization_error") or "Chưa tính lại được")
         if row.get("record_kind") == "PERIODIC":
             text += "\n" + "\n".join(f"{label}: {row.get(key, '—')}" for key, label in (
                 ("scheduled_at", "Mốc lấy mẫu"), ("price_source", "Nguồn giá"),
@@ -1482,23 +1536,42 @@ class HistoryPopup:
             book = trace_workbook(captures) if captures else Workbook()
             if not captures:
                 book.remove(book.active)
+            views = self._history_views(original)
             for index, normalized in enumerate((False, True) if self.normalization_enabled else (False,)):
                 sheet = book.create_sheet("CHUẨN HOÁ" if normalized else "DNSE GỐC", index)
-                sheet.append(["GIỜ GHI NHẬN", *[title for _, title, *_ in self.SIGNAL_COLUMNS],
-                              "NGUỒN", "CHI TIẾT", "LỖI CHUẨN HOÁ", "CACHE DNSE", "SỐ NẾN", "CHU KỲ MẶC ĐỊNH",
-                              "LỊCH SỬ TỪ", "LỊCH SỬ ĐẾN", "CHU KỲ TÍNH", "EMA/RSI TÍNH LẠI"])
+                metadata = ["NGUỒN", "CHI TIẾT", "LỖI CHUẨN HOÁ", "CACHE DNSE", "SỐ NẾN", "CHU KỲ MẶC ĐỊNH",
+                            "LỊCH SỬ TỪ", "LỊCH SỬ ĐẾN", "CHU KỲ TÍNH", "EMA/RSI TÍNH LẠI"]
+                columns = (["MÃ", "CHẾ ĐỘ", "SỰ KIỆN ĐÃ GHI", "XỬ LÝ ĐÃ GHI", "GIÁ ĐÃ GHI",
+                            "EMA ĐÃ GHI", "RSI ĐÃ GHI", "PHIÊN RSI TRƯỚC ĐÃ GHI", "CẮT EMA ĐÃ GHI",
+                            "EMA TÍNH LẠI", "RSI TÍNH LẠI", "PHIÊN RSI TRƯỚC TÍNH LẠI"] if normalized
+                           else [title for _, title, *_ in self.SIGNAL_COLUMNS])
+                sheet.append(["GIỜ GHI NHẬN", *columns, *metadata])
                 for cell in sheet[1]:
                     cell.font = Font(bold=True)
-                for row in self._history_views(original, normalized):
-                    sheet.append([row["timestamp"], *[row.get(key, "") for key, *_ in self.SIGNAL_COLUMNS],
+                for row in views:
+                    result = self._normalization_for(row) if normalized else {}
+                    ok = bool(result.get("normalization_ok"))
+                    if normalized:
+                        values = [row.get(key, "") for key in (
+                            "symbol", "execution_mode", "display_signal", "suggestion", "display_price",
+                            "ema_comparison", "rsi_comparison", "rsi_previous_date", "ema_cross_display")]
+                        values.extend([
+                            number_comparison(result.get("ema_fast"), result.get("ema_slow"), 4) if ok else "Chưa tính lại",
+                            rsi_observation_display(result.get("rsi"), result.get("rsi_previous"))[0] if ok else "Chưa tính lại",
+                            result.get("rsi_previous_date", "") if ok else ""])
+                    else:
+                        values = [row.get(key, "") for key, *_ in self.SIGNAL_COLUMNS]
+                    detail = ("Chỉ đối chiếu; không đổi sự kiện/xử lý/cắt EMA đã ghi. Lịch sử DNSE hiện có, không phải số TradingView."
+                              if normalized else row.get("_reason_detail", ""))
+                    sheet.append([row["timestamp"], *values,
                                   "DNSE · Tính lại" if normalized else "DNSE · Đã ghi",
-                                  row.get("_reason_detail", ""), row.get("normalization_error", ""),
-                                  row.get("normalization_cache_at", ""), row.get("normalization_bars", ""),
+                                  detail, result.get("normalization_error", ""),
+                                  result.get("normalization_cache_at", ""), result.get("normalization_bars", ""),
                                   ", ".join({"ema_fast_period": "EMA nhanh", "ema_slow_period": "EMA chậm", "rsi_period": "RSI"}.get(key, key)
-                                            for key in row.get("normalization_defaults") or []),
-                                  row.get("normalization_history_start", ""), row.get("normalization_history_end", ""),
-                                  "/".join(str(value) for value in row.get("normalization_periods") or []),
-                                  row.get("normalization_condition", "")])
+                                            for key in result.get("normalization_defaults") or []),
+                                  result.get("normalization_history_start", ""), result.get("normalization_history_end", ""),
+                                  "/".join(str(value) for value in result.get("normalization_periods") or []),
+                                  result.get("normalization_condition", "") if ok else ""])
                 sheet.freeze_panes = "A2"
                 sheet.auto_filter.ref = sheet.dimensions
                 for sheet_row in sheet.iter_rows():

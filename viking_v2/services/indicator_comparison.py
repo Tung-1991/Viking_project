@@ -163,7 +163,7 @@ def number_comparison(left: Any, right: Any, decimals: int = 2) -> str:
     return f"{a!r} {sign} {b!r}"
 
 
-def rsi_observation_display(current: Any, previous: Any) -> tuple[str, str]:
+def rsi_observation_display(current: Any, previous: Any, *, legacy: bool = False) -> tuple[str, str]:
     """Keep available RSI evidence visible without inventing the missing side.
 
     Display only: does not calculate a new baseline or change the entry rule.
@@ -179,7 +179,13 @@ def rsi_observation_display(current: Any, previous: Any) -> tuple[str, str]:
     if now is not None and prior is not None:
         return number_comparison(now, prior), ""
     if now is not None:
+        if legacy:
+            return f"{now:.2f} · Trước: chưa lưu", "Bản cũ chưa lưu RSI trước"
         return f"{now:.2f} · Trước: —", "Thiếu RSI trước"
     if prior is not None:
+        if legacy:
+            return f"Chưa lưu · Trước: {prior:.2f}", "Bản cũ chưa lưu RSI hiện tại"
         return f"— · Trước: {prior:.2f}", "Thiếu RSI hiện tại"
+    if legacy:
+        return "Bản cũ chưa lưu", "Bản cũ chưa lưu RSI"
     return "—", "Thiếu RSI"

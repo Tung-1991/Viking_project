@@ -238,9 +238,9 @@ def test_history_ema_cross_uses_saved_evidence_and_old_rows_remain_unknown():
     from viking_v2.dashboard.windows import signal_rows_by_day
     values = [row(ema_cross_state="WAIT_DOWN", ema_cross_required=True,
                   ema_cross_at="2026-10-09T13:39:31+07:00"),
-              row("14:00:00", signal_cycle="C2")]
+              row("14:00:00", signal_cycle="C2", record_kind="")]
     displayed = signal_rows_by_day(values)[0]["rows"]
-    assert displayed[0]["ema_cross_display"] == "—"
+    assert displayed[0]["ema_cross_display"] == "Bản cũ chưa lưu"
     assert displayed[1]["ema_cross_display"] == "ĐÃ LÊN 13:39:31"
 
 

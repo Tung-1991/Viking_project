@@ -131,11 +131,12 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   không xóa CSV, SQLite, Excel đã lưu, nhật ký lệnh hay trạng thái chống lặp.
   Chuột phải **Khôi phục các dòng đã xóa** trả lại danh sách, không gửi Telegram/tạo lệnh lần nữa.
   Lý do trong bảng được rút ngắn; số gốc và chi tiết vẫn xem được bằng chuột phải hoặc nhấp đúp dòng.
-- Cột **CẮT EMA** dùng chứng cứ backend lúc ghi; bản cũ thiếu hiện —.
+- Cột **CẮT EMA** dùng chứng cứ backend lúc ghi; bản cũ thiếu hiện **Bản cũ chưa lưu**.
   Tín hiệu chờ giờ còn hiệu lực giữ giờ cắt ban đầu, không đòi cắt lại đúng 14h.
 - EMA/RSI hiện phép so sánh số gốc; bản ghi mới giữ RSI tham chiếu, phiên tham chiếu và chu kỳ chỉ báo.
-  Thiếu RSI phiên trước vẫn hiện số hiện tại, ví dụ **52.29 · Trước: —**; thiếu hiện tại vẫn giữ số trước.
-  Thiếu cả hai mới hiện **—**. Không lấy RSI cuối ngày hôm nay hoặc giá mới điền ngược bản ghi cũ.
+  Bản cũ không lưu RSI phiên trước vẫn hiện số hiện tại, ví dụ **52.29 · Trước: chưa lưu**;
+  phiên tham chiếu thiếu hiện **Bản cũ chưa lưu**. Đây là trường nhật ký chưa lưu, không phải kết luận bot thiếu dữ liệu lúc chạy.
+  Bản ghi mới thiếu dữ liệu vẫn báo thiếu, không che lỗi bằng nhãn bản cũ. Không điền số tính lại vào chứng cứ cũ.
 - Chỉ có **một nguồn DNSE**, không còn hai mode hay nút nạp CSV. **CHUẨN HOÁ · OFF** mặc định giữ số đã ghi.
   Bấm **ON** tự đọc cache `market_bars.json` của đúng tài khoản mà daemon đã tải từ DNSE.
   Tính lại chạy nền, không chặn Tk; không gọi thêm nguồn/API, không ghi vào nhật ký, rule hay lệnh.
@@ -143,13 +144,16 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   lịch sử chỉ đến trước ngày sự kiện + **giá tick tại giờ ghi**, không dùng close cuối ngày hoặc các tick trước đó làm nến mới.
   EMA chuẩn, RSI Wilder; giữ độ chính xác giá đầu vào. Đủ lịch sử RSI trước mới tính, không đòi CSV 100 nến.
   Dùng chu kỳ đã ghi; bản cũ thiếu thì dùng 3/6/14, ghi rõ giả định trong Chi tiết và Excel.
-  Thiếu cache/mã/giá/chu kỳ hợp lệ: **giữ số gốc**, hiện số dòng chưa tính và Chi tiết; không làm trống cả bảng.
-  Nút có hint; LÀM MỚI tính lại nếu cache đã đổi, OFF trả ngay số gốc.
-  Sự kiện, **XỬ LÝ ĐÃ GHI**, cắt EMA và tổng kết vẫn giữ chứng cứ bot lúc ghi; mẫu không tự thành ENTRY/lệnh mới.
-  Chi tiết có số DNSE gốc, số tính lại, phạm vi lịch sử và mốc cache; lịch sử có thể đã được cập nhật/điều chỉnh sau phiên.
+  **Bảng luôn giữ số gốc, sự kiện, xử lý, cắt EMA và tiêu đề cột**, cả khi ON/OFF; mẫu không tự thành ENTRY/lệnh mới.
+  ON mở **khung đối chiếu dưới bảng**: chọn một dòng giờ để xem **Đã ghi / Tính lại DNSE** cạnh nhau.
+  Thiếu cache/mã/giá/chu kỳ hợp lệ: chỉ báo chưa tính được trong khung đối chiếu và Chi tiết; không làm trống hoặc thay số bảng.
+  Nút có hint; LÀM MỚI cập nhật đối chiếu nếu cache đã đổi, OFF đóng khung đối chiếu.
+  Chi tiết tách số đã ghi và tính lại, có phạm vi lịch sử và mốc cache; lịch sử có thể đã được cập nhật/điều chỉnh sau phiên.
   Đây là **tính lại trên DNSE**, không khẳng định khôi phục quyết định cũ hoặc khớp từng số TradingView;
   không tự đoán hệ số cổ tức, sửa giá hoặc nhân/chia RSI để ép khớp chart. File CSV đối chiếu cũ không bị xóa.
 - XUẤT EXCEL luôn có **DNSE GỐC**; bật chuẩn hoá thêm **CHUẨN HOÁ**, không còn sheet TradingView rỗng.
+  Sheet CHUẨN HOÁ đặt **EMA/RSI đã ghi** và **EMA/RSI tính lại** ở các cột riêng, không thay số gốc bằng số tính lại.
+  Sự kiện/xử lý/cắt EMA có nhãn **ĐÃ GHI**; tính lại thất bại không giả là số tính thành công.
   Bao gồm các dòng trong danh sách (kể cả nhóm chưa xổ), không xuất dòng đã xóa/ẩn và không tự kéo dữ liệu mạng.
   Có mẫu định kỳ thì thêm TRACE/SETTING đầy đủ. Chờ chuẩn hoá xong trước khi xuất số tính lại.
   UI giữ 7 ngày ghi nhận gần nhất; nguồn sự kiện gần nhất tối đa 250 dòng, mẫu định kỳ được gộp thêm.
