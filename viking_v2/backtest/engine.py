@@ -17,6 +17,7 @@ from ..rules.business import (
     protect_rearm_mfe,
 )
 from ..rules.entry_filters import apply_buy_filters
+from ..rules.observations import advance_session_cross
 from ..trading.portfolio import (
     bot_slot_state,
     order_budget,
@@ -1987,6 +1988,7 @@ class BacktestEngine:
             )
             for symbol, values in history.items()
         }
+        session_crosses: dict[str, dict] = dict(carried.get("session_crosses") or {})
         marks = {
             symbol: float(values[-1].get("close", 0.0) or 0.0) if values else 0.0
             for symbol, values in history.items()
@@ -2445,6 +2447,16 @@ class BacktestEngine:
                     # a fill or protection exit.  The next comparison must
                     # never jump back over a processed minute.
                     indicator_streams[symbol] = current_indicators
+                    now = datetime.fromtimestamp(stamp, VN_TZ)
+                    if (params.buy_signal_session_cross_enabled and params.buy_signal_use_ema
+                            and params.buy_signal_require_ema_cross):
+                        expires = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() + (
+                            exchange_close_minute(symbol_exchanges[symbol]) * 60)
+                        session_crosses[symbol] = advance_session_cross(
+                            session_crosses.get(symbol), current_indicators, previous_indicators,
+                            day=day, observed_at=now.isoformat(),
+                            pair=f"{params.buy_ema_fast}/{params.buy_ema_slow}", expires_at=expires,
+                        )
                     position = positions.get(symbol)
                     event_count_before_exit = len(events)
                     if position and symbol not in pending:
@@ -2702,7 +2714,10 @@ class BacktestEngine:
                         "precomputed_market": {"candidate": current_phase, "state": current_phase, "details": {}},
                         "priority_entry": symbol in settings.priority_symbols,
                         "previous_indicators": previous_indicators,
+                        "indicator_snapshot": current_indicators,
                     }
+                    if symbol in session_crosses:
+                        rule_context["session_ema_cross"] = session_crosses[symbol]
                     portfolio_context = {
                         "nav": nav, "available_cash": cash,
                         "available_capital": max(0.0, budget), "order_budget": max(0.0, budget),
@@ -2795,6 +2810,9 @@ class BacktestEngine:
                     if existing:
                         continue
                     if decision.action == "BUY" and position is None and not locked:
+                        if (details.get("ema_cross") or {}).get("session"):
+                            session_crosses[symbol]["used"] = True
+                            session_crosses[symbol]["state"] = "SESSION_USED"
                         pending[symbol] = _Pending(
                             "BUY", symbol, day, decision.event or decision.reason, 1.0,
                             market_state=current_phase, reason=decision.reason, details=details,
@@ -2843,6 +2861,7 @@ class BacktestEngine:
                 pending=pending, loss_streaks=loss_streaks,
                 loss_locked_until=loss_locked_until, capital_ledgers=capital_ledgers,
                 last_decisions=last_decisions, buy_confirmations=buy_confirmations,
+                session_crosses=session_crosses,
                 last_processed_date=last_day,
             )
         open_trades = [

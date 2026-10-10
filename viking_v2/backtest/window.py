@@ -178,6 +178,7 @@ BACKTEST_RULE_KEYS = PHASE_PARAMETER_KEYS | {
     "buy_volume_enabled", "buy_volume_average_sessions", "buy_volume_min_ratio",
     "buy_signal_use_ema", "buy_signal_use_rsi",
     "buy_signal_require_ema_cross",
+    "buy_signal_session_cross_enabled",
     "sell_signal_use_ema", "sell_signal_use_rsi",
     "buy_confirmation_enabled", "buy_confirmation_minutes",
     "buy_confirmation_require_ema", "buy_confirmation_require_rsi",
@@ -1379,6 +1380,7 @@ class BacktestPopup:
         self.buy_signal_ema = ctk.BooleanVar(value=params.buy_signal_use_ema)
         self.buy_signal_rsi = ctk.BooleanVar(value=params.buy_signal_use_rsi)
         self.buy_signal_require_ema_cross = ctk.BooleanVar(value=params.buy_signal_require_ema_cross)
+        self.buy_signal_session_cross_enabled = ctk.BooleanVar(value=params.buy_signal_session_cross_enabled)
         self._label(signal_toggle_row, "TÍN HIỆU BUY", 13, bold=True).grid(row=0, column=0, sticky="w", padx=(0, 14))
         for column, (label, variable) in enumerate((
             ("BUY EMA", self.buy_signal_ema),
@@ -1400,6 +1402,12 @@ class BacktestPopup:
         ).grid(row=1, column=3, padx=10, pady=(8, 0))
 
         rule_toggle_row = ctk.CTkFrame(card, fg_color="transparent")
+        ctk.CTkSwitch(
+            signal_toggle_row, text="GIỮ LẦN CẮT TRONG PHIÊN", variable=self.buy_signal_session_cross_enabled,
+            font=(FONT, 12), progress_color=COL_GREEN, text_color=COL_TEXT,
+        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self._hint(signal_toggle_row, "Giữ lần cắt lên còn hiệu lực đến khi EMA xuống hoặc hết phiên; mỗi lần chỉ dùng một lần.\n"
+                   "Replay theo dữ liệu intraday đã chọn. RSI, giờ mua và vốn vẫn kiểm tra.").grid(row=2, column=3, padx=10)
         rule_toggle_row.grid(row=4, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
         self.volume_confirmation = ctk.BooleanVar(value=params.volume_confirmation)
         self.buy_volume_enabled = ctk.BooleanVar(value=params.buy_volume_enabled)
@@ -1580,6 +1588,7 @@ class BacktestPopup:
         self.buy_signal_ema.set(bool(params.get("buy_signal_use_ema", True)))
         self.buy_signal_rsi.set(bool(params.get("buy_signal_use_rsi", True)))
         self.buy_signal_require_ema_cross.set(bool(params.get("buy_signal_require_ema_cross", True)))
+        self.buy_signal_session_cross_enabled.set(bool(params.get("buy_signal_session_cross_enabled", False)))
         self.sell_signal_ema.set(bool(params.get("sell_signal_use_ema", True)))
         self.sell_signal_rsi.set(bool(params.get("sell_signal_use_rsi", True)))
         indicator_exit_policy = str(
@@ -1750,6 +1759,7 @@ class BacktestPopup:
         params["buy_signal_use_ema"] = bool(self.buy_signal_ema.get())
         params["buy_signal_use_rsi"] = bool(self.buy_signal_rsi.get())
         params["buy_signal_require_ema_cross"] = bool(self.buy_signal_require_ema_cross.get())
+        params["buy_signal_session_cross_enabled"] = bool(self.buy_signal_session_cross_enabled.get())
         params["sell_signal_use_ema"] = bool(self.sell_signal_ema.get())
         params["sell_signal_use_rsi"] = bool(self.sell_signal_rsi.get())
         params["indicator_exit_policy"] = self.indicator_exit_policy.get()

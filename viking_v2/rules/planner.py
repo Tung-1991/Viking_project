@@ -118,9 +118,11 @@ class StrategyOrderPlanner:
             quantity = sizing.quantity
             if quantity <= 0:
                 return PlanResult(None, sizing.reason)
-            if not self.rule_state.claim_signal(
-                symbol, "BUY", candle_key, stream=execution_mode,
-            ):
+            session_cross = decision.details.get("ema_cross") or {}
+            claimed = (self.rule_state.claim_session_cross(symbol, execution_mode, session_cross.get("cross_id", ""))
+                       if session_cross.get("session") else self.rule_state.claim_signal(
+                           symbol, "BUY", candle_key, stream=execution_mode))
+            if not claimed:
                 return PlanResult(None, "BUY_SIGNAL_ALREADY_PROCESSED")
             alerted_id = (
                 decision.details.get("telegram_signal_id", "")
@@ -248,6 +250,8 @@ class StrategyOrderPlanner:
             # The signal has already been consumed. It is not a future BUY job.
             intent.expires_at = min(intent.expires_at, time.time() + 30.0)
             intent.details["reservation_price"] = price
+            if session_cross.get("session"):
+                intent.details["session_ema_cross"] = dict(session_cross)
         if side == "BUY" and window:
             intent.buy_window_start = window["start"]
             intent.buy_window_end = window["end"]

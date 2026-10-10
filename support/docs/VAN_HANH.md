@@ -95,13 +95,28 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Tùy chọn **PHẢI VỪA CẮT EMA** mặc định ON theo VA: lần quan sát trước nhanh ≤ chậm, lần này nhanh > chậm.
   OFF chỉ đòi EMA nhanh đang > chậm. RSI vẫn phải đạt; không đổi cách tính hai đường EMA.
   Đủ chỉ báo chưa phải đã gửi lệnh: còn giờ mua, bộ lọc/WHIPSAW/khóa lỗ, vốn/slot, BOT và token REAL.
-  Bật lại BOT/hết khóa bán tay không phục hồi lệnh cũ. Khi cần vừa cắt, EMA đã nằm trên không tự sinh ENTRY mới;
-  chỉ khi OFF mới xét lại điều kiện hiện tại không cần lần cắt mới. Cập nhật giữ OFF đã lưu; nạp preset VA bật ON.
+  Bật lại BOT/hết khóa bán tay không phục hồi lệnh cũ. Khi chỉ bật yêu cầu vừa cắt,
+  EMA đã nằm trên không tự sinh ENTRY mới; tắt yêu cầu này thì xét mức EMA hiện tại.
+  Cập nhật giữ OFF đã lưu; nạp preset VA bật ON.
+  **GIỮ LẦN CẮT TRONG PHIÊN** là lựa chọn thêm trong RULE → Phase 2 → BUY, mặc định OFF.
+  Chỉ áp dụng với REALTIME + DÙNG EMA + yêu cầu vừa cắt. ON nhận lần cắt lên còn hiệu lực
+  trong ngày: cắt lúc 14:10, restart 14:20 vẫn xét BUY nếu khôi phục được dữ liệu và điều kiện hiện tại đạt.
+  EMA vẫn tính trên nến ngày; giá phút đã đóng chỉ dùng dựng lại diễn biến nến ngày trong phiên.
+  Cache trên đĩa lưu theo mã/ngày, dùng chung REAL/PAPER; chỉ tải phút thiếu sau restart/mất kết nối,
+  không tải lại phần đã có khi tắt/bật lựa chọn, bật BUY hay mở preview. Tải lỗi thì chờ dữ liệu, không đoán BUY.
+  Một lần cắt chỉ tạo một lệnh mỗi sổ; dấu đã dùng lưu cùng giao dịch queue nên restart không mua trùng.
+  BUY OFF/thiếu vốn chưa tạo lệnh thì chưa dùng tín hiệu. Lệnh đã xếp nhưng bị hủy/hết hạn vẫn tính đã dùng.
+  EMA xuống/bằng làm mất hiệu lực; lần cắt lên ở phút mới có ID mới. Dao động trong cùng phút không tạo nhiều lệnh.
+  Hết phiên hoặc sang ngày khác không dùng lại. Khi đang chạy, app vẫn nhận cắt mới ngay theo nhịp chỉ báo đã chọn.
+  RSI, giờ mua, xác nhận, WHIPSAW, khóa lỗ, vốn và slot vẫn kiểm tra. Xác nhận X phút bắt đầu khi app quan sát,
+  không cộng ngược thời gian trước restart. Nhịp 1M/2M/5M vẫn cần mẫu hiện tại hoàn tất sau gián đoạn.
   P2 có vùng **CẮT EMA** bên phải: CHỜ XUỐNG / CHỜ LÊN / ĐÃ LÊN + giờ,
+  hoặc **CÒN HIỆU LỰC / ĐÃ DÙNG + giờ / HẾT PHIÊN** khi dùng lựa chọn giữ cắt;
   kèm phép so sánh EMA lần quan sát trước. Số lấy từ backend; preview nến đơn lẻ không tự đoán giao cắt.
   Nhịp 1M/2M/5M chờ mẫu đầu tiên hoàn tất sau khởi động hoặc gián đoạn nguồn giá.
   Không dùng số nền phiên trước hay giá chờ cũ để BUY/E; SL/TP/PROTECT vẫn xét giá mới.
   Giờ cắt EMA là mốc hoàn tất mẫu, không đổi theo mỗi lần poll. TRACE lưu riêng giá/mốc mẫu và giá tick mới.
+  Khôi phục phút không tái dựng được dao động chỉ xảy ra giữa hai mẫu phút.
   Lệnh bị chặn vốn/slot và tín hiệu chờ có quy tắc riêng; xem lý do, không coi Telegram là xác nhận đã mua.
 - Khóa sau lỗ có hai chế độ: **THEO GIỜ** tự hết sau số giờ đã đặt;
   **KHÓA HẲN** giữ đến khi mở tay. Ô giờ chỉ hiện ở THEO GIỜ.

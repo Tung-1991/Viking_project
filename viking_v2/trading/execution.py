@@ -525,12 +525,22 @@ class ExecutionService:
             if intent.side == "BUY" and intent.source == "BOT" and self.bot_buy_allowed_provider is not None and not self.bot_buy_allowed_provider(mode):
                 self.queue.cancel_claimed_local(intent.id, "BUY bỏ qua: OFF trước hand-off")
                 continue
-            if self.quote_provider and needs_quote and not quote_is_fresh(self.quote_provider(intent.symbol), intent.symbol):
+            handoff_quote = self.quote_provider(intent.symbol) if self.quote_provider and needs_quote else quote
+            if self.quote_provider and needs_quote and not quote_is_fresh(handoff_quote, intent.symbol):
                 if intent.side == "BUY" and intent.source == "BOT":
                     self.queue.cancel_claimed_local(intent.id, "BUY bỏ qua: quote hết hạn trước hand-off")
                 else:
                     self.queue.release(intent.id, "PENDING", "Chờ quote mới")
                 continue
+            session_cross = intent.details.get("session_ema_cross") or {}
+            if intent.side == "BUY" and intent.source == "BOT" and session_cross.get("session"):
+                cross_price = board_price((handoff_quote or {}).get("price", 0))
+                if (cross_price <= float(session_cross.get("threshold_price", float("inf")))
+                        or not self.rule_state or not self.rule_state.session_cross_available(
+                    intent.symbol, mode, session_cross.get("cross_id", ""), allow_used=True,
+                )):
+                    self.queue.cancel_claimed_local(intent.id, "BUY bỏ qua: lần cắt EMA trong phiên không còn hiệu lực")
+                    continue
             # Durable hand-off identity BEFORE the network call. A timeout never
             # authorizes another POST. Persist the package on the original, too.
             if intent.side == "BUY" and self.trade_state:

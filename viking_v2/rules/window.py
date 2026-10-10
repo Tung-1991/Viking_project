@@ -436,6 +436,13 @@ class RuleSettingsPopup:
             "Backend hiện dùng một chu kỳ RSI cho cả BUY và E. Ô này đồng bộ với ô RSI trong E/M.",
             variable=self.shared_rsi_period,
         )
+        self.buy_signal_session_cross_enabled = self._switch(
+            buy_group, "GIỮ LẦN CẮT TRONG PHIÊN", self.params.buy_signal_session_cross_enabled,
+            "BẬT: nhận lần cắt lên còn hiệu lực trong ngày, kể cả sau restart.\n"
+            "Khôi phục bằng giá phút đã đóng; EMA vẫn tính trên nến ngày. Hủy khi EMA xuống hoặc hết phiên.\n"
+            "Một lần cắt chỉ tạo một lệnh. RSI, giờ mua và vốn vẫn kiểm tra.\n"
+            "Chỉ dùng với REALTIME + DÙNG EMA + BUY CẦN EMA VỪA VƯỢT LÊN. TẮT: giữ cách bắt cắt mới.",
+        )
 
         mode = self._card(
             body, "NẾN & GIỜ MUA",
@@ -1337,6 +1344,7 @@ class RuleSettingsPopup:
             self.params.buy_signal_use_ema = bool(self.buy_signal_ema.get())
             self.params.buy_signal_use_rsi = bool(self.buy_signal_rsi.get())
             self.params.buy_signal_require_ema_cross = bool(self.buy_signal_require_ema_cross.get())
+            self.params.buy_signal_session_cross_enabled = bool(self.buy_signal_session_cross_enabled.get())
             self.params.buy_volume_enabled = bool(self.buy_volume_enabled.get())
             self.params.buy_volume_average_sessions = buy_volume_average
             self.params.buy_volume_min_ratio = buy_volume_minimum / 100.0

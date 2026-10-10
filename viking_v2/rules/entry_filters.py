@@ -34,6 +34,12 @@ def apply_buy_filters(
     if (decision.details.get("indicators") or {}).get("signal_ready") is False:
         return {}, decision  # Downtime and initialization cannot preserve a BUY candidate.
     saved = dict(state or {})
+    session = decision.details.get("ema_cross") or {}
+    if session.get("session"):
+        if session.get("state") != "SESSION_ACTIVE" or not session.get("ready") or not session.get("valid"):
+            return {}, decision
+        if saved.get("session_cross_id") != session.get("cross_id"):
+            saved = {}
     # Read candidates written by the previous confirmation-only version.
     confirmation = dict(saved.get("confirmation") or (saved if saved.get("active") else {}))
     window = dict(saved.get("window") or {})
@@ -50,6 +56,8 @@ def apply_buy_filters(
     window_info: dict[str, Any] = {}
 
     def waiting(reason: str, text: str, next_state: dict[str, Any]) -> tuple[dict, StrategyDecision]:
+        if session.get("session") and next_state:
+            next_state["session_cross_id"] = session.get("cross_id")
         return next_state, StrategyDecision(
             "WAIT", decision.symbol, reason, signal="BUY",
             market_state=decision.market_state,
@@ -79,7 +87,7 @@ def apply_buy_filters(
                 return waiting("BUY_WINDOW_EXPIRED", "HẾT KHUNG GIỜ MUA", {})
             return {}, decision
         if not window and trigger and phase in {"ATO", "OPEN", "ATC"}:
-            window = {**window_info, "signal_time": now.isoformat(), "released": False,
+            window = {**window_info, "signal_time": session.get("cross_at") or now.isoformat(), "released": False,
                       "ema_cross": dict(details.get("ema_cross") or {})}
         if not window:
             if trigger:
@@ -130,4 +138,11 @@ def apply_buy_filters(
     for key in ("buy_window", "buy_confirmation"):
         if key in details:
             approved.details[key] = details[key]
+    if session.get("session"):
+        # Keep observing a confirmed crossing while BUY is OFF or a capital
+        # gate is closed. Queue consumption/invalid EMA clears it next cycle.
+        retained = {"session_cross_id": session.get("cross_id"), "window": window}
+        if params.buy_confirmation_enabled:
+            retained["confirmation"] = {**confirmation, "updated_at": now.isoformat()}
+        return retained, approved
     return {}, approved

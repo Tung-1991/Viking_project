@@ -321,6 +321,7 @@ class StaticRuleParameters:
     buy_signal_use_ema: bool = bool(DEFAULT_RULE_PARAMETERS["buy_signal_use_ema"])
     buy_signal_use_rsi: bool = bool(DEFAULT_RULE_PARAMETERS["buy_signal_use_rsi"])
     buy_signal_require_ema_cross: bool = bool(DEFAULT_RULE_PARAMETERS["buy_signal_require_ema_cross"])
+    buy_signal_session_cross_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["buy_signal_session_cross_enabled"])
     buy_volume_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["buy_volume_enabled"])
     buy_volume_average_sessions: int = int(DEFAULT_RULE_PARAMETERS["buy_volume_average_sessions"])
     buy_volume_min_ratio: float = float(DEFAULT_RULE_PARAMETERS["buy_volume_min_ratio"])
@@ -388,6 +389,7 @@ class StaticRuleParameters:
         self.buy_signal_use_ema = bool(self.buy_signal_use_ema)
         self.buy_signal_use_rsi = bool(self.buy_signal_use_rsi)
         self.buy_signal_require_ema_cross = bool(self.buy_signal_require_ema_cross)
+        self.buy_signal_session_cross_enabled = bool(self.buy_signal_session_cross_enabled)
         self.buy_volume_enabled = bool(self.buy_volume_enabled)
         self.sell_signal_use_ema = bool(self.sell_signal_use_ema)
         self.sell_signal_use_rsi = bool(self.sell_signal_use_rsi)
@@ -989,6 +991,13 @@ class StaticRule:
             use_ema=self.params.buy_signal_use_ema,
             observed_at=str(context.get("observation_time", "") or ""),
         )
+        session_mode = bool(signal_mode.upper() == "REALTIME" and self.params.buy_signal_use_ema
+                            and self.params.buy_signal_require_ema_cross
+                            and self.params.buy_signal_session_cross_enabled)
+        if session_mode:
+            cross_evidence = dict(context.get("session_ema_cross") or {
+                "required": True, "session": True, "state": "UNKNOWN", "valid": False, "ready": False,
+            })
         if signal_mode.upper() == "REALTIME" and isinstance(previous_indicators, dict):
             signal = crossover_signal_from_snapshots(
                 indicators,
@@ -996,7 +1005,7 @@ class StaticRule:
                 prefer="SELL" if quantity > 0 else "BUY",
                 buy_use_ema=self.params.buy_signal_use_ema,
                 buy_use_rsi=self.params.buy_signal_use_rsi,
-                buy_signal_require_ema_cross=self.params.buy_signal_require_ema_cross,
+                buy_signal_require_ema_cross=self.params.buy_signal_require_ema_cross and not session_mode,
                 sell_use_ema=self.params.sell_signal_use_ema,
                 sell_use_rsi=self.params.sell_signal_use_rsi,
             )
@@ -1011,13 +1020,18 @@ class StaticRule:
                 prefer="SELL" if quantity > 0 else "BUY",
                 buy_use_ema=self.params.buy_signal_use_ema,
                 buy_use_rsi=self.params.buy_signal_use_rsi,
-                buy_signal_require_ema_cross=self.params.buy_signal_require_ema_cross,
+                buy_signal_require_ema_cross=self.params.buy_signal_require_ema_cross and not session_mode,
                 sell_use_ema=self.params.sell_signal_use_ema,
                 sell_use_rsi=self.params.sell_signal_use_rsi,
             )
         confirmed_entry = bool(context.get("confirmed_buy")) and indicators.get("signal_ready") is not False
         if quantity <= 0 and confirmed_entry:
             signal = "BUY"
+        if session_mode and signal == "BUY" and not (
+            cross_evidence.get("state") == "SESSION_ACTIVE" and cross_evidence.get("valid")
+            and cross_evidence.get("ready")
+        ):
+            signal = ""
         # Whipsaw is an entry guard, so it follows the BUY EMA pair only.
         crosses = (
             crossover_count(

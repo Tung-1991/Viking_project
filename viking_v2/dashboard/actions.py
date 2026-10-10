@@ -3437,6 +3437,7 @@ class DashboardActionsMixin:
             row["observation_profile"] = json.dumps({
                 key: params.get(key) for key in (
                     "buy_signal_use_ema", "buy_signal_use_rsi", "buy_signal_require_ema_cross",
+                    "buy_signal_session_cross_enabled",
                     "sell_signal_use_ema", "sell_signal_use_rsi", "buy_ema_fast", "buy_ema_slow",
                     "sell_ema_fast", "sell_ema_slow", "rsi_period",
                 )}, sort_keys=True)
@@ -3482,6 +3483,8 @@ class DashboardActionsMixin:
         latest.clear()
 
     def _claim_terminal_buy(self, decision: StrategyDecision, mode: str) -> None:
+        if (decision.details.get("ema_cross") or {}).get("session"):
+            return  # A same-session crossing is consumed only with a queued intent.
         if (
             str(decision.signal or "").upper() != "BUY"
             or not is_terminal_buy_block(decision.reason)

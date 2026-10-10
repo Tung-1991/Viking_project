@@ -126,6 +126,7 @@ DEFAULT_RULE_PARAMETERS: dict[str, Any] = {
     "buy_signal_use_ema": True,
     "buy_signal_use_rsi": True,
     "buy_signal_require_ema_cross": True,
+    "buy_signal_session_cross_enabled": False,
     "buy_volume_enabled": False,
     "buy_volume_average_sessions": 20,
     "buy_volume_min_ratio": 1.0,

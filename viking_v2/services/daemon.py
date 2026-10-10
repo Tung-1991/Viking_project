@@ -35,6 +35,7 @@ from ..rules.business import (
 from ..rules.entry_filters import apply_buy_filters
 from ..trading.state import TradeStateStore
 from ..trading.durable import AccountLease
+from .session_cross import SessionPriceCache, SessionCrossService
 
 
 def merge_live_tick(
@@ -206,6 +207,8 @@ def run(account_id: str | None = None) -> int:
     settings = load_settings(account_id)
     rule = StaticRule(StaticRuleParameters.from_dict(settings.rule_parameters))
     rule_state = RuleStateStore(bridge.rule_state_path)
+    session_prices = SessionPriceCache(bridge.root / "session_prices.json", client)
+    session_crosses = SessionCrossService(session_prices, rule_state)
     rule_state.discard_buy_candidates(recheck_current_conditions=not (
         rule.params.buy_signal_use_ema and rule.params.buy_signal_require_ema_cross
     ))
@@ -669,7 +672,29 @@ def run(account_id: str | None = None) -> int:
                                         accepted_bucket = int(observation.get("bucket", 0) or 0)
                                         candle_key = f"{candle_key}|{interval}|{accepted_bucket or 'INIT'}"
                                     context["indicator_snapshot"] = current_indicators
+                                    if symbol_live:
+                                        if (rule.params.buy_signal_session_cross_enabled
+                                                and rule.params.buy_signal_use_ema
+                                                and rule.params.buy_signal_require_ema_cross):
+                                            context["session_ema_cross"] = session_crosses.observe(
+                                                symbol, stream, bars, current_indicators, rule.params,
+                                                cycle_decision_time, symbol_exchange,
+                                            )
+                                        else:
+                                            session_prices.observe(symbol, float(bars[-1]["close"]),
+                                                                   cycle_decision_time, symbol_exchange)
                                 exposure = effective_exposure
+                                if (settings.signal_mode == "REALTIME" and not symbol_live
+                                        and rule.params.buy_signal_session_cross_enabled
+                                        and rule.params.buy_signal_use_ema and rule.params.buy_signal_require_ema_cross):
+                                    from ..trading.market import exchange_close_minute
+                                    closed = (cycle_decision_time.hour * 60 + cycle_decision_time.minute
+                                              >= exchange_close_minute(symbol_exchange))
+                                    context["session_ema_cross"] = {
+                                        **rule_state.session_cross(symbol, decision_mode), "required": True,
+                                        "session": True, "state": "EXPIRED" if closed else "UNKNOWN",
+                                        "valid": False, "ready": False,
+                                    }
                                 cycle_stage = "PORTFOLIO"
                                 portfolio = portfolio_builder.build(
                                     symbol,
@@ -825,6 +850,11 @@ def run(account_id: str | None = None) -> int:
                                         f"{candle_key}|{first_seen}"
                                     )
                                 decision.details["candle_key"] = candle_key
+                                cross = decision.details.get("ema_cross") or {}
+                                if cross.get("session") and cross.get("cross_id") and decision.signal != "SELL":
+                                    decision.details["signal_cycle"] = cross["cross_id"]
+                                    decision.details["signal_time"] = cross.get("cross_at", "")
+                                    decision.details["candle_key"] = cross["cross_id"]
                                 decision.details["order_budget"] = portfolio.get("order_budget", 0.0)
                                 decision.details["trade_id"] = portfolio.get("trade_id", "")
                                 decision.details["position_quantity"] = portfolio.get("position_quantity", 0)

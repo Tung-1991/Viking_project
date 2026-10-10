@@ -38,7 +38,7 @@ def ema_cross_caption(evidence: dict | None, window: dict | None = None) -> tupl
     state = str(evidence.get("state", "UNKNOWN"))
     when = str(evidence.get("cross_at", "") or "")
     accepted = window.get("ema_cross") or {}
-    if (evidence.get("required") is True and window.get("state") in {"WAITING", "ALLOWED"}
+    if (not evidence.get("session") and evidence.get("required") is True and window.get("state") in {"WAITING", "ALLOWED"}
             and accepted.get("crossed_up") is True):
         # An accepted candidate may wait for the buy window without crossing
         # again on every tick. Do not revive cancelled/expired candidates.
@@ -50,6 +50,9 @@ def ema_cross_caption(evidence: dict | None, window: dict | None = None) -> tupl
         "WAIT_DOWN": ("CẮT EMA · CHỜ XUỐNG", "wait"),
         "WAIT_UP": ("CẮT EMA · CHỜ LÊN", "wait"),
         "CROSSED_UP": ("CẮT EMA · ĐÃ LÊN" + (f" {clock}" if clock else ""), "ok"),
+        "SESSION_ACTIVE": ("CẮT EMA · CÒN HIỆU LỰC" + (f" {clock[:5]}" if clock else ""), "ok"),
+        "SESSION_USED": ("CẮT EMA · ĐÃ DÙNG" + (f" {clock[:5]}" if clock else ""), "muted"),
+        "EXPIRED": ("CẮT EMA · HẾT PHIÊN", "muted"),
     }.get(state, ("CẮT EMA · —", "muted"))
 
 
@@ -65,3 +68,22 @@ def exit_conditions(marks: dict, params: dict) -> bool | None:
             a, b = finite(left), finite(right)
             chosen.append(None if a is None or b is None else a < b)
     return None if not chosen or any(value is None for value in chosen) else all(chosen)
+
+
+def advance_session_cross(prior: dict | None, current: dict, previous: dict, *,
+                          day: str, observed_at: str, pair: str, expires_at: float) -> dict:
+    """Retain a crossing while replaying completed intraday observations."""
+    row = dict(prior or {}) if (prior or {}).get("day") == day else {}
+    evidence = ema_cross_evidence(current, previous, required=True, observed_at=observed_at)
+    if evidence["state"] == "CROSSED_UP":
+        cross_id = f"SESSION:{day}:{pair}:{observed_at}"
+        row = {**evidence, "cross_id": cross_id,
+               "used": bool(row.get("used") and row.get("cross_id") == cross_id)}
+    ready = evidence["state"] != "UNKNOWN"
+    valid = bool(ready and row.get("cross_id") and evidence["current_fast"] > evidence["current_slow"])
+    if ready and evidence["current_fast"] <= evidence["current_slow"]:
+        row = {}
+    state = ("SESSION_USED" if valid and row.get("used") else "SESSION_ACTIVE" if valid
+             else evidence["state"])
+    return {**row, "required": True, "session": True, "day": day, "expires_at": expires_at,
+            "ready": ready, "valid": valid, "state": state}

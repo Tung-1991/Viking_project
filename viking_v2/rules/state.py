@@ -48,6 +48,8 @@ class RuleStateStore:
                 "buy_confirmations": {},
                 "signal_observations": {},
                 "entry_pauses": {},
+                "session_crosses": {},
+                "session_cross_used": {},
             },
         )
         self._lock = self.store.transaction
@@ -70,7 +72,53 @@ class RuleStateStore:
         raw["buy_confirmations"] = raw.get("buy_confirmations") if isinstance(raw.get("buy_confirmations"), dict) else {}
         raw["signal_observations"] = raw.get("signal_observations") if isinstance(raw.get("signal_observations"), dict) else {}
         raw["entry_pauses"] = raw.get("entry_pauses") if isinstance(raw.get("entry_pauses"), dict) else {}
+        for name in ("session_crosses", "session_cross_used"):
+            raw[name] = raw.get(name) if isinstance(raw.get(name), dict) else {}
         return raw
+
+    def session_cross(self, symbol: str, stream: str) -> dict:
+        with self._lock:
+            return dict(self._read()["session_crosses"].get(f"{stream.upper()}|{symbol.upper()}") or {})
+
+    def save_session_cross(self, symbol: str, stream: str, evidence: dict) -> dict:
+        key = f"{stream.upper()}|{symbol.upper()}"
+        with self._lock:
+            raw = self._read()
+            row = dict(evidence)
+            used = raw["session_cross_used"].get(key) or {}
+            if used.get("day") == row.get("day") and row.get("cross_id") in used.get("ids", []):
+                if row.get("valid"):
+                    row["state"] = "SESSION_USED"
+            raw["session_crosses"][key] = row
+            self.store.write(raw)
+            return dict(row)
+
+    def session_cross_available(self, symbol: str, stream: str, cross_id: str, *,
+                                now: float | None = None, allow_used: bool = False) -> bool:
+        checked = time.time() if now is None else float(now)
+        with self._lock:
+            raw = self._read()
+            key = f"{stream.upper()}|{symbol.upper()}"
+            row = raw["session_crosses"].get(key) or {}
+            used = raw["session_cross_used"].get(key) or {}
+            return bool(cross_id and row.get("cross_id") == cross_id and row.get("valid")
+                        and row.get("ready") and checked < float(row.get("expires_at", 0))
+                        and row.get("day") == datetime.fromtimestamp(checked, VN_TZ).date().isoformat()
+                        and (allow_used or cross_id not in used.get("ids", [])))
+
+    def claim_session_cross(self, symbol: str, stream: str, cross_id: str, *, now: float | None = None) -> bool:
+        with self._lock:
+            if not self.session_cross_available(symbol, stream, cross_id, now=now):
+                return False
+            key = f"{stream.upper()}|{symbol.upper()}"
+            raw = self._read()
+            row = raw["session_crosses"][key]
+            used = raw["session_cross_used"].get(key) or {}
+            ids = list(used.get("ids", [])) if used.get("day") == row["day"] else []
+            raw["session_cross_used"][key] = {"day": row["day"], "ids": [*ids, cross_id]}
+            row["state"] = "SESSION_USED"
+            self.store.write(raw)
+            return True
 
     def start_entry_pause(
         self,
