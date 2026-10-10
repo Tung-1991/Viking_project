@@ -9,7 +9,7 @@ from typing import Any
 
 import customtkinter as ctk
 
-from ..branding import APP_NAME
+from ..branding import APP_NAME, APP_VERSION
 from ..connections.dnse.snapshot_health import FAST_POLL_SECONDS, IDLE_POLL_SECONDS, snapshot_failure_summary
 from ..rules.business import average_true_range_pct, indicator_snapshot, protect_level
 from ..rules.observations import ema_cross_caption
@@ -540,7 +540,7 @@ class DashboardPanelsMixin:
         brand = ctk.CTkFrame(self.left, fg_color="transparent")
         brand.pack(fill="x", padx=6, pady=(1, 0))
         ctk.CTkLabel(
-            brand, text=APP_NAME, font=("Segoe UI", 19, "bold"),
+            brand, text=f"{APP_NAME} · v{APP_VERSION}", font=("Segoe UI", 19, "bold"),
             text_color="#A78BFA",
         ).pack()
 
