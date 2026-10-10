@@ -1252,13 +1252,13 @@ class ConnectionPopup:
             (
                 "blocked_buy", "BUY · TÍN HIỆU EMA/RSI",
                 "Báo điều kiện EMA/RSI đang bật, không lọc theo giờ mua, WHIPSAW, khóa lỗ hoặc vốn/slot.\n"
-                "Tin đầu gửi ngay; mặc định giãn 60 phút/mã/sổ. Chỉ báo kỹ thuật; đặt lệnh vẫn giữ mọi kiểm tra.",
+                "Gửi riêng: tin đầu gửi ngay, mặc định giãn 60 phút/mã/sổ. Bật gom tín hiệu: dùng chung phút GOM TIN. Chỉ báo kỹ thuật.",
                 "cooldown",
             ),
             (
                 "buy_lost", "BUY · MẤT TÍN HIỆU",
                 "Báo EMA/RSI không còn đạt sau tin BUY đã gửi, nếu chưa tạo lệnh.\n"
-                "Hiện hai số và dấu so sánh; không hủy lệnh. Mặc định giãn 60 phút/mã/sổ; 0 vẫn chống trùng từng lần mất.",
+                "Không hủy lệnh. Gửi riêng: mặc định giãn 60 phút/mã/sổ. Bật gom tín hiệu: mỗi mã/sổ chỉ giữ trạng thái mới nhất.",
                 "cooldown",
             ),
             ("protect", "PROTECT CHẠM MỨC", "AUTO báo đã tạo yêu cầu bán, chưa xác nhận khớp. ALERT chỉ báo, không bán. Tắt tin không tắt PROTECT. Phút = giãn tin mới cùng mã, không trì hoãn SELL.", "cooldown"),
@@ -1352,8 +1352,26 @@ class ConnectionPopup:
                 timing.grid(row=row_index, column=4, columnspan=2, padx=6)
                 _HoverHint(timing, hint)
                 self.tele_event_time_controls[key] = timing
+        technical_batch = ctk.CTkFrame(card, fg_color="transparent")
+        technical_batch.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 3))
+        self.tele_batch_technical = tk.BooleanVar(value=self.settings.telegram_batch_technical_signals)
+        self.tele_batch_technical_switch = ctk.CTkSwitch(
+            technical_batch, text="GOM CẢ BUY KỸ THUẬT / MẤT BUY",
+            variable=self.tele_batch_technical, font=("Segoe UI", 11, "bold"),
+            progress_color=self.GREEN, command=self._telegram_buy_mode_changed,
+        )
+        self.tele_batch_technical_switch.grid(row=0, column=0, sticky="w")
+        self._hint_icon(
+            technical_batch,
+            "Chỉ áp dụng khi chọn GOM TIN; dùng chung số phút của BUY đã xếp lệnh.\n"
+            "Mỗi mã/sổ REAL hoặc PAPER chỉ một dòng trạng thái mới nhất. "
+            "Các ô giãn BUY kỹ thuật/MẤT BUY áp dụng khi gửi riêng.\n"
+            "PROTECT, E ALERT, CLOSED và lỗi hệ thống gửi riêng theo công tắc của chúng. "
+            "Không đổi rule mua bán hoặc TRACE.",
+        ).grid(row=0, column=1, padx=(8, 0))
+        self._telegram_buy_mode_changed()
         tele_actions = ctk.CTkFrame(card, fg_color="transparent")
-        tele_actions.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 3))
+        tele_actions.grid(row=6, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 3))
         tele_actions.grid_columnconfigure(0, weight=1)
         self.btn_tele_test = ctk.CTkButton(
             tele_actions, text="GỬI THỬ", width=100, height=32, fg_color="#3A3F47",
@@ -1368,7 +1386,7 @@ class ConnectionPopup:
             card, text="",
             font=("Segoe UI", 11), text_color=self.MUTED, anchor="w",
         )
-        self.tele_status.grid(row=6, column=0, columnspan=3, sticky="ew", padx=12, pady=(1, 10))
+        self.tele_status.grid(row=7, column=0, columnspan=3, sticky="ew", padx=12, pady=(1, 10))
 
     @staticmethod
     def _account_payload(data: Any) -> tuple[list[dict[str, Any]], str, str]:
@@ -2158,11 +2176,18 @@ class ConnectionPopup:
         )
 
     def _telegram_buy_mode_changed(self, _value: str = "") -> None:
+        batch = self.tele_buy_mode.get() == "GOM TIN"
         for widget in (self.tele_batch, self.tele_batch_suffix):
-            if self.tele_buy_mode.get() == "GOM TIN":
+            if batch:
                 widget.grid()
             else:
                 widget.grid_remove()
+        switch = getattr(self, "tele_batch_technical_switch", None)
+        if switch is not None:
+            switch.configure(state="normal" if batch else "disabled")
+            for key in ("blocked_buy", "buy_lost"):
+                self.tele_cooldown_entries[key].configure(
+                    state="disabled" if batch and self.tele_batch_technical.get() else "normal")
 
     def _save_telegram(self) -> None:
         token = self.tele_token.get().strip()
@@ -2183,6 +2208,10 @@ class ConnectionPopup:
                 return
         cooldowns: dict[str, int] = {}
         for key, entry in self.tele_cooldown_entries.items():
+            if (key in {"blocked_buy", "buy_lost"} and delivery_mode == "BATCH"
+                    and self.tele_batch_technical.get()):
+                cooldowns[key] = self.settings.telegram_cooldown_minutes[key]
+                continue
             try:
                 value = int(float(entry.get().strip()))
             except (TypeError, ValueError, OverflowError):
@@ -2200,6 +2229,7 @@ class ConnectionPopup:
         self.settings.telegram_chat_id = chat_id
         self.settings.telegram_buy_delivery_mode = delivery_mode
         self.settings.telegram_buy_batch_minutes = batch_minutes
+        self.settings.telegram_batch_technical_signals = bool(self.tele_batch_technical.get())
         self.settings.telegram_notifications = {
             key: bool(variable.get())
             for key, variable in self.tele_event_switches.items()

@@ -137,6 +137,13 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   lịch nghỉ/chốt quyền, SELL trên DNSE app, hệ thống. BUY đã xếp mặc định GỬI NGAY;
   có thể đổi GOM TIN (mặc định nhớ 30 phút, chỉnh 1–120). Cửa sổ gom tính từ lệnh đầu tiên;
   không có lệnh mới thì không có tin gom mới, không trì hoãn đặt lệnh.
+  Trong cùng popup **KẾT NỐI → TELEGRAM**, bật **GOM CẢ BUY KỸ THUẬT / MẤT BUY**
+  để gom thêm tín hiệu tham khảo theo cùng số phút. Mỗi mã/sổ REAL hoặc PAPER chỉ giữ
+  trạng thái mới nhất; giãn riêng BUY kỹ thuật/MẤT BUY không áp dụng khi gom.
+  Hàng chờ tín hiệu lưu trên đĩa, giữ mốc gom qua restart và thử lại tin lỗi sau 60 giây.
+  Tin dài chia phần để không mất mã; phần đã gửi thành công không gửi lại.
+  PROTECT, E ALERT, CLOSED và lỗi hệ thống gửi riêng. Checkbox mặc định OFF để giữ lựa chọn cũ;
+  chọn GỬI NGAY hoặc tắt checkbox sẽ gửi riêng các tín hiệu còn chờ, vẫn giữ công tắc từng loại.
   GỬI NGAY lỗi mạng giữ tin BUY đã xếp để thử lại sau 60 giây khi app còn chạy;
   tin thử lại vẫn riêng từng lệnh, chỉ thử lại tin thất bại. Tắt nhóm/Telegram hoặc đổi nơi gửi hủy tin chờ.
   Giãn mặc định: BUY EMA/RSI 60 phút, MẤT BUY 60, E ALERT 30, hệ thống 30, lịch 1440;

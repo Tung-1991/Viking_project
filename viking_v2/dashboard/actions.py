@@ -1277,6 +1277,10 @@ class DashboardActionsMixin:
         values = getattr(self.settings, "telegram_notifications", {})
         return bool(values.get(str(key or ""), False)) if isinstance(values, dict) else False
 
+    def _technical_telegram_batch_enabled(self) -> bool:
+        return bool(getattr(self.settings, "telegram_batch_technical_signals", False)
+                    and getattr(self.settings, "telegram_buy_delivery_mode", "IMMEDIATE") == "BATCH")
+
     def _telegram_cooldown_seconds(self, key: str) -> float:
         values = getattr(self.settings, "telegram_cooldown_minutes", {})
         if not isinstance(values, dict):
@@ -1340,6 +1344,11 @@ class DashboardActionsMixin:
         )
         if lost:
             DashboardActionsMixin._notify_buy_lost(self, lost)
+        elif (watch.get("lost_snapshot") and not watch.get("active") and not watch.get("queued")
+              and DashboardActionsMixin._technical_telegram_batch_enabled(self)):
+            # A BUY retained for a digest can lose its conditions before delivery.
+            # Replace it with the latest loss rather than report a stale BUY.
+            DashboardActionsMixin._notify_buy_lost(self, watch)
 
         event = str(decision.event or "").upper()
         triggered_events = {
@@ -1547,29 +1556,83 @@ class DashboardActionsMixin:
     def _notify_buy_lost(self, watch: dict[str, Any]) -> None:
         service = self.telegram
         snapshot = watch.get("lost_snapshot") or {}
-        if (not service or not snapshot or watch.get("queued") or not watch.get("announced")
-                or not DashboardActionsMixin._telegram_notification_enabled(self, "buy_lost")):
+        if not service or not snapshot or watch.get("queued"):
             return
         symbol, mode = str(watch.get("symbol", "")), str(watch.get("execution_mode", ""))
+        pending = []
+        if DashboardActionsMixin._technical_telegram_batch_enabled(self):
+            pending = [notice for notice in self.rule_state.pending_telegram_notices()
+                       if notice.get("batch_technical") and notice["category"] == "blocked_buy"
+                       and notice.get("watch_id") == watch.get("id")
+                       and notice["symbol"] == symbol and notice["execution_mode"] == mode]
+        if not watch.get("announced") and not pending:
+            return
+        if not DashboardActionsMixin._telegram_notification_enabled(self, "buy_lost"):
+            for notice in pending:
+                self.rule_state.discard_telegram_notice(notice["id"])
+            return
         DashboardActionsMixin._queue_telegram_notice(
             self, service, "buy_lost", f"buy_lost|{mode}", symbol, str(watch["id"]),
             {"symbol": symbol, "execution_mode": mode,
                     **{key: snapshot[key] for key in (
                         "price", "indicators", "ema_enabled", "rsi_enabled", "observed_at",
-                     )}},
+                     )}}, watch_id=str(watch["id"]),
         )
 
     def _queue_telegram_notice(self, service: Any, category: str, key: str, symbol: str,
                                occurrence: str, payload: dict, *, watch_id: str = "") -> None:
+        batch = (category in {"blocked_buy", "buy_lost"}
+                 and DashboardActionsMixin._technical_telegram_batch_enabled(self))
         identity = self.rule_state.queue_telegram_notice(
             f"TELEGRAM|{key.upper()}|{symbol.upper()}", occurrence,
             {"category": category, "symbol": symbol, "execution_mode": payload["execution_mode"],
              "destination": str(getattr(service, "chat_id", self.settings.telegram_chat_id)),
-             "payload": payload, "watch_id": watch_id},
-            DashboardActionsMixin._telegram_cooldown_seconds(self, category),
+             "payload": payload, "watch_id": watch_id, "batch_technical": batch},
+            0.0 if batch else DashboardActionsMixin._telegram_cooldown_seconds(self, category),
         )
-        if identity:
+        if identity and not batch:
             DashboardActionsMixin._dispatch_telegram_notice(self, identity, service)
+
+    def _technical_telegram_notice_is_current(self, notice: dict) -> bool:
+        watch = self.rule_state.telegram_buy_watch(notice["symbol"], notice["execution_mode"])
+        return not (watch and notice.get("watch_id") and (
+            watch.get("id") != notice["watch_id"]
+            or (notice["category"] == "buy_lost" and (watch.get("active") or watch.get("queued")))
+            or (notice["category"] == "blocked_buy" and not watch.get("active"))))
+
+    def _dispatch_technical_telegram_digest(self, service: Any) -> None:
+        notices = self.rule_state.claim_telegram_technical_batch(
+            max(1, int(self.settings.telegram_buy_batch_minutes)) * 60.0, str(service.chat_id))
+        if not notices:
+            return
+
+        def send_digest() -> None:
+            delivered: set[str] = set()
+            try:
+                if (not self.settings.telegram_enabled or self.telegram is not service
+                        or not DashboardActionsMixin._technical_telegram_batch_enabled(self)):
+                    return
+                selected = []
+                for notice in notices:
+                    if (not DashboardActionsMixin._technical_telegram_notice_is_current(self, notice)
+                            or not DashboardActionsMixin._telegram_notification_enabled(self, notice["category"])
+                            or notice["destination"] != str(service.chat_id)):
+                        self.rule_state.discard_telegram_notice(notice["id"])
+                    else:
+                        selected.append(notice)
+                delivered = service.notify_technical_digest(selected)
+            except Exception as exc:
+                logger = getattr(self, "logger", None)
+                if logger:
+                    logger.warning("Telegram digest delivery failed: %s", type(exc).__name__)
+            finally:
+                for notice in notices:
+                    lost = self.rule_state.finish_telegram_notice(
+                        notice["id"], notice["attempt_id"], sent=notice["id"] in delivered)
+                    if lost:
+                        DashboardActionsMixin._notify_buy_lost(self, lost)
+
+        threading.Thread(target=send_digest, kwargs={}, daemon=True).start()
 
     def _dispatch_telegram_notice(self, identity: str, service: Any) -> None:
         notice = self.rule_state.claim_telegram_notice(identity)
@@ -1583,6 +1646,8 @@ class DashboardActionsMixin:
                 destination = str(getattr(current_service, "chat_id", self.settings.telegram_chat_id))
                 if (not self.settings.telegram_enabled
                         or not DashboardActionsMixin._telegram_notification_enabled(self, notice["category"])
+                        or (notice.get("batch_technical")
+                            and not DashboardActionsMixin._technical_telegram_notice_is_current(self, notice))
                         or destination != notice["destination"]):
                     self.rule_state.discard_telegram_notice(identity)
                     return
@@ -1617,8 +1682,12 @@ class DashboardActionsMixin:
                 if (not self.settings.telegram_enabled or not enabled
                         or destination != notice["destination"]):
                     self.rule_state.discard_telegram_notice(notice["id"])
-                elif service is not None:
+                elif (service is not None and not (notice.get("batch_technical")
+                        and DashboardActionsMixin._technical_telegram_batch_enabled(self))):
                     DashboardActionsMixin._dispatch_telegram_notice(self, notice["id"], service)
+            if (service is not None and self.settings.telegram_enabled
+                    and DashboardActionsMixin._technical_telegram_batch_enabled(self)):
+                DashboardActionsMixin._dispatch_technical_telegram_digest(self, service)
         except Exception as exc:
             # Notification storage must not stop scheduling UI/trading polls.
             now = time.time()
@@ -1644,6 +1713,8 @@ class DashboardActionsMixin:
                 str(details.get("signal_cycle") or details.get("candle_key") or decision.timestamp),
             )
         )
+        if watch_id and DashboardActionsMixin._technical_telegram_batch_enabled(self):
+            occurrence = f"BUY|{watch_id}"
         DashboardActionsMixin._queue_telegram_notice(
             self, service, "blocked_buy", f"blocked_buy|{str(execution_mode or '').upper()}|TECHNICAL",
             symbol, occurrence,

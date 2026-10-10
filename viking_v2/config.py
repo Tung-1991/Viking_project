@@ -347,6 +347,7 @@ class AppSettings:
     telegram_token_env: str = "TELE_BOT_KEY"
     telegram_buy_delivery_mode: str = "IMMEDIATE"
     telegram_buy_batch_minutes: int = 30
+    telegram_batch_technical_signals: bool = False
     # Per-event delivery controls shared by PAPER and REAL.
     telegram_notifications: dict[str, bool] = field(
         default_factory=lambda: dict(TELEGRAM_NOTIFICATION_DEFAULTS)
@@ -442,6 +443,7 @@ class AppSettings:
         ).strip().upper()
         if self.telegram_buy_delivery_mode not in {"IMMEDIATE", "BATCH"}:
             self.telegram_buy_delivery_mode = "IMMEDIATE"
+        self.telegram_batch_technical_signals = self.telegram_batch_technical_signals is True
         try:
             self.telegram_buy_batch_minutes = max(
                 1, min(120, int(float(self.telegram_buy_batch_minutes or 30)))

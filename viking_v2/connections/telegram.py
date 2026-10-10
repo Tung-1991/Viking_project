@@ -348,6 +348,34 @@ class SignalTelegramService:
         lines.append("Chỉ báo kỹ thuật; không xác nhận đã gửi/khớp lệnh.")
         return self._send("\n".join(lines))
 
+    def notify_technical_digest(self, notices: list[dict[str, Any]]) -> set[str]:
+        """Return only delivered IDs; split large digests instead of truncating."""
+        header = "⚪ BUY KỸ THUẬT / MẤT BUY · TRẠNG THÁI MỚI NHẤT\nChỉ báo kỹ thuật; không xác nhận gửi/khớp lệnh.\n"
+        chunks: list[tuple[str, list[str]]] = []
+        text, ids = header, []
+        for notice in sorted(notices, key=lambda row: (row["symbol"], row["execution_mode"])):
+            payload = notice["payload"]
+            marks = payload["indicators"]
+            state = "MẤT BUY" if notice["category"] == "buy_lost" else "BUY"
+            line = f"{notice['symbol']} {notice['execution_mode']} · {state} · {self._price(payload['price'])}"
+            if payload["ema_enabled"]:
+                line += " · EMA " + self._comparison(marks["buy_ema_fast"], marks["buy_ema_slow"])
+            if payload["rsi_enabled"]:
+                line += " · RSI " + self._comparison(marks["rsi"], marks["rsi_previous"])
+            if ids and len(text) + len(line) + 1 > 3800:
+                chunks.append((text, ids))
+                text, ids = header, []
+            text += line + "\n"
+            ids.append(notice["id"])
+        if ids:
+            chunks.append((text, ids))
+        delivered: set[str] = set()
+        for text, ids in chunks:
+            if not self._send(text.rstrip()):
+                break
+            delivered.update(ids)
+        return delivered
+
     @staticmethod
     def _comparison(left: float, right: float, *, scale: float = 1.0) -> str:
         """Compare unrounded values; expand precision if two labels collide."""

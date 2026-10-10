@@ -879,6 +879,12 @@ class RuleStateStore:
         with self._lock:
             raw = self._read()
             if identity in raw["telegram_notices"]:
+                saved = raw["telegram_notices"][identity]
+                if notice.get("batch_technical") and (
+                        not saved.get("attempt_id") or now >= saved.get("retry_at", 0.0)):
+                    saved.pop("attempt_id", None)
+                    saved.update(payload=notice["payload"], watch_id=notice.get("watch_id", ""))
+                    self.store.write(raw)
                 return identity
             previous = raw["processed_alerts"].get(alert_key)
             if isinstance(previous, dict):
@@ -892,9 +898,22 @@ class RuleStateStore:
                    and now < item["created_at"] + cooldown_seconds
                    for item in raw["telegram_notices"].values()):
                 return ""
+            created_at, retry_at = now, 0.0
+            if notice.get("batch_technical"):
+                # Coalesce only unsent technical notices. Never replace evidence
+                # already leased to a sender, or reset the original batch clock.
+                for pending_id, pending in list(raw["telegram_notices"].items()):
+                    if (pending.get("batch_technical")
+                            and (not pending.get("attempt_id") or now >= pending.get("retry_at", 0.0))
+                            and pending.get("destination") == notice.get("destination")
+                            and pending.get("symbol") == notice.get("symbol")
+                            and pending.get("execution_mode") == notice.get("execution_mode")):
+                        created_at = min(created_at, pending["created_at"])
+                        retry_at = max(retry_at, pending.get("retry_at", 0.0))
+                        raw["telegram_notices"].pop(pending_id)
             raw["telegram_notices"][identity] = {
                 **notice, "id": identity, "alert_key": alert_key,
-                "occurrence": occurrence, "created_at": now, "retry_at": 0.0,
+                "occurrence": occurrence, "created_at": created_at, "retry_at": retry_at,
             }
             self.store.write(raw)
             return identity
@@ -915,6 +934,26 @@ class RuleStateStore:
             notice.update(attempt_id=uuid.uuid4().hex, retry_at=now + 60.0)
             self.store.write(raw)
             return dict(notice)
+
+    def claim_telegram_technical_batch(self, seconds: float, destination: str) -> list[dict[str, Any]]:
+        """Claim a due digest atomically; its window survives a process restart."""
+        with self._lock:
+            raw = self._read()
+            now = time.time()
+            notices = [notice for notice in raw["telegram_notices"].values()
+                       if notice.get("batch_technical") and notice.get("destination") == destination
+                       and now >= notice.get("retry_at", 0.0)]
+            if not notices or now < min(notice["created_at"] for notice in notices) + seconds:
+                return []
+            for notice in notices:
+                notice.update(attempt_id=uuid.uuid4().hex, retry_at=now + 300.0)
+            self.store.write(raw)
+            return [dict(notice) for notice in notices]
+
+    def telegram_buy_watch(self, symbol: str, stream: str) -> dict[str, Any]:
+        with self._lock:
+            return dict(self._read()["telegram_buy_watches"].get(
+                self._buy_confirmation_key(symbol, stream)) or {})
 
     def finish_telegram_notice(self, identity: str, attempt_id: str, *, sent: bool) -> dict[str, Any] | None:
         """Commit delivery and the BUY watch together; retain failures for retry."""
