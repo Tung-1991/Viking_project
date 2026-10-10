@@ -250,7 +250,7 @@ def test_buy_window_preserves_actual_cross_proof_without_requiring_another_cross
     from viking_v2.rules.business import StaticRule, StaticRuleParameters
     from viking_v2.rules.entry_filters import apply_buy_filters
     from viking_v2.trading.market import VN_TZ
-    rule = StaticRule(StaticRuleParameters(whipsaw_enabled=False))
+    rule = StaticRule(StaticRuleParameters(whipsaw_enabled=False, buy_signal_session_cross_enabled=False))
     marks = dict(buy_ema_fast=22.45, buy_ema_slow=22.4, rsi=58, rsi_previous=57.5)
     evidence = ema_cross_evidence(marks, dict(buy_ema_fast=22.39, buy_ema_slow=22.4),
                                   required=True, observed_at="2026-10-09T13:39:31+07:00")

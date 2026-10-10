@@ -238,7 +238,8 @@ def test_new_signal_can_add_but_exits_and_maximum_win(tmp_path):
 def test_scale_in_still_obeys_buy_confirmation(tmp_path):
     from datetime import datetime
     from viking_v2.trading.market import VN_TZ
-    rule = StaticRule(StaticRuleParameters.from_dict({"buy_confirmation_enabled": True, "buy_confirmation_minutes": 5}))
+    rule = StaticRule(StaticRuleParameters.from_dict({"buy_confirmation_enabled": True, "buy_confirmation_minutes": 5,
+                                                    "buy_signal_session_cross_enabled": False}))
     b = builder(tmp_path)
     cycle = b.trades.create("MSN", "PAPER")
     b.trades.record_buy_fill(cycle.id, 100, 70, order_id="first")

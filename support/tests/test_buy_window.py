@@ -20,7 +20,9 @@ def clock(value, day=4):
 
 
 def step(state, at, *, raw=False, ema=True, rsi=True, params=None, portfolio=None):
-    rule = StaticRule(params or StaticRuleParameters(buy_window_enabled=True, whipsaw_enabled=False))
+    # These legacy filter inputs intentionally contain no session-cross evidence.
+    rule = StaticRule(params or StaticRuleParameters(buy_window_enabled=True, whipsaw_enabled=False,
+                                                    buy_signal_session_cross_enabled=False))
     indicators = {"buy_ema_fast": 11 if ema else 9, "buy_ema_slow": 10,
                   "rsi": 51 if rsi else 49, "rsi_previous": 50}
     decision = StrategyDecision("BUY" if raw else "WAIT", "CTS", "BUY_SIGNAL" if raw else "NO_NEW_BUY_SIGNAL",
@@ -54,7 +56,8 @@ def test_broken_morning_signal_requires_a_new_cross(broken):
 
 
 def test_hdb_rsi_equality_cancels_waiting_buy_without_placing_an_order():
-    rule = StaticRule(StaticRuleParameters(buy_window_enabled=True, whipsaw_enabled=False))
+    rule = StaticRule(StaticRuleParameters(buy_window_enabled=True, whipsaw_enabled=False,
+                                         buy_signal_session_cross_enabled=False))
     baseline = 56.79212294979958
     context = {"symbol": "HDB", "signal_mode": "REALTIME", "confirmed_market_state": "ACCUMULATION"}
     portfolio = {"available_capital": 15_000_000}
@@ -83,6 +86,7 @@ def test_hdb_rsi_equality_cancels_waiting_buy_without_placing_an_order():
 
 def test_window_holds_only_the_enabled_base_buy_conditions():
     params = StaticRuleParameters(
+        buy_signal_session_cross_enabled=False,
         buy_window_enabled=True,
         buy_signal_use_ema=True,
         buy_signal_use_rsi=False,
@@ -109,6 +113,7 @@ def test_window_release_rechecks_entry_guards(portfolio, reason):
 
 def test_combined_filters_start_timer_at_1400_and_allow_rsi_only():
     params = StaticRuleParameters(buy_window_enabled=True, buy_confirmation_enabled=True,
+                                  buy_signal_session_cross_enabled=False,
                                   buy_confirmation_require_ema=False, buy_confirmation_require_rsi=True,
                                   whipsaw_enabled=False)
     state, _ = step({}, clock("09:52"), raw=True, params=params)

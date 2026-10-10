@@ -2,7 +2,8 @@
 
 ## Hành vi
 
-- Thêm `buy_signal_session_cross_enabled`, mặc định OFF, trong RULE → Phase 2 → BUY.
+- Thêm `buy_signal_session_cross_enabled`, mặc định ON, trong RULE → Phase 2 → BUY.
+  Cấu hình chưa có khóa này nhận ON; giá trị OFF đã lưu vẫn được giữ nguyên.
   Khi ON với REALTIME và hai lựa chọn EMA, lần cắt lên trong ngày còn hiệu lực có thể dùng sau restart.
 - Khi đang chạy vẫn nhận cắt mới theo nhịp chỉ báo; lịch sử giá phút dùng khôi phục phần không quan sát được.
   EMA được dựng từ các phiên ngày đã đóng và một giá đóng ngày tạm tính, không đổi sang EMA trên nến phút.
@@ -19,7 +20,7 @@
 - Preview thêm trạng thái CÒN HIỆU LỰC / ĐÃ DÙNG + giờ / HẾT PHIÊN trong vùng P2 hiện có.
   TRACE vẫn cấu hình duy nhất tại Lịch sử; khóa lỗ vẫn THEO GIỜ / KHÓA HẲN.
 
-## Kiểm thử mới
+## Kiểm thử khi triển khai tính năng
 
 `support/tests/test_session_ema_cross.py`: 40 trường hợp đạt trong 16,24 giây, chạy bằng
 `support/tools/run_offline.py`, không đọc dotenv và không có kết nối mạng.
@@ -42,8 +43,24 @@ Các đối chứng đã chạy:
 Kết quả suite cuối và XML nằm trong `.artifacts/session_cross_20261010/verified_full_output.txt`
 và `verified_full.xml` của lượt kiểm thử này; kiểm thử riêng chức năng nằm trong `final_feature.xml`.
 
-Suite toàn bộ trên bản code cuối: **2.001 passed trong 278,28 giây**, JUnit **0 failure, 0 error, 0 skipped**.
+Suite toàn bộ khi triển khai tính năng, trước khi đổi mặc định: **2.001 passed trong 278,28 giây**,
+JUnit **0 failure, 0 error, 0 skipped**.
 Lệnh: `.\ckvnvenv\Scripts\python.exe support/tools/run_offline.py support/tests -q --disable-warnings --tb=short`.
+
+## Đổi mặc định sang ON
+
+- Mặc định thống nhất trong config, RULE, Backtest và hint preview. Giữ cắt trong phiên chỉ áp dụng REALTIME.
+- Cấu hình mới hoặc chưa có khóa nhận ON; giá trị OFF đã lưu được giữ nguyên qua load/save.
+  Không sửa runtime tài khoản; VPS đã lưu OFF thì bật lựa chọn trong RULE một lần.
+- Đối chứng MARKET, quote cuối xuống, hết phiên và UNKNOWN dùng trực tiếp mặc định của `StaticRuleParameters`.
+  Lệnh hợp lệ được broker giả nhận; trường hợp không hợp lệ bị chặn; UNKNOWN không gửi lại.
+- Các test lọc tín hiệu cũ truyền snapshot không có dữ liệu giao cắt trong phiên đặt rõ OFF.
+  Giữ các assertion cũ; không nới kiểm tra dữ liệu hoặc điều kiện BUY để làm test đạt.
+- **514 test liên quan đạt trong 48,68 giây**, JUnit **0 failure, 0 error, 0 skipped**.
+  Kết quả: `.artifacts/session_cross_default_on_20261010/verified_targeted_output.txt` và `verified_targeted.xml`.
+- Suite toàn bộ trên bản code mặc định ON: **2.006 passed trong 274,33 giây**,
+  JUnit **0 failure, 0 error, 0 skipped**, chạy qua `support/tools/run_offline.py`.
+  Kết quả: `.artifacts/session_cross_default_on_20261010/verified_full_output.txt` và `verified_full.xml`.
 
 ## Phụ thuộc dữ liệu broker
 

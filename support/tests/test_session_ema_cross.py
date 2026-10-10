@@ -81,7 +81,7 @@ def test_restart_1420_recovers_1410_cross_and_can_buy_without_new_cross(tmp_path
     assert cross["cross_at"] == CROSS.isoformat()
     assert StaticRule(parameters()).evaluate(rule_context(bars, marks, cross), portfolio()).action == "BUY"
     assert StaticRule(parameters(buy_signal_require_ema_cross=False)).params.buy_signal_require_ema_cross is False
-    old = StaticRule(StaticRuleParameters(whipsaw_enabled=False))
+    old = StaticRule(StaticRuleParameters(buy_signal_session_cross_enabled=False, whipsaw_enabled=False))
     assert old.evaluate(rule_context(bars, marks, cross), portfolio()).action == "WAIT"
     assert len(broker.calls) == 2  # Morning and afternoon, excluding lunch.
     restarted = SessionCrossService(SessionPriceCache(tmp_path / "minutes.json", broker),
@@ -241,12 +241,13 @@ def test_queue_write_failure_rolls_back_cross_claim(tmp_path, monkeypatch, clock
 
 @pytest.mark.parametrize("scenario", ["valid", "down", "last_quote_down", "expired", "unknown"])
 def test_actual_fake_broker_submission_and_last_moment_checks(tmp_path, clock, scenario):
-    _, state, _, bars, marks, cross = observed(tmp_path)
+    params = StaticRuleParameters(whipsaw_enabled=False)
+    _, state, _, bars, marks, cross = observed(tmp_path, params=params)
     queue = OrderQueue(tmp_path / "orders.json")
     queue._now = lambda: NOW.timestamp()
     trades = TradeStateStore(tmp_path / "trades.json")
     planner = StrategyOrderPlanner(queue, trades, state)
-    decision = StaticRule(parameters()).evaluate(rule_context(bars, marks, cross), portfolio())
+    decision = StaticRule(params).evaluate(rule_context(bars, marks, cross), portfolio())
     intent = planner.plan(decision, execution_mode="REAL", execution_style="MARKET", tick={"ask": 104},
                           portfolio=portfolio(), candle_key=cross["cross_id"]).intent
     sent = []
@@ -362,19 +363,39 @@ def test_cross_expires_after_close_and_old_day_cannot_be_claimed(tmp_path, clock
     assert not state.claim_session_cross("TEST", "REAL", cross["cross_id"], now=(NOW + timedelta(days=1)).timestamp())
 
 
-def test_switch_roundtrip_and_preview_are_small_and_explicit(ui_root, monkeypatch, tmp_path):
+@pytest.mark.parametrize("configured,expected", [(None, True), ({}, True),
+    ({"buy_signal_session_cross_enabled": True}, True),
+    ({"buy_signal_session_cross_enabled": False}, False)])
+def test_session_cross_default_and_saved_preference_survive_load_save(tmp_path, monkeypatch, configured, expected):
+    import json
+    from viking_v2 import config
+    monkeypatch.setattr(config, "ACCOUNTS_ROOT", tmp_path / "accounts")
+    if configured is not None:
+        path = config.account_root("SESSION_DEFAULT") / "settings.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"rule_parameters": configured}), encoding="utf-8")
+    settings = config.load_settings("SESSION_DEFAULT")
+    assert settings.rule_parameters["buy_signal_session_cross_enabled"] is expected
+    assert StaticRuleParameters.from_dict(settings.rule_parameters).buy_signal_session_cross_enabled is expected
+    config.save_settings(settings, "SESSION_DEFAULT")
+    assert config.load_settings("SESSION_DEFAULT").rule_parameters["buy_signal_session_cross_enabled"] is expected
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_switch_roundtrip_and_preview_are_small_and_explicit(ui_root, monkeypatch, tmp_path, enabled):
     from viking_v2 import config
     from viking_v2.rules.window import RuleSettingsPopup
     monkeypatch.setattr(config, "ACCOUNTS_ROOT", tmp_path / "accounts")
     settings = AppSettings()
-    assert not StaticRuleParameters().buy_signal_session_cross_enabled
+    assert StaticRuleParameters().buy_signal_session_cross_enabled
     popup = RuleSettingsPopup(ui_root, settings, "SESSION_UI", lambda: None)
     try:
-        popup.buy_signal_session_cross_enabled.set(True)
+        assert popup.buy_signal_session_cross_enabled.get() is True
+        popup.buy_signal_session_cross_enabled.set(enabled)
         popup.save()
         assert "ĐÃ LƯU" in popup.status.cget("text")
         saved = config.load_settings("SESSION_UI")
-        assert StaticRuleParameters.from_dict(saved.rule_parameters).buy_signal_session_cross_enabled
+        assert StaticRuleParameters.from_dict(saved.rule_parameters).buy_signal_session_cross_enabled is enabled
     finally:
         popup._close()
     for state, text in (("SESSION_ACTIVE", "CÒN HIỆU LỰC 14:10"), ("SESSION_USED", "ĐÃ DÙNG 14:10")):

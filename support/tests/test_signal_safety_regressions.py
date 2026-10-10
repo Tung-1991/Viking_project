@@ -37,6 +37,7 @@ def test_whipsaw_daily_counter_and_threshold_control():
     p = dict(available_capital=100_000_000)
     for enabled, action in [(True, 'WAIT'), (False, 'BUY')]:
         rule = StaticRule(StaticRuleParameters(buy_ema_fast=1, buy_ema_slow=2,
+            buy_signal_session_cross_enabled=False,
             buy_signal_use_rsi=False, whipsaw_enabled=enabled, whipsaw_n=3, whipsaw_x=4))
         result = rule.evaluate(source, p)
         assert result.action == action
@@ -96,6 +97,7 @@ def portfolio():
 @pytest.mark.parametrize('exit_event', ['STOP_LOSS', 'TAKE_PROFIT', 'INDICATOR_EXIT'])
 def test_buy_filters_must_preserve_exits_during_scale_in_wait(filter_kind, exit_event):
     params = StaticRuleParameters(whipsaw_enabled=False,
+        buy_signal_session_cross_enabled=False,
         indicator_exit_policy='AUTO',
         buy_window_enabled=filter_kind == 'window',
         buy_confirmation_enabled=filter_kind == 'confirmation',
@@ -127,6 +129,7 @@ def test_buy_filters_must_preserve_exits_during_scale_in_wait(filter_kind, exit_
 @pytest.mark.parametrize('filter_kind', ['window', 'confirmation'])
 def test_valid_scale_in_candidate_must_release_without_a_second_cross(filter_kind):
     rule = StaticRule(StaticRuleParameters(whipsaw_enabled=False,
+        buy_signal_session_cross_enabled=False,
         buy_window_enabled=filter_kind == 'window',
         buy_confirmation_enabled=filter_kind == 'confirmation',
         buy_confirmation_minutes=5))
@@ -227,7 +230,7 @@ def test_minute_cross_timestamp_must_not_move_on_unchanged_bucket(tmp_path):
     repeated = store.observe_indicator_bucket('MSN', 'REAL', '2026-10-09', '1M', 1001,
         103, base, lambda price: marks(fast=price))
     assert first['advanced'] and not repeated['advanced']
-    rule = StaticRule(StaticRuleParameters(whipsaw_enabled=False))
+    rule = StaticRule(StaticRuleParameters(whipsaw_enabled=False, buy_signal_session_cross_enabled=False))
     values = []
     for result, clock in [(first, '14:01:00'), (repeated, '14:01:55')]:
         decision = rule.evaluate(context(result['current'], result['previous'], clock),
@@ -278,7 +281,8 @@ def test_confirmed_scale_in_preserves_position_management(event):
     ({'corporate_action_blocked': True}, 'CORPORATE_ACTION_BLOCK'),
 ])
 def test_scale_in_release_rechecks_guards(updates, reason):
-    rule = StaticRule(StaticRuleParameters(whipsaw_enabled=False, buy_window_enabled=True))
+    rule = StaticRule(StaticRuleParameters(whipsaw_enabled=False, buy_window_enabled=True,
+                                         buy_signal_session_cross_enabled=False))
     p, source = portfolio(), context(clock='13:59:00')
     state, waiting = apply_buy_filters(rule, rule.evaluate(source, p), source, p, {},
         observed_at=at('13:59:00'), exchange='HOSE')

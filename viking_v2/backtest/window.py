@@ -1588,7 +1588,7 @@ class BacktestPopup:
         self.buy_signal_ema.set(bool(params.get("buy_signal_use_ema", True)))
         self.buy_signal_rsi.set(bool(params.get("buy_signal_use_rsi", True)))
         self.buy_signal_require_ema_cross.set(bool(params.get("buy_signal_require_ema_cross", True)))
-        self.buy_signal_session_cross_enabled.set(bool(params.get("buy_signal_session_cross_enabled", False)))
+        self.buy_signal_session_cross_enabled.set(bool(params.get("buy_signal_session_cross_enabled", True)))
         self.sell_signal_ema.set(bool(params.get("sell_signal_use_ema", True)))
         self.sell_signal_rsi.set(bool(params.get("sell_signal_use_rsi", True)))
         indicator_exit_policy = str(

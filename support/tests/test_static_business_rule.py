@@ -226,7 +226,7 @@ def test_strategy_decision_carries_phase1_confirmation_and_phase3_checks_for_pre
 
 
 def test_realtime_mode_can_use_live_daily_bar_but_closed_mode_cannot():
-    rule = StaticRule()
+    rule = StaticRule(StaticRuleParameters(buy_signal_session_cross_enabled=False))
     context = {
         "symbol": "FPT",
         "bars": _bars(M_VALUES, last_closed=False),

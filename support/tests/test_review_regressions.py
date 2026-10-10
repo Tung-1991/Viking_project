@@ -547,7 +547,7 @@ def test_buy_window_release_has_actual_broker_post_control(tmp_path, monkeypatch
     monkeypatch.setattr(time, "time", lambda: now.timestamp())
     broker, queue, trades, rules, service = fixture_book(tmp_path, quote_provider=fresh_quote)
     queue._now = lambda: now.timestamp()
-    rule = StaticRule(StaticRuleParameters(whipsaw_enabled=False))
+    rule = StaticRule(StaticRuleParameters(whipsaw_enabled=False, buy_signal_session_cross_enabled=False))
     marks = dict(sample_count=50, buy_ema_fast=51, buy_ema_slow=50,
         sell_ema_fast=51, sell_ema_slow=50, rsi=60, rsi_previous=55,
         buy_ema_slow_period=6, sell_ema_slow_period=6, rsi_period=14)

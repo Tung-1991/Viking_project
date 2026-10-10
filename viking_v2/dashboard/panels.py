@@ -1645,7 +1645,8 @@ class DashboardPanelsMixin:
             if str(self.settings.signal_mode).upper() == "REALTIME"
             else "RSI 1D: hai phiên đã đóng liên tiếp, trái trước → phải sau; không so với tick trước."
         )
-        if (params.get("buy_signal_session_cross_enabled", False)
+        if (str(self.settings.signal_mode).upper() == "REALTIME"
+                and params.get("buy_signal_session_cross_enabled", True)
                 and params.get("buy_signal_use_ema", True) and params.get("buy_signal_require_ema_cross", True)):
             buy_ema_rule = "BUY nhận lần cắt lên trong phiên còn hiệu lực, kể cả sau restart; mỗi lần cắt chỉ dùng một lần."
         text = (

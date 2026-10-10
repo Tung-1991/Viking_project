@@ -98,7 +98,8 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Bật lại BOT/hết khóa bán tay không phục hồi lệnh cũ. Khi chỉ bật yêu cầu vừa cắt,
   EMA đã nằm trên không tự sinh ENTRY mới; tắt yêu cầu này thì xét mức EMA hiện tại.
   Cập nhật giữ OFF đã lưu; nạp preset VA bật ON.
-  **GIỮ LẦN CẮT TRONG PHIÊN** là lựa chọn thêm trong RULE → Phase 2 → BUY, mặc định OFF.
+  **GIỮ LẦN CẮT TRONG PHIÊN** là lựa chọn trong RULE → Phase 2 → BUY, mặc định ON.
+  Cấu hình cũ chưa có lựa chọn này nhận ON; giá trị OFF đã lưu được giữ nguyên.
   Chỉ áp dụng với REALTIME + DÙNG EMA + yêu cầu vừa cắt. ON nhận lần cắt lên còn hiệu lực
   trong ngày: cắt lúc 14:10, restart 14:20 vẫn xét BUY nếu khôi phục được dữ liệu và điều kiện hiện tại đạt.
   EMA vẫn tính trên nến ngày; giá phút đã đóng chỉ dùng dựng lại diễn biến nến ngày trong phiên.

@@ -125,7 +125,8 @@ def test_rule_ui_option_is_explicit_and_saves_without_touching_other_settings(ui
 def test_preview_hint_explains_the_saved_buy_option(enabled, text):
     from viking_v2.dashboard.panels import DashboardPanelsMixin
     view = DashboardPanelsMixin()
-    view.settings = AppSettings(rule_parameters={"buy_signal_require_ema_cross": enabled})
+    view.settings = AppSettings(rule_parameters={"buy_signal_require_ema_cross": enabled,
+                                               "buy_signal_session_cross_enabled": False})
     assert text in view._indicator_preview_hint()
 
 

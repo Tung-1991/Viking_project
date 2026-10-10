@@ -642,7 +642,7 @@ def test_technical_notification_does_not_open_entry_guards_after_14h(
     monkeypatch, tmp_path, reason, portfolio, whipsaw_count,
 ):
     from datetime import datetime
-    from viking_v2.rules.business import StaticRule
+    from viking_v2.rules.business import StaticRule, StaticRuleParameters
     from viking_v2.rules.entry_filters import apply_buy_filters
     from viking_v2.trading.market import VN_TZ
 
@@ -651,7 +651,7 @@ def test_technical_notification_does_not_open_entry_guards_after_14h(
     bars = [{"close": value, "volume": 1_000_000, "closed": True}
             for value in ([100] * 15 + [99, 98, 97, 98, 100])]
     context = {"symbol": "HDB", "bars": bars, "previous_market_state": "UPTREND", "signal_mode": "REALTIME"}
-    rule = StaticRule()
+    rule = StaticRule(StaticRuleParameters(buy_signal_session_cross_enabled=False))
     original = rule.evaluate(context, portfolio)
     _, decision = apply_buy_filters(
         rule, original, context, portfolio, {},
