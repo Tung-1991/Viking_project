@@ -107,7 +107,7 @@ def test_e_shows_market_price_and_signal_without_fabricating_a_fixed_exit(policy
     assert view.preview_exit_value.options["text"] == "TT: 74,200"
     detail = view.preview_exit_detail.options["text"]
     if quantity == 0:
-        assert detail == "CHƯA VỊ THẾ"
+        assert detail == "CHƯA CÓ CỔ"
         assert view.preview_exit_value.options["text_color"] != COL_RED
     elif policy == "ALERT":
         assert "CHỈ BÁO" in detail and "100%" not in detail

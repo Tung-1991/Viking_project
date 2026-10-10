@@ -179,6 +179,58 @@ def test_insufficient_history_does_not_invent_rsi_or_atr():
     assert "atr14_daily_pct" not in result
 
 
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+@pytest.mark.parametrize("phase", ["CLOSED", "WEEKEND"])
+def test_closed_preview_recovers_latest_book_observation_after_restart_without_writes(tmp_path, monkeypatch, mode, phase):
+    from viking_v2.rules.state import RuleStateStore
+    now = market_now().replace(hour=17, minute=29)
+    monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: now)
+    view = subject(mode)
+    state_path = tmp_path / "rules.json"
+    state = RuleStateStore(state_path)
+    for book, fast, slow in (("REAL", 74.0, 73.0), ("PAPER", 72.0, 73.0)):
+        state.save_session_cross("AAA", book, {"profile": "3/6", "current_ready": True,
+            "current_fast": fast, "current_slow": slow, "valid": False, "state": "WAIT_DOWN",
+            "observed_at_epoch": now.replace(hour=14, minute=44).timestamp(),
+            "expires_at": now.replace(hour=14, minute=45).timestamp()})
+    view.rule_state = RuleStateStore(state_path)
+    before = deepcopy(view.rule_state.store.read())
+    monkeypatch.setattr(view.rule_state.store, "write", lambda *_args: pytest.fail("Preview must not write rule state"))
+    result = view._preview_indicator_details({"symbol_phases": {"AAA": phase}}, "AAA")
+    saved = result["ema_cross_last_preview"]
+    assert saved["fast"] == (74 if mode == "REAL" else 72)
+    assert saved["slow"] == 73 and saved["label"] == "CUỐI 14:44"
+    assert result["ema_cross_preview_expired"]
+    assert "ema_cross" not in result and "action" not in result and "signal" not in result
+    assert view.rule_state.store.read() == before
+
+
+def test_closed_preview_uses_completed_daily_cache_when_saved_observation_is_wrong_profile(monkeypatch):
+    now = market_now().replace(hour=17, minute=29)
+    monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: now)
+    view = subject()
+    view.rule_state = SimpleNamespace(session_cross=lambda *_args: {
+        "profile": "5/10", "current_ready": True, "current_fast": 999, "current_slow": 998,
+        "observed_at_epoch": now.replace(hour=14, minute=44).timestamp(),
+        "expires_at": now.replace(hour=14, minute=45).timestamp()})
+    view._preview_bars.append({"time": now.timestamp(), "close": 10000, "closed": False})
+    before = deepcopy(view._preview_bars)
+    result = view._preview_indicator_details({"market_status": "CLOSED"}, "AAA")
+    saved = result["ema_cross_last_preview"]
+    expected = indicator_snapshot(history())
+    assert saved["source"] == "DAILY_CLOSE"
+    assert saved["fast"] == expected["buy_ema_fast"] and saved["slow"] == expected["buy_ema_slow"]
+    assert saved["label"].startswith("ĐÓNG ")
+    assert "ema_cross" not in result and view._preview_bars == before
+
+
+def test_live_preview_does_not_import_expired_observation_as_cross_evidence():
+    view = subject()
+    view.rule_state = SimpleNamespace(session_cross=lambda *_args: pytest.fail("Live preview must use live evidence"))
+    result = view._preview_indicator_details({"symbol_phases": {"AAA": "OPEN"}}, "AAA")
+    assert "ema_cross_last_preview" not in result and "ema_cross" not in result
+
+
 class DeferredExecutor:
     def __init__(self):
         self.calls = []

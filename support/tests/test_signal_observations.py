@@ -227,6 +227,16 @@ def test_phase2_cross_preview_occupies_existing_right_hand_space(ui_root):
             "ema_cross": {"crossed_up": True, "cross_at": "2026-10-09T13:39:31+07:00"}}})
         assert subject.preview_rule_cross.cget("text") == "ĐÃ LÊN 13:39:31"
         assert subject.preview_rule_cross.cget("text_color") == COL_GREEN
+        archived = {"ema_cross": evidence, "ema_cross_preview_closed": True,
+                    "ema_cross_preview_expired": True, "buy_window": {
+                        "state": "WAITING", "ema_cross": {"crossed_up": True}}, "ema_cross_last_preview": {
+                        "fast": 73.98, "slow": 73.13, "label": "CUỐI 14:44"}}
+        before = deepcopy(archived)
+        subject._render_ema_cross_preview(archived)
+        assert subject.preview_rule_cross.cget("text") == "HẾT PHIÊN"
+        assert subject.preview_rule_cross_detail.cget("text") == "CUỐI 14:44: 73.98 > 73.13"
+        assert subject.preview_rule_cross_detail.cget("text_color") == COL_GREEN
+        assert archived == before
         subject.settings.rule_parameters["buy_signal_require_ema_cross"] = False
         subject._render_ema_cross_preview({})
         assert subject.preview_rule_cross.cget("text") == "OFF"

@@ -62,6 +62,18 @@ Lệnh: `.\ckvnvenv\Scripts\python.exe support/tools/run_offline.py support/test
   JUnit **0 failure, 0 error, 0 skipped**, chạy qua `support/tools/run_offline.py`.
   Kết quả: `.artifacts/session_cross_default_on_20261010/verified_full_output.txt` và `verified_full.xml`.
 
+## Preview ngoài phiên và số cổ
+
+- Đổi `CHƯA VỊ THẾ` thành `CHƯA CÓ CỔ`; hint giải thích REAL là cổ thật, PAPER là cổ mô phỏng.
+- Ngoài phiên/ngày nghỉ, `CUỐI + giờ` lấy mẫu trước đóng phiên đã lưu của đúng sổ và đúng cặp EMA.
+  Sau restart vẫn đọc được mẫu; nếu chỉ có nến ngày đã đóng thì hiện `ĐÓNG + ngày` theo cache.
+  Xanh `>`, đỏ `<`, vàng `=`. Không tạo bằng chứng giao cắt từ nến ngày dùng để preview.
+- Giữ `HẾT PHIÊN`, kể cả khi có trạng thái chờ giờ mua cũ. Preview không ghi rule state hoặc tạo BUY.
+- Bản code cuối: **407 test liên quan đạt trong 58,77 giây**, JUnit **0 failure, 0 error, 0 skipped**,
+  chạy bằng `support/tools/run_offline.py`. Gồm kiểm tra cache/restart, tách hai sổ, đổi cặp EMA,
+  UI preview và gửi MARKET/UNKNOWN qua broker giả.
+  Kết quả: `.artifacts/closed_preview_20261010/final_output.txt` và `final.xml`.
+
 ## Phụ thuộc dữ liệu broker
 
 Khôi phục yêu cầu DNSE trả OHLC phút đúng mã, mốc thời gian và cùng thang giá với dữ liệu ngày.

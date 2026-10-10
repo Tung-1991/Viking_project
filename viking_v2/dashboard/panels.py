@@ -12,8 +12,8 @@ import customtkinter as ctk
 from ..branding import APP_NAME, APP_VERSION
 from ..connections.dnse.snapshot_health import FAST_POLL_SECONDS, IDLE_POLL_SECONDS, snapshot_failure_summary
 from ..rules.business import average_true_range_pct, indicator_snapshot, protect_level
-from ..rules.observations import ema_cross_caption
-from ..trading.market import VN_TZ, market_now, market_phase, merge_tick_into_daily_bars
+from ..rules.observations import ema_cross_caption, finite
+from ..trading.market import VN_TZ, exchange_close_minute, market_now, market_phase, merge_tick_into_daily_bars
 from ..trading.portfolio import (
     nav_from_balance, position_quantity as holding_quantity,
     size_buy_order, stock_exposure_limit, validate_quantity,
@@ -1569,6 +1569,7 @@ class DashboardPanelsMixin:
         status = self._book_preview_status(status)
         decision = (status.get("decisions") or {}).get(symbol) or {}
         details = dict(decision.get("details") or {})
+        saved_cross = dict(details.get("ema_cross") or {})
         mode = str(self.mode.get()).upper() if hasattr(self, "mode") else "PAPER"
         if (details.get("updated_at") or decision.get("timestamp")) and not decision_is_fresh(decision, symbol, mode):
             details = {}  # A stopped daemon must not pin old EMA/RSI over newer preview bars.
@@ -1623,6 +1624,17 @@ class DashboardPanelsMixin:
         details["indicators"] = {**expected_periods, **indicators}
         if source != "DECISION":
             details.pop("ema_cross", None)  # A price-only fallback cannot prove an observed crossing.
+        phase = str((status.get("symbol_phases") or {}).get(symbol) or status.get("market_status") or "").upper()
+        if phase in {"CLOSED", "WEEKEND", "HOLIDAY"}:
+            # Display history separately from the evidence that can approve BUY.
+            now = market_now()
+            exchange = (status.get("symbol_exchanges") or {}).get(symbol) or "HOSE"
+            details["ema_cross_preview_closed"] = True
+            details["ema_cross_preview_expired"] = (phase in {"WEEKEND", "HOLIDAY"}
+                or now.hour * 60 + now.minute >= exchange_close_minute(exchange))
+            details["ema_cross_last_preview"] = self._last_closed_ema_preview(
+                symbol, mode, params, saved_cross, rows,
+            )
         atr = _number(details.get("atr14_daily_pct"))
         details["dynamic_start_pct"] = atr * params.normal_atr_activation_multiplier if params.normal_atr_activation_enabled else 0.0
         details["dynamic_trail_pct"] = atr * params.normal_atr_multiplier if params.normal_atr_trail_enabled else 0.0
@@ -1630,6 +1642,34 @@ class DashboardPanelsMixin:
                                           "signal_ready": indicators.get("signal_ready"),
                                           "atr_asof": details.get("atr14_daily_asof", "")}
         return details
+
+    def _last_closed_ema_preview(self, symbol, mode, params, saved_cross, rows) -> dict[str, Any]:
+        profile = f"{params.buy_ema_fast}/{params.buy_ema_slow}"
+        candidates = [saved_cross]
+        rule_state = getattr(self, "rule_state", None)
+        if rule_state is not None:
+            candidates.append(rule_state.session_cross(symbol, mode))
+        now = market_now()
+        for row in sorted(candidates, key=lambda value: finite(value.get("observed_at_epoch")) or 0, reverse=True):
+            stamp, expires = finite(row.get("observed_at_epoch")), finite(row.get("expires_at"))
+            fast, slow = finite(row.get("current_fast")), finite(row.get("current_slow"))
+            if (row.get("profile") != profile or not row.get("current_ready") or fast is None or slow is None
+                    or stamp is None or expires is None or not 0 < stamp < expires <= now.timestamp()):
+                continue
+            try:
+                at = datetime.fromtimestamp(stamp, VN_TZ)
+            except (ValueError, OverflowError, OSError):
+                continue
+            clock = at.strftime("%H:%M" if at.date() == now.date() else "%d/%m %H:%M")
+            return {"fast": fast, "slow": slow, "label": f"CUỐI {clock}", "source": "OBSERVED"}
+        closed = [row for row in rows if bool(row.get("closed", True))]
+        if closed:
+            marks = indicator_snapshot(closed, params.buy_ema_fast, params.buy_ema_slow, params.rsi_period)
+            fast, slow = finite(marks.get("buy_ema_fast")), finite(marks.get("buy_ema_slow"))
+            if fast is not None and slow is not None:
+                at = datetime.fromtimestamp(float(closed[-1]["time"]), VN_TZ)
+                return {"fast": fast, "slow": slow, "label": f"ĐÓNG {at:%d/%m}", "source": "DAILY_CLOSE"}
+        return {}
 
     def _indicator_preview_hint(self) -> str:
         preview = getattr(self, "_preview_indicator_source", {})
@@ -1658,6 +1698,9 @@ class DashboardPanelsMixin:
             "\nCẮT EMA: CHỜ XUỐNG = đang ở trên từ trước; CHỜ LÊN = đang ≤. "
             "ĐÃ LÊN = backend ghi nhận lần vượt lên. RSI phải đạt cùng lúc; còn các khóa/vốn. "
             "Tín hiệu chờ giờ còn hiệu lực không cần cắt lại đúng 14h."
+            "\nTRƯỚC: EMA trước lần cắt. CUỐI + giờ: mẫu gần nhất đã lưu trước đóng phiên. "
+            "ĐÓNG + ngày: EMA từ nến ngày đã đóng khi chưa có mẫu trong phiên. "
+            "Xanh >, đỏ <, vàng =. Các số ngoài phiên chỉ để xem lại; HẾT PHIÊN không cho BUY."
         )
         if preview.get("signal_ready") is False:
             return text + "\nChờ mẫu phút hoàn tất với giá mới; chỉ số nền 1D chưa dùng để BUY/E."
@@ -1673,17 +1716,28 @@ class DashboardPanelsMixin:
         required = bool(params.get("buy_signal_use_ema", True)
                         and params.get("buy_signal_require_ema_cross", True))
         evidence = dict(details.get("ema_cross") or {})
+        if details.get("ema_cross_preview_expired") and required and self.settings.signal_mode == "REALTIME":
+            evidence.update(state="EXPIRED")
         if not required:
             evidence.update(required=False, state="OFF")
-        caption, role = ema_cross_caption(evidence, details.get("buy_window"))
+        caption, role = ema_cross_caption(evidence, None if details.get("ema_cross_preview_expired")
+                                         else details.get("buy_window"))
         self._preview_ema_cross_evidence = (caption, evidence)
         widget._viking_full_cross_text = caption.removeprefix("CẮT EMA · ")
         self.preview_rule_cross_title.configure(text="CẮT EMA · " + ("BẬT" if required else "OFF"))
         widget.configure(text=caption.removeprefix("CẮT EMA · "),
                          text_color={"ok": COL_GREEN, "wait": COL_WARN}.get(role, COL_MUTED))
         from ..services.indicator_comparison import number_comparison
+        comparison = details.get("ema_cross_last_preview") or {}
+        last = bool(details.get("ema_cross_preview_closed"))
+        left, right = (comparison.get("fast"), comparison.get("slow")) if last else (
+            evidence.get("previous_fast"), evidence.get("previous_slow"))
+        a, b = finite(left), finite(right)
+        color = COL_MUTED if a is None or b is None else COL_GREEN if a > b else COL_RED if a < b else COL_WARN
+        label = comparison.get("label", "CUỐI") if last else "TRƯỚC"
+        text = number_comparison(left, right) if a is not None and b is not None else "CHƯA CÓ MỐC LƯU" if last else "—"
         self.preview_rule_cross_detail.configure(
-            text="TRƯỚC: " + number_comparison(evidence.get("previous_fast"), evidence.get("previous_slow")))
+            text=f"{label}: {text}", text_color=color)
         for label, font in ((widget, ("Segoe UI", 11, "bold")),
                             (self.preview_rule_cross_title, ("Segoe UI", 10, "bold")),
                             (self.preview_rule_cross_detail, ("Segoe UI", 10))):
@@ -1796,17 +1850,20 @@ class DashboardPanelsMixin:
         enabled = bool(preview.get("enabled"))
         quantity = int(preview.get("quantity", 0))
         policy = preview.get("policy", "ALERT")
-        status = ("CHƯA CÓ VỊ THẾ" if quantity <= 0 else
+        status = ("CHƯA CÓ CỔ" if quantity <= 0 else
                   "CÓ TÍN HIỆU THOÁT" if signal == "SELL" else "CHỜ TÍN HIỆU THOÁT")
+        mode = str(self.mode.get()).upper() if hasattr(self, "mode") else "PAPER"
+        book = "REAL: cổ trong tài khoản thật" if mode == "REAL" else "PAPER: cổ mô phỏng"
         behavior = ("tự gửi bán 100% phần còn lại khi có tín hiệu và đủ điều kiện lệnh."
                     if policy == "AUTO" else "chỉ báo tín hiệu, không đặt lệnh.")
         behavior = (f"{policy}: {behavior}" if enabled else
                     f"OFF: chỉ preview. Khi bật {policy}: {behavior}")
         return (
             "E thoát theo EMA SELL/RSI, không có một giá kích hoạt cố định như SL.\n"
+            f"{book} · Đang giữ {quantity:,} CP. Hai sổ có số cổ độc lập.\n"
             f"Giá thị trường: {price_text} · {status}.\n"
             f"{behavior}\n"
-            "Giá hiển thị để tham khảo, không bảo đảm giá khớp. Chưa có vị thế thì không gửi SELL."
+            "Giá hiển thị để tham khảo, không bảo đảm giá khớp. Chưa có cổ thì không gửi SELL."
         )
 
     def _exit_preview_quantity(self, details: dict[str, Any], symbol: str) -> int:
@@ -2548,7 +2605,7 @@ class DashboardPanelsMixin:
         market_price = f"TT: {_display_price(price)}" if price > 0 else "CHỜ GIÁ TT"
         # Enable switches control execution, not read-only preview data.
         if position_quantity <= 0:
-            value, detail, color = market_price, "CHƯA VỊ THẾ", COL_PREVIEW_TEXT
+            value, detail, color = market_price, "CHƯA CÓ CỔ", COL_PREVIEW_TEXT
         elif signal == "SELL":
             if policy == "ALERT":
                 value, detail, color = market_price, "SELL · CHỈ BÁO", COL_WARN

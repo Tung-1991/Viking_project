@@ -114,6 +114,11 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   P2 có vùng **CẮT EMA** bên phải: CHỜ XUỐNG / CHỜ LÊN / ĐÃ LÊN + giờ,
   hoặc **CÒN HIỆU LỰC / ĐÃ DÙNG + giờ / HẾT PHIÊN** khi dùng lựa chọn giữ cắt;
   kèm phép so sánh EMA lần quan sát trước. Số lấy từ backend; preview nến đơn lẻ không tự đoán giao cắt.
+  Ngoài phiên, **CUỐI + giờ** là mẫu EMA gần nhất đã lưu trước đóng phiên của sổ đang chọn.
+  Nếu chưa có mẫu trong phiên, **ĐÓNG + ngày** dùng EMA từ nến ngày đã đóng trong cache.
+  Xanh `>`, đỏ `<`, vàng `=`; số xem lại không tạo tín hiệu BUY. Thiếu cả hai nguồn thì ghi chưa có mốc lưu.
+  **CHƯA CÓ CỔ** ở ô E nghĩa là sổ đang chọn chưa có cổ của mã đó; REAL là cổ thật, PAPER là cổ mô phỏng.
+  Số cổ của hai sổ độc lập; khối lượng ở phiếu BUY là số dự kiến mua.
   Nhịp 1M/2M/5M chờ mẫu đầu tiên hoàn tất sau khởi động hoặc gián đoạn nguồn giá.
   Không dùng số nền phiên trước hay giá chờ cũ để BUY/E; SL/TP/PROTECT vẫn xét giá mới.
   Giờ cắt EMA là mốc hoàn tất mẫu, không đổi theo mỗi lần poll. TRACE lưu riêng giá/mốc mẫu và giá tick mới.
