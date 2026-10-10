@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from functools import wraps
 import uuid
 import time
 from typing import Any
@@ -21,6 +22,16 @@ class PlanResult:
     reason: str
 
 
+def _atomic_plan(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        # Claims, replacement cancellations and the new intent either all
+        # commit or all roll back. No broker I/O occurs in the planner.
+        with self.queue.store.database:
+            return method(self, *args, **kwargs)
+    return wrapped
+
+
 class StrategyOrderPlanner:
     """Translate an approved rule decision into one persistent order intent."""
 
@@ -28,7 +39,10 @@ class StrategyOrderPlanner:
         self.queue = queue
         self.trades = trades
         self.rule_state = rule_state
+        if not (queue.store.database is trades.store.database is rule_state.store.database):
+            raise ValueError("Planner stores must share the same account database")
 
+    @_atomic_plan
     def plan(
         self,
         decision: StrategyDecision,
@@ -49,6 +63,7 @@ class StrategyOrderPlanner:
         symbol = decision.symbol
         style = str(execution_style or "MARKET").upper()
         side = "BUY" if decision.action == "BUY" else "SELL"
+        replace_sell_ids: list[str] = []
         price_key = "ask" if side == "BUY" else "bid"
         price = float(tick.get(price_key, tick.get("price", 0.0)) or 0.0)
         if price <= 0 or not quote_is_fresh(tick, symbol, require_timestamp=False):
@@ -72,7 +87,9 @@ class StrategyOrderPlanner:
             )
             if not checks.get("entry_orders_available", True):
                 return PlanResult(None, "MAX_SYMBOL_ORDERS")
-            if style != "LO_LOCAL" and checks.get("priority_capital_enabled"):
+            if style != "LO_LOCAL" and (
+                checks.get("priority_capital_enabled") or float(checks.get("buy_budget_price", 0.0) or 0.0) > 0
+            ):
                 price = max(price, float(checks.get("buy_budget_price", 0.0) or 0.0))
                 if float(checks.get("buy_budget_price", 0.0) or 0.0) <= 0:
                     return PlanResult(None, "NO_PRIORITY_PRICE_BOUND")
@@ -134,7 +151,6 @@ class StrategyOrderPlanner:
                 }
                 requested_reason = str(decision.event or decision.reason or "").upper()
                 requested_priority = priority.get(requested_reason, 0)
-                replaced = False
                 for existing in active_sell:
                     existing_reasons = [
                         value for value in str(existing.reason or "").upper().split("+") if value
@@ -146,10 +162,10 @@ class StrategyOrderPlanner:
                         requested_priority > existing_priority
                         and existing.status.upper() in {"PENDING", "WAITING_TOKEN", "WAITING_SETTLEMENT"}
                     ):
-                        replaced = bool(self.queue.cancel_local(existing.id)) or replaced
+                        replace_sell_ids.append(existing.id)
                         continue
                     return PlanResult(None, "SELL_ALREADY_PENDING")
-                if not replaced:
+                if not replace_sell_ids:
                     return PlanResult(None, "SELL_ALREADY_PENDING")
             if (
                 decision.event == "INDICATOR_EXIT"
@@ -229,5 +245,10 @@ class StrategyOrderPlanner:
                 hour=end_minute // 60, minute=end_minute % 60, tzinfo=VN_TZ,
             ).timestamp()
             intent.expires_at = min(intent.expires_at, deadline)
+        # A rejected/duplicate decision above must leave the old exit intact.
+        # Only cancel it once a replacement intent can commit with it.
+        for existing_id in replace_sell_ids:
+            if not self.queue.cancel_local(existing_id):
+                raise RuntimeError("Exit changed before its replacement could be persisted")
         self.queue.add(intent)
         return PlanResult(intent, "PLANNED")

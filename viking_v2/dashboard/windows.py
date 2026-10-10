@@ -131,12 +131,18 @@ _SIGNAL_REASONS = {
     "LOCKED_AFTER_3_LOSSES": "Khóa sau chuỗi 3 lệnh lỗ",
     "LOCKED_AFTER_LOSSES": "Khóa sau chuỗi lệnh lỗ",
     "NO_AVAILABLE_CAPITAL": "Không còn vốn khả dụng",
+    "PORTFOLIO_EXPOSURE_LIMIT": "Không còn hạn mức vốn danh mục cho lệnh này",
+    "PRIORITY_CAPITAL_LIMIT": "Không đủ hạn mức vốn Priority",
+    "DECISION_POLL_UNAVAILABLE": "Đang phục hồi xử lý quyết định; tạm chặn BUY",
+    "ENTRY_LIMIT_SNAPSHOT_UNAVAILABLE": "Chờ dữ liệu tài khoản để kiểm tra hạn mức",
+    "FILL_ACCOUNTING_RECONCILE_REQUIRED": "Cần đối soát sổ vị thế; tạm chặn BUY",
     "BUY_ALREADY_PENDING": "Đã có lệnh mua chờ",
     "BROKER_REJECTED": "Broker từ chối lệnh BUY",
     "BROKER_FAILED": "Gửi lệnh BUY tới broker thất bại",
     "CORPORATE_ACTION_BLOCK": "Đang chặn vì sự kiện quyền",
     "MARKET_STATE_UNKNOWN": "Chưa xác nhận trạng thái thị trường",
     "NO_NEW_BUY_SIGNAL": "Chưa có tín hiệu BUY mới",
+    "INDICATOR_BUCKET_WAIT": "Chờ mẫu chỉ báo phút hoàn tất với giá mới",
     "NO_FRESH_DECISION": "Chưa có quyết định mới",
     "BUY_SIGNAL": "Đạt ENTRY của rule",
     "ENTRY_CONDITIONS_LOST": "Điều kiện ENTRY không còn đạt",
@@ -810,6 +816,11 @@ def short_signal_reason(code: str, row: dict[str, Any]) -> str:
         "WHIPSAW_LOCK": "Khóa WHIPSAW", "LOCKED_AFTER_LOSSES": "Khóa chuỗi lỗ",
         "LOCKED_AFTER_3_LOSSES": "Khóa chuỗi lỗ", "NO_AVAILABLE_CAPITAL": "Thiếu vốn",
         "MAX_POSITIONS": "Hết slot", "MAX_SYMBOL_ORDERS": "Đủ lệnh/mã",
+        "PORTFOLIO_EXPOSURE_LIMIT": "Hết hạn mức danh mục",
+        "PRIORITY_CAPITAL_LIMIT": "Hết hạn mức Priority",
+        "DECISION_POLL_UNAVAILABLE": "Tạm chặn BUY · đang phục hồi",
+        "ENTRY_LIMIT_SNAPSHOT_UNAVAILABLE": "Chờ kiểm tra vốn tài khoản",
+        "FILL_ACCOUNTING_RECONCILE_REQUIRED": "Chờ đối soát sổ vị thế",
         "BOT_OFF": "BOT OFF", "MANUAL_SELL_PAUSE": "Tạm khóa BUY",
         "BUY_ALREADY_PENDING": "Đã có lệnh chờ", "BUY_SIGNAL": "EMA/RSI đạt",
         "BROKER_REJECTED": "DNSE từ chối", "BROKER_FAILED": "Lỗi gửi DNSE",
@@ -822,6 +833,8 @@ def short_signal_reason(code: str, row: dict[str, Any]) -> str:
         return "Đã xếp yêu cầu"
     if code == "NO_NEW_BUY_SIGNAL":
         return "Chờ cắt EMA" if row.get("ema_cross_required") is True and row.get("entry") else "Chưa có ENTRY"
+    if code == "INDICATOR_BUCKET_WAIT":
+        return "Chờ mẫu chỉ báo phút"
     return reasons.get(code, code.replace("_", " ")[:65] or "Chỉ ghi nhận")
 
 

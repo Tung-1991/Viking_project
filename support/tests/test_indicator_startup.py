@@ -267,7 +267,7 @@ def _run_two_daemon_cycles(monkeypatch, tmp_path, *, mode="REAL", phase="OPEN", 
 
 @pytest.mark.parametrize("mode", ["REAL", "PAPER"])
 @pytest.mark.parametrize("phase", ["OPEN", "CLOSED"])
-@pytest.mark.parametrize("interval", ["TICK", "1M", "2M"])
+@pytest.mark.parametrize("interval", ["TICK", "1M", "2M", "5M"])
 def test_real_daemon_cold_start_publishes_four_symbols_without_cycle_errors(monkeypatch, tmp_path, mode, phase, interval):
     statuses, _ = _run_two_daemon_cycles(monkeypatch, tmp_path, mode=mode, phase=phase, interval=interval)
     completed = [status for status in statuses if status["daemon_status"] == "RUNNING" and status["decisions"]]
@@ -326,8 +326,15 @@ def test_daemon_restart_with_failed_cached_ticks_resumes_decisions(monkeypatch, 
     "QUOTE_TOO_OLD", "MARKED_STALE", "FROZEN", "SOURCE_ERROR", "NO_QUOTE",
     "SYMBOL_MISMATCH", "MISSING_TIMESTAMP",
 ])
-def test_daemon_rejects_bad_live_quote_then_recovers_and_logs_once(monkeypatch, tmp_path, fault):
-    statuses, bridge = _run_two_daemon_cycles(monkeypatch, tmp_path, fault=fault)
+@pytest.mark.parametrize("interval", ["TICK", "1M"])
+def test_daemon_rejects_bad_live_quote_then_recovers_and_logs_once(monkeypatch, tmp_path, fault, interval):
+    resets = []
+    original = RuleStateStore.reset_indicator_bucket
+    def reset(store, symbol, mode):
+        resets.append((symbol, mode))
+        original(store, symbol, mode)
+    monkeypatch.setattr(RuleStateStore, 'reset_indicator_bucket', reset)
+    statuses, bridge = _run_two_daemon_cycles(monkeypatch, tmp_path, fault=fault, interval=interval)
     completed = [status for status in statuses if status["daemon_status"] == "RUNNING" and status["decisions"]]
     assert len(completed) == 2
     assert set(completed[0]["decisions"]) == {"MSN", "CTS", "IDC"}
@@ -338,6 +345,10 @@ def test_daemon_rejects_bad_live_quote_then_recovers_and_logs_once(monkeypatch, 
         assert completed[0]["ticks"]["HDB"]["quote_issue"] == fault
     assert set(completed[1]["decisions"]) == {"MSN", "CTS", "HDB", "IDC"}
     assert not completed[1]["ticks"]["HDB"].get("stale")
+    assert ('HDB', 'REAL') in resets
+    if interval == '1M':
+        assert completed[1]['decisions']['HDB']['details']['indicators']['signal_ready'] is False
+        assert completed[1]['decisions']['HDB']['action'] == 'WAIT'
     log = (bridge.log_dir / "daemon.log").read_text(encoding="utf-8")
     assert log.count("BỊ LOẠI") == 1
     assert log.count("PHỤC HỒI") == 1

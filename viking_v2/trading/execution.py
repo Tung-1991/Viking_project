@@ -4,6 +4,7 @@ import time
 import uuid
 import hashlib
 import json
+import math
 from dataclasses import asdict
 from dataclasses import replace
 from typing import Callable
@@ -144,10 +145,34 @@ class ExecutionService:
                     return self.queue.get(intent.id)
                 self._deferred_events = notifications
                 self.database.bind_order(result.order_id, intent.id)
-                persisted = self.queue.finish(intent, result, submitted_quantity=submitted, keep_sell_remainder=intent.side == "SELL")
-                self._record_trade_fill(intent, result, submitted, mark_events=bool(persisted and persisted.filled_quantity > intent.filled_quantity))
+                raw = result.raw if isinstance(result.raw, dict) else {}
+                body = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+                filled, _leaves = self.queue._fill_quantities(result, submitted)
+                price = account_price(body, body.get("averagePrice", body.get("price", 0)))
+                event_result = asdict(result)
+                if filled and (not math.isfinite(price) or price <= 0):
+                    # Broker acceptance is durable, but quantity accounting
+                    # cannot advance before its executed price is known.
+                    # UNKNOWN keeps the reservation and forbids another POST.
+                    persisted = self.queue._update(
+                        intent.id, status="UNKNOWN", broker_order_id=result.order_id,
+                        working_quantity=submitted,
+                        result="FILL_PRICE_UNAVAILABLE: chờ đối soát giá khớp",
+                    )
+                    # Preserve the observed response as evidence without
+                    # exporting its costs before that fill is accounted for.
+                    event_result.update(status="UNKNOWN", message="FILL_PRICE_UNAVAILABLE",
+                                        raw={"broker_response": raw})
+                else:
+                    persisted = self.queue.finish(intent, result, submitted_quantity=submitted, keep_sell_remainder=intent.side == "SELL")
+                    self._record_trade_fill(intent, result, submitted, mark_events=bool(persisted and persisted.filled_quantity > intent.filled_quantity))
+                    if result.ok and filled:
+                        fee, tax = self.queue._broker_costs({**body, "fillQuantity": filled})
+                        accounted_body = {**body, "fee": fee, "tax": tax}
+                        event_result["raw"] = ({**raw, "data": accounted_body}
+                                               if isinstance(raw.get("data"), dict) else accounted_body)
                 persisted = self.queue.get(intent.id) or persisted
-                self.database.add_event({"event_id": key, "ts": time.time(), "intent": (persisted or intent).to_dict(), "queue_status": persisted.status if persisted else "", "result": asdict(result)})
+                self.database.add_event({"event_id": key, "ts": time.time(), "intent": (persisted or intent).to_dict(), "queue_status": persisted.status if persisted else "", "result": event_result})
                 self.database.mark_applied(key)
         finally:
             self._deferred_events = None
@@ -458,7 +483,7 @@ class ExecutionService:
                                     previous_id = str(previous_order.get("orderId", previous_order.get("id", "")) or "")
                                     if previous_id:
                                         fee, tax = self.queue._broker_costs(previous_order)
-                                        baseline_progress[previous_id] = {"filled": int(previous_order.get("fillQuantity", 0) or 0), "notional": self.queue._broker_notional(previous_order), "cost": fee+tax}
+                                        baseline_progress[previous_id] = {"filled": int(previous_order.get("fillQuantity", 0) or 0), "notional": self.queue._broker_notional(previous_order), "cost": fee+tax, "fee": fee, "tax": tax}
                                 intent.details["existing_deal"]["progress"] = baseline_progress
                 except BrokerSnapshotError as exc:
                     if intent.source == "BOT" and intent.side == "BUY":
@@ -727,7 +752,7 @@ class ExecutionService:
         raw = result.raw if isinstance(result.raw, dict) else {}
         body = raw.get("data") if isinstance(raw.get("data"), dict) else raw
         price = account_price(body, body.get("averagePrice", body.get("price", 0.0)))
-        broker_fee, broker_tax = self.queue._broker_costs(body)
+        broker_fee, broker_tax = self.queue._broker_costs({**body, "fillQuantity": filled})
         fee = broker_fee + broker_tax
         if intent.side == "BUY":
             previous = self.trade_state.get(intent.trade_id)
@@ -877,6 +902,30 @@ class ExecutionService:
                 progress = (intent.details.get("broker_progress") or {}).get(broker_id)
                 if progress is None:
                     progress = {"filled": intent.broker_filled_quantity, "notional": intent.broker_notional_logged, "fee": intent.broker_fee_logged, "tax": intent.broker_tax_logged} if broker_id == intent.broker_order_id else {}
+                accounted_cycle = self.trade_state.get(intent.trade_id) if self.trade_state and intent.trade_id else None
+                ledger_filled = (accounted_cycle.entry_quantity if intent.side == "BUY" else accounted_cycle.sold_quantity) if accounted_cycle else 0
+                queued_filled = sum(
+                    item.filled_quantity for item in self.queue.list_all()
+                    if intent.trade_id and item.trade_id == intent.trade_id
+                    and item.side == intent.side and item.execution_mode == intent.execution_mode
+                )
+                ledger_mismatch = bool(self.trade_state and intent.trade_id and queued_filled > ledger_filled)
+                if ledger_mismatch or (int(progress.get("filled", 0)) > 0 and float(progress.get("notional", 0)) <= 0):
+                    # A pre-fix account may already have advanced quantity
+                    # without recording its fill. Its true ledger cannot be
+                    # inferred from the next cumulative broker row alone.
+                    # Quarantine it, keep the suspect capital reserved, and
+                    # never silently finalize or replay a possibly applied fill.
+                    details = dict(intent.details)
+                    details["fill_accounting_reconcile_required"] = broker_id
+                    details["unaccounted_fill_quantity"] = max(
+                        int(details.get("unaccounted_fill_quantity", 0) or 0),
+                        intent.filled_quantity if ledger_mismatch else int(progress.get("filled", 0)),
+                    )
+                    quarantined = self.queue._update(intent.id, status="UNKNOWN", details=details,
+                        result="LEGACY_FILL_ACCOUNTING_UNVERIFIED: cần đối soát sổ vị thế")
+                    self.database.mark_applied(key)
+                    return quarantined
                 absolute = int(match.get("fillQuantity", match.get("filledQuantity", 0)) or 0)
                 if absolute < int(progress.get("filled", 0)):
                     self.database.mark_applied(key)
@@ -930,6 +979,21 @@ class ExecutionService:
             self._emit_trade_event(*args)
         return reconciled
 
+    def _external_costs(self, row: dict[str, Any], previous: dict[str, Any]) -> dict[str, float]:
+        has_fee = any(key in row for key in ("fee", "totalFee", "feeRate"))
+        has_tax = any(key in row for key in ("tax", "taxRate"))
+        if "cost" in previous and not {"fee", "tax"}.issubset(previous) and not (has_fee and has_tax):
+            # Older versions retained only the sum. A partial cost snapshot
+            # cannot tell us its fee/tax split; retain the accounted total
+            # until both components arrive rather than inventing that split.
+            return {"cost": float(previous["cost"])}
+        fee, tax = self.queue._broker_costs(row)
+        if not has_fee:
+            fee = float(previous.get("fee", 0))
+        if not has_tax:
+            tax = float(previous.get("tax", 0))
+        return {"cost": fee + tax, "fee": fee, "tax": tax}
+
     def _reconcile_external_costs(self, broker_orders: list[dict[str, Any]]) -> None:
         if not self.trade_state:
             return
@@ -945,18 +1009,19 @@ class ExecutionService:
                         continue
                     if int(row.get("fillQuantity", 0) or 0) != int(previous.get("filled", 0)) or not any(key in row for key in ("fee", "totalFee", "feeRate", "tax", "taxRate")):
                         continue
-                    fee, tax = self.queue._broker_costs(row)
-                    cost = fee+tax
+                    cost_fields = self._external_costs(row, previous)
+                    cost = cost_fields["cost"]
                     delta = cost-float(previous.get("cost", 0))
+                    if any(previous.get(name) != value for name, value in cost_fields.items()):
+                        previous.update(cost_fields)
+                        self.trade_state.save(cycle)
                     if not delta:
                         continue
-                    previous["cost"] = cost
-                    self.trade_state.save(cycle)
                     self.trade_state.adjust_costs(cycle.id, delta)
                     cycle = self.trade_state.get(cycle.id)
                     synthetic = OrderIntent.create(cycle.symbol, "BUY" if str(row.get("side", "")).upper() in {"BUY", "NB"} else "SELL", int(previous.get("filled", 0)) or 100, "MARKET", execution_mode="REAL", source="EXTERNAL_DNSE", trade_id=cycle.id)
                     synthetic.status = "FILLED"
-                    self.database.add_event({"event_id": f"external-cost:{cycle.id}:{broker_id}:{previous.get('filled')}:{cost}", "ts": time.time(), "intent": synthetic.to_dict(), "queue_status": "FILLED",
+                    self.database.add_event({"event_id": f"external-cost:{cycle.id}:{broker_id}:{uuid.uuid4().hex}", "ts": time.time(), "intent": synthetic.to_dict(), "queue_status": "FILLED",
                         "result": {"ok": True, "status": "COST_ADJUSTMENT", "order_id": broker_id, "message": "BROKER_COST_RECONCILED", "raw": {"fee": delta, "tax": 0}}})
         self.flush_events()
 
@@ -1050,12 +1115,12 @@ class ExecutionService:
                 delta_notional = notional - float(previous.get("notional", 0))
                 if delta_notional <= 0:
                     continue
-                fee, tax = self.queue._broker_costs(row)
-                delta_cost = max(0, fee + tax - float(previous.get("cost", 0)))
+                cost_fields = self._external_costs(row, previous)
+                delta_cost = cost_fields["cost"] - float(previous.get("cost", 0))
                 is_buy = side in {"NB", "BUY"}
                 projected += delta if is_buy else -delta
                 changes.append((broker_id, row, delta, delta_notional / delta / 1000, delta_cost, is_buy))
-                progress[broker_id] = {"filled": filled, "notional": notional, "cost": fee + tax}
+                progress[broker_id] = {"filled": filled, "notional": notional, **cost_fields}
             if projected != actual or projected < 0:
                 results.append({"status": "RECONCILE_REQUIRED", "symbol": cycle.symbol,
                                 "quantity": actual, "trade_id": cycle.id,
@@ -1086,6 +1151,11 @@ class ExecutionService:
                             raise RuntimeError("External SELL exceeds managed Deal")
                         cycle.record_sell_fill(delta, price, cost)
                         cycle.mark_exit_once("EXTERNAL_SELL")
+                    if cost < 0:
+                        # TradeCycle fill methods accept nonnegative charges;
+                        # cumulative broker refunds are a separate adjustment.
+                        cycle.fees_paid = max(0.0, cycle.fees_paid + cost)
+                        cycle.refresh_pnl()
                     synthetic = OrderIntent.create(cycle.symbol, "BUY" if is_buy else "SELL", delta,
                                                    "MARKET", execution_mode="REAL", source="EXTERNAL_DNSE",
                                                    trade_id=cycle.id, action="OPEN" if is_buy else "CLOSE")

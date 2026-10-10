@@ -17,7 +17,9 @@ def ema_cross_evidence(current: dict, previous: dict, *, required: bool,
                        use_ema: bool = True, observed_at: str = "") -> dict:
     fast, slow = (finite(current.get(f"buy_ema_{side}")) for side in ("fast", "slow"))
     prior_fast, prior_slow = (finite(previous.get(f"buy_ema_{side}")) for side in ("fast", "slow"))
-    ready = all(value is not None for value in (fast, slow, prior_fast, prior_slow))
+    ready = current.get("signal_ready") is not False and all(
+        value is not None for value in (fast, slow, prior_fast, prior_slow))
+    observed_at = str(current.get("indicator_observed_at") or observed_at or "")
     up = bool(ready and prior_fast <= prior_slow and fast > slow)
     down = bool(ready and prior_fast >= prior_slow and fast < slow)
     state = ("OFF" if not use_ema or not required else "UNKNOWN" if not ready
@@ -52,6 +54,8 @@ def ema_cross_caption(evidence: dict | None, window: dict | None = None) -> tupl
 
 
 def exit_conditions(marks: dict, params: dict) -> bool | None:
+    if marks.get("signal_ready") is False:
+        return None
     chosen = []
     for enabled, left, right in (
         (params.get("sell_signal_use_ema", True), marks.get("sell_ema_fast"), marks.get("sell_ema_slow")),

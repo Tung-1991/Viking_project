@@ -312,13 +312,65 @@ def position_quantity(row: dict[str, Any]) -> int:
     return max(0, int(_number(row, "openQuantity", "quantity", "volume")))
 
 def position_price(row: dict[str, Any]) -> float:
-    return account_price(row, _number(row, "marketPrice", "currentPrice", "price", "costPrice", "averagePrice"))
+    for key in ("marketPrice", "currentPrice", "price", "costPrice", "averagePrice"):
+        price = account_price(row, _number(row, key))
+        if math.isfinite(price) and price > 0:
+            return price
+    return 0.0
 
 def position_cost(row: dict[str, Any]) -> float:
     return account_price(row, _number(row, "costPrice", "averagePrice", "avgPrice", "price"))
 
 def stock_value(positions: Iterable[dict[str, Any]]) -> float:
     return sum(position_quantity(row) * position_price(row) * 1000.0 for row in positions or [])
+
+def confirmed_holding_values(positions: list[dict[str, Any]], cycles: Iterable[Any],
+                             mode: str, tick: dict[str, Any], *,
+                             fee_rate: float | None = None) -> dict[str, float]:
+    """Reserve confirmed holdings absent from a lagging broker snapshot.
+
+    Consume matching quantities once, by package where known. A holding in a
+    different loan package must not hide the missing cash-package holding.
+    """
+    values: dict[str, float] = {}
+    factor = 1.0 + max(0.0, fee_rate or 0.0)
+    remaining_lots: dict[tuple[str, str], list[list[float]]] = {}
+    prices: dict[str, float] = {}
+    for row in positions:
+        symbol = str(row.get("symbol", "")).upper()
+        key = (symbol, str(row.get("loanPackageId", "") or ""))
+        prices[symbol] = max(prices.get(symbol, 0.0), position_price(row))
+        price = (position_cost(row) or position_price(row)) if fee_rate is not None else position_price(row)
+        if not math.isfinite(price) or price <= 0:
+            price = 0.0
+        remaining_lots.setdefault(key, []).append([position_quantity(row), price])
+        values[symbol] = values.get(symbol, 0.0) + position_quantity(row) * price * 1000.0 * factor
+    active = [cycle for cycle in cycles
+              if cycle.execution_mode == mode and cycle.status == "OPEN" and cycle.open_quantity > 0]
+    # Specific package matches take precedence over legacy unbound cycles.
+    for cycle in sorted(active, key=lambda item: bool(item.loan_package_id), reverse=True):
+        missing = cycle.open_quantity
+        price = cycle.avg_entry_price if fee_rate is not None else max(cycle.avg_entry_price, prices.get(cycle.symbol, 0.0))
+        if fee_rate is None and str(tick.get("symbol", "")).upper() == cycle.symbol:
+            price = max(price, board_price(tick.get("price", 0)))
+        matched_topup = 0.0
+        keys = [(cycle.symbol, cycle.loan_package_id)] if cycle.loan_package_id else [
+            key for key in remaining_lots if key[0] == cycle.symbol]
+        for key in keys:
+            for lot in remaining_lots.get(key, []):
+                matched = min(missing, int(lot[0]))
+                lot[0] -= matched
+                missing -= matched
+                # Missing valuations cannot erase a confirmed holding. For
+                # Priority, a stale lower acquisition cost also cannot free
+                # capital already spent; use only the positive difference.
+                if fee_rate is not None or lot[1] <= 0:
+                    matched_topup += matched * max(0.0, price - lot[1])
+        values[cycle.symbol] = values.get(cycle.symbol, 0.0) + (missing * price + matched_topup) * 1000.0 * factor
+        if fee_rate is not None and cycle.sold_quantity == 0:
+            values[cycle.symbol] += max(0.0, cycle.fees_paid - cycle.buy_notional * fee_rate)
+    return values
+
 
 def cash_from_balance(balance: dict[str, Any]) -> float:
     stock = balance.get("stock") if isinstance(balance.get("stock"), dict) else {}
@@ -374,7 +426,8 @@ class PortfolioContextBuilder:
         rows = [row for row in positions or [] if isinstance(row, dict)]
         nav = nav_from_balance(balance or {}, rows)
         cash = cash_from_balance(balance or {})
-        current_value = stock_value(rows)
+        cycles = self.trades.list_cycles()
+        current_value = sum(confirmed_holding_values(rows, cycles, mode, tick).values())
         pending_buys = [
             item for item in self.queue.list_all()
             if item.side == "BUY"
@@ -394,11 +447,14 @@ class PortfolioContextBuilder:
         }
         fee_rate = max(0.0, float(self.buy_fee_rate() or 0.0))
         for item in pending_buys:
+            reservation_quantity = item.remaining_quantity + min(
+                item.filled_quantity, int(item.details.get("unaccounted_fill_quantity", 0) or 0),
+            )
             price = item.limit_price or float(item.details.get("reservation_price", 0) or 0)
             if not price and item.symbol == symbol:
                 price = float(tick.get("ask", tick.get("price", 0.0)) or 0.0)
             if price:
-                value = max(0, item.remaining_quantity) * max(0.0, price) * 1000.0
+                value = max(0, reservation_quantity) * max(0.0, price) * 1000.0
             elif item.entry_budget:
                 value = max(0, item.entry_budget)
             else:
@@ -434,30 +490,7 @@ class PortfolioContextBuilder:
             minimum_order_room = budget
         priority_capital = {}
         if priority_capital_enabled or priority_symbols:
-            holding_costs: dict[str, float] = {}
-            for row in rows:
-                value = str(row.get("symbol", "")).upper()
-                cost = position_quantity(row) * (position_cost(row) or position_price(row)) * 1000.0 * (1.0 + fee_rate)
-                holding_costs[value] = holding_costs.get(value, 0.0) + cost
-            durable_costs: dict[str, float] = {}
-            for cycle in self.trades.list_cycles():
-                if cycle.execution_mode == mode and cycle.status == "OPEN" and cycle.open_quantity > 0:
-                    durable_costs[cycle.symbol] = durable_costs.get(cycle.symbol, 0.0) + (
-                        cycle.avg_entry_price * cycle.open_quantity * 1000.0 * (1.0 + fee_rate)
-                        + (max(0.0, cycle.fees_paid - cycle.buy_notional * fee_rate)
-                           if cycle.sold_quantity == 0 else 0.0)
-                    )
-                if (cycle.execution_mode == mode and cycle.status == "OPEN"
-                        and cycle.open_quantity > 0 and cycle.sold_quantity == 0):
-                    # Lowering today's fee must not erase fees already paid.
-                    extra_fee = max(0.0, cycle.fees_paid - cycle.buy_notional * fee_rate)
-                    holding_costs[cycle.symbol] = holding_costs.get(cycle.symbol, 0.0) + extra_fee
-            if manual_buy:
-                # A lagging broker position snapshot must not free capital
-                # already spent by a confirmed local fill. Never add the same
-                # holding twice when both snapshots contain it.
-                for value, cost in durable_costs.items():
-                    holding_costs[value] = max(holding_costs.get(value, 0.0), cost)
+            holding_costs = confirmed_holding_values(rows, cycles, mode, tick, fee_rate=fee_rate)
             envelope = stock_exposure_limit(nav, exposure) / max(1, max_positions) * (1.0 + fee_rate)
             allocations = (priority_allocations or {}) if priority_capital_enabled else {
                 value: {"limit_vnd": envelope, "use_pct": 100.0} for value in priority_symbols}
@@ -497,7 +530,7 @@ class PortfolioContextBuilder:
                 "minimum_order_room": minimum_order_room, "buy_fee_rate": fee_rate,
                 "priority_capital": priority_capital,
                 "priority_capital_enabled": bool(priority_capital),
-                "buy_budget_price": board_price(tick.get("ceiling_price", 0.0)) if priority_capital else 0.0,
+                "buy_budget_price": board_price(tick.get("ceiling_price", 0.0)),
                 **entry_orders,
             }
         matching_rows = [
@@ -559,7 +592,7 @@ class PortfolioContextBuilder:
             "loss_streak": active_loss_streak,
             "loss_blocked": symbol in self.trades.loss_blocks(mode),
             "priority_capital": priority_capital,
-            "buy_budget_price": board_price(tick.get("ceiling_price", 0.0)) if priority_capital else 0.0,
+            "buy_budget_price": board_price(tick.get("ceiling_price", 0.0)),
         }
         action = action_for_symbol(
             corporate_actions or [],

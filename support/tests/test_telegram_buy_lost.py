@@ -91,6 +91,80 @@ def test_failed_buy_delivery_does_not_produce_orphan_loss(subject, monkeypatch):
     assert client.sent == []
 
 
+@pytest.mark.parametrize('category', ['blocked_buy', 'buy_lost'])
+@pytest.mark.parametrize('failure', ['false', 'exception'])
+def test_delivery_retries_original_payload_after_restart_and_signal_loss(subject, monkeypatch, category, failure):
+    value, client = subject
+    clock = [1000.0]
+    monkeypatch.setattr('viking_v2.rules.state.time.time', lambda: clock[0])
+    method = 'notify_technical_buy' if category == 'blocked_buy' else 'notify_buy_lost'
+    if category == 'buy_lost':
+        observe(value)
+    original = getattr(value.telegram, method)
+    def fail(**_kwargs):
+        if failure == 'exception':
+            raise RuntimeError('offline delivery failure')
+        return False
+    monkeypatch.setattr(value.telegram, method, fail)
+    if category == 'blocked_buy':
+        observe(value)
+    observe(value, rsi=50.0)
+    assert len(value.rule_state.pending_telegram_notices()) == 1
+    evidence = deepcopy(value.rule_state.pending_telegram_notices()[0]['payload'])
+    assert evidence['indicators']['rsi'] == (57.70 if category == 'blocked_buy' else 50.0)
+    value.rule_state = RuleStateStore(value.rule_state.store.path)
+    monkeypatch.setattr(value.telegram, method, original)
+    value._retry_telegram_notices()
+    assert len(value.rule_state.pending_telegram_notices()) == 1
+    clock[0] += 60
+    value._retry_telegram_notices()
+    value._retry_telegram_notices()
+    assert len(client.sent) == 2 and 'MẤT BUY' in client.sent[-1]
+    assert value.rule_state.pending_telegram_notices() == []
+
+
+@pytest.mark.parametrize('change', ['master_off', 'category_off', 'destination'])
+def test_deferred_delivery_respects_notification_changes(subject, monkeypatch, change):
+    value, client = subject
+    workers = []
+    class DeferredThread(ImmediateThread):
+        def start(self):
+            workers.append(self)
+    monkeypatch.setattr('viking_v2.dashboard.actions.threading.Thread', DeferredThread)
+    observe(value)
+    for _ in range(3):
+        value._retry_telegram_notices()
+    assert len(workers) == 1  # Polls cannot send a leased notice concurrently.
+    if change == 'master_off':
+        value.settings.telegram_enabled = False
+    elif change == 'category_off':
+        value.settings.telegram_notifications['blocked_buy'] = False
+    else:
+        value.telegram = SignalTelegramService(Telegram(), chat_id='different-offline-chat')
+    worker = workers.pop()
+    worker.target(**worker.kwargs)
+    assert client.sent == [] and value.rule_state.pending_telegram_notices() == []
+
+
+def test_retry_storage_failure_keeps_notification_pending_without_stopping_poll(subject, monkeypatch):
+    value, client = subject
+    clock = [1000.0]
+    monkeypatch.setattr('viking_v2.rules.state.time.time', lambda: clock[0])
+    monkeypatch.setattr(value.telegram, 'notify_technical_buy', lambda **_kwargs: False)
+    observe(value)
+    original = value.rule_state.claim_telegram_notice
+    def offline_disk_error(_identity):
+        raise OSError('offline disk failure')
+    monkeypatch.setattr(value.rule_state, 'claim_telegram_notice', offline_disk_error)
+    value._retry_telegram_notices()
+    assert len(value.rule_state.pending_telegram_notices()) == 1 and client.sent == []
+    monkeypatch.setattr(value.rule_state, 'claim_telegram_notice', original)
+    monkeypatch.setattr(value.telegram, 'notify_technical_buy', lambda **_kwargs: True)
+    clock[0] += 60
+    value._retry_telegram_notices()
+    assert value.rule_state.pending_telegram_notices() == []
+
+
 def test_loss_option_off_does_not_cancel_later_candidates_or_change_rules(subject):
     value, client = subject
     value.settings.telegram_notifications["buy_lost"] = False

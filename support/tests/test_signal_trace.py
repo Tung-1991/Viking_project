@@ -66,6 +66,34 @@ def test_all_symbols_no_signal_still_recorded_with_numeric_reason_and_restart_de
     assert len(reopened.read()) == 4
 
 
+@pytest.mark.parametrize('ready', [True, False])
+def test_minute_trace_records_sample_price_time_and_readiness(tmp_path, ready):
+    source = status()
+    details = source['decisions_by_mode']['REAL']['IDC']['details']
+    sample_time = (NOW - timedelta(seconds=2)).isoformat()
+    details['indicators'].update(signal_ready=ready, indicator_observed_at=sample_time,
+                                  indicator_price=35.1)
+    details['ema_cross'] = {'required': True, 'cross_at': sample_time, 'state': 'CROSSED_UP'}
+    details['buy_window'] = {'state': 'ALLOWED', 'signal_time': NOW.isoformat(),
+                              'ema_cross': {'crossed_up': True, 'cross_at': sample_time}}
+    store = SignalTraceStore(tmp_path / 'minute.sqlite3')
+    store.capture(source, settings(), active_mode='REAL', now=NOW)
+    saved = store.read(mode='REAL', symbol='IDC')[0]
+    assert saved['entry'] is (True if ready else None)
+    assert saved['price_vnd'] == 35200 and saved['indicator_price_vnd'] == 35100
+    assert saved['indicator_observed_at'] == saved['ema_cross_at'] == sample_time
+    assert saved['signal_ready'] is ready
+    path = tmp_path / 'minute.xlsx'
+    export_trace([saved], path)
+    from openpyxl import load_workbook
+    book = load_workbook(path, read_only=True)
+    try:
+        headers = next(book['TRACE'].values)
+        assert 'Mẫu chỉ báo sẵn sàng' in headers and 'Giá mẫu chỉ báo VND' in headers
+    finally:
+        book.close()
+
+
 def test_paper_real_separate_and_missing_real_does_not_use_paper(tmp_path):
     store = SignalTraceStore(tmp_path / "trace.sqlite3")
     value = status(mode="PAPER")

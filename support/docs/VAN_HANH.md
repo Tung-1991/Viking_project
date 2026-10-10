@@ -76,6 +76,7 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 - BOT ON cho phép BUY tự động ở sổ đang chọn khi đủ tín hiệu, vốn và điều kiện an toàn.
   OFF vẫn tính chỉ báo/lưu lịch sử; tin BUY không thực hiện chỉ gửi nếu bật TÍN HIỆU.
 - SL/TP/E AUTO bán 100%; PROTECT/Dynamic bán theo % đã đặt. ALERT chỉ ghi nhận.
+  Chờ giờ mua hoặc xác nhận BUY thêm không trì hoãn SELL, ARM hay ALERT của vị thế đang giữ.
   E không chờ ARM. E/M mặc định chỉ áp dụng trade BOT mới; vị thế đang giữ chỉnh riêng.
   Nạp preset không gắn E vào vị thế cũ đang OFF; vị thế đã bật E dùng chính sách AUTO mới.
 - CACHE vàng: chưa gửi ở app. PARTIAL: khớp một phần, phần khớp được quản lý.
@@ -92,10 +93,15 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   chỉ khi OFF mới xét lại điều kiện hiện tại không cần lần cắt mới. Cập nhật giữ OFF đã lưu; nạp preset VA bật ON.
   P2 có vùng **CẮT EMA** bên phải: CHỜ XUỐNG / CHỜ LÊN / ĐÃ LÊN + giờ,
   kèm phép so sánh EMA lần quan sát trước. Số lấy từ backend; preview nến đơn lẻ không tự đoán giao cắt.
+  Nhịp 1M/2M/5M chờ mẫu đầu tiên hoàn tất sau khởi động hoặc gián đoạn nguồn giá.
+  Không dùng số nền phiên trước hay giá chờ cũ để BUY/E; SL/TP/PROTECT vẫn xét giá mới.
+  Giờ cắt EMA là mốc hoàn tất mẫu, không đổi theo mỗi lần poll. TRACE lưu riêng giá/mốc mẫu và giá tick mới.
   Lệnh bị chặn vốn/slot và tín hiệu chờ có quy tắc riêng; xem lý do, không coi Telegram là xác nhận đã mua.
 - BLOCK phải **MỞ BLOCK** đúng mã/sổ. ↻ reset thống kê/khóa chờ, không mở BLOCK,
   không xóa vị thế. THEO NGÀY chốt đúng giờ GMT+7; CỘNG DỒN từ lần ↻ gần nhất.
 - Telegram: GOM chờ gom tin BUY, không chờ đặt lệnh; GIÃN hạn chế tin mới cùng mã/loại.
+  Tin BUY kỹ thuật/MẤT BUY chỉ đánh dấu đã gửi sau khi thành công. Tin lỗi lưu trên đĩa,
+  thử lại sau 60 giây với số liệu gốc kể cả sau restart; tắt nhóm/tổng hoặc đổi nơi nhận hủy tin chờ.
   0 phút vẫn chống tin trùng. 1 TIN/VỊ THẾ = tổng kết khi BOT bán hết, không phải mỗi lần khớp.
   Mặc định cả 9 loại tin ON: BUY đã xếp, BUY EMA/RSI, MẤT BUY, PROTECT, E ALERT, BOT đã đóng,
   lịch nghỉ/chốt quyền, SELL trên DNSE app, hệ thống. BUY đã xếp mặc định GỬI NGAY;
@@ -121,6 +127,8 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Thiếu dữ liệu không coi là mất ENTRY. E chỉ được ghi lại sau khi điều kiện E đã mất rồi xuất hiện lại.
   Lỗi ghi CSV không đánh dấu đã ghi. App giữ các quan sát chưa ghi trong bộ nhớ, thử lại theo thứ tự,
   giữ giờ/số gốc và không dừng vòng cập nhật hay thực hiện lại lệnh. Không đóng app khi lỗi ghi chưa hết nếu cần giữ phần đang chờ.
+  Mỗi dòng sự kiện mới có ID và bản ghi chờ trên đĩa trước khi thêm CSV; restart hoàn tất
+  trạng thái chống lặp mà không thêm lại dòng CSV đã ghi thành công.
   Bản cũ lặp cùng trạng thái được gộp khi xem (×N cũ), giữ bản ghi đầu và nhật ký gốc,
   không xóa dữ liệu hoặc gộp các chu kỳ ENTRY mới. PROTECT không trộn vào bảng tín hiệu ENTRY/E.
 - **⚙ GHI TÍN HIỆU**: một form nhỏ bật/tắt ghi định kỳ, chỉnh từ/đến giờ và nhịp phút.
@@ -142,6 +150,8 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Tính lại chạy nền, không chặn Tk; không gọi thêm nguồn/API, không ghi vào nhật ký, rule hay lệnh.
   Chuẩn hoá đơn vị giá, sắp nến theo phiên Việt Nam và dùng đúng một nến 1D/phiên;
   lịch sử chỉ đến trước ngày sự kiện + **giá tick tại giờ ghi**, không dùng close cuối ngày hoặc các tick trước đó làm nến mới.
+  Với nhịp phút, dùng giá đóng mẫu chỉ báo đã lưu; giữ giá tick mới riêng trong chứng cứ gốc.
+  Mẫu chưa sẵn sàng giữ số nền, chưa đánh dấu ENTRY hoặc chuẩn hoá thành tín hiệu mới.
   EMA chuẩn, RSI Wilder; giữ độ chính xác giá đầu vào. Đủ lịch sử RSI trước mới tính, không đòi CSV 100 nến.
   Dùng chu kỳ đã ghi; bản cũ thiếu thì dùng 3/6/14, ghi rõ giả định trong Chi tiết và Excel.
   **Bảng luôn giữ số gốc, sự kiện, xử lý, cắt EMA và tiêu đề cột**, cả khi ON/OFF; mẫu không tự thành ENTRY/lệnh mới.
@@ -182,6 +192,16 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Đây không phải nhật ký tick/vốn/slot/OTP/lệnh thật VPS; không kết luận đã gửi/khớp từ replay.
 
 ## Khi có bất thường
+
+Nếu hiện `DECISION: LỖI · ĐANG THỬ LẠI`, app đăng ký lại vòng nhận quyết định
+mỗi giây và tạm chặn BUY đến khi xử lý thành công; đối soát và exit vẫn tiếp tục.
+Broker báo khớp nhưng thiếu giá: giữ UNKNOWN và hạn mức chờ đối soát, không gửi lại.
+Nếu dữ liệu bản cũ đã ghi khớp nhưng notional 0, app giữ UNKNOWN và chặn BUY
+với `LEGACY_FILL_ACCOUNTING_UNVERIFIED`; cần đối soát sổ vị thế, không reset runtime.
+Cap danh mục của BOT xét cả fill đã xác nhận chưa có trong snapshot broker và
+các BUY đang chờ; MARKET REAL tính biên vốn bằng giá trần trước khi gửi.
+Sửa lệnh bị từ chối chắc chắn trả quyền sửa/hủy lệnh gốc; UNKNOWN tiếp tục chờ đối soát.
+Chi tiết sửa và regression: [SAFETY_FIXES_2026-10-10.md](SAFETY_FIXES_2026-10-10.md).
 
 Giá cũ / HEALTH lỗi: kiểm tra mạng, daemon, DNSE và đồng hồ; không dùng giá cũ đặt tay.
 CHỜ TIỀN TÀI KHOẢN = chưa có số dư, khác TIỀN KHẢ DỤNG = 0. Hint KL ghi tiền/cap/giá tính lô.

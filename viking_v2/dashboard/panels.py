@@ -1580,7 +1580,7 @@ class DashboardPanelsMixin:
         if any(indicators.get(key, value) != value for key, value in expected_periods.items()):
             indicators = {}  # Do not show a previous settings generation.
         source = "DECISION" if indicators else "MISSING"
-        asof = details.get("updated_at", "")
+        asof = indicators.get("indicator_observed_at") or details.get("updated_at", "")
         rows = []
         today = market_now().date()
         if getattr(self, "_preview_bars_symbol", "") == symbol:
@@ -1625,6 +1625,7 @@ class DashboardPanelsMixin:
         details["dynamic_start_pct"] = atr * params.normal_atr_activation_multiplier if params.normal_atr_activation_enabled else 0.0
         details["dynamic_trail_pct"] = atr * params.normal_atr_multiplier if params.normal_atr_trail_enabled else 0.0
         self._preview_indicator_source = {"symbol": symbol, "source": source, "asof": asof,
+                                          "signal_ready": indicators.get("signal_ready"),
                                           "atr_asof": details.get("atr14_daily_asof", "")}
         return details
 
@@ -1652,6 +1653,8 @@ class DashboardPanelsMixin:
             "ĐÃ LÊN = backend ghi nhận lần vượt lên. RSI phải đạt cùng lúc; còn các khóa/vốn. "
             "Tín hiệu chờ giờ còn hiệu lực không cần cắt lại đúng 14h."
         )
+        if preview.get("signal_ready") is False:
+            return text + "\nChờ mẫu phút hoàn tất với giá mới; chỉ số nền 1D chưa dùng để BUY/E."
         if source == "MISSING":
             return text + "\nDấu --: chưa đủ nến; chờ daemon tải lịch sử."
         return text + f"\nNguồn: {'quyết định bot' if source == 'DECISION' else 'preview nến'} · {preview.get('symbol', '')} · {preview.get('asof', '')}."
@@ -2432,6 +2435,7 @@ class DashboardPanelsMixin:
         reason_labels = {
             "": "CHỜ DỮ LIỆU",
             "NO_NEW_BUY_SIGNAL": "CHỜ · CHƯA CÓ BUY",
+            "INDICATOR_BUCKET_WAIT": "CHỜ · MẪU CHỈ BÁO PHÚT",
             "BUY_SIGNAL": "BUY · ĐỦ ĐIỀU KIỆN",
             "SELL_SIGNAL": "SELL · TÍN HIỆU THOÁT",
             "HOLD_POSITION": "GIỮ VỊ THẾ",
@@ -2442,6 +2446,11 @@ class DashboardPanelsMixin:
             "BOT_OFF": "BOT ĐANG TẮT",
             "MANUAL_SELL_PAUSE": "TẠM KHÓA BUY SAU BÁN TAY",
             "NO_AVAILABLE_CAPITAL": "KHÔNG ĐỦ CASH",
+            "PORTFOLIO_EXPOSURE_LIMIT": "KHÔNG ĐỦ HẠN MỨC DANH MỤC",
+            "PRIORITY_CAPITAL_LIMIT": "KHÔNG ĐỦ HẠN MỨC PRIORITY",
+            "DECISION_POLL_UNAVAILABLE": "TẠM CHẶN BUY · ĐANG PHỤC HỒI",
+            "ENTRY_LIMIT_SNAPSHOT_UNAVAILABLE": "CHỜ KIỂM TRA VỐN TÀI KHOẢN",
+            "FILL_ACCOUNTING_RECONCILE_REQUIRED": "CHỜ ĐỐI SOÁT SỔ VỊ THẾ",
             "BROKER_REJECTED": "BROKER TỪ CHỐI",
             "BROKER_FAILED": "GỬI BROKER THẤT BẠI",
             "MARKET_STATE_UNKNOWN": "CHỜ · STATE CHƯA XÁC NHẬN",

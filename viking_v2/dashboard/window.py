@@ -92,6 +92,7 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
             ),
             bot_buy_allowed_provider=lambda mode: (
                 self.bridge.read_config().bot_enabled
+                and not getattr(self, "_decision_poll_fault", False)
                 and mode == ("PAPER" if self.bridge.read_config().paper_mode else "REAL")
             ),
             bot_entry_guard=self._check_bot_entry_limits,

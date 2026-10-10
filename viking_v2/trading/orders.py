@@ -335,7 +335,10 @@ class OrderQueue:
         elif not result.ok and status not in FINAL_STATUSES:
             status = "REJECTED" if result.status_code and result.status_code < 500 else "FAILED"
         filled_now, broker_leaves = self._fill_quantities(result, submitted)
-        broker_fee, broker_tax = self._broker_costs(result.raw)
+        raw = result.raw if isinstance(result.raw, dict) else {}
+        body = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+        fill_body = {**body, "fillQuantity": filled_now}
+        broker_fee, broker_tax = self._broker_costs(fill_body)
         filled_total = min(intent.quantity, intent.filled_quantity + filled_now)
         remaining = max(0, intent.quantity - filled_total)
         if result.ok:
@@ -360,7 +363,7 @@ class OrderQueue:
             broker_filled_quantity=0 if reset_broker_costs else filled_now,
             broker_fee_logged=0.0 if reset_broker_costs else broker_fee,
             broker_tax_logged=0.0 if reset_broker_costs else broker_tax,
-            broker_notional_logged=0.0 if reset_broker_costs else self._broker_notional(result.raw.get("data", result.raw)),
+            broker_notional_logged=0.0 if reset_broker_costs else self._broker_notional(fill_body),
             attempt=intent.attempt + 1 if reset_broker_costs else intent.attempt,
             handed_off_at=0.0 if reset_broker_costs else intent.handed_off_at,
             settlement_waited=bool(intent.settlement_waited or status == "WAITING_SETTLEMENT"),
@@ -637,7 +640,8 @@ class OrderQueue:
         details = dict(item.details)
         if int(quantity) < item.filled_quantity:
             return None
-        details["requested_replace"] = {"quantity": int(quantity), "broker_quantity": int(quantity if broker_quantity is None else broker_quantity), "price": float(limit_price)}
+        previous_status = (details.get("requested_replace") or {}).get("previous_status", item.status)
+        details["requested_replace"] = {"quantity": int(quantity), "broker_quantity": int(quantity if broker_quantity is None else broker_quantity), "price": float(limit_price), "previous_status": previous_status}
         aliases = list(dict.fromkeys([*item.broker_order_ids, item.broker_order_id, broker_order_id]))
         if broker_order_id and broker_order_id != item.broker_order_id:
             progress = dict(details.get("broker_progress") or {})
@@ -655,6 +659,20 @@ class OrderQueue:
             broker_tax_logged=0.0 if broker_order_id and broker_order_id != item.broker_order_id else item.broker_tax_logged,
             result=result,
         )
+
+    @_transactional
+    def reject_broker_replace(self, order_id: str, result: str) -> OrderIntent | None:
+        item = self.get(order_id)
+        if not item or not item.details.get("requested_replace"):
+            return item
+        details = dict(item.details)
+        request = details.pop("requested_replace")
+        status = item.status
+        if status == "REPLACE_PENDING":
+            status = str(request.get("previous_status", "WORKING"))
+            if status in {"WORKING", "PARTIAL", "REPLACE_PENDING"}:
+                status = "PARTIAL" if item.broker_filled_quantity else "WORKING"
+        return self._update(order_id, details=details, status=status, result=result)
 
     def mark_broker_cancelled(self, order_id: str, result: str = "Cancelled at broker") -> OrderIntent | None:
         return self._update(

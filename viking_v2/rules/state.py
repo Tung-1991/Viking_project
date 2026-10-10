@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime
 import hashlib
+import math
 import threading
 import time
 import uuid
 from typing import Any, Callable
 
 from ..trading.durable import DurableJSONStore
+from ..trading.market import VN_TZ
+from ..trading.validation import MAX_DECISION_AGE
 
 
 _LEGACY_SIGNAL_NAMES = {"M": "BUY", "B": "SELL"}
@@ -39,6 +43,7 @@ class RuleStateStore:
                 "processed_alerts": {},
                 "telegram_signals": {},
                 "telegram_buy_watches": {},
+                "telegram_notices": {},
                 "indicator_streams": {},
                 "buy_confirmations": {},
                 "signal_observations": {},
@@ -60,6 +65,7 @@ class RuleStateStore:
         raw["processed_alerts"] = raw.get("processed_alerts") if isinstance(raw.get("processed_alerts"), dict) else {}
         raw["telegram_signals"] = raw.get("telegram_signals") if isinstance(raw.get("telegram_signals"), dict) else {}
         raw["telegram_buy_watches"] = raw.get("telegram_buy_watches") if isinstance(raw.get("telegram_buy_watches"), dict) else {}
+        raw["telegram_notices"] = raw.get("telegram_notices") if isinstance(raw.get("telegram_notices"), dict) else {}
         raw["indicator_streams"] = raw.get("indicator_streams") if isinstance(raw.get("indicator_streams"), dict) else {}
         raw["buy_confirmations"] = raw.get("buy_confirmations") if isinstance(raw.get("buy_confirmations"), dict) else {}
         raw["signal_observations"] = raw.get("signal_observations") if isinstance(raw.get("signal_observations"), dict) else {}
@@ -253,6 +259,16 @@ class RuleStateStore:
             self.store.write(raw)
             return previous
 
+    def reset_indicator_bucket(self, symbol: str, stream: str) -> None:
+        """A rejected quote invalidates a minute close, including within a bucket."""
+        key = self._buy_confirmation_key(symbol, stream)
+        with self._lock:
+            raw = self._read()
+            existing = raw["indicator_streams"].get(key) or {}
+            if existing.get("interval") in {"1M", "2M", "5M"}:
+                raw["indicator_streams"].pop(key)
+                self.store.write(raw)
+
     def observe_indicator_bucket(
         self,
         symbol: str,
@@ -278,6 +294,7 @@ class RuleStateStore:
         bucket_key = int(bucket_key or 0)
         close_price = float(close_price or 0.0)
         baseline = dict(baseline_snapshot or {})
+        baseline.update(signal_ready=False, indicator_observed_at="", indicator_price=None)
         if not symbol or not stream or interval not in {"1M", "2M", "5M"}:
             return {"current": baseline, "previous": baseline, "advanced": False, "bucket": 0}
         key = f"{stream}|{symbol}"
@@ -286,13 +303,21 @@ class RuleStateStore:
             "sell_ema_fast_period", "sell_ema_slow_period", "rsi_period",
         )
         with self._lock:
+            now = time.time()
             raw = self._read()
             existing = raw["indicator_streams"].get(key)
             compatible = (
                 isinstance(existing, dict)
                 and str(existing.get("session", "")) == session_key
                 and str(existing.get("interval", "")).upper() == interval
+                and "signal_ready" in (existing.get("snapshot") or {})
             )
+            if compatible:
+                pending_bucket = int(existing.get("pending_bucket", 0) or 0)
+                elapsed = now - float(existing.get("updated_at", 0) or 0)
+                if bucket_key >= pending_bucket and (
+                        bucket_key > pending_bucket + 1 or not 0 <= elapsed <= MAX_DECISION_AGE):
+                    compatible = False
             accepted = dict(existing.get("snapshot") or {}) if compatible else baseline
             if accepted and baseline and any(
                 accepted.get(name) != baseline.get(name) for name in periods
@@ -308,7 +333,7 @@ class RuleStateStore:
                     "pending_bucket": bucket_key,
                     "pending_close": close_price,
                     "accepted_bucket": 0,
-                    "updated_at": time.time(),
+                    "updated_at": now,
                 }
                 self.store.write(raw)
                 return {
@@ -320,9 +345,9 @@ class RuleStateStore:
             if bucket_key <= pending_bucket:
                 # Out-of-order ticks must not roll the close backwards. The
                 # latest observation in the active bucket wins.
-                if bucket_key == pending_bucket and close_price > 0:
+                if bucket_key == pending_bucket and math.isfinite(close_price) and close_price > 0:
                     existing["pending_close"] = close_price
-                    existing["updated_at"] = time.time()
+                    existing["updated_at"] = now
                     raw["indicator_streams"][key] = existing
                     self.store.write(raw)
                 return {
@@ -334,9 +359,17 @@ class RuleStateStore:
 
             completed_close = float(existing.get("pending_close", 0.0) or 0.0)
             previous = accepted
-            current = dict(build_snapshot(completed_close) or {}) if completed_close > 0 else accepted
+            current = (dict(build_snapshot(completed_close) or {})
+                       if math.isfinite(completed_close) and completed_close > 0 else {})
             if not current:
-                current = accepted
+                current = dict(baseline)
+            else:
+                minutes = {"1M": 1, "2M": 2, "5M": 5}[interval]
+                current.update(
+                    signal_ready=True, indicator_price=completed_close,
+                    indicator_observed_at=datetime.fromtimestamp(
+                        (pending_bucket + 1) * minutes * 60, VN_TZ).isoformat(),
+                )
             existing.update(
                 session=session_key,
                 interval=interval,
@@ -345,7 +378,7 @@ class RuleStateStore:
                 pending_bucket=bucket_key,
                 pending_close=close_price,
                 accepted_bucket=pending_bucket,
-                updated_at=time.time(),
+                updated_at=now,
             )
             raw["indicator_streams"][key] = existing
             self.store.write(raw)
@@ -790,6 +823,83 @@ class RuleStateStore:
             self.store.write(raw)
             return True
 
+    def queue_telegram_notice(self, alert_key: str, occurrence: str, notice: dict[str, Any],
+                              cooldown_seconds: float = 0.0) -> str:
+        """Persist original evidence before delivery; failures never consume dedup."""
+        identity = hashlib.sha256(f"{alert_key}\0{occurrence}".encode()).hexdigest()
+        now = time.time()
+        with self._lock:
+            raw = self._read()
+            if identity in raw["telegram_notices"]:
+                return identity
+            previous = raw["processed_alerts"].get(alert_key)
+            if isinstance(previous, dict):
+                if previous.get("occurrence") == occurrence:
+                    return ""
+                if now < float(previous.get("claimed_at", 0)) + cooldown_seconds:
+                    return ""
+            elif previous == occurrence:
+                return ""
+            if any(item.get("alert_key") == alert_key
+                   and now < item["created_at"] + cooldown_seconds
+                   for item in raw["telegram_notices"].values()):
+                return ""
+            raw["telegram_notices"][identity] = {
+                **notice, "id": identity, "alert_key": alert_key,
+                "occurrence": occurrence, "created_at": now, "retry_at": 0.0,
+            }
+            self.store.write(raw)
+            return identity
+
+    def pending_telegram_notices(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return sorted(self._read()["telegram_notices"].values(),
+                          key=lambda item: item["created_at"])
+
+    def claim_telegram_notice(self, identity: str) -> dict[str, Any] | None:
+        """Lease a send for 60 seconds, so concurrent polls cannot duplicate it."""
+        with self._lock:
+            raw = self._read()
+            notice = raw["telegram_notices"].get(identity)
+            now = time.time()
+            if not notice or now < notice.get("retry_at", 0.0):
+                return None
+            notice.update(attempt_id=uuid.uuid4().hex, retry_at=now + 60.0)
+            self.store.write(raw)
+            return dict(notice)
+
+    def finish_telegram_notice(self, identity: str, attempt_id: str, *, sent: bool) -> dict[str, Any] | None:
+        """Commit delivery and the BUY watch together; retain failures for retry."""
+        with self._lock:
+            raw = self._read()
+            notice = raw["telegram_notices"].get(identity)
+            if not notice or notice.get("attempt_id") != attempt_id:
+                return None
+            lost = None
+            if sent:
+                raw["processed_alerts"][notice["alert_key"]] = {
+                    "occurrence": notice["occurrence"], "claimed_at": time.time(),
+                }
+                raw["telegram_notices"].pop(identity)
+                watch = raw["telegram_buy_watches"].get(
+                    self._buy_confirmation_key(notice["symbol"], notice["execution_mode"]))
+                if (notice["category"] == "blocked_buy" and watch
+                        and watch.get("id") == notice.get("watch_id")):
+                    watch["announced"] = True
+                    if not watch.get("active") and not watch.get("queued"):
+                        lost = dict(watch)
+            else:
+                notice.pop("attempt_id", None)
+                notice["retry_at"] = time.time() + 60.0
+            self.store.write(raw)
+            return lost
+
+    def discard_telegram_notice(self, identity: str) -> None:
+        with self._lock:
+            raw = self._read()
+            if raw["telegram_notices"].pop(identity, None) is not None:
+                self.store.write(raw)
+
     def observe_telegram_buy(
         self, symbol: str, stream: str, valid: bool | None, *,
         session_key: str, queued: bool = False, snapshot: dict[str, Any] | None = None,
@@ -826,7 +936,7 @@ class RuleStateStore:
                     raw["telegram_buy_watches"].pop(key, None)
                 self.store.write(raw)
             lost = (
-                dict(watch) if changed_to_lost and watch.get("announced")
+                dict(watch) if watch.get("lost_snapshot") and not watch.get("active") and watch.get("announced")
                 and not watch.get("queued") else None
             )
             return dict(watch), lost

@@ -54,12 +54,16 @@ Preset VA 50 triệu: MSN/CTS/HDB 15 triệu, IDC 5 triệu, 100%, MAX=1; IDC kh
   `TradeCycle.entry_order_ids` đếm BUY BOT khớp; union pending, khớp từng phần chỉ 1, UNKNOWN giữ lượt.
   Chỉ thêm vào vị thế BOT chưa thoát, snapshot đủ cổ, không BUY/SELL đang chờ; cần tín hiệu mới
   và qua bộ lọc BUY. Cùng cycle/giá vốn bình quân/SL/PROTECT; 1 mã vẫn 1 slot. Bán hết đếm lại.
+  Lọc BUY không thay SELL/ARM/ALERT. Khi giờ/xác nhận đã đạt, BUY thêm được xét lại
+  mọi khóa/vốn với tín hiệu đã giữ, không yêu cầu một lần giao cắt thứ hai.
   MFE rebase theo giá vốn mới, không hạ sàn Protect đã lưu. Tiền để dành/chưa chia không cho mã khác mượn. Cash/room P1,
   no-compound vẫn chặn; FORCE 100 không phá cap. MARKET/ATO/ATC dự phòng giá trần,
   LO giá giới hạn. Giảm cap không tự bán/top-up.
 - Backtest hiện chỉ hỗ trợ MAX LỆNH=1; MAX>1 phải báo lỗi rõ, không giả kết quả tương đương LIVE.
 - Telegram BUY/closed lưu theo book + mã; BUY thêm có ID riêng trong digest, không ghi đè BUY trước.
   Reject BUY thêm không xóa record tổng kết vị thế đang giữ. Delivery thật phụ thuộc token/chat/mạng.
+  BUY kỹ thuật/MẤT BUY có hàng đợi bền vững; chỉ commit dedup sau delivery thành công,
+  lease/thử lại 60 giây. Mỗi lần thử kiểm tra nhóm/tổng/nơi nhận hiện tại.
 - Preview chỉ báo chọn `decisions_by_mode`; AUTO tính lại từ snapshot đúng sổ và
   P1/OVERRIDE qua `PortfolioContextBuilder.build(budget_only=True)`, không cần decision
   BUY, không đổi cooldown/vị thế. Thiếu dữ liệu không đoán vốn. CHƯA LƯU chưa áp dụng.

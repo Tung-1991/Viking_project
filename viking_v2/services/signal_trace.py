@@ -34,7 +34,7 @@ def compare_entry(marks: dict, params: dict) -> tuple[bool | None, bool | None, 
     rsi = current > prior if current is not None and prior is not None else None
     chosen = [value for enabled, value in ((params.get("buy_signal_use_ema", True), ema),
                                           (params.get("buy_signal_use_rsi", True), rsi)) if enabled]
-    entry = None if not chosen or any(value is None for value in chosen) else all(chosen)
+    entry = None if marks.get("signal_ready") is False or not chosen or any(value is None for value in chosen) else all(chosen)
     return ema, rsi, entry
 
 
@@ -61,6 +61,8 @@ def trace_workbook(rows: list[dict]):
         ("quote_issue", "Lỗi giá"), ("decision_time", "Giờ đánh giá"),
         ("system_issue", "Lỗi hệ thống lúc ghi"),
         ("decision_fresh", "Đánh giá mới"), ("ema_fast", "EMA nhanh"), ("ema_slow", "EMA chậm"),
+        ("signal_ready", "Mẫu chỉ báo sẵn sàng"), ("indicator_observed_at", "Mốc chỉ báo"),
+        ("indicator_price_vnd", "Giá mẫu chỉ báo VND"),
         ("ema_comparison", "So EMA"), ("rsi", "RSI hiện tại"), ("rsi_previous", "RSI phiên trước"),
         ("ema_fast_period", "Chu kỳ EMA nhanh"), ("ema_slow_period", "Chu kỳ EMA chậm"), ("rsi_period", "Chu kỳ RSI"),
         ("rsi_previous_date", "Phiên RSI trước"), ("rsi_comparison", "So RSI"),
@@ -196,6 +198,9 @@ class SignalTraceStore:
                     "quote_age_seconds": quote["age_seconds"], "quote_issue": quote["reason"],
                     "system_issue": safe_detail(status.get("error", "")),
                     "decision_time": details.get("updated_at", ""), "decision_fresh": fresh,
+                    "signal_ready": marks.get("signal_ready"),
+                    "indicator_observed_at": marks.get("indicator_observed_at", ""),
+                    "indicator_price_vnd": finite(marks.get("indicator_price")),
                     "ema_fast": marks.get("buy_ema_fast", marks.get("ema_fast")),
                     "ema_slow": marks.get("buy_ema_slow", marks.get("ema_slow")),
                     "rsi": marks.get("rsi"), "rsi_previous": marks.get("rsi_previous"),
@@ -207,7 +212,8 @@ class SignalTraceStore:
                                                and settings.rule_parameters.get("buy_signal_require_ema_cross", True)),
                     "ema_cross_state": ((details.get("ema_cross") or {}).get("state", "")
                                         if fresh and quote["valid"] else ""),
-                    "ema_cross_at": ((details.get("buy_window") or {}).get("signal_time", "")
+                    "ema_cross_at": (((details.get("buy_window") or {}).get("ema_cross") or {}).get("cross_at")
+                                     or (details.get("buy_window") or {}).get("signal_time", "")
                                      if (details.get("ema_cross") or {}).get("required")
                                      and (details.get("buy_window") or {}).get("state") in {"WAITING", "ALLOWED"}
                                      and ((details.get("buy_window") or {}).get("ema_cross") or {}).get("crossed_up") is True
@@ -238,7 +244,7 @@ class SignalTraceStore:
                 for key, value in row.items():
                     if isinstance(value, float) and not math.isfinite(value):
                         row[key] = None
-                for key in ("price_vnd", "budget_price_vnd"):
+                for key in ("price_vnd", "budget_price_vnd", "indicator_price_vnd"):
                     if row.get(key) is not None:
                         row[key] *= 1000
                 row["ema_comparison"] = number_comparison(row["ema_fast"], row["ema_slow"], 4)

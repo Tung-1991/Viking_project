@@ -24,10 +24,15 @@ def apply_buy_filters(
 ) -> tuple[dict[str, Any], StrategyDecision]:
     params = rule.params
     position = portfolio.get("position") or {}
+    if (decision.action == "SELL" or (decision.scope == "POSITION_MANAGEMENT"
+            and decision.reason != "HOLD_POSITION")):
+        return {}, decision
     if ((position.get("quantity", portfolio.get("position_quantity", 0)) and not portfolio.get("scale_in_allowed", False))
             or portfolio.get("pending_buy")
             or not (params.buy_window_enabled or params.buy_confirmation_enabled)):
         return {}, decision
+    if (decision.details.get("indicators") or {}).get("signal_ready") is False:
+        return {}, decision  # Downtime and initialization cannot preserve a BUY candidate.
     saved = dict(state or {})
     # Read candidates written by the previous confirmation-only version.
     confirmation = dict(saved.get("confirmation") or (saved if saved.get("active") else {}))

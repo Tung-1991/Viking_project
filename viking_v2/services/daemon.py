@@ -585,6 +585,7 @@ def run(account_id: str | None = None) -> int:
                                             "quote_issue": quote_details["reason"],
                                         }
                                     rule_state.save_buy_confirmation(symbol, decision_mode, {})
+                                    rule_state.reset_indicator_bucket(symbol, decision_mode)
                                     tick = None
                             elif tick and str(tick.get("symbol", symbol)).upper() != symbol:
                                 tick = None

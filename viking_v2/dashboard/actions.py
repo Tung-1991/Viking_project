@@ -1507,7 +1507,8 @@ class DashboardActionsMixin:
         """Evaluate selected EMA/RSI only; bad/missing data cannot cancel BUY."""
         details = decision.details if isinstance(decision.details, dict) else {}
         marks = details.get("indicators")
-        if not isinstance(marks, dict) or not math.isfinite(price) or price <= 0:
+        if (not isinstance(marks, dict) or marks.get("signal_ready") is False
+                or not math.isfinite(price) or price <= 0):
             return None
         rules = getattr(self.settings, "rule_parameters", {}) or {}
         ema_enabled = bool(rules.get("buy_signal_use_ema", True))
@@ -1546,16 +1547,76 @@ class DashboardActionsMixin:
                 or not DashboardActionsMixin._telegram_notification_enabled(self, "buy_lost")):
             return
         symbol, mode = str(watch.get("symbol", "")), str(watch.get("execution_mode", ""))
-        if not DashboardActionsMixin._claim_telegram_event(self, f"buy_lost|{mode}", symbol, str(watch["id"])):
-            return
-        threading.Thread(
-            target=service.notify_buy_lost,
-            kwargs={"symbol": symbol, "execution_mode": mode,
+        DashboardActionsMixin._queue_telegram_notice(
+            self, service, "buy_lost", f"buy_lost|{mode}", symbol, str(watch["id"]),
+            {"symbol": symbol, "execution_mode": mode,
                     **{key: snapshot[key] for key in (
                         "price", "indicators", "ema_enabled", "rsi_enabled", "observed_at",
-                    )}},
-            daemon=True,
-        ).start()
+                     )}},
+        )
+
+    def _queue_telegram_notice(self, service: Any, category: str, key: str, symbol: str,
+                               occurrence: str, payload: dict, *, watch_id: str = "") -> None:
+        identity = self.rule_state.queue_telegram_notice(
+            f"TELEGRAM|{key.upper()}|{symbol.upper()}", occurrence,
+            {"category": category, "symbol": symbol, "execution_mode": payload["execution_mode"],
+             "destination": str(getattr(service, "chat_id", self.settings.telegram_chat_id)),
+             "payload": payload, "watch_id": watch_id},
+            DashboardActionsMixin._telegram_cooldown_seconds(self, category),
+        )
+        if identity:
+            DashboardActionsMixin._dispatch_telegram_notice(self, identity, service)
+
+    def _dispatch_telegram_notice(self, identity: str, service: Any) -> None:
+        notice = self.rule_state.claim_telegram_notice(identity)
+        if notice is None:
+            return
+
+        def send_notice() -> None:
+            sent = False
+            try:
+                current_service = getattr(self, "telegram", service)
+                destination = str(getattr(current_service, "chat_id", self.settings.telegram_chat_id))
+                if (not self.settings.telegram_enabled
+                        or not DashboardActionsMixin._telegram_notification_enabled(self, notice["category"])
+                        or destination != notice["destination"]):
+                    self.rule_state.discard_telegram_notice(identity)
+                    return
+                if current_service is not service:
+                    return  # A reconfigured service may retry this retained notice.
+                method = (service.notify_technical_buy if notice["category"] == "blocked_buy"
+                          else service.notify_buy_lost)
+                sent = bool(method(**notice["payload"]))
+            except Exception as exc:
+                logger = getattr(self, "logger", None)
+                if logger:
+                    logger.warning("Telegram notice delivery failed: %s", type(exc).__name__)
+            finally:
+                lost = self.rule_state.finish_telegram_notice(
+                    identity, notice["attempt_id"], sent=sent)
+                if lost:
+                    DashboardActionsMixin._notify_buy_lost(self, lost)
+
+        threading.Thread(target=send_notice, kwargs={}, daemon=True).start()
+
+    def _retry_telegram_notices(self) -> None:
+        try:
+            service = self.telegram
+            for notice in self.rule_state.pending_telegram_notices():
+                enabled = DashboardActionsMixin._telegram_notification_enabled(self, notice["category"])
+                destination = str(getattr(service, "chat_id", self.settings.telegram_chat_id))
+                if (not self.settings.telegram_enabled or not enabled
+                        or destination != notice["destination"]):
+                    self.rule_state.discard_telegram_notice(notice["id"])
+                elif service is not None:
+                    DashboardActionsMixin._dispatch_telegram_notice(self, notice["id"], service)
+        except Exception as exc:
+            # Notification storage must not stop scheduling UI/trading polls.
+            now = time.time()
+            logger = getattr(self, "logger", None)
+            if logger and now - getattr(self, "_last_telegram_retry_error", 0.0) >= 60:
+                self._last_telegram_retry_error = now
+                logger.warning("Telegram retry storage failed: %s", type(exc).__name__)
 
     def _notify_signal_only(
         self, service: Any, symbol: str, signal: str, decision: Any, price: float,
@@ -1574,20 +1635,10 @@ class DashboardActionsMixin:
                 str(details.get("signal_cycle") or details.get("candle_key") or decision.timestamp),
             )
         )
-        if not DashboardActionsMixin._claim_telegram_event(
-            self,
-            f"blocked_buy|{str(execution_mode or '').upper()}|TECHNICAL", symbol, occurrence,
-        ):
-            return
-        def send_notice(**kwargs: Any) -> None:
-            if service.notify_technical_buy(**kwargs) and watch_id:
-                lost = self.rule_state.mark_telegram_buy_announced(symbol, execution_mode, watch_id)
-                if lost:
-                    DashboardActionsMixin._notify_buy_lost(self, lost)
-
-        threading.Thread(
-            target=send_notice,
-            kwargs={
+        DashboardActionsMixin._queue_telegram_notice(
+            self, service, "blocked_buy", f"blocked_buy|{str(execution_mode or '').upper()}|TECHNICAL",
+            symbol, occurrence,
+            {
                 "symbol": symbol,
                 "price": price,
                 "market_state": decision.market_state,
@@ -1596,8 +1647,8 @@ class DashboardActionsMixin:
                 "rsi_enabled": snapshot["rsi_enabled"],
                 "execution_mode": execution_mode,
             },
-            daemon=True,
-        ).start()
+            watch_id=watch_id,
+        )
 
     def _notify_bot_trade_event(
         self,
@@ -1867,7 +1918,8 @@ class DashboardActionsMixin:
                     if local_id:
                         self.queue.mark_broker_cancelled(local_id, "Yêu cầu hủy đang gửi DNSE")
                     result = self.real.cancel_order(broker_order_id)
-                    if (result.ok or result.status == "UNKNOWN") and local_id:
+                    uncertain = result.status == "UNKNOWN" or result.error == "ORDER_STATUS_UNKNOWN"
+                    if (result.ok or uncertain) and local_id:
                         self.queue.mark_broker_cancelled(local_id, result.message or "USER_CANCELLED_DNSE")
                     messages.append(
                         f"DNSE #{broker_order_id}: {result.status} {result.message or result.error}".strip()
@@ -2205,20 +2257,22 @@ class DashboardActionsMixin:
                     if local_id:
                         self.queue.mark_broker_replaced(local_id, quantity=logical_quantity, broker_quantity=quantity, limit_price=price, result="Yêu cầu sửa đang gửi DNSE")
                     result = self.real.replace_order(broker_order_id, price=price, quantity=quantity)
-                    if (result.ok or result.status == "UNKNOWN") and local_id:
+                    uncertain = result.status == "UNKNOWN" or result.error == "ORDER_STATUS_UNKNOWN"
+                    if (result.ok or uncertain) and local_id:
                         self.queue.mark_broker_replaced(
                             local_id, quantity=logical_quantity, broker_quantity=quantity, limit_price=price,
                             result=result.message or "USER_REPLACED_DNSE",
                             broker_order_id=result.order_id,
                         )
+                    elif local_id:
+                        self.queue.reject_broker_replace(local_id, result.message or result.error or result.status)
 
                     def finish() -> None:
                         status.configure(
                             text=result.message or result.error or result.status,
                             text_color=COL_GREEN if result.ok else COL_RED,
                         )
-                        if result.ok:
-                            self._refresh_local()
+                        self._refresh_local()
 
                     self._post_ui(finish)
 
@@ -2675,6 +2729,30 @@ class DashboardActionsMixin:
     def _poll_runtime(self) -> None:
         if not self.running:
             return
+        try:
+            self._poll_runtime_once()
+            self._decision_poll_fault = False
+        except Exception as exc:
+            # Keep exits/reconciliation alive, but do not authorize new BUYs
+            # until one whole decision cycle has succeeded again.
+            self._decision_poll_fault = True
+            broker = getattr(self, "real", None)
+            detail = error_summary(exc, secrets=tuple(getattr(broker, name, "") for name in (
+                "api_key", "api_secret", "trading_token",
+            )))
+            logger = getattr(self, "logger", None)
+            if logger is not None:
+                logger.error("Decision polling failed: %s", detail)
+            try:
+                self.lbl_brain.configure(text="DECISION: LỖI · ĐANG THỬ LẠI", text_color=COL_RED)
+                self._log(f"Lỗi xử lý quyết định; tạm chặn BUY, thử lại sau 1 giây: {detail}", "bot")
+            except Exception:
+                pass
+        finally:
+            if self.running:
+                self.after(1000, self._poll_runtime)
+
+    def _poll_runtime_once(self) -> None:
         now = time.time()
         process = self.daemon_process
         if process is not None and process.poll() is not None:
@@ -2782,7 +2860,7 @@ class DashboardActionsMixin:
         )
         self._consume_bot_decisions(status, daemon)
         DashboardActionsMixin._capture_signal_trace(self, status, daemon)
-        self.after(1000, self._poll_runtime)
+        DashboardActionsMixin._retry_telegram_notices(self)
 
     def _capture_signal_trace(self, status: dict, daemon: str) -> None:
         """Observe after planning; tracing never creates/claims a signal or order."""
@@ -2832,13 +2910,19 @@ class DashboardActionsMixin:
         self, decision: StrategyDecision, tick: dict[str, Any], mode: str,
         *, available_cash: float | None = None,
     ) -> Any:
+        # Snapshot data is already local. Reserve capital and enqueue under
+        # the same account transaction so fills cannot interleave these reads.
+        with self.queue.store.database:
+            return self._plan_rule_decision_locked(decision, tick, mode, available_cash=available_cash)
+
+    def _plan_rule_decision_locked(
+        self, decision: StrategyDecision, tick: dict[str, Any], mode: str,
+        *, available_cash: float | None = None,
+    ) -> Any:
         details = decision.details if isinstance(decision.details, dict) else {}
         checks = details.get("entry_checks") if isinstance(details.get("entry_checks"), dict) else {}
-        if decision.action == "BUY" and (
-            getattr(self.settings, "priority_capital_enabled", False) or self.settings.priority_symbols
-            or self.settings.rule_parameters.get("loss_lock_mode") == "BLOCK"
-            or self.trade_state.loss_blocks(mode)
-        ):
+        if decision.action == "BUY":
+            details["entry_checks"] = checks
             balance, positions, _orders = self.snapshots[mode]
             fresh = self._build_entry_limits(decision.symbol, mode, tick, balance, positions,
                                              float(details.get("exposure", 0.0) or 0.0))
@@ -2857,6 +2941,7 @@ class DashboardActionsMixin:
                 return PlanResult(None, "MAX_POSITIONS")
             details["order_budget"] = min(float(details.get("order_budget", 0.0) or 0.0), fresh["order_budget"])
             checks.update(minimum_order_room=fresh["minimum_order_room"], priority_capital=fresh["priority_capital"])
+            checks.update(nav=fresh["nav"], available_cash=fresh["available_cash"], buy_fee_rate=fresh["buy_fee_rate"])
             checks["priority_capital_enabled"] = bool(fresh["priority_capital"])
             checks["buy_budget_price"] = fresh["buy_budget_price"] or checks.get("buy_budget_price", 0.0)
             checks.update({key: fresh[key] for key in ("entry_orders_used", "entry_orders_max", "entry_orders_available", "scale_in_allowed")})
@@ -3038,22 +3123,30 @@ class DashboardActionsMixin:
     def _check_bot_entry_limits(self, intent: OrderIntent, quote: dict[str, Any]) -> str:
         """Final check of the new policies, without changing MANUAL or exits."""
         params = self.settings.rule_parameters
+        if getattr(self, "_decision_poll_fault", False):
+            return "DECISION_POLL_UNAVAILABLE"
+        if any(item.execution_mode == intent.execution_mode
+               and item.details.get("fill_accounting_reconcile_required")
+               for item in self.queue.list_all()):
+            return "FILL_ACCOUNTING_RECONCILE_REQUIRED"
         if self.trade_state.is_loss_locked(
             intent.symbol, intent.execution_mode, int(params.get("loss_lock_count", 3)),
             lock_hours=float(params.get("loss_lock_hours", 24)),
             lock_mode=str(params.get("loss_lock_mode", "TIMED")),
         ):
             return "LOCKED_AFTER_LOSSES"
-        if not self.settings.priority_capital_enabled and not self.settings.priority_symbols:
-            return ""
         broker = self.paper if intent.execution_mode == "PAPER" else self.real
         if intent.execution_mode == "REAL":
             balance, positions = broker.get_balance(force=True), broker.get_positions(force=True)
         else:
             balance, positions = broker.get_balance(), broker.get_positions()
+        from ..rules.business import StaticRuleParameters
+        policy = StaticRuleParameters.from_dict(params)
         exposure = (self.settings.market_phase_override_exposure_pct / 100.0
                     if self.settings.market_phase_override_enabled
-                    else float(params.get("exposure", {}).get(intent.entry_market_state, 0.0)))
+                    else float(policy.exposure.get(intent.entry_market_state, 0.0)))
+        if intent.entry_exposure > 0:
+            exposure = min(exposure, intent.entry_exposure)
         context = self._build_entry_limits(intent.symbol, intent.execution_mode, quote,
                                          balance, positions, exposure, intent.id,
                                          fee_rate=quote.get("buy_fee_rate"))
@@ -3064,12 +3157,18 @@ class DashboardActionsMixin:
             return "POSITION_NOT_READY_FOR_ADD"
         if not context["entry_slot_available"]:
             return "MAX_POSITIONS"
+        priority = bool(context.get("priority_capital"))
         price = intent.limit_price if intent.order_type == "LO" else _price_unit(
             (self.real.get_secdef(intent.symbol) or {}).get("ceilingPrice", 0.0)
+            if priority or intent.execution_mode == "REAL"
+            else quote.get("ceiling_price") or quote.get("ask", quote.get("price", 0.0))
         )
         needed = (intent.remaining_quantity or intent.quantity) * price * 1000.0
-        if price <= 0 or needed > context["order_budget"] + 0.01:
-            return "PRIORITY_CAPITAL_LIMIT"
+        allowed = context["order_budget"]
+        if not priority and policy.force_min_lot_enabled and needed <= price * config.STOCK_ROUND_LOT * 1000.0:
+            allowed = max(allowed, context["minimum_order_room"])
+        if price <= 0 or needed > allowed + 0.01:
+            return "PRIORITY_CAPITAL_LIMIT" if priority else "PORTFOLIO_EXPOSURE_LIMIT"
         return ""
 
     def _record_signal_decision(
@@ -3124,10 +3223,13 @@ class DashboardActionsMixin:
             "ema_slow_period": marks.get("sell_ema_slow_period" if indicator_alert else "buy_ema_slow_period", ""),
             "rsi_period": marks.get("rsi_period", ""),
             "price_source": tick.get("source", ""), "indicator_source": "DNSE",
+            "signal_ready": marks.get("signal_ready", ""),
+            "indicator_observed_at": marks.get("indicator_observed_at", ""),
+            "indicator_price": marks.get("indicator_price", ""),
             "record_kind": "SIGNAL_EVENT",
             "ema_cross_required": cross.get("required", ""),
             "ema_cross_state": cross.get("state", ""),
-            "ema_cross_at": (window.get("signal_time", "")
+            "ema_cross_at": ((window.get("ema_cross") or {}).get("cross_at") or window.get("signal_time", "")
                              if window.get("state") in {"WAITING", "ALLOWED"} and cross.get("required")
                              and (window.get("ema_cross") or {}).get("crossed_up") is True
                              else cross.get("cross_at", "")),

@@ -96,6 +96,8 @@ class DNSEIndicatorNormalizer:
                 output.append(row)
                 continue
             try:
+                if original.get("signal_ready") is False or str(original.get("signal_ready", "")).lower() == "false":
+                    raise ValueError("Chưa có mẫu chỉ báo phút hoàn tất; giữ số nền đã ghi")
                 symbol = str(original.get("symbol", "")).strip().upper()
                 if not symbol or not symbol.isalnum():
                     raise ValueError("Mã không hợp lệ")
@@ -110,9 +112,15 @@ class DNSEIndicatorNormalizer:
                 if history_error:
                     raise ValueError(history_error)
                 history = [bar for bar in history if bar["date"] < day]
-                # Event CSV uses thousands of VND; captures also retain explicit VND.
-                price = (float(original["price_vnd"]) / 1000.0
-                         if original.get("price_vnd") not in (None, "") else float(original["price"]))
+                # Minute decisions use the frozen bucket close, not the newer quote.
+                # Event CSV uses thousands of VND; TRACE retains explicit VND.
+                if original.get("indicator_price_vnd") not in (None, ""):
+                    price = float(original["indicator_price_vnd"]) / 1000.0
+                elif original.get("indicator_price") not in (None, ""):
+                    price = float(original["indicator_price"])
+                else:
+                    price = (float(original["price_vnd"]) / 1000.0
+                             if original.get("price_vnd") not in (None, "") else float(original["price"]))
                 if not isfinite(price) or price <= 0:
                     raise ValueError("Thiếu giá tại giờ ghi; không dùng giá cuối ngày thay thế")
                 periods, defaults = [], []

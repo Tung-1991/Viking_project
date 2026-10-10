@@ -60,6 +60,21 @@ def test_indicator_hint_explains_daily_rsi_baseline_and_strict_comparison(mode, 
     assert "bằng không đạt" in hint
 
 
+@pytest.mark.parametrize('ready', [True, False])
+def test_minute_preview_identifies_completed_sample_or_initialization(ready):
+    view = subject()
+    values = indicator_snapshot(view._preview_bars)
+    sample_time = '2026-10-09T14:00:00+07:00'
+    values.update(signal_ready=ready, indicator_observed_at=sample_time if ready else '')
+    view._preview_indicator_details({'decisions_by_mode': {'PAPER': {'AAA': {
+        'details': {'indicators': values, 'updated_at': ''}}}}}, 'AAA')
+    assert view._preview_indicator_source['signal_ready'] is ready
+    if ready:
+        assert view._preview_indicator_source['asof'] == sample_time
+    else:
+        assert 'chỉ số nền 1D chưa dùng để BUY/E' in view._indicator_preview_hint()
+
+
 def test_bars_show_ema_rsi_atr_without_any_decision_or_bot_entry():
     view = subject()
     status = {"decisions_by_mode": {"REAL": {}, "PAPER": {}}, "bot_enabled": False}

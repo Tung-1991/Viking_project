@@ -135,6 +135,8 @@ def crossover_signal_from_snapshots(
     """
     current = current if isinstance(current, dict) else {}
     previous = previous if isinstance(previous, dict) else {}
+    if current.get("signal_ready") is False:
+        return ""
 
     def number(source: dict[str, Any], key: str) -> float | None:
         try:
@@ -1013,7 +1015,8 @@ class StaticRule:
                 sell_use_ema=self.params.sell_signal_use_ema,
                 sell_use_rsi=self.params.sell_signal_use_rsi,
             )
-        if quantity <= 0 and bool(context.get("confirmed_buy")):
+        confirmed_entry = bool(context.get("confirmed_buy")) and indicators.get("signal_ready") is not False
+        if quantity <= 0 and confirmed_entry:
             signal = "BUY"
         # Whipsaw is an entry guard, so it follows the BUY EMA pair only.
         crosses = (
@@ -1089,6 +1092,9 @@ class StaticRule:
                     market_state=market_state, details=details, scope="POSITION_MANAGEMENT",
                 )
             exit_decision = self._evaluate_position(symbol, market_state, signal, bars, position, details)
+            if (exit_decision.reason == "HOLD_POSITION" and confirmed_entry
+                    and portfolio.get("scale_in_allowed", False)):
+                signal = "BUY"
             if (exit_decision.reason == "HOLD_POSITION" and signal == "BUY"
                     and int(portfolio.get("entry_orders_max", 1)) > 1
                     and not portfolio.get("entry_orders_available", True)):
@@ -1100,7 +1106,8 @@ class StaticRule:
                 return exit_decision
 
         if signal != "BUY":
-            return StrategyDecision("WAIT", symbol, "NO_NEW_BUY_SIGNAL", signal=signal, market_state=market_state, details=details)
+            reason = "INDICATOR_BUCKET_WAIT" if indicators.get("signal_ready") is False else "NO_NEW_BUY_SIGNAL"
+            return StrategyDecision("WAIT", symbol, reason, signal=signal, market_state=market_state, details=details)
         if not bool(context.get("entry_allowed", True)):
             return StrategyDecision("WAIT", symbol, "NOT_IN_WATCHLIST", signal=signal, market_state=market_state, details=details)
         if self.params.buy_volume_enabled and not bool(buy_volume.get("ready")):

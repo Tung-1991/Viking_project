@@ -139,12 +139,19 @@ class MonthlyExcelArchive:
                     tuple("" if cell.value is None else str(cell.value) for cell in excel_row)
                     for excel_row in sheet.iter_rows(min_row=2)
                 }
+                id_column = self.fields.index("record_id") if "record_id" in self.fields else None
+                existing_ids = ({signature[id_column] for signature in existing
+                                 if len(signature) > id_column and signature[id_column]}
+                                if id_column is not None else set())
                 for row in rows:
                     values = tuple(row.get(field, "") for field in self.fields)
                     signature = tuple("" if value is None else str(value) for value in values)
-                    if signature not in existing:
+                    identity = str(row.get("record_id", "") or "")
+                    if signature not in existing and not (identity and identity in existing_ids):
                         sheet.append(list(values))
                         existing.add(signature)
+                        if identity:
+                            existing_ids.add(identity)
                 sheet.auto_filter.ref = sheet.dimensions
                 temporary = target.with_name(f".{target.stem}.{uuid.uuid4().hex}.tmp.xlsx")
                 try:
@@ -306,6 +313,8 @@ class SignalLog:
         "rsi_period", "price_source", "indicator_source", "record_kind",
         "signal_event", "ema_cross_required", "ema_cross_state", "ema_cross_at",
         "ema_previous_fast", "ema_previous_slow",
+        "signal_ready", "indicator_observed_at", "indicator_price",
+        "record_id",
     )
     RECENT_CSV_ROWS = 500
 
@@ -327,6 +336,50 @@ class SignalLog:
         self.observations = AtomicJSONStore(
             self.path.with_name(f"{self.path.stem}_observations.json"), default={}
         )
+        self.pending = AtomicJSONStore(
+            self.path.with_name(f"{self.path.stem}_pending.json"), default={}
+        )
+
+    def _finish_pending_record(self) -> tuple[str, str] | None:
+        """Recover the original append before accepting a newer observation.
+
+        The pending row is durable before CSV I/O. Its ID lets a restart finish
+        dedup/archive writes without appending the same row a second time.
+        """
+        pending = self.pending.read()
+        if not pending:
+            return
+        saved_row = pending["row"]
+        if self._recent_count is None:
+            self._recent_count = self.excel_archive.bootstrap_csv(
+                self.path, self.RECENT_CSV_ROWS,
+            )
+        recorded = any(row.get("record_id") == saved_row["record_id"]
+                       for row in self.read_all(limit=self.RECENT_CSV_ROWS))
+        if not recorded:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            new_file = not self.path.exists() or self.path.stat().st_size == 0
+            with self.path.open("a", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=self.FIELDS, extrasaction="ignore")
+                if new_file:
+                    writer.writeheader()
+                writer.writerow(saved_row)
+                handle.flush()
+                os.fsync(handle.fileno())
+            self._recent_count += 1
+        self._last[pending["stream"]] = pending["key"]
+        self._state_dirty = True
+        archived = self.excel_archive.append(saved_row)
+        if archived and self._recent_count > self.RECENT_CSV_ROWS:
+            recent = self.read_all(limit=self.RECENT_CSV_ROWS)
+            _rewrite_csv(self.path, self.FIELDS, recent)
+            self._recent_count = len(recent)
+        elif not archived:
+            self.excel_archive.invalidate_bootstrap()
+        self.state.write(self._last)
+        self.pending.write({})
+        self._state_dirty = False
+        return None if recorded else (pending["stream"], pending["key"])
 
     def observe(self, row: dict[str, Any], *, entry_condition: bool | None,
                 exit_condition: bool | None) -> list[str]:
@@ -411,46 +464,24 @@ class SignalLog:
             str(row.get("blocked_by", "") or ""),
         ) if value)
         with self._lock:
+            recovered = self._finish_pending_record()
             if not symbol:
                 return False
             if self._last.get(state_symbol) == state_key:
                 if self._state_dirty:
                     self.state.write(self._last)
                     self._state_dirty = False
-                return False
+                return recovered == (state_symbol, state_key)
             if not signal:
                 updated = {**self._last, state_symbol: state_key}
                 self.state.write(updated)
                 self._last = updated
                 self._state_dirty = False
                 return False
-            if self._recent_count is None:
-                self._recent_count = self.excel_archive.bootstrap_csv(
-                    self.path, self.RECENT_CSV_ROWS,
-                )
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            new_file = not self.path.exists() or self.path.stat().st_size == 0
             saved_row = {key: row.get(key, "") for key in self.FIELDS}
-            with self.path.open("a", encoding="utf-8-sig", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=self.FIELDS, extrasaction="ignore")
-                if new_file:
-                    writer.writeheader()
-                writer.writerow(saved_row)
-                handle.flush()
-                os.fsync(handle.fileno())
-            # A failed CSV append must remain retryable, including after restart.
-            self._last[state_symbol] = state_key
-            self._state_dirty = True
-            self._recent_count += 1
-            archived = self.excel_archive.append(saved_row)
-            if archived and self._recent_count > self.RECENT_CSV_ROWS:
-                recent = self.read_all(limit=self.RECENT_CSV_ROWS)
-                _rewrite_csv(self.path, self.FIELDS, recent)
-                self._recent_count = len(recent)
-            elif not archived:
-                self.excel_archive.invalidate_bootstrap()
-            self.state.write(self._last)
-            self._state_dirty = False
+            saved_row["record_id"] = uuid.uuid4().hex
+            self.pending.write({"stream": state_symbol, "key": state_key, "row": saved_row})
+            self._finish_pending_record()
         return True
 
     def _ensure_schema(self) -> None:
@@ -637,7 +668,7 @@ class DailyFeeTracker:
             if timestamp <= start or timestamp > end:
                 continue
             try:
-                signed = str(row.get("message", "")) in {"BROKER_COST_RECONCILED", "BROKER_FILL_RECONCILED"}
+                signed = str(row.get("message", "")) in {"BROKER_COST_RECONCILED", "BROKER_FILL_RECONCILED", "EXTERNAL_FILL_RECONCILED"}
                 fee = float(row.get("fee", 0.0) or 0.0)
                 tax = float(row.get("tax", 0.0) or 0.0)
                 if not signed:
