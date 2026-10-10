@@ -6,7 +6,7 @@ import pytest
 
 from viking_v2.config import AppSettings
 from viking_v2.dashboard.windows import HistoryPopup, SignalRecordingPopup
-from viking_v2.services.indicator_comparison import IndicatorComparisonStore
+from viking_v2.services.indicator_comparison import DNSEIndicatorNormalizer
 from viking_v2.services.signal_history import (
     SignalHistoryTrash, observation_id, periodic_history_row, recording_options,
 )
@@ -32,7 +32,7 @@ def sample(clock="14:00:01", symbol="HDB"):
 def popup_for(ui_root, tmp_path, rows=None, samples=None):
     trace = SimpleNamespace(path=tmp_path / "trace.sqlite3", read=lambda **_kw: deepcopy(samples or []))
     return HistoryPopup(ui_root, lambda _mode: [], signals_provider=lambda: rows or [], trace_store=trace,
-                        indicator_comparison=IndicatorComparisonStore(tmp_path / "comparison"))
+                        indicator_normalizer=DNSEIndicatorNormalizer(tmp_path / "market_bars.json"))
 
 
 def test_trash_hides_only_ids_persists_and_can_restore_without_modifying_records(tmp_path):
@@ -150,14 +150,14 @@ def test_delete_legacy_aggregate_hides_all_repeats_but_not_new_cycle(ui_root, tm
         popup.close()
 
 
-def test_delete_identity_remains_original_when_switching_to_tradingview(ui_root, tmp_path, monkeypatch):
+def test_delete_identity_remains_original_when_enabling_normalization(ui_root, tmp_path, monkeypatch):
     popup = popup_for(ui_root, tmp_path, [event()], [sample()])
     try:
-        popup._change_indicator_basis("TRADINGVIEW")
+        popup._toggle_normalization()
         popup.signal_tree.selection_set("symbol:2026-10-09:HDB")
         monkeypatch.setattr("viking_v2.dashboard.windows.messagebox.askyesno", lambda *_a, **_kw: True)
         popup._delete_signal_rows()
-        popup._change_indicator_basis("DNSE")
+        popup._toggle_normalization()
         assert not popup.signal_tree.get_children()
         popup._restore_signal_rows()
         assert len(popup.signal_tree.get_children("symbol:2026-10-09:HDB")) == 2

@@ -136,18 +136,22 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 - EMA/RSI hiện phép so sánh số gốc; bản ghi mới giữ RSI tham chiếu, phiên tham chiếu và chu kỳ chỉ báo.
   Thiếu RSI phiên trước vẫn hiện số hiện tại, ví dụ **52.29 · Trước: —**; thiếu hiện tại vẫn giữ số trước.
   Thiếu cả hai mới hiện **—**. Không lấy RSI cuối ngày hôm nay hoặc giá mới điền ngược bản ghi cũ.
-- Mặc định **DNSE** giữ nguyên số bot đã ghi. **TRADINGVIEW** tính lại để đối chiếu, không đổi bot/lệnh.
-  Nút và dòng trạng thái có hint giải thích cần CSV; nếu chưa tính được, báo số dòng lỗi và xem LÝ DO/Chi tiết.
-  NẠP CSV 1D xuất từ TradingView, đơn vị VND, ít nhất 100 nến (nên toàn bộ lịch sử); chọn đúng mã.
-  Giữ số lẻ của CSV, dùng lịch sử đến phiên trước + giá intraday đã ghi, không dùng close cuối ngày để tính ngược.
-  CSV được lưu riêng theo phiên chuẩn giá (phiên cuối CSV); tự chọn đúng bộ dữ liệu của ngày sự kiện.
-  Nạp CSV ngày mới không xóa bộ của ngày cũ. Ngày chưa có CSV đúng chuẩn báo thiếu dữ liệu;
-  không tự giả định hệ số điều chỉnh hay lấy CSV đã điều chỉnh hôm nay gán cho ngày cũ.
-  Mẫu đối chiếu hiện **TV · Đạt / TV · Chưa đạt / TV · Chưa có số** theo kết quả TradingView.
-  Xử lý sự kiện lịch sử vẫn ghi rõ **DNSE · ...**; Chi tiết giữ kết quả DNSE đã ghi, không đổi quyết định cũ.
-  Không khôi phục TradingView bằng cách nhân/chia RSI hoặc tự đoán hệ số từ dữ liệu DNSE đã làm tròn.
-- XUẤT EXCEL gồm DNSE gốc và TradingView đối chiếu của các dòng trong danh sách (kể cả nhóm chưa xổ),
-  không xuất dòng đã xóa/ẩn và không tự kéo dữ liệu mạng. Có mẫu định kỳ thì thêm TRACE/SETTING đầy đủ.
+- Chỉ có **một nguồn DNSE**, không còn hai mode hay nút nạp CSV. **CHUẨN HOÁ · OFF** mặc định giữ số đã ghi.
+  Bấm **ON** tự đọc cache `market_bars.json` của đúng tài khoản mà daemon đã tải từ DNSE.
+  Tính lại chạy nền, không chặn Tk; không gọi thêm nguồn/API, không ghi vào nhật ký, rule hay lệnh.
+  Chuẩn hoá đơn vị giá, sắp nến theo phiên Việt Nam và dùng đúng một nến 1D/phiên;
+  lịch sử chỉ đến trước ngày sự kiện + **giá tick tại giờ ghi**, không dùng close cuối ngày hoặc các tick trước đó làm nến mới.
+  EMA chuẩn, RSI Wilder; giữ độ chính xác giá đầu vào. Đủ lịch sử RSI trước mới tính, không đòi CSV 100 nến.
+  Dùng chu kỳ đã ghi; bản cũ thiếu thì dùng 3/6/14, ghi rõ giả định trong Chi tiết và Excel.
+  Thiếu cache/mã/giá/chu kỳ hợp lệ: **giữ số gốc**, hiện số dòng chưa tính và Chi tiết; không làm trống cả bảng.
+  Nút có hint; LÀM MỚI tính lại nếu cache đã đổi, OFF trả ngay số gốc.
+  Sự kiện, **XỬ LÝ ĐÃ GHI**, cắt EMA và tổng kết vẫn giữ chứng cứ bot lúc ghi; mẫu không tự thành ENTRY/lệnh mới.
+  Chi tiết có số DNSE gốc, số tính lại, phạm vi lịch sử và mốc cache; lịch sử có thể đã được cập nhật/điều chỉnh sau phiên.
+  Đây là **tính lại trên DNSE**, không khẳng định khôi phục quyết định cũ hoặc khớp từng số TradingView;
+  không tự đoán hệ số cổ tức, sửa giá hoặc nhân/chia RSI để ép khớp chart. File CSV đối chiếu cũ không bị xóa.
+- XUẤT EXCEL luôn có **DNSE GỐC**; bật chuẩn hoá thêm **CHUẨN HOÁ**, không còn sheet TradingView rỗng.
+  Bao gồm các dòng trong danh sách (kể cả nhóm chưa xổ), không xuất dòng đã xóa/ẩn và không tự kéo dữ liệu mạng.
+  Có mẫu định kỳ thì thêm TRACE/SETTING đầy đủ. Chờ chuẩn hoá xong trước khi xuất số tính lại.
   UI giữ 7 ngày ghi nhận gần nhất; nguồn sự kiện gần nhất tối đa 250 dòng, mẫu định kỳ được gộp thêm.
   CSV gần nhất 500 dòng, Excel sự kiện tự lưu theo tháng.
 

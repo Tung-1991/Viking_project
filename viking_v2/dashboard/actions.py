@@ -41,7 +41,7 @@ from ..services.signal_coordinator import (
     decision_signal_time,
     is_terminal_buy_block,
 )
-from ..services.indicator_comparison import IndicatorComparisonStore
+from ..services.indicator_comparison import DNSEIndicatorNormalizer
 from ..services.signal_trace import SignalTraceStore, compare_entry
 from ..rules.observations import exit_conditions
 from ..storage import CSVOrderJournal
@@ -615,7 +615,7 @@ class DashboardActionsMixin:
             self._history_popup = HistoryPopup(
                 self, self._history_popup_groups, initial_mode=self.mode.get(),
                 signals_provider=self._signal_log_rows,
-                indicator_comparison=IndicatorComparisonStore(self.bridge.root / "indicator_comparison"),
+                indicator_normalizer=DNSEIndicatorNormalizer(self.bridge.market_cache_path),
                 trace_store=SignalTraceStore(self.bridge.root / "signal_trace.sqlite3"),
                 trace_settings_provider=lambda: self.settings,
                 on_trace_settings=self._save_signal_recording_settings,

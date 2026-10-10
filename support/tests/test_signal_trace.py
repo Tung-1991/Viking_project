@@ -147,7 +147,7 @@ def test_capture_is_in_the_same_symbol_tree_as_events_and_exportable(ui_root, tm
         from openpyxl import load_workbook
         book = load_workbook(tmp_path / "out.xlsx")
         try:
-            assert book.sheetnames == ["DNSE GỐC", "TRADINGVIEW ĐỐI CHIẾU", "TRACE", "SETTING"]
+            assert book.sheetnames == ["DNSE GỐC", "TRACE", "SETTING"]
             assert book["DNSE GỐC"].max_row == 4 and book["TRACE"].max_row == 3
         finally:
             book.close()
