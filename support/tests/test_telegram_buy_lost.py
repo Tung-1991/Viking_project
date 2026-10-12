@@ -10,6 +10,7 @@ from viking_v2.connections.telegram import SignalTelegramService
 from viking_v2.dashboard.actions import DashboardActionsMixin
 from viking_v2.models import StrategyDecision
 from viking_v2.rules.state import RuleStateStore
+from support.tests.telegram_support import TELEGRAM_START, set_technical_test_session
 
 
 class Telegram:
@@ -30,8 +31,10 @@ class ImmediateThread:
 
 @pytest.fixture
 def subject(monkeypatch, tmp_path):
+    monkeypatch.setattr("viking_v2.dashboard.actions.time.time", lambda: TELEGRAM_START)
     monkeypatch.setattr("viking_v2.dashboard.actions.threading.Thread", ImmediateThread)
     value = DashboardActionsMixin()
+    set_technical_test_session(value)
     value.settings = AppSettings(telegram_enabled=True).normalize()
     value.rule_state = RuleStateStore(tmp_path / "rules.json")
     client = Telegram()
@@ -95,7 +98,7 @@ def test_failed_buy_delivery_does_not_produce_orphan_loss(subject, monkeypatch):
 @pytest.mark.parametrize('failure', ['false', 'exception'])
 def test_delivery_retries_original_payload_after_restart_and_signal_loss(subject, monkeypatch, category, failure):
     value, client = subject
-    clock = [1000.0]
+    clock = [TELEGRAM_START]
     monkeypatch.setattr('viking_v2.rules.state.time.time', lambda: clock[0])
     method = 'notify_technical_buy' if category == 'blocked_buy' else 'notify_buy_lost'
     if category == 'buy_lost':
@@ -148,7 +151,7 @@ def test_deferred_delivery_respects_notification_changes(subject, monkeypatch, c
 
 def test_retry_storage_failure_keeps_notification_pending_without_stopping_poll(subject, monkeypatch):
     value, client = subject
-    clock = [1000.0]
+    clock = [TELEGRAM_START]
     monkeypatch.setattr('viking_v2.rules.state.time.time', lambda: clock[0])
     monkeypatch.setattr(value.telegram, 'notify_technical_buy', lambda **_kwargs: False)
     observe(value)
@@ -208,7 +211,7 @@ def test_queued_or_pending_buy_cannot_be_reported_as_lost(subject, action, reaso
 
 def test_loss_cooldown_is_separate_by_mode_and_persists_restart(subject, monkeypatch):
     value, client = subject
-    clock = [1000.0]
+    clock = [TELEGRAM_START]
     monkeypatch.setattr("viking_v2.rules.state.time.time", lambda: clock[0])
     value.settings.telegram_cooldown_minutes["blocked_buy"] = 0
     observe(value)
@@ -222,7 +225,7 @@ def test_loss_cooldown_is_separate_by_mode_and_persists_restart(subject, monkeyp
     observe(value, mode="PAPER")
     observe(value, mode="PAPER", rsi=50.0)
     assert len(client.sent) == 5  # REAL cannot suppress PAPER.
-    clock[0] = 4600.0
+    clock[0] = TELEGRAM_START + 3600
     observe(value, cycle="C")
     observe(value, cycle="C", rsi=50.0)
     assert len(client.sent) == 7

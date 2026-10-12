@@ -327,12 +327,13 @@ class SignalTelegramService:
     def notify_technical_buy(
         self, *, symbol: str, price: float, market_state: str,
         indicators: dict[str, Any], ema_enabled: bool, rsi_enabled: bool,
-        execution_mode: str = "",
+        execution_mode: str = "", observed_at: str = "", delayed: bool = False, session_closed: bool = False,
     ) -> bool:
         """Report the technical BUY candidate, never an execution outcome."""
         lines = [
             f"⚪ TÍN HIỆU BUY · {str(symbol).upper()}"
-            + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
+            + (f" · {str(execution_mode).upper()}" if execution_mode else "")
+            + (f" · {observed_at[11:19]}" if observed_at else ""),
             f"Giá {self._price(price)} · {str(market_state).upper()}",
         ]
         if ema_enabled:
@@ -346,11 +347,24 @@ class SignalTelegramService:
                 f"{float(indicators['rsi_previous']):.2f} → {float(indicators['rsi']):.2f} · tăng"
             )
         lines.append("Chỉ báo kỹ thuật; không xác nhận đã gửi/khớp lệnh.")
+        if delayed:
+            lines.append(self._technical_delivery_note(observed_at, session_closed))
         return self._send("\n".join(lines))
+
+    @staticmethod
+    def _technical_delivery_note(observed_at: str, session_closed: bool) -> str:
+        try:
+            at = datetime.fromisoformat(observed_at)
+            origin = at.strftime("%d/%m %H:%M:%S")
+        except (TypeError, ValueError):
+            origin = "chưa rõ giờ gốc"
+        return f"🕒 Ghi nhận {origin} · GỬI CHẬM" + (" · PHIÊN ĐÃ ĐÓNG" if session_closed else "")
 
     def notify_technical_digest(self, notices: list[dict[str, Any]]) -> set[str]:
         """Return only delivered IDs; split large digests instead of truncating."""
         header = "⚪ BUY KỸ THUẬT / MẤT BUY · TRẠNG THÁI MỚI NHẤT\nChỉ báo kỹ thuật; không xác nhận gửi/khớp lệnh.\n"
+        if any((row.get("payload") or {}).get("session_closed") for row in notices):
+            header += "🕒 GỬI CHẬM · Giờ ghi nhận trên từng dòng; phiên đã đóng được đánh dấu.\n"
         chunks: list[tuple[str, list[str]]] = []
         text, ids = header, []
         for notice in sorted(notices, key=lambda row: (row["symbol"], row["execution_mode"])):
@@ -362,6 +376,10 @@ class SignalTelegramService:
                 line += " · EMA " + self._comparison(marks["buy_ema_fast"], marks["buy_ema_slow"])
             if payload["rsi_enabled"]:
                 line += " · RSI " + self._comparison(marks["rsi"], marks["rsi_previous"])
+            if payload.get("observed_at"):
+                line += " · " + payload["observed_at"][11:16]
+            if payload.get("session_closed"):
+                line += " · PHIÊN ĐÃ ĐÓNG"
             if ids and len(text) + len(line) + 1 > 3800:
                 chunks.append((text, ids))
                 text, ids = header, []
@@ -392,7 +410,7 @@ class SignalTelegramService:
     def notify_buy_lost(
         self, *, symbol: str, price: float, indicators: dict[str, Any],
         ema_enabled: bool, rsi_enabled: bool, observed_at: str,
-        execution_mode: str = "",
+        execution_mode: str = "", delayed: bool = False, session_closed: bool = False,
     ) -> bool:
         lines = [
             f"⚫ MẤT BUY · {str(symbol).upper()} · {str(execution_mode).upper()} · {observed_at[11:19]}",
@@ -409,6 +427,8 @@ class SignalTelegramService:
                 + self._comparison(indicators["rsi"], indicators["rsi_previous"])
             )
         lines.append("Chưa tạo lệnh.")
+        if delayed:
+            lines.append(self._technical_delivery_note(observed_at, session_closed))
         return self._send("\n".join(lines))
 
     def notify_protect_alert(

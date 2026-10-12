@@ -415,10 +415,12 @@ def test_default_technical_buy_alert_ignores_entry_locks_and_creates_no_order(
             self.target(**self.kwargs)
 
     monkeypatch.setattr("viking_v2.dashboard.actions.threading.Thread", ImmediateThread)
-    now = [1000.0]
+    from support.tests.telegram_support import TELEGRAM_START, set_technical_test_session
+    now = [TELEGRAM_START]
     monkeypatch.setattr("viking_v2.rules.state.time.time", lambda: now[0])
     tele = Telegram()
     subject = DashboardActionsMixin()
+    set_technical_test_session(subject)
     subject.settings = AppSettings(telegram_enabled=True).normalize()
     subject.telegram = SignalTelegramService(tele, chat_id="7", buy_batch_minutes=30)
     subject.rule_state = RuleStateStore(tmp_path / "rules.json")
@@ -444,10 +446,10 @@ def test_default_technical_buy_alert_ignores_entry_locks_and_creates_no_order(
     now[0] += 60
     subject._notify_rule_signal("MSN", decision, {"price": 74.4}, execution_mode=mode)
     assert len(tele.sent) == 1
-    now[0] = 4599.0
+    now[0] = TELEGRAM_START + 3599
     subject._notify_rule_signal("MSN", decision, {"price": 74.4}, execution_mode=mode)
     assert len(tele.sent) == 1
-    now[0] = 4600.0
+    now[0] = TELEGRAM_START + 3600
     subject._notify_rule_signal("MSN", decision, {"price": 74.4}, execution_mode=mode)
     assert len(tele.sent) == 2
     subject.settings.telegram_notifications["blocked_buy"] = False
@@ -464,6 +466,8 @@ def test_default_technical_buy_alert_ignores_entry_locks_and_creates_no_order(
 
 def _technical_subject(monkeypatch, tmp_path):
     from viking_v2.config import AppSettings
+    from support.tests.telegram_support import TELEGRAM_START, set_technical_test_session
+    monkeypatch.setattr("viking_v2.dashboard.actions.time.time", lambda: TELEGRAM_START)
 
     class ImmediateThread:
         def __init__(self, *, target, kwargs, daemon):
@@ -475,6 +479,7 @@ def _technical_subject(monkeypatch, tmp_path):
     monkeypatch.setattr("viking_v2.dashboard.actions.threading.Thread", ImmediateThread)
     tele = Telegram()
     subject = DashboardActionsMixin()
+    set_technical_test_session(subject)
     subject.settings = AppSettings(telegram_enabled=True).normalize()
     subject.telegram = SignalTelegramService(tele, chat_id="7")
     subject.rule_state = RuleStateStore(tmp_path / "rules.json")

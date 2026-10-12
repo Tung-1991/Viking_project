@@ -155,6 +155,12 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   PROTECT/SELL ngoài app 0 phút nhưng vẫn chống trùng sự kiện. CLOSED 1 tin/vị thế đã bán hết.
   BUY EMA/RSI phải đạt các chỉ báo đang bật; thông báo không bỏ qua RSI. Nó độc lập với giờ/khóa giao dịch.
   MẤT BUY chỉ gửi khi đã báo BUY, điều kiện mất và chưa xếp lệnh; thiếu dữ liệu không coi là mất BUY.
+  BUY kỹ thuật/MẤT BUY chỉ ghi nhận khi mã đang ở ATO, khớp liên tục hoặc ATC, theo sàn và lịch giao dịch.
+  Nghỉ trưa tạm ngừng ghi nhận, giữ trạng thái qua buổi chiều; đóng phiên kết thúc theo dõi BUY của phiên đó.
+  Tải lại nến sau phiên không tạo BUY/MẤT BUY mới. Tin trong phiên gửi muộn giữ giờ ghi nhận gốc,
+  ghi GỬI CHẬM và PHIÊN ĐÃ ĐÓNG nếu đã đóng phiên; tin kỹ thuật của ngày cũ hoặc ghi ngoài phiên bị bỏ.
+  Tin gom từ bản cũ chưa lưu giờ ghi nhận bị bỏ vì không xác định được giờ của số liệu cuối cùng.
+  Quyền đặt lệnh ATO/ATC vẫn theo công tắc thực thi riêng. Tin lệnh đã xếp/CLOSED/PROTECT/E/hệ thống có luồng riêng.
   E AUTO không gửi tin E ALERT; khi bán hết có tin BOT đã đóng. Telegram cần bật tổng, token/chat đúng.
   Cập nhật Git giữ các lựa chọn OFF đã lưu; nạp lại preset VA là thao tác chủ động bật cả 9 loại tin.
 

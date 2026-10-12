@@ -197,7 +197,8 @@ def test_minute_feed_recovery_must_not_buy_on_an_old_pending_close(tmp_path):
 
 
 def test_failed_technical_telegram_delivery_can_retry_same_candidate(tmp_path, monkeypatch):
-    clock = [1000.0]
+    from support.tests.telegram_support import TELEGRAM_START, set_technical_test_session
+    clock = [TELEGRAM_START]
     monkeypatch.setattr('viking_v2.rules.state.time.time', lambda: clock[0])
     class ImmediateThread:
         def __init__(self, *, target, kwargs, daemon):
@@ -206,6 +207,7 @@ def test_failed_technical_telegram_delivery_can_retry_same_candidate(tmp_path, m
             self.target(**self.kwargs)
     monkeypatch.setattr('viking_v2.dashboard.actions.threading.Thread', ImmediateThread)
     app = DashboardActionsMixin()
+    set_technical_test_session(app)
     app.settings = AppSettings(telegram_enabled=True).normalize()
     app.settings.telegram_cooldown_minutes['blocked_buy'] = 0
     app.rule_state = RuleStateStore(tmp_path / 'telegram.json')
@@ -214,7 +216,7 @@ def test_failed_technical_telegram_delivery_can_retry_same_candidate(tmp_path, m
     decision = StaticRule(StaticRuleParameters(whipsaw_enabled=False)).evaluate(source,
         dict(available_capital=100_000_000))
     decision.details['signal_cycle'] = 'same-candidate'
-    for moment in (1000.0, 1060.0, 1061.0):
+    for moment in (TELEGRAM_START, TELEGRAM_START + 60, TELEGRAM_START + 61):
         clock[0] = moment  # A failed delivery waits 60 seconds before retry.
         app._notify_signal_only(service, 'MSN', 'BUY', decision, 100, 'REAL')
     assert service.notify_technical_buy.call_count == 2

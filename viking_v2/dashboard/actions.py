@@ -59,6 +59,7 @@ from .view import (
 )
 from .info import InfoPopup
 from .quote_direction import quote_background
+from ..services.technical_notifications import notification_session, technical_delivery, TECHNICAL_CATEGORIES
 from .windows import (
     FONT_KEY,
     FONT_MONO_VALUE,
@@ -1343,6 +1344,12 @@ class DashboardActionsMixin:
         except (TypeError, ValueError):
             return 0.0
 
+    def _technical_notification_session(self, symbol: str, mode: str, decision=None) -> dict:
+        details = getattr(decision, "details", {}) or {}
+        return notification_session(symbol, getattr(self, "settings", None),
+                                    getattr(self, "_technical_signal_status", {}),
+                                    exchange=details.get("exchange", ""), mode=mode)
+
     def _claim_telegram_event(self, key: str, symbol: str, occurrence: str) -> bool:
         category = str(key or "").split("|", 1)[0]
         return self.rule_state.claim_alert_with_cooldown(
@@ -1380,11 +1387,17 @@ class DashboardActionsMixin:
         price = _price_unit(raw_price)
         signal = str(decision.signal or "").upper()
 
-        technical = DashboardActionsMixin._technical_buy_snapshot(self, decision, price)
+        session = DashboardActionsMixin._technical_notification_session(self, symbol, execution_mode, decision)
+        if session["ended"]:
+            self.rule_state.close_telegram_buy_watch(symbol, execution_mode)
+        technical = (DashboardActionsMixin._technical_buy_snapshot(self, decision, price)
+                     if session["active"] else None)
+        if technical:
+            technical.update(session=session, observed_at=session["observed_at"])
         settings = getattr(self, "settings", None)
         rules = getattr(settings, "rule_parameters", {}) or {}
         session_key = "|".join(str(value) for value in (
-            datetime.now(VN_TZ).date().isoformat(),
+            session["day"],
             getattr(settings, "telegram_chat_id", ""),
             rules.get("buy_signal_use_ema", True), rules.get("buy_signal_use_rsi", True),
             rules.get("buy_ema_fast", 3), rules.get("buy_ema_slow", 6), rules.get("rsi_period", 14),
@@ -1395,9 +1408,9 @@ class DashboardActionsMixin:
             queued=bool(order_intent or (decision.action == "BUY" and signal_id)
                         or decision.reason == "BUY_ALREADY_PENDING"),
         )
-        if lost:
+        if lost and session["active"]:
             DashboardActionsMixin._notify_buy_lost(self, lost)
-        elif (watch.get("lost_snapshot") and not watch.get("active") and not watch.get("queued")
+        elif (session["active"] and watch.get("lost_snapshot") and not watch.get("active") and not watch.get("queued")
               and DashboardActionsMixin._technical_telegram_batch_enabled(self)):
             # A BUY retained for a digest can lose its conditions before delivery.
             # Replace it with the latest loss rather than report a stale BUY.
@@ -1516,7 +1529,7 @@ class DashboardActionsMixin:
         # the queue and every trading guard remain untouched by this alert.
         self._notify_signal_only(
             service, symbol, signal, decision, price, execution_mode,
-            watch_id=str(watch.get("id", "")),
+            watch_id=str(watch.get("id", "")), snapshot=technical,
         )
         if decision.action != "BUY" or signal != "BUY" or not signal_id:
             return None
@@ -1603,7 +1616,7 @@ class DashboardActionsMixin:
                      and (not rsi_enabled or values["rsi"] > values["rsi_previous"]),
             "price": price, "indicators": values,
             "ema_enabled": ema_enabled, "rsi_enabled": rsi_enabled,
-            "observed_at": datetime.now(VN_TZ).isoformat(),
+            "observed_at": datetime.fromtimestamp(time.time(), VN_TZ).isoformat(),
         }
 
     def _notify_buy_lost(self, watch: dict[str, Any]) -> None:
@@ -1629,18 +1642,19 @@ class DashboardActionsMixin:
             {"symbol": symbol, "execution_mode": mode,
                     **{key: snapshot[key] for key in (
                         "price", "indicators", "ema_enabled", "rsi_enabled", "observed_at",
-                     )}}, watch_id=str(watch["id"]),
+                     )}}, watch_id=str(watch["id"]), session=snapshot.get("session"),
         )
 
     def _queue_telegram_notice(self, service: Any, category: str, key: str, symbol: str,
-                               occurrence: str, payload: dict, *, watch_id: str = "") -> None:
+                               occurrence: str, payload: dict, *, watch_id: str = "", session=None) -> None:
         batch = (category in {"blocked_buy", "buy_lost"}
                  and DashboardActionsMixin._technical_telegram_batch_enabled(self))
         identity = self.rule_state.queue_telegram_notice(
             f"TELEGRAM|{key.upper()}|{symbol.upper()}", occurrence,
             {"category": category, "symbol": symbol, "execution_mode": payload["execution_mode"],
              "destination": str(getattr(service, "chat_id", self.settings.telegram_chat_id)),
-             "payload": payload, "watch_id": watch_id, "batch_technical": batch},
+             "payload": payload, "watch_id": watch_id, "batch_technical": batch,
+             "session": dict(session or {})},
             0.0 if batch else DashboardActionsMixin._telegram_cooldown_seconds(self, category),
         )
         if identity and not batch:
@@ -1667,12 +1681,13 @@ class DashboardActionsMixin:
                     return
                 selected = []
                 for notice in notices:
-                    if (not DashboardActionsMixin._technical_telegram_notice_is_current(self, notice)
+                    delivery = technical_delivery(notice, self.settings, getattr(self, "_technical_signal_status", {}))
+                    if (delivery is None or not DashboardActionsMixin._technical_telegram_notice_is_current(self, notice)
                             or not DashboardActionsMixin._telegram_notification_enabled(self, notice["category"])
                             or notice["destination"] != str(service.chat_id)):
                         self.rule_state.discard_telegram_notice(notice["id"])
                     else:
-                        selected.append(notice)
+                        selected.append({**notice, "payload": {**notice["payload"], **delivery}})
                 delivered = service.notify_technical_digest(selected)
             except Exception as exc:
                 logger = getattr(self, "logger", None)
@@ -1706,6 +1721,12 @@ class DashboardActionsMixin:
                     return
                 if current_service is not service:
                     return  # A reconfigured service may retry this retained notice.
+                delivery = None
+                if notice["category"] in TECHNICAL_CATEGORIES:
+                    delivery = technical_delivery(notice, self.settings, getattr(self, "_technical_signal_status", {}))
+                    if delivery is None:
+                        self.rule_state.discard_telegram_notice(identity)
+                        return
                 if notice["category"] == "closed":
                     payload = notice["payload"]
                     sent = bool(service.notify_closed(
@@ -1713,7 +1734,7 @@ class DashboardActionsMixin:
                 else:
                     method = (service.notify_technical_buy if notice["category"] == "blocked_buy"
                               else service.notify_buy_lost)
-                    sent = bool(method(**notice["payload"]))
+                    sent = bool(method(**{**notice["payload"], **(delivery or {})}))
             except Exception as exc:
                 logger = getattr(self, "logger", None)
                 if logger:
@@ -1728,11 +1749,16 @@ class DashboardActionsMixin:
 
     def _retry_telegram_notices(self) -> None:
         try:
+            exchanges = {**getattr(self.settings, "symbol_exchanges", {}),
+                         **(getattr(self, "_technical_signal_status", {}).get("symbol_exchanges") or {})}
+            self.rule_state.expire_telegram_buy_watches(exchanges=exchanges)
             service = self.telegram
             for notice in self.rule_state.pending_telegram_notices():
                 enabled = DashboardActionsMixin._telegram_notification_enabled(self, notice["category"])
                 destination = str(getattr(service, "chat_id", self.settings.telegram_chat_id))
                 if (not self.settings.telegram_enabled or not enabled
+                        or (notice["category"] in TECHNICAL_CATEGORIES and technical_delivery(
+                            notice, self.settings, getattr(self, "_technical_signal_status", {})) is None)
                         or destination != notice["destination"]):
                     self.rule_state.discard_telegram_notice(notice["id"])
                 elif (service is not None and not (notice.get("batch_technical")
@@ -1751,13 +1777,16 @@ class DashboardActionsMixin:
 
     def _notify_signal_only(
         self, service: Any, symbol: str, signal: str, decision: Any, price: float,
-        execution_mode: str, *, watch_id: str = "",
+        execution_mode: str, *, watch_id: str = "", snapshot=None,
     ) -> None:
         """Notify EMA/RSI BUY candidates without bypassing trading guards."""
         if not DashboardActionsMixin._telegram_notification_enabled(self, "blocked_buy") or signal != "BUY":
             return
+        session = DashboardActionsMixin._technical_notification_session(self, symbol, execution_mode, decision)
+        if not session["active"]:
+            return
         details = decision.details if isinstance(decision.details, dict) else {}
-        snapshot = DashboardActionsMixin._technical_buy_snapshot(self, decision, price)
+        snapshot = snapshot or DashboardActionsMixin._technical_buy_snapshot(self, decision, price)
         if not snapshot or not snapshot["valid"]:
             return
         occurrence = "|".join(
@@ -1779,8 +1808,9 @@ class DashboardActionsMixin:
                 "ema_enabled": snapshot["ema_enabled"],
                 "rsi_enabled": snapshot["rsi_enabled"],
                 "execution_mode": execution_mode,
+                "observed_at": snapshot["observed_at"],
             },
-            watch_id=watch_id,
+            watch_id=watch_id, session=session,
         )
 
     def _notify_bot_trade_event(
@@ -3678,6 +3708,7 @@ class DashboardActionsMixin:
             DashboardActionsMixin._consume_book_decisions(self, other_status, daemon_status, other_mode, True)
 
     def _consume_book_decisions(self, status: dict[str, Any], daemon_status: str, mode: str, management_only: bool) -> None:
+        self._technical_signal_status = status
         if daemon_status != "RUNNING":
             return
         runtime = self.bridge.read_config()

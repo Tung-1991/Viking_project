@@ -10,6 +10,7 @@ from viking_v2.connections.telegram import SignalTelegramService
 from viking_v2.dashboard.actions import DashboardActionsMixin
 from viking_v2.models import OrderIntent, StrategyDecision, TradeCycle
 from viking_v2.rules.state import RuleStateStore
+from support.tests.telegram_support import TELEGRAM_START, set_technical_test_session
 
 
 class Telegram:
@@ -35,10 +36,11 @@ class ImmediateThread:
 
 @pytest.fixture
 def subject(monkeypatch, tmp_path):
-    clock = [1_000_000.0]
+    clock = [TELEGRAM_START]
     monkeypatch.setattr("viking_v2.rules.state.time.time", lambda: clock[0])
     monkeypatch.setattr("viking_v2.dashboard.actions.threading.Thread", ImmediateThread)
     app = DashboardActionsMixin()
+    set_technical_test_session(app)
     app.settings = AppSettings(telegram_enabled=True, telegram_buy_delivery_mode="BATCH",
                                telegram_buy_batch_minutes=10, telegram_batch_technical_signals=True).normalize()
     app.rule_state = RuleStateStore(tmp_path / "rules.json")

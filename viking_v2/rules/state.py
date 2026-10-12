@@ -10,7 +10,7 @@ import uuid
 from typing import Any, Callable
 
 from ..trading.durable import DurableJSONStore
-from ..trading.market import VN_TZ
+from ..trading.market import VN_TZ, exchange_close_minute, normalize_exchange
 from ..trading.validation import MAX_DECISION_AGE
 
 
@@ -955,6 +955,34 @@ class RuleStateStore:
             return dict(self._read()["telegram_buy_watches"].get(
                 self._buy_confirmation_key(symbol, stream)) or {})
 
+    def close_telegram_buy_watch(self, symbol: str, stream: str) -> None:
+        """End observation silently; retain already recorded notices for delivery."""
+        with self._lock:
+            raw = self._read()
+            if raw["telegram_buy_watches"].pop(self._buy_confirmation_key(symbol, stream), None) is not None:
+                self.store.write(raw)
+
+    def expire_telegram_buy_watches(self, *, now: float | None = None, exchanges=None) -> None:
+        checked = time.time() if now is None else float(now)
+        day = datetime.fromtimestamp(checked, VN_TZ).date().isoformat()
+        with self._lock:
+            raw = self._read()
+            expired = []
+            for key, watch in raw["telegram_buy_watches"].items():
+                session = watch.get("session") or {}
+                saved_day = session.get("day") or str(watch.get("session_key", "")).split("|", 1)[0]
+                end = session.get("ends_at", 0)
+                exchange = normalize_exchange((exchanges or {}).get(watch.get("symbol")))
+                if not end and saved_day == day and exchange:
+                    end = datetime.fromtimestamp(checked, VN_TZ).replace(
+                        hour=0, minute=0, second=0, microsecond=0).timestamp() + exchange_close_minute(exchange) * 60
+                if (saved_day and saved_day < day) or (end and checked >= end):
+                    expired.append(key)
+            for key in expired:
+                raw["telegram_buy_watches"].pop(key)
+            if expired:
+                self.store.write(raw)
+
     def finish_telegram_notice(self, identity: str, attempt_id: str, *, sent: bool) -> dict[str, Any] | None:
         """Commit delivery and the BUY watch together; retain failures for retry."""
         with self._lock:
@@ -1009,6 +1037,7 @@ class RuleStateStore:
                     "id": uuid.uuid4().hex, "symbol": str(symbol).upper(),
                     "execution_mode": str(stream).upper(), "session_key": session_key,
                     "active": True, "announced": False, "queued": False,
+                    "session": dict((snapshot or {}).get("session") or {}),
                 }
             changed_to_lost = valid is False and bool(watch.get("active"))
             if changed_to_lost:
