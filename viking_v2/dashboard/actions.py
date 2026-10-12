@@ -59,6 +59,7 @@ from .view import (
 )
 from .info import InfoPopup
 from .quote_direction import quote_background
+from .trade_history import history_datetime, history_groups
 from ..services.technical_notifications import notification_session, technical_delivery, TECHNICAL_CATEGORIES
 from .windows import (
     FONT_KEY,
@@ -848,25 +849,7 @@ class DashboardActionsMixin:
 
     @staticmethod
     def _history_datetime(value: Any) -> datetime:
-        try:
-            number = float(value)
-            if number > 0:
-                return datetime.fromtimestamp(number)
-        except (TypeError, ValueError, OSError):
-            pass
-        text = str(value or "").strip().replace("Z", "+00:00")
-        for candidate in (text, text[:19]):
-            try:
-                parsed = datetime.fromisoformat(candidate)
-                return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
-            except ValueError:
-                pass
-        for pattern in ("%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-            try:
-                return datetime.strptime(text[:19], pattern)
-            except ValueError:
-                pass
-        return datetime.min
+        return history_datetime(value)
 
     def _signal_log_rows(self) -> list[dict[str, Any]]:
         """Only recent signal days are rendered; Excel keeps the full archive."""
@@ -876,153 +859,11 @@ class DashboardActionsMixin:
         return [row for row in rows if str(row.get("timestamp", ""))[:10] in visible_days]
 
     def _history_popup_groups(self, mode: str) -> list[dict[str, Any]]:
-        """Build day -> trade -> event without counting order attempts as trades."""
         mode = "REAL" if str(mode).upper() == "REAL" else "PAPER"
-        events: list[dict[str, Any]] = []
-        seen_orders: set[str] = set()
-        recent_events = CSVOrderJournal(self.bridge.history_csv_path).read_all(
-            limit=HISTORY_EVENT_LIMIT,
-        )
-        for index, row in enumerate(recent_events):
-            if str(row.get("execution_mode", "PAPER")).upper() != mode:
-                continue
-            item = dict(row)
-            item["_source"] = "CSV"
-            item["_index"] = index
-            order_id = str(item.get("broker_order_id", "") or "")
-            if order_id:
-                seen_orders.add(order_id)
-            events.append(item)
-
-        source_rows = self.histories.get(mode, []) or self.snapshots.get(mode, ({}, [], []))[2]
-        for index, raw in enumerate(source_rows):
-            order_id = str(raw.get("orderId", raw.get("id", "")) or "")
-            if order_id and order_id in seen_orders:
-                continue
-            events.append({
-                "timestamp": raw.get("createdAt", raw.get("createdDate", "")),
-                "broker_order_id": order_id,
-                "trade_id": raw.get("tradeId", ""),
-                "symbol": raw.get("symbol", raw.get("instrumentId", "?")),
-                "side": raw.get("side", ""),
-                "order_type": raw.get("orderType", ""),
-                "limit_price": raw.get("averagePrice", raw.get("price", 0)),
-                "quantity": raw.get("quantity", raw.get("orderQuantity", 0)),
-                "filled_quantity": raw.get("fillQuantity", raw.get("filledQuantity", 0)),
-                "remaining_quantity": raw.get("leaveQuantity", 0),
-                "fee": raw.get("fee", 0),
-                "tax": raw.get("tax", 0),
-                "broker_status": raw.get("orderStatus", raw.get("status", "")),
-                "message": raw.get("message", raw.get("result", "")),
-                "_source": "DNSE" if mode == "REAL" else "PAPER",
-                "_index": index,
-            })
-
-        cycles = {
-            cycle.id: cycle for cycle in self.trade_state.list_cycles()
-            if cycle.execution_mode == mode
-        }
-        by_trade: dict[str, list[dict[str, Any]]] = {}
-        for item in events:
-            trade_id = str(item.get("trade_id", "") or "").strip()
-            fallback = str(item.get("cache_id", item.get("broker_order_id", "")) or "")
-            key = trade_id or fallback or f"event-{item.get('_index', len(by_trade))}"
-            by_trade.setdefault(key, []).append(item)
-
-        days: dict[str, list[dict[str, Any]]] = {}
-        for trade_id, trade_events in by_trade.items():
-            trade_events.sort(key=lambda item: self._history_datetime(item.get("timestamp")))
-            cycle = cycles.get(trade_id)
-            last_dt = max(
-                (self._history_datetime(item.get("timestamp")) for item in trade_events),
-                default=datetime.min,
-            )
-            if cycle and cycle.closed_at:
-                last_dt = datetime.fromtimestamp(cycle.closed_at)
-            day_key = last_dt.strftime("%Y-%m-%d") if last_dt != datetime.min else "0000-00-00"
-            symbol = cycle.symbol if cycle else str(trade_events[-1].get("symbol", "?"))
-            quantity = cycle.entry_quantity if cycle else max(
-                (int(_number(item.get("quantity", 0))) for item in trade_events), default=0,
-            )
-            entry = cycle.avg_entry_price if cycle else 0.0
-            exit_price = cycle.avg_exit_price if cycle else 0.0
-            if entry <= 0:
-                buy_prices = [
-                    _price_unit(item.get("limit_price", 0)) for item in trade_events
-                    if str(item.get("side", "")).upper() == "BUY"
-                ]
-                entry = next((price for price in buy_prices if price > 0), 0.0)
-            pnl = cycle.net_pnl if cycle else 0.0
-            costs = cycle.fees_paid if cycle else sum(
-                _number(item.get("fee", 0)) + _number(item.get("tax", 0)) for item in trade_events
-            )
-            status = cycle.status if cycle else str(trade_events[-1].get("broker_status", "") or "")
-            reason = (cycle.exit_events[-1].replace("_", " ") if cycle and cycle.exit_events else "") or (
-                "ĐANG GIỮ" if status == "OPEN" else status
-            )
-            trade_label = f"{symbol} · {quantity} CP · {_display_price(entry)}"
-            if exit_price > 0:
-                trade_label += f" → {_display_price(exit_price)}"
-            trade_label += f" · {reason} · {status}"
-            event_rows: list[dict[str, Any]] = []
-            for event in trade_events:
-                side = str(event.get("side", "") or "").upper()
-                status_text = str(event.get("broker_status", event.get("queue_status", "")) or "").upper()
-                quantity_value = int(_number(event.get("quantity", 0)))
-                filled = int(_number(event.get("filled_quantity", 0)))
-                remaining = int(_number(event.get("remaining_quantity", 0)))
-                # Old journal rows were written before persisted fill quantities
-                # were copied into CSV. FILLED itself is authoritative.
-                if status_text in {"FILLED", "MATCHED"} and filled <= 0:
-                    filled, remaining = quantity_value, 0
-                price = _price_unit(event.get("limit_price", 0))
-                if price <= 0 and status_text in {"FILLED", "MATCHED"} and cycle:
-                    price = cycle.avg_entry_price if side == "BUY" else cycle.avg_exit_price
-                price_qty = f"{_display_price(price)} · {filled or quantity_value} CP"
-                if remaining > 0:
-                    price_qty += f" · còn {remaining}"
-                fee = _number(event.get("fee", 0))
-                tax = _number(event.get("tax", 0))
-                event_rows.append({
-                    "label": f"{side or 'LỆNH'} · {str(event.get('order_type', '') or '')}",
-                    "values": (
-                        self._row_time(event.get("timestamp")),
-                        str(event.get("broker_order_id", event.get("cache_id", "")) or "")[:18],
-                        price_qty,
-                        f"{_compact_vnd(fee)} / {_compact_vnd(tax)}",
-                        "",
-                        status_text,
-                        str(event.get("message", event.get("error", "")) or ""),
-                    ),
-                    "tag": "cancelled" if status_text == "CANCELLED" else "buy" if side == "BUY" else "sell" if side == "SELL" else "pending",
-                })
-            days.setdefault(day_key, []).append({
-                "label": trade_label,
-                "values": ("", trade_id[:14], "", _compact_vnd(costs), _compact_vnd(pnl), status, ""),
-                "tag": "trade_win" if status == "CLOSED" and pnl >= 0 else "trade_loss" if status == "CLOSED" else "trade_open",
-                "events": event_rows,
-                "pnl": pnl,
-                "costs": costs,
-                "closed": status == "CLOSED",
-            })
-
-        output: list[dict[str, Any]] = []
-        for day_key in sorted(days, reverse=True):
-            trades = days[day_key]
-            date_label = day_key
-            try:
-                date_label = datetime.strptime(day_key, "%Y-%m-%d").strftime("%d/%m/%Y")
-            except ValueError:
-                pass
-            closed_count = sum(1 for item in trades if item["closed"])
-            pnl = sum(float(item["pnl"]) for item in trades)
-            costs = sum(float(item["costs"]) for item in trades)
-            output.append({
-                "label": f"{date_label} · {closed_count} giao dịch đóng · PNL {_compact_vnd(pnl)} · Phí/thuế {_compact_vnd(costs)}",
-                "values": ("", "", "", "", "", "", ""),
-                "trades": trades,
-            })
-        return output[:HISTORY_DAY_LIMIT]
+        journal = CSVOrderJournal(self.bridge.history_csv_path).read_all(limit=HISTORY_EVENT_LIMIT)
+        broker_rows = self.histories.get(mode, []) or self.snapshots.get(mode, ({}, [], []))[2]
+        return history_groups(journal, broker_rows, self.trade_state.list_cycles(), mode,
+                              day_limit=HISTORY_DAY_LIMIT)
 
     def _sync_cancel_button(self) -> None:
         mode = "REAL" if self.tabs.get() == "CKCS REAL" else "PAPER"
@@ -4418,12 +4259,18 @@ class DashboardActionsMixin:
         mode = self.mode.get()
         balance = self.snapshots.get(mode, ({}, [], []))[0]
         self.lbl_equity.configure(text=f"{_equity(balance):,.0f} ₫" if balance else "CHỜ TÀI KHOẢN")
+        title = getattr(self, "lbl_equity_title", None)
+        if title is not None:
+            stock = balance.get("stock") if isinstance(balance.get("stock"), dict) else {}
+            has_nav = any(key in body for body in (balance, stock) for key in ("equity", "nav", "netAssetValue", "totalAsset"))
+            title.configure(text="TỔNG TÀI SẢN / NAV" if has_nav else "TIỀN KHẢ DỤNG · DNSE" if mode == "REAL" else "TIỀN KHẢ DỤNG")
         stats_mode = str(getattr(self.settings, "daily_stats_mode", "DAILY") or "DAILY").upper()
-        summary = self.daily_fees.summary(
+        summary_provider = getattr(self.daily_fees, "display_summary", self.daily_fees.summary)
+        summary = summary_provider(
             mode,
             self.trade_state.list_cycles(),
             daily=stats_mode == "DAILY",
-            reset_time=getattr(self.settings, "daily_stats_reset_time", "00:00"),
+            reset_time=getattr(self.settings, "daily_stats_reset_time", "15:00"),
         )
         if bool(summary.get("rolled_over", False)):
             cleared = self._clear_rule_cooldowns(mode)
@@ -4439,11 +4286,12 @@ class DashboardActionsMixin:
             text_color=COL_GREEN if pnl >= 0 else COL_RED,
         )
         self.lbl_cash.configure(
-            text=f"FEE {period}: -{fees:,.0f}" if fees > 0 else f"FEE {period}: 0",
+            text=(f"PHÍ {period}: -{_compact_vnd(fees)}" + (" · CHỜ DNSE" if summary.get("fees_pending") else "")) if fees > 0
+                 else f"PHÍ {period}: CHỜ DNSE" if summary.get("fees_pending") else f"PHÍ {period}: 0",
             text_color=COL_WARN,
         )
         cash_text = f"{_cash(balance):,.0f}" if balance else "—"
-        self.lbl_account.configure(text=f"ID: {self.account_id}  ·  {mode}  ·  CASH {cash_text}")
+        self.lbl_account.configure(text=f"ID: {self.account_id}  ·  {mode}  ·  TIỀN KHẢ DỤNG {cash_text}")
 
     def _reset_daily_stats(self) -> None:
         mode = self.mode.get()
@@ -4460,7 +4308,7 @@ class DashboardActionsMixin:
             mode,
             cycles=self.trade_state.list_cycles(),
             daily=stats_mode == "DAILY",
-            reset_time=getattr(self.settings, "daily_stats_reset_time", "00:00"),
+            reset_time=getattr(self.settings, "daily_stats_reset_time", "15:00"),
         )
         cleared = self._clear_rule_cooldowns(mode)
         self._paint_account()

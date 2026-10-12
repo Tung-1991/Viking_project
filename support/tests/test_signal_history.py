@@ -82,8 +82,9 @@ def test_unified_tree_keeps_every_sample_orders_mixed_timestamps_and_short_reaso
         assert [tree.item(iid, "text").strip() for iid in hdb] == ["14:02:01", "14:01:00", "14:00:01", "13:30:00"]
         assert [tree.set(iid, "display_signal") for iid in hdb] == ["ĐỊNH KỲ", "ENTRY", "ĐỊNH KỲ", "ENTRY"]
         assert all(tree.set(iid, "rsi_comparison") == "58.00 > 56.80" for iid in hdb)
-        assert "2 sự kiện · 2 mẫu" in tree.item("symbol:2026-10-09:HDB", "text")
-        assert tree.set("day:2026-10-09", "reason") == ""
+        assert tree.set("symbol:2026-10-09:HDB", "display_signal") == "2 sự kiện"
+        assert tree.set("symbol:2026-10-09:HDB", "suggestion") == "2 mẫu"
+        assert tree.set("day:2026-10-09", "reason") == "2 mã"
         assert tree.bind("<Button-3>") and tree.bind("<Delete>")
         assert str(tree.cget("selectmode")) == "extended"
         assert not hasattr(popup, "trace_tree") and not hasattr(popup, "signal_view_button")

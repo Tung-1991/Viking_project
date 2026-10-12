@@ -365,7 +365,8 @@ def test_actual_va_preset_captures_four_symbols_at_all_sixteen_slots_without_buy
     try:
         tree = popup.signal_tree
         assert len(tree.get_children("day:2026-10-12")) == 4
-        assert "0 sự kiện · 64 mẫu" in tree.item("day:2026-10-12", "text")
+        assert tree.set("day:2026-10-12", "display_signal") == "0 sự kiện"
+        assert tree.set("day:2026-10-12", "suggestion") == "64 mẫu"
         for symbol in configured.watchlist:
             leaves = tree.get_children(f"symbol:2026-10-12:{symbol}")
             assert len(leaves) == 16

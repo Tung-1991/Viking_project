@@ -516,6 +516,9 @@ class CSVOrderJournal:
         "symbol", "side", "action", "order_type", "limit_price", "quantity",
         "filled_quantity", "remaining_quantity", "source", "queue_status",
         "broker_status", "fee", "tax", "message", "error", "event_id",
+        "fee_known", "tax_known",
+        "fill_price_vnd",
+        "fill_delta_quantity", "broker_quantity",
     )
     RECENT_CSV_ROWS = 1000
 
@@ -531,6 +534,10 @@ class CSVOrderJournal:
         result = event.get("result") if isinstance(event.get("result"), dict) else {}
         raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
         body = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+        fill_price_vnd = 0.0
+        if body.get("fillQuantity", body.get("filledQuantity", 0)) or str(result.get("status", "")).upper() in {"FILLED", "MATCHED"}:
+            from .trading.portfolio import account_price
+            fill_price_vnd = account_price(body, body.get("averagePrice", body.get("price", 0))) * 1000.0
         row = {
             "event_id": event.get("event_id", ""),
             "timestamp": event.get("ts", ""),
@@ -551,6 +558,11 @@ class CSVOrderJournal:
             "broker_status": result.get("status", ""),
             "fee": body.get("fee", body.get("totalFee", 0)) if isinstance(body, dict) else 0,
             "tax": body.get("tax", 0) if isinstance(body, dict) else 0,
+            "fee_known": body.get("fee_known", any(body.get(key) is not None for key in ("fee", "totalFee", "feeRate"))),
+            "tax_known": body.get("tax_known", any(body.get(key) is not None for key in ("tax", "taxRate"))),
+            "fill_price_vnd": fill_price_vnd,
+            "fill_delta_quantity": body.get("fill_delta_quantity", ""),
+            "broker_quantity": body.get("submitted_quantity", body.get("quantity", 0)),
             "message": result.get("message", ""),
             "error": result.get("error", ""),
         }
@@ -612,11 +624,11 @@ class DailyFeeTracker:
 
     @staticmethod
     def normalize_reset_time(value: Any) -> str:
-        text = str(value or "00:00").strip()
+        text = str(value or "15:00").strip()
         try:
             parsed = datetime.strptime(text, "%H:%M")
         except ValueError:
-            return "00:00"
+            return "15:00"
         return parsed.strftime("%H:%M")
 
     @classmethod
@@ -726,7 +738,7 @@ class DailyFeeTracker:
         cycles: Iterable[Any] = (),
         *,
         daily: bool = True,
-        reset_time: str = "00:00",
+        reset_time: str = "15:00",
         now: float | None = None,
     ) -> dict[str, float | int | bool]:
         current = float(now or datetime.now(VN_TZ).timestamp())
@@ -762,6 +774,10 @@ class DailyFeeTracker:
                     period_end = datetime.fromtimestamp(period_start, VN_TZ) + timedelta(days=1)
                     period_end_ts = min(period_end.timestamp(), current_period)
                     cutoff = max(period_start, first_cutoff)
+                    if normalized_time == "15:00":
+                        # A trading-day close contains that day's activity,
+                        # not yesterday's late fee reports after 15:00.
+                        cutoff = max(cutoff, period_end.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
                     archived = self._totals_between(
                         selected_mode, values, cutoff, period_end_ts,
                     )
@@ -788,12 +804,69 @@ class DailyFeeTracker:
             if row != original_row or rolled_over:
                 self.state.write(state)
             cutoff = max(stored_period, reset_at) if daily else reset_at
+            if daily and normalized_time == "15:00":
+                cutoff = max(cutoff, datetime.fromtimestamp(current, VN_TZ).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
             result = self._totals_between(selected_mode, values, cutoff, current)
             result["rolled_over"] = rolled_over
             return result
 
     def total(self, mode: str, now: float | None = None) -> float:
         return float(self.summary(mode, now=now)["fees"])
+
+    def display_summary(
+        self, mode: str, cycles: Iterable[Any] = (), *, daily: bool = True,
+        reset_time: str = "15:00", now: float | None = None,
+    ) -> dict[str, Any]:
+        """Close the accounting period on schedule, retain its UI until 09:00.
+
+        Late broker cost corrections remain visible. A manual reset still
+        clears the display immediately. This projection never changes cycles.
+        """
+        current = float(now if now is not None else datetime.now(VN_TZ).timestamp())
+        selected_mode = "REAL" if str(mode).upper() == "REAL" else "PAPER"
+        values = list(cycles)
+        result = self.summary(selected_mode, values, daily=daily, reset_time=reset_time, now=current)
+        with self._lock:
+            state = self.state.read()
+            row = state.get(selected_mode) or {}
+            start = max(float(row.get("period_start", 0)), float(row.get("reset_at", 0))) if daily else float(row.get("reset_at", 0))
+            current_dt = datetime.fromtimestamp(current, VN_TZ)
+            boundary = datetime.fromtimestamp(self._period_start(current, reset_time), VN_TZ)
+            retain = daily and boundary.hour >= 9 and (
+                boundary.date() == current_dt.date() or current_dt.hour < 9)
+            if retain and float(row.get("reset_at", 0)) <= boundary.timestamp():
+                start = (boundary.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+                         if self.normalize_reset_time(reset_time) == "15:00" else (boundary - timedelta(days=1)).timestamp())
+                retained = self._totals_between(selected_mode, values, start, current)
+                result.update(retained, closed_day=boundary.date().isoformat())
+                # A cold start after the cutoff must also have its closing row.
+                before_history = list(state.get("history") or [])
+                self._archive(state, selected_mode, start, boundary.timestamp(),
+                              self._totals_between(selected_mode, values, start, boundary.timestamp()), "SCHEDULED")
+                if state.get("history") != before_history:
+                    self.state.write(state)
+            elif daily and self.normalize_reset_time(reset_time) == "15:00":
+                start = max(start, current_dt.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+            pending: dict[tuple[str, str], bool] = {}
+            for item in self.history.read_all():
+                if str(item.get("execution_mode", "")).upper() != selected_mode:
+                    continue
+                timestamp = self._timestamp(item.get("timestamp"))
+                if timestamp <= start or timestamp > current:
+                    continue
+                key = str(item.get("cache_id") or "") + "|" + str(item.get("broker_order_id") or timestamp), str(item.get("side", ""))
+                try:
+                    fee = float(item.get("fee", 0) or 0)
+                    filled = float(item.get("filled_quantity", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                known = str(item.get("fee_known", "")).lower() in {"true", "1"} or fee != 0
+                if known:
+                    pending[key] = False
+                elif key not in pending and filled > 0:
+                    pending[key] = True
+            result["fees_pending"] = sum(pending.values()) if selected_mode == "REAL" else 0
+            return result
 
     def reset(
         self,
@@ -802,7 +875,7 @@ class DailyFeeTracker:
         *,
         cycles: Iterable[Any] = (),
         daily: bool = True,
-        reset_time: str = "00:00",
+        reset_time: str = "15:00",
     ) -> dict[str, float | int | bool]:
         current = float(now or datetime.now(VN_TZ).timestamp())
         selected_mode = "REAL" if str(mode).upper() == "REAL" else "PAPER"

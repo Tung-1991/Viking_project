@@ -391,7 +391,7 @@ def test_account_cash_display_does_not_claim_zero_when_snapshot_is_missing(balan
     for name in ("equity", "account", "pnl", "cash"):
         setattr(view, f"lbl_{name}", Label())
     view._paint_account()
-    assert view.lbl_account.options["text"].endswith(f"CASH {expected}")
+    assert view.lbl_account.options["text"].endswith(f"TIỀN KHẢ DỤNG {expected}")
     assert view.lbl_equity.options["text"] == ("0 ₫" if balance else "CHỜ TÀI KHOẢN")
 
 

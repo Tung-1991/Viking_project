@@ -150,6 +150,9 @@ class ExecutionService:
                 filled, _leaves = self.queue._fill_quantities(result, submitted)
                 price = account_price(body, body.get("averagePrice", body.get("price", 0)))
                 event_result = asdict(result)
+                audit_body = {**body, "submitted_quantity": submitted, "fill_delta_quantity": 0}
+                event_result["raw"] = ({**raw, "data": audit_body}
+                                       if isinstance(raw.get("data"), dict) else audit_body)
                 if filled and (not math.isfinite(price) or price <= 0):
                     # Broker acceptance is durable, but quantity accounting
                     # cannot advance before its executed price is known.
@@ -168,7 +171,10 @@ class ExecutionService:
                     self._record_trade_fill(intent, result, submitted, mark_events=bool(persisted and persisted.filled_quantity > intent.filled_quantity))
                     if result.ok and filled:
                         fee, tax = self.queue._broker_costs({**body, "fillQuantity": filled})
-                        accounted_body = {**body, "fee": fee, "tax": tax}
+                        accounted_body = {**body, "fee": fee, "tax": tax,
+                            "submitted_quantity": submitted, "fill_delta_quantity": filled,
+                            "fee_known": any(body.get(name) is not None for name in ("fee", "totalFee", "feeRate")),
+                            "tax_known": any(body.get(name) is not None for name in ("tax", "taxRate"))}
                         event_result["raw"] = ({**raw, "data": accounted_body}
                                                if isinstance(raw.get("data"), dict) else accounted_body)
                 persisted = self.queue.get(intent.id) or persisted
@@ -962,24 +968,30 @@ class ExecutionService:
                     # inbox item and supplies the authoritative fill price.
                     self.database.mark_applied(key)
                     return None
-                if not any(name in match for name in ("fee", "totalFee", "feeRate")):
+                fee_known = any(match.get(name) is not None for name in ("fee", "totalFee", "feeRate"))
+                tax_known = any(match.get(name) is not None for name in ("tax", "taxRate"))
+                if not fee_known:
                     match["fee"] = progress.get("fee", 0)
-                if not any(name in match for name in ("tax", "taxRate")):
+                if not tax_known:
                     match["tax"] = progress.get("tax", 0)
                 fee, tax = self.queue._broker_costs(match)
                 fee_delta, tax_delta = fee - float(progress.get("fee", 0)), tax - float(progress.get("tax", 0))
                 self._deferred_events = notifications
                 reconciled, delta = self.queue.reconcile_broker(intent, match)
-                if reconciled and payload.get("snapshot_digest"):
+                if reconciled:
                     details = dict(reconciled.details)
                     recorded = dict(details.get("broker_progress") or {})
                     recorded[broker_id] = {**recorded.get(broker_id, {}),
-                        "snapshot_digest": payload["snapshot_digest"],
-                        "snapshot_revision": payload["snapshot_revision"]}
+                        "fee_known": (fee_known and absolute > 0) or bool(progress.get("fee_known")),
+                        "tax_known": (tax_known and absolute > 0) or bool(progress.get("tax_known"))}
+                    if payload.get("snapshot_digest"):
+                        recorded[broker_id].update(snapshot_digest=payload["snapshot_digest"],
+                                                   snapshot_revision=payload["snapshot_revision"])
                     details["broker_progress"] = recorded
                     reconciled = self.queue._update(intent.id, details=details)
                 if delta:
-                    delta_raw = {**match, "price_unit": "VND", "fillQuantity": delta, "averagePrice": (notional - float(progress.get("notional", 0))) / delta, "fee": max(0, fee_delta + tax_delta), "tax": 0}
+                    delta_raw = {**match, "price_unit": "VND", "fillQuantity": delta, "averagePrice": (notional - float(progress.get("notional", 0))) / delta, "fee": max(0, fee_delta + tax_delta), "tax": 0,
+                                 "fee_known": fee_known, "tax_known": tax_known, "fill_delta_quantity": delta}
                     result = BrokerOrderResult(True, str(match.get("orderStatus", "")), order_id=broker_id, raw=delta_raw)
                     self._record_trade_fill(intent, result, delta, mark_events=True)
                     result.raw.update(fee=fee_delta, tax=tax_delta)
@@ -994,7 +1006,19 @@ class ExecutionService:
                     event_intent["filled_quantity"] = 0
                     event = {"ts": time.time(), "event_id": key, "intent": event_intent, "queue_status": reconciled.status if reconciled else "",
                              "result": {"ok": True, "status": "COST_ADJUSTMENT", "order_id": broker_id, "message": "BROKER_COST_RECONCILED", "error": "", "status_code": 200,
-                                        "raw": {"fee": fee_delta, "tax": tax_delta}}}
+                                        "raw": {"fee": fee_delta, "tax": tax_delta, "fee_known": fee_known, "tax_known": tax_known}}}
+                elif int(progress.get("filled", 0)) > 0 and ((fee_known and not progress.get("fee_known"))
+                                            or (tax_known and not progress.get("tax_known"))):
+                    # Zero can be an authoritative broker fee, distinct from
+                    # an omitted field. Record that confirmation once; no fill
+                    # or monetary adjustment is made by this audit event.
+                    event_intent = intent.to_dict()
+                    event_intent["filled_quantity"] = 0
+                    event = {"ts": time.time(), "event_id": key, "intent": event_intent,
+                             "queue_status": reconciled.status if reconciled else "",
+                             "result": {"ok": True, "status": "COST_ADJUSTMENT", "order_id": broker_id,
+                                        "message": "BROKER_COST_CONFIRMED", "error": "", "status_code": 200,
+                                        "raw": {"fee": 0, "tax": 0, "fee_known": fee_known, "tax_known": tax_known}}}
                 if intent.side == "BUY" and reconciled and reconciled.status in FINAL_STATUSES and self.trade_state:
                     cycle = self.trade_state.get(intent.trade_id)
                     if cycle and cycle.status == "OPEN" and cycle.open_quantity == 0 and not any(item.trade_id == cycle.id and item.side == "BUY" and item.status not in FINAL_STATUSES for item in self.queue.list_all()):

@@ -51,6 +51,8 @@ FONT_VALUE = ("Segoe UI", 14)
 FONT_MONO_VALUE = ("Cascadia Mono", 14)
 FONT_TABLE_HEADING = ("Segoe UI", 16, "bold", "italic")
 FONT_TABLE_VALUE = ("Segoe UI", 14)
+FONT_HISTORY_VALUE = ("Segoe UI", 18)
+FONT_HISTORY_HEADING = ("Segoe UI", 16, "bold")
 HINT_FONT = ("Segoe UI", 20)
 
 
@@ -948,13 +950,13 @@ class HistoryPopup:
     """
 
     COLUMNS = (
-        ("time", "THỜI GIAN", 155, "center"),
-        ("order", "ORDER ID", 145, "center"),
-        ("price_qty", "GIÁ / KHỐI LƯỢNG", 210, "center"),
-        ("cost", "PHÍ / THUẾ", 145, "center"),
-        ("pnl", "PNL", 145, "center"),
-        ("status", "TRẠNG THÁI", 170, "center"),
-        ("note", "GHI CHÚ", 390, "w"),
+        ("time", "GIỜ (VN)", 265, "center"),
+        ("order", "ORDER ID", 165, "center"),
+        ("price_qty", "GIÁ / KHỐI LƯỢNG", 330, "center"),
+        ("cost", "PHÍ / THUẾ", 170, "center"),
+        ("pnl", "PNL", 140, "center"),
+        ("status", "TRẠNG THÁI", 260, "center"),
+        ("note", "GHI CHÚ", 420, "w"),
     )
 
     def __init__(
@@ -1049,12 +1051,12 @@ class HistoryPopup:
         style.configure(
             "History.Treeview", background=PALETTE["SURFACE"], foreground=PALETTE["TEXT"],
             fieldbackground=PALETTE["SURFACE"], rowheight=50,
-            font=FONT_TABLE_VALUE, borderwidth=0,
+            font=FONT_HISTORY_VALUE, borderwidth=0,
         )
         style.layout("History.Treeview", [("History.Treeview.treearea", {"sticky": "nswe"})])
         style.configure(
             "History.Treeview.Heading", background=PALETTE["SURFACE_2"],
-            foreground=PALETTE["TITLE"], font=FONT_TABLE_HEADING,
+            foreground=PALETTE["TITLE"], font=FONT_HISTORY_HEADING,
             relief="flat", padding=(10, 9),
         )
         style.map(
@@ -1073,15 +1075,15 @@ class HistoryPopup:
                 frame, columns=keys, show="tree headings", selectmode="browse",
                 style="History.Treeview",
             )
-            tree.heading("#0", text="NGÀY / GIAO DỊCH / SỰ KIỆN", anchor="w")
-            tree.column("#0", width=510, minwidth=360, anchor="w", stretch=True)
+            tree.heading("#0", text="NGÀY / GIAO DỊCH / LỆNH", anchor="w")
+            tree.column("#0", width=340, minwidth=300, anchor="w", stretch=False)
             for key, title, width_px, anchor in self.COLUMNS:
                 tree.heading(key, text=title, anchor=anchor)
-                tree.column(key, width=width_px, minwidth=min(width_px, 100), anchor=anchor, stretch=True)
-            tree.tag_configure("day", background="#171B20", foreground="#FFFFFF", font=("Segoe UI", 12, "bold"))
-            tree.tag_configure("trade_win", background="#173322", foreground="#EAFBF0", font=FONT_TABLE_VALUE)
-            tree.tag_configure("trade_loss", background="#382126", foreground="#FFF1F2", font=FONT_TABLE_VALUE)
-            tree.tag_configure("trade_open", background="#3C321B", foreground="#FEF3C7", font=FONT_TABLE_VALUE)
+                tree.column(key, width=width_px, minwidth=width_px, anchor=anchor, stretch=key == "note")
+            tree.tag_configure("day", background="#171B20", foreground="#FFFFFF", font=("Segoe UI", 16, "bold"))
+            tree.tag_configure("trade_win", background="#173322", foreground="#EAFBF0", font=FONT_HISTORY_VALUE)
+            tree.tag_configure("trade_loss", background="#382126", foreground="#FFF1F2", font=FONT_HISTORY_VALUE)
+            tree.tag_configure("trade_open", background="#3C321B", foreground="#FEF3C7", font=FONT_HISTORY_VALUE)
             tree.tag_configure("buy", foreground="#65D991")
             tree.tag_configure("sell", foreground="#FF8A8A")
             tree.tag_configure("cancelled", foreground="#F6C35B")
@@ -1105,14 +1107,14 @@ class HistoryPopup:
     SIGNAL_COLUMNS = (
         ("symbol", "MÃ", 95, "center"),
         ("execution_mode", "CHẾ ĐỘ", 95, "center"),
-        ("watchlist_priority", "ƯU TIÊN FA", 125, "center"),
-        ("slot_usage", "SLOT", 90, "center"),
-        ("display_signal", "SỰ KIỆN", 140, "center"),
-        ("suggestion", "XỬ LÝ", 140, "center"),
-        ("display_price", "GIÁ", 130, "center"),
-        ("ema_comparison", "EMA NHANH / CHẬM", 235, "center"),
-        ("ema_cross_display", "CẮT EMA", 225, "center"),
-        ("rsi_comparison", "RSI HIỆN TẠI / TRƯỚC", 205, "center"),
+        ("watchlist_priority", "ƯU TIÊN", 110, "center"),
+        ("slot_usage", "SLOT", 85, "center"),
+        ("display_signal", "SỰ KIỆN", 150, "center"),
+        ("suggestion", "XỬ LÝ", 170, "center"),
+        ("display_price", "GIÁ", 145, "center"),
+        ("ema_comparison", "EMA NHANH / CHẬM", 285, "center"),
+        ("ema_cross_display", "CẮT EMA", 210, "center"),
+        ("rsi_comparison", "RSI NAY / TRƯỚC", 260, "center"),
         ("rsi_previous_date", "PHIÊN RSI TRƯỚC", 170, "center"),
         ("market_state", "THỊ TRƯỜNG", 210, "center"),
         ("reason", "LÝ DO", 320, "w"),
@@ -1158,22 +1160,23 @@ class HistoryPopup:
         keys = tuple(item[0] for item in self.SIGNAL_COLUMNS)
         tree = self.signal_tree = ttk.Treeview(
             frame, columns=keys, show="tree headings", selectmode="extended", style="Signal.Treeview")
+        tree.configure(displaycolumns=tuple(key for key in keys if key not in {"symbol", "rsi_previous_date", "market_state"}))
         style = ttk.Style()
         style.configure("Signal.Treeview", background=PALETTE["SURFACE"], foreground=PALETTE["TEXT"],
-                        fieldbackground=PALETTE["SURFACE"], rowheight=50, font=FONT_TABLE_VALUE, borderwidth=0)
+                        fieldbackground=PALETTE["SURFACE"], rowheight=50, font=FONT_HISTORY_VALUE, borderwidth=0)
         style.configure("Signal.Treeview.Heading", background=PALETTE["SURFACE_2"],
-                        foreground=PALETTE["TITLE"], font=FONT_TABLE_HEADING, relief="flat", padding=(10, 9))
+                        foreground=PALETTE["TITLE"], font=FONT_HISTORY_HEADING, relief="flat", padding=(10, 9))
         style.map("Signal.Treeview", background=[("selected", "#2B6CB0")], foreground=[("selected", "#FFFFFF")])
-        tree.heading("#0", text="NGÀY / MÃ / GIỜ GHI NHẬN", anchor="w")
-        tree.column("#0", width=390, minwidth=350, anchor="w", stretch=True)
+        tree.heading("#0", text="NGÀY / MÃ / GIỜ (VN)", anchor="w")
+        tree.column("#0", width=260, minwidth=250, anchor="w", stretch=False)
         for key, title, width_px, anchor in self.SIGNAL_COLUMNS:
             tree.heading(key, text=title, anchor=anchor)
-            tree.column(key, width=width_px, minwidth=min(width_px, 85), anchor=anchor, stretch=True)
+            tree.column(key, width=width_px, minwidth=width_px, anchor=anchor, stretch=key == "reason")
         for tag, color in (("buy", "#65D991"), ("sell", "#FF8A8A"),
                            ("blocked", "#F6C35B"), ("periodic", PALETTE["MUTED"])):
             tree.tag_configure(tag, foreground=color)
         tree.tag_configure("signal_day", background=PALETTE["SURFACE_2"], foreground=PALETTE["TITLE"],
-                           font=("Segoe UI", 12, "bold"))
+                           font=("Segoe UI", 16, "bold"))
         tree.grid(row=1, column=0, sticky="nsew", padx=(5, 0), pady=(5, 0))
         ys = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
         xs = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
@@ -1183,7 +1186,7 @@ class HistoryPopup:
         tree.bind("<Button-3>", self._signal_context_menu)
         tree.bind("<Delete>", lambda _event: self._delete_signal_rows())
         tree.bind("<Double-1>", self._signal_double_click, add="+")
-        tree.bind("<<TreeviewSelect>>", lambda _event: self._refresh_normalization_preview(), add="+")
+        tree.bind("<<TreeviewSelect>>", lambda _event: self._signal_selection_changed(), add="+")
         self.signal_menu = tk.Menu(self.top, tearoff=False)
         self.signal_menu.add_command(label="Chi tiết", command=self._show_signal_details)
         self.signal_menu.add_command(label="Sao chép", command=self._copy_signal_rows)
@@ -1193,7 +1196,7 @@ class HistoryPopup:
         self.signal_menu.add_command(label="Khôi phục các dòng đã xóa", command=self._restore_signal_rows)
         self.normalization_preview = ctk.CTkFrame(frame, fg_color=PALETTE["SURFACE_2"],
                                                  border_color=PALETTE["BORDER"], border_width=1)
-        self.normalization_preview.grid(row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 0))
+        self.normalization_preview.grid(row=4, column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 0))
         self.normalization_preview.grid_columnconfigure(0, weight=1)
         self.normalization_title = ctk.CTkLabel(
             self.normalization_preview, text="ĐỐI CHIẾU · DNSE TÍNH LẠI", anchor="w",
@@ -1206,11 +1209,17 @@ class HistoryPopup:
         self.normalization_preview.bind("<Configure>", lambda event: self.normalization_detail.configure(
             wraplength=max(120, int(self.normalization_preview._reverse_widget_scaling(event.width)) - 30)), add="+")
         self.normalization_preview.grid_remove()
+        self.signal_selection_detail = ctk.CTkLabel(frame,
+            text="Chọn một dòng giờ để xem phiên RSI trước, thị trường và lý do đầy đủ.",
+            font=("Segoe UI", 14), text_color=PALETTE["TEXT"], anchor="w", justify="left", wraplength=1000)
+        self.signal_selection_detail.grid(row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 0))
+        frame.bind("<Configure>", lambda event: self.signal_selection_detail.configure(
+            wraplength=max(300, int(frame._reverse_widget_scaling(event.width)) - 40)), add="+")
         ctk.CTkLabel(
             frame, text="ENTRY / MẤT ENTRY / EXIT E: sự kiện · ĐỊNH KỲ: mẫu, không gửi Telegram\n"
                         "7 ngày gần nhất · Chuột phải: chi tiết / xóa / khôi phục · Không xóa lệnh giao dịch",
-            font=("Segoe UI", 11), text_color=PALETTE["MUTED"], anchor="w", justify="left",
-        ).grid(row=4, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 4))
+            font=("Segoe UI", 13), text_color=PALETTE["MUTED"], anchor="w", justify="left",
+        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 4))
         self.signal_empty = ctk.CTkLabel(frame, text="CHƯA CÓ DỮ LIỆU TÍN HIỆU",
                                        text_color=PALETTE["DIM"], fg_color=PALETTE["SURFACE"])
 
@@ -1312,13 +1321,20 @@ class HistoryPopup:
                 label = datetime.strptime(day, "%Y-%m-%d").strftime("%d/%m/%Y")
             except ValueError:
                 label = day
-            parent = tree.insert("", "end", iid=f"day:{day}", text=f"  {label} · {history_counts(details)}",
+            event_count, sample_count = history_counts(details).split(" · ")
+            group_values = {"display_signal": event_count, "suggestion": sample_count,
+                            "reason": f"{len({row['symbol'] for row in details})} mã"}
+            parent = tree.insert("", "end", iid=f"day:{day}", text=label,
+                                 values=tuple(group_values.get(key, "") for key, *_ in self.SIGNAL_COLUMNS),
                                  open=opened.get(f"day:{day}", index == 0), tags=("signal_day",))
             self._history_node_rows[parent] = details
             for symbol in sorted({row["symbol"] for row in details}):
                 symbol_rows = [row for row in details if row["symbol"] == symbol]
                 iid = f"symbol:{day}:{symbol}"
-                tree.insert(parent, "end", iid=iid, text=f"  {symbol} · {history_counts(symbol_rows)}",
+                event_count, sample_count = history_counts(symbol_rows).split(" · ")
+                group_values = {"display_signal": event_count, "suggestion": sample_count}
+                tree.insert(parent, "end", iid=iid, text=symbol,
+                            values=tuple(group_values.get(key, "") for key, *_ in self.SIGNAL_COLUMNS),
                             open=opened.get(iid, False), tags=("signal_day",))
                 self._history_node_rows[iid] = symbol_rows
                 for row in symbol_rows:
@@ -1329,7 +1345,7 @@ class HistoryPopup:
                     if row.get("legacy_repeat_count", 1) > 1:
                         clock += f" (×{row['legacy_repeat_count']} cũ)"
                     leaf = tree.insert(iid, "end", iid="row:" + row["_history_ids"][0],
-                                       text=f"    {clock}", tags=(tag,),
+                                       text=clock, tags=(tag,),
                                        values=tuple(row.get(key, "") for key, *_ in self.SIGNAL_COLUMNS))
                     self._history_node_rows[leaf] = [row]
         tree.selection_set([iid for iid in selected if tree.exists(iid)])
@@ -1397,6 +1413,18 @@ class HistoryPopup:
         if iid and not self.signal_tree.get_children(iid):
             self.signal_tree.selection_set(iid)
             self._show_signal_details()
+
+    def _signal_selection_changed(self) -> None:
+        rows = self._selected_signal_rows()
+        if len(rows) == 1:
+            row = rows[0]
+            self.signal_selection_detail.configure(text=(
+                f"{row.get('symbol')} · {row.get('execution_mode')} · {row.get('time')} · "
+                f"RSI so với phiên {row.get('rsi_previous_date') or '—'} · Thị trường {row.get('market_state') or '—'}\n"
+                f"{_SIGNAL_REASONS.get(str(row.get('_reason_detail') or ''), row.get('reason') or '—')}"))
+        else:
+            self.signal_selection_detail.configure(text="Chọn một dòng giờ để xem phiên RSI trước, thị trường và lý do đầy đủ.")
+        self._refresh_normalization_preview()
 
     def _copy_signal_rows(self) -> None:
         rows = self._selected_signal_rows()
@@ -1481,6 +1509,10 @@ class HistoryPopup:
 
     def _toggle_normalization(self) -> None:
         self.normalization_enabled = not self.normalization_enabled
+        if self.normalization_enabled:
+            self.signal_selection_detail.grid_remove()
+        else:
+            self.signal_selection_detail.grid()
         if not self.normalization_enabled:
             self._stop_normalization()
         self.normalization_button.configure(
@@ -1642,25 +1674,45 @@ class HistoryPopup:
     def refresh(self) -> None:
         self._refresh_signals()
         for mode, tree in self.trees.items():
+            opened = {}
+            def remember(parent=""):
+                for iid in tree.get_children(parent):
+                    opened[iid] = tree.item(iid, "open")
+                    remember(iid)
+            remember()
+            selected, yview = tree.selection(), tree.yview()
             tree.delete(*tree.get_children())
             groups = self.rows_provider(mode)
             for day in groups:
                 day_id = tree.insert(
                     "", "end", text=str(day.get("label", "")),
+                    **({"iid": day["id"]} if day.get("id") else {}),
                     values=tuple(day.get("values", ())), tags=("day",), open=True,
                 )
                 for trade in day.get("trades", []):
                     trade_id = tree.insert(
                         day_id, "end", text=str(trade.get("label", "")),
+                        **({"iid": trade["id"]} if trade.get("id") else {}),
                         values=tuple(trade.get("values", ())),
                         tags=(str(trade.get("tag", "trade_open")),), open=True,
                     )
                     for event in trade.get("events", []):
-                        tree.insert(
+                        order_id = tree.insert(
                             trade_id, "end", text=str(event.get("label", "")),
+                            **({"iid": event["id"]} if event.get("id") else {}),
                             values=tuple(event.get("values", ())),
                             tags=(str(event.get("tag", "pending")),),
                         )
+                        for detail in event.get("details", []):
+                            tree.insert(order_id, "end", text=str(detail.get("label", "")),
+                                        values=tuple(detail.get("values", ())),
+                                        tags=(str(detail.get("tag", "pending")),))
+            for iid, is_open in opened.items():
+                if tree.exists(iid):
+                    tree.item(iid, open=is_open)
+            tree.selection_set([iid for iid in selected if tree.exists(iid)])
+            if yview:
+                tree.yview_moveto(yview[0])
             empty = self.empty_labels[mode]
             if groups:
                 empty.place_forget()

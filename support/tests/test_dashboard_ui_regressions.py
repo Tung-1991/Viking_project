@@ -977,7 +977,7 @@ def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> 
         assert connection_popup.daily_stats_segment.cget("values") == [
             "THEO NGÀY", "CỘNG DỒN",
         ]
-        assert connection_popup.daily_stats_time.get() == "00:00"
+        assert connection_popup.daily_stats_time.get() == "15:00"
         assert connection_popup.btn_save_daily_stats.cget("text") == "LƯU"
         assert connection_popup.tele_event_time_controls["buy_queued"] is connection_popup.tele_batch
         assert connection_popup.tele_event_time_controls["closed"].cget("text") == "1 TIN/VỊ THẾ"
@@ -1233,12 +1233,12 @@ def test_signal_history_ui_names_cancellations_and_recording_time_without_creati
         popup.tabs.set("TÍN HIỆU")
         ui_root.update_idletasks()
         tree = popup.signal_tree
-        assert tree.heading("#0", "text") == "NGÀY / MÃ / GIỜ GHI NHẬN"
+        assert tree.heading("#0", "text") == "NGÀY / MÃ / GIỜ (VN)"
         assert tree.heading("suggestion", "text") == "XỬ LÝ"
         assert tree.heading("display_signal", "text") == "SỰ KIỆN"
         parent = tree.get_children()[0]
-        assert "2 sự kiện" in tree.item(parent, "text")
-        assert tree.set(parent, "reason") == ""
+        assert tree.set(parent, "display_signal") == "2 sự kiện"
+        assert tree.set(parent, "reason") == "1 mã"
         symbol = tree.get_children(parent)[0]
         sell, cancelled = tree.get_children(symbol)
         assert tree.set(cancelled, "display_signal") == "MẤT ENTRY"

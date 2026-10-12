@@ -338,7 +338,8 @@ class AppSettings:
     # Dashboard account counters either roll with the Vietnam calendar day or
     # accumulate until the operator resets their shared display cutoff.
     daily_stats_mode: str = "DAILY"
-    daily_stats_reset_time: str = "00:00"
+    daily_stats_reset_time: str = "15:00"
+    daily_stats_schedule_version: int = 2
     # UI convenience only: manual order confirmations/errors become inline
     # notices. Broker validation, cash, quantities, tokens and sessions remain.
     skip_order_popups: bool = True
@@ -427,13 +428,14 @@ class AppSettings:
         self.daily_stats_mode = str(self.daily_stats_mode or "DAILY").strip().upper()
         if self.daily_stats_mode not in {"DAILY", "SINCE_RESET"}:
             self.daily_stats_mode = "DAILY"
-        self.daily_stats_reset_time = str(self.daily_stats_reset_time or "00:00").strip()
+        self.daily_stats_reset_time = str(self.daily_stats_reset_time or "15:00").strip()
+        self.daily_stats_schedule_version = 2
         try:
             self.daily_stats_reset_time = datetime.strptime(
                 self.daily_stats_reset_time, "%H:%M",
             ).strftime("%H:%M")
         except ValueError:
-            self.daily_stats_reset_time = "00:00"
+            self.daily_stats_reset_time = "15:00"
         # Malformed values must not silently enable confirmation bypass.
         self.skip_order_popups = self.skip_order_popups is True
         self.telegram_chat_id = str(self.telegram_chat_id or "").strip()
@@ -546,6 +548,10 @@ class AppSettings:
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> "AppSettings":
         raw = raw if isinstance(raw, dict) else {}
+        # Move the former midnight default once. Explicit custom schedules,
+        # including midnight chosen in the new version, remain editable.
+        if "daily_stats_schedule_version" not in raw and raw.get("daily_stats_reset_time") == "00:00":
+            raw = {**raw, "daily_stats_reset_time": "15:00"}
         # Migrate the former all-in-one alert switch once, without retaining
         # it in the current settings model.
         if "telegram_notifications" not in raw and "telegram_signal_alerts" in raw:

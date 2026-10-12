@@ -5,6 +5,9 @@
   "signal_trace_interval_minutes": 2,
   "signal_trace_start": "14:00",
   "signal_trace_end": "14:30",
+  "daily_stats_mode": "DAILY",
+  "daily_stats_reset_time": "15:00",
+  "daily_stats_schedule_version": 2,
   "priority_capital_enabled": true,
   "priority_total_capital": 50000000,
   "priority_allocations": {

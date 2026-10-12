@@ -75,9 +75,11 @@ def _cash(balance: dict[str, Any]) -> float:
     return 0.0
 
 def _equity(balance: dict[str, Any]) -> float:
-    for key in ("equity", "netAssetValue", "totalAsset"):
-        if key in balance:
-            return _number(balance[key])
+    stock = balance.get("stock") if isinstance(balance.get("stock"), dict) else {}
+    for body in (balance, stock):
+        for key in ("equity", "nav", "netAssetValue", "totalAsset"):
+            if key in body:
+                return _number(body[key])
     return _cash(balance)
 
 def _display_price(value: Any) -> str:

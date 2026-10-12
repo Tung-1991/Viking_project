@@ -20,7 +20,7 @@ def test_v2_settings_only_keep_two_bot_execution_modes():
 def test_execution_defaults_are_explicit_and_minimal():
     settings = AppSettings().normalize()
     assert settings.daily_stats_mode == "DAILY"
-    assert settings.daily_stats_reset_time == "00:00"
+    assert settings.daily_stats_reset_time == "15:00"
     assert settings.skip_order_popups is True
     assert settings.bot_sl_enabled is True
     assert settings.bot_em_modes == ["NORMAL", "IND_EXIT"]
@@ -99,7 +99,7 @@ def test_dashboard_stats_mode_is_normalized():
     assert AppSettings(daily_stats_mode="since_reset").normalize().daily_stats_mode == "SINCE_RESET"
     assert AppSettings(daily_stats_mode="bad").normalize().daily_stats_mode == "DAILY"
     assert AppSettings(daily_stats_reset_time="15:30").normalize().daily_stats_reset_time == "15:30"
-    assert AppSettings(daily_stats_reset_time="25:00").normalize().daily_stats_reset_time == "00:00"
+    assert AppSettings(daily_stats_reset_time="25:00").normalize().daily_stats_reset_time == "15:00"
 
 
 def test_static_rule_fallback_matches_the_single_canonical_default_source():

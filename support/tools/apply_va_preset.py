@@ -24,6 +24,7 @@ PRESET_FIELDS = {
     "bot_em_modes", "rule_parameters", "telegram_notifications", "telegram_cooldown_minutes",
     "telegram_buy_delivery_mode",
     "signal_trace_enabled", "signal_trace_interval_minutes", "signal_trace_start", "signal_trace_end",
+    "daily_stats_mode", "daily_stats_reset_time", "daily_stats_schedule_version",
 }
 PRESET_RULE_FIELDS = {"max_positions", "indicator_exit_policy", "buy_signal_require_ema_cross"}
 
@@ -50,6 +51,8 @@ def prepared_settings(account_id: str) -> config.AppSettings:
             or preset["rule_parameters"]["indicator_exit_policy"] != "AUTO"
             or preset["rule_parameters"]["buy_signal_require_ema_cross"] is not True
             or preset["signal_trace_enabled"] is not True
+            or preset["daily_stats_mode"] != "DAILY" or preset["daily_stats_reset_time"] != "15:00"
+            or preset["daily_stats_schedule_version"] != 2
             or preset["signal_trace_interval_minutes"] != 2
             or preset["signal_trace_start"] != "14:00" or preset["signal_trace_end"] != "14:30"):
         raise ValueError("Preset sai pham vi; chi nap von VA, E AUTO, BUY gui ngay, tin ky thuat/PROTECT va gian tin da chot.")

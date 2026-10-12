@@ -194,15 +194,21 @@ class DashboardPanelsMixin:
         account.grid_columnconfigure(0, weight=1)
         account.grid_columnconfigure(1, weight=0, minsize=180)
 
+        self.lbl_equity_title = ctk.CTkLabel(account, text="TỔNG TÀI SẢN / NAV",
+                                            font=("Segoe UI", 11, "bold"), text_color=COL_MUTED, anchor="w")
+        self.lbl_equity_title.grid(row=0, column=0, sticky="w", padx=11, pady=(4, 0))
         self.lbl_equity = ctk.CTkLabel(
             account, text="----", font=("Segoe UI", 30, "bold"),
             text_color=COL_GREEN, anchor="w",
         )
-        self.lbl_equity.grid(row=0, column=0, sticky="w", padx=(11, 5), pady=(5, 0))
+        self.lbl_equity.grid(row=1, column=0, sticky="w", padx=(11, 5), pady=(0, 0))
+        _HoverHint(self.lbl_equity,
+                   "NAV: tổng tài sản broker báo; mua cổ phiếu chuyển tiền thành cổ phiếu nên không giảm bằng giá trị lệnh.\n"
+                   "Nếu DNSE chỉ trả tiền, tiêu đề ghi TIỀN KHẢ DỤNG. Đây là số từ snapshot tài khoản.")
         session_box = ctk.CTkFrame(
             account, width=180, height=52, fg_color="transparent",
         )
-        session_box.grid(row=0, column=1, sticky="ne", padx=(3, 11), pady=(7, 0))
+        session_box.grid(row=0, column=1, rowspan=2, sticky="ne", padx=(3, 11), pady=(7, 0))
         session_box.pack_propagate(False)
         self.lbl_session = ctk.CTkLabel(
             session_box, text="PHIÊN: --", font=("Segoe UI", 11, "bold"),
@@ -221,11 +227,11 @@ class DashboardPanelsMixin:
             justify="left",
         )
         self.lbl_account.grid(
-            row=1, column=0, columnspan=2, sticky="ew",
+            row=2, column=0, columnspan=2, sticky="ew",
             padx=(11, 11), pady=(0, 2),
         )
         account_footer = ctk.CTkFrame(account, fg_color="transparent")
-        account_footer.grid(row=2, column=0, columnspan=2, sticky="ew", padx=11, pady=(1, 5))
+        account_footer.grid(row=3, column=0, columnspan=2, sticky="ew", padx=11, pady=(1, 5))
         account_footer.grid_columnconfigure(0, minsize=82)
         account_footer.grid_columnconfigure(1, minsize=120)
         account_footer.grid_columnconfigure(2, weight=1)
@@ -238,6 +244,9 @@ class DashboardPanelsMixin:
             text_color=COL_WARN, anchor="w",
         )
         self.lbl_cash.grid(row=0, column=1, sticky="w", padx=(24, 0))
+        _HoverHint(self.lbl_cash, "Phí đã ghi nhận từ broker; CHỜ DNSE nghĩa là lệnh khớp nhưng chưa có phí.\n"
+                   "Phí có dấu ~ ở bảng lệnh là ước tính, không cộng vào số phí đã ghi nhận.\n"
+                   "Chốt ngày theo giờ đã đặt; giữ kết quả đến 09:00 sáng hôm sau.")
         self.btn_reset_daily_stats = ctk.CTkButton(
             account_footer, text="↻", width=25, height=22,
             font=("Segoe UI Symbol", 12, "bold"),

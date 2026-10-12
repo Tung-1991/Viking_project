@@ -10,6 +10,7 @@ Chốt ngày 12/10/2026. Preset: `VA_4_MA_50M.json`.
 | Nhịp ghi | 2 phút |
 | Mốc ghi | 14:00, 14:02, 14:04, …, 14:28, 14:30 |
 | Đủ khung giờ | 16 mẫu/mã/sổ; 64 mẫu cho bốn mã mỗi sổ |
+| Chốt thống kê ngày | 15:00 Việt Nam; giữ PNL/phí đến 09:00 sáng hôm sau |
 
 Ghi cả khi không có BUY hoặc BOT OFF. Thiếu giá/quyết định thì ghi tình trạng thiếu dữ liệu; không giả số EMA/RSI. TRACE không gửi Telegram hoặc tạo lệnh.
 

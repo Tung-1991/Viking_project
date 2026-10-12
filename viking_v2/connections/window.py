@@ -837,6 +837,7 @@ class ConnectionPopup:
             self.dnse_compact_row, "THỐNG KÊ",
             "PNL là lãi/lỗ chu kỳ đã đóng, không phải lãi tạm tính. REAL/PAPER có sổ riêng.\n"
             "THEO NGÀY: chốt kỳ theo giờ GMT+7. CỘNG DỒN: tính từ lần ↻ gần nhất. Restart vẫn giữ.\n"
+            "Chốt lúc 15:00 mặc định; màn hình giữ kết quả đến 09:00 sáng hôm sau.\n"
             "↻ reset bộ đếm và khóa chờ/cooldown, không mở BLOCK, không xóa vị thế.",
         )
         self.stats_card.grid(row=0, column=2, sticky="nsew", padx=(3, 0))
@@ -873,7 +874,7 @@ class ConnectionPopup:
         stats_time_row.grid(row=4, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 6))
         stats_time_row.grid_columnconfigure(0, weight=1)
         self.daily_stats_time = ctk.CTkEntry(
-            stats_time_row, height=32, placeholder_text="00:00",
+            stats_time_row, height=32, placeholder_text="15:00",
             fg_color=self.SURFACE_2, border_color=self.BORDER,
             font=FONT_VALUE, text_color=self.TEXT,
         )
@@ -890,7 +891,7 @@ class ConnectionPopup:
             text=(
                 "Cộng dồn tới khi bấm ↻"
                 if self.settings.daily_stats_mode == "SINCE_RESET"
-                else "Theo ngày · tự chốt đúng giờ"
+                else "Chốt đúng giờ · giữ kết quả đến 09:00 sáng hôm sau"
             ),
             font=("Segoe UI", 10), text_color=self.MUTED,
             anchor="w", justify="left", wraplength=240,

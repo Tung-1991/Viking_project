@@ -288,6 +288,7 @@ class DashboardTablesMixin:
                 gross = avg_price * quantity * 1000.0
                 market_value = market_price * quantity * 1000.0
                 buy_fee = _number(row.get("buyFee", row.get("fee", 0)))
+                buy_fee_text = f"PHÍ MUA {_compact_vnd(buy_fee)}"
                 if mode == "PAPER":
                     estimated_exit_cost = market_value * (
                         config.PAPER_SELL_FEE_RATE + config.PAPER_SELL_TAX_RATE
@@ -297,6 +298,11 @@ class DashboardTablesMixin:
                     sell_rate = self._cached_fee_rate(symbol, "SELL")
                     if buy_fee <= 0 and buy_rate is not None:
                         buy_fee = gross * buy_rate
+                        buy_fee_text = f"PHÍ MUA ~{_compact_vnd(buy_fee)}"
+                    elif buy_fee <= 0 and not any(key in row for key in ("buyFee", "fee")):
+                        buy_fee_text = "PHÍ MUA CHỜ DNSE"
+                    if cycle and cycle.fees_paid > 0:
+                        buy_fee_text = f"PHÍ ĐÃ GHI {_compact_vnd(cycle.fees_paid)}"
                     estimated_exit_cost = market_value * sell_rate if sell_rate is not None else 0.0
                 fallback_pnl = (
                     float(cycle.net_pnl) if cycle else -abs(buy_fee)
@@ -541,7 +547,7 @@ class DashboardTablesMixin:
                         f"{mode} · {source} · BUY {symbol} @ {_display_price(avg_price)} · KL {quantity}",
                         f"{sl_text} · "
                         + (f"TP▲ {_display_price(tp_price)} ({tp_pct:+g}%)" if tp_price > 0 else "TP▲ --"),
-                        f"FEE {_compact_vnd(buy_fee)} · DỰ KIẾN BÁN {_compact_vnd(estimated_exit_cost)}",
+                        f"{buy_fee_text} · DỰ KIẾN BÁN {_compact_vnd(estimated_exit_cost)}",
                         rr_text,
                         f"{pnl_icon}{_compact_vnd(pnl)} ({pnl_pct:+.2f}%)"
                         f" · ↘{_compact_vnd(mae)} ({mae_pct:+.2f}%)"
