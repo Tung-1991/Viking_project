@@ -48,11 +48,6 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
             self.bridge.paper_state_path,
             initial_balance=self.settings.paper_initial_balance,
             tick_provider=self._shared_tick,
-            fee_rates=lambda: (
-                self.settings.buy_fee_pct / 100.0,
-                self.settings.sell_fee_pct / 100.0,
-                self.settings.sell_tax_pct / 100.0,
-            ),
             working_dates_provider=lambda: [
                 value for value in self.real.get_working_dates()
                 if str(value)[:10] not in set(self.settings.trading_holidays)

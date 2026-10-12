@@ -38,6 +38,27 @@ def test_execution_defaults_are_explicit_and_minimal():
     assert settings.rule_parameters is not config.DEFAULT_RULE_PARAMETERS
 
 
+@pytest.mark.parametrize("legacy_rate", [0, .12, 5, "invalid", None])
+def test_retired_live_fee_settings_are_ignored_and_removed_on_next_save(tmp_path, monkeypatch, legacy_rate):
+    monkeypatch.setattr(config, "ACCOUNTS_ROOT", tmp_path / "accounts")
+    raw = AppSettings(watchlist=["HDB"], allow_atc=True, bot_em_modes=["IND_EXIT"]).to_dict()
+    retired = {"buy_fee_pct", "sell_fee_pct", "sell_tax_pct"}
+    raw.update({key: legacy_rate for key in retired})
+    path = config.account_root("RETIRED_FEES") / "settings.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    before = path.read_bytes()
+    settings = config.load_settings("RETIRED_FEES")
+    assert path.read_bytes() == before
+    assert settings.watchlist == ["HDB"] and settings.allow_atc
+    assert settings.bot_em_modes == ["IND_EXIT"]
+    assert all(not hasattr(settings, key) for key in retired)
+    assert retired.isdisjoint(settings.to_dict())
+    config.save_settings(settings, "RETIRED_FEES")
+    assert retired.isdisjoint(json.loads(path.read_text(encoding="utf-8")))
+    assert config.load_settings("RETIRED_FEES").to_dict() == settings.to_dict()
+
+
 @pytest.mark.parametrize("legacy", [True, False])
 def test_old_confirmation_setting_uses_new_skip_default_without_changing_other_settings(legacy):
     raw = AppSettings(telegram_enabled=True, telegram_chat_id="123", watchlist=["MSN"]).to_dict()

@@ -39,9 +39,9 @@ ORDERS_TTL_SECONDS = 5.0
 POSITIONS_TTL_SECONDS = 5.0
 WORKING_DATES_TTL_SECONDS = 24 * 60 * 60
 STOCK_ROUND_LOT = 100
-# One canonical fallback for live sizing, PAPER and backtest.  A successful
-# DNSE fee lookup is saved into AppSettings and therefore supersedes these
-# values everywhere; individual modules must not invent their own fallback.
+# Fixed defaults for PAPER, backtest and provisional live sizing. Live order
+# checks use the DNSE package rate; recorded REAL costs come from broker rows.
+# These rates are internal defaults, not editable account settings.
 DEFAULT_BUY_FEE_PCT = 0.045
 DEFAULT_SELL_FEE_PCT = 0.045
 DEFAULT_SELL_TAX_PCT = 0.1
@@ -370,11 +370,6 @@ class AppSettings:
     market_phase_override_enabled: bool = False
     market_phase_override: str = "ACCUMULATION"
     market_phase_override_exposure_pct: float = 60.0
-    # Real DNSE rates.  The bot needs them to leave room for the fee when
-    # sizing an order, and the paper broker charges with them.
-    buy_fee_pct: float = DEFAULT_BUY_FEE_PCT
-    sell_fee_pct: float = DEFAULT_SELL_FEE_PCT
-    sell_tax_pct: float = DEFAULT_SELL_TAX_PCT
     sell_wait_policy: str = "RECHECK"
     # Live/PAPER operation follows the unfinished 1D candle so EMA/RSI can
     # react during the session. Backtest explicitly opts into CLOSED when it
@@ -485,8 +480,6 @@ class AppSettings:
         self.allow_ato = bool(self.allow_ato)
         self.allow_atc = bool(self.allow_atc)
         self.bot_sl_enabled = bool(self.bot_sl_enabled)
-        for name in ("buy_fee_pct", "sell_fee_pct", "sell_tax_pct"):
-            setattr(self, name, min(5.0, max(0.0, float(getattr(self, name) or 0.0))))
         self.bot_em_modes = normalize_exit_modes(self.bot_em_modes)
         self.market_phase_override_enabled = bool(self.market_phase_override_enabled)
         self.market_phase_override = str(

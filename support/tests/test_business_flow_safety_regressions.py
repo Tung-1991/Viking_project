@@ -199,7 +199,7 @@ def headless_app(root, *, balance, positions, symbols):
     app.queue, app.trade_state, app.rule_state = stores(root)
     app.strategy_planner = StrategyOrderPlanner(app.queue, app.trade_state, app.rule_state)
     app.settings = config.AppSettings.from_dict({
-        'watchlist': symbols, 'bot_order_mode': 'MARKET', 'buy_fee_pct': 0,
+        'watchlist': symbols, 'bot_order_mode': 'MARKET',
         'priority_capital_enabled': False, 'priority_symbols': [],
         'rule_parameters': {'max_positions': 5, 'no_compound_enabled': False},
     })

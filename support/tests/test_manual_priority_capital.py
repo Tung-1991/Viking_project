@@ -65,7 +65,6 @@ def app_at(tmp_path, cash=60e6, *, mode="PAPER", use_pct=100):
         "priority_allocations": {symbol: {"limit_vnd": 15e6, "use_pct": use_pct, "max_orders": 1}
                                  for symbol in PRIORITY},
         "market_phase_override_enabled": True, "market_phase_override_exposure_pct": 100,
-        "buy_fee_pct": .1,
     })
     app.queue = OrderQueue(tmp_path / "orders.json")
     app.trade_state = TradeStateStore(tmp_path / "trades.json")
@@ -166,8 +165,8 @@ def test_partial_fill_preserves_holding_and_only_reserves_unfilled_remainder(tmp
     app.queue._update(pending.id, status="PARTIAL", broker_order_id="DNSE-1", filled_quantity=100, remaining_quantity=100)
     feedback = app._manual_buy_capital_feedback("MSN", "PAPER", 100, "LO", 50,
                                                tick={}, balance=app.paper.get_balance(), positions=app.paper.positions)
-    assert feedback["reason"]  # 5.005m holding + 5.005m pending + 5.005m new > 15m.
-    assert "10,010,000 đ" in feedback["hint"]
+    assert feedback["reason"]  # 5.005m confirmed holding + 5.00225m pending + 5.00225m new > 15m.
+    assert "10,007,250 đ" in feedback["hint"]
 
 
 def test_fee_is_included_and_typed_quantity_can_fit_at_lo_instead_of_ceiling(tmp_path):

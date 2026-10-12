@@ -32,7 +32,7 @@ def preview(tmp_path, *, enabled=True, mode="PAPER"):
             "CTS": {"limit_vnd": 20_000_000, "use_pct": 100},
         },
         "market_phase_override_enabled": True, "market_phase_override_exposure_pct": 100,
-        "buy_fee_pct": 0, "rule_parameters": {"max_positions": 4, "no_compound_enabled": False},
+        "rule_parameters": {"max_positions": 4, "no_compound_enabled": False},
     })
     parent = DashboardActionsMixin()
     parent.mode, parent.settings = Value(mode), settings
@@ -227,7 +227,7 @@ def test_remaining_limit_deducts_holdings_and_pending_in_same_book(tmp_path):
     parent.queue.add(OrderIntent(id="paper-pending", symbol="MSN", side="BUY", quantity=400,
                                 order_type="LO", limit_price=20, execution_mode="PAPER"))
     overview, rows, invalid = popup._priority_preview_data()
-    assert rows[0][-1] == "3 tr"  # 15m limit - 10m held - 2m pending; other book excluded.
+    assert rows[0][-1] == "2.995 tr"  # 15m - (10m held + 2m pending) including 0.045% provisional fees.
     assert "TIỀN KHẢ DỤNG 80 tr" in overview
     assert not invalid
 
@@ -239,7 +239,7 @@ def test_private_off_uses_original_p1_budget_ignoring_draft_limits(tmp_path):
     overview, rows, invalid = popup._priority_preview_data()
     assert "VỐN RIÊNG OFF" in overview
     assert "ĐƯỢC MUA" not in overview
-    assert rows[0] == ("MSN", "25 tr", "100%", "0/1", "25 tr", "0 tr", "25 tr")
+    assert rows[0] == ("MSN", "25.011 tr", "100%", "0/1", "25.011 tr", "0 tr", "25.011 tr")
     assert not invalid
     assert parent._preview_entry_checks("MSN", {})["order_budget"] == 25_000_000
 

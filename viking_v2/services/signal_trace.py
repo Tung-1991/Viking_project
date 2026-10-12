@@ -146,7 +146,7 @@ class SignalTraceStore:
         keys = ("signal_mode", "realtime_indicator_interval", "rule_parameters", "watchlist",
                 "priority_symbols", "priority_capital_enabled", "priority_total_capital",
                 "priority_allocations", "bot_order_mode", "allow_ato", "allow_atc",
-                "buy_fee_pct", "signal_trace_interval_minutes", "signal_trace_start", "signal_trace_end",
+                "signal_trace_interval_minutes", "signal_trace_start", "signal_trace_end",
                 "market_phase_override_enabled", "market_phase_override", "market_phase_override_exposure_pct")
         snapshot = {key: getattr(settings, key) for key in keys}
         snapshot["rule_parameters"] = StaticRuleParameters.from_dict(settings.rule_parameters).to_dict()

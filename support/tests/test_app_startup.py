@@ -139,7 +139,7 @@ with tempfile.TemporaryDirectory(prefix="money-hunter-startup-") as directory:
             app.order_type.set("MARKET")
             app.snapshots[book] = ({"equity": 50_000_000, "availableCash": 50_000_000}, [], [])
             app._update_order_preview()
-            total = 15_860_000 * (1 + (.0012 if book == "REAL" else app.settings.buy_fee_pct / 100))
+            total = 15_860_000 * (1 + (.0012 if book == "REAL" else config.PAPER_BUY_FEE_RATE))
             assert app.lbl_order_value.cget("text") == f"{total:,.0f} ₫"
             assert app.preview_cash_value.cget("text") == _compact_vnd(total)
             assert app.lbl_fee_preview.cget("text") == app.preview_fee_value.cget("text")

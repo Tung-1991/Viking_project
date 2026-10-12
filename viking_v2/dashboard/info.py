@@ -327,9 +327,6 @@ class InfoPopup:
             ("LỆNH BOT", "LO LOCAL" if settings.bot_order_mode == "LO_LOCAL" else "MARKET", PALETTE["TEXT"]),
             ("ATO / ATC", f"{self._on_off(settings.allow_ato)} / {self._on_off(settings.allow_atc)}", PALETTE["TEXT"]),
             ("SELL T+", "KIỂM TRA LẠI" if settings.sell_wait_policy == "RECHECK" else "VẪN BÁN", PALETTE["TEXT"]),
-            ("PHÍ MUA", f"{settings.buy_fee_pct:g}%", PALETTE["WARN"]),
-            ("PHÍ BÁN", f"{settings.sell_fee_pct:g}%", PALETTE["WARN"]),
-            ("THUẾ", f"{settings.sell_tax_pct:g}%", PALETTE["WARN"]),
         ], columns=2, grid_column=1, grid_span=1)
 
     @staticmethod

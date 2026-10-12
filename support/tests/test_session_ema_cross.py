@@ -427,9 +427,15 @@ def test_backtest_ui_syncs_same_session_option(ui_root, monkeypatch, tmp_path, e
     popup = BacktestPopup(ui_root, settings, None)
     try:
         monkeypatch.setattr(popup.data, "save_settings", lambda _: None)
+        costs = {"buy_fee_pct": .12, "sell_fee_pct": .15, "sell_tax_pct": .22}
+        for key, value in costs.items():
+            popup.cost_entries[key].delete(0, "end")
+            popup.cost_entries[key].insert(0, str(value))
         popup._sync_from_bot()
         assert popup.buy_signal_session_cross_enabled.get() is enabled
-        assert popup._collect().rule_parameters["buy_signal_session_cross_enabled"] is enabled
+        collected = popup._collect()
+        assert collected.rule_parameters["buy_signal_session_cross_enabled"] is enabled
+        assert all(getattr(collected, key) == value for key, value in costs.items())
     finally:
         popup.close()
 

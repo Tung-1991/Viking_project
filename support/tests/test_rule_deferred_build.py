@@ -19,7 +19,7 @@ def pump(root, predicate, timeout=8):
 
 
 def test_deferred_load_cannot_save_partial_settings_and_matches_full_constructor(ui_root):
-    initial = config.AppSettings(signal_mode="REALTIME", buy_fee_pct=0.06, sell_fee_pct=0.07,
+    initial = config.AppSettings(signal_mode="REALTIME",
                                  sell_wait_policy="KEEP", allow_atc=True,
                                  signal_trace_enabled=False, signal_trace_interval_minutes=3,
                                  rule_parameters={"buy_ema_fast": 4, "buy_ema_slow": 9,
@@ -59,8 +59,6 @@ def test_deferred_load_cannot_save_partial_settings_and_matches_full_constructor
         assert "ĐÃ LƯU" in deferred.status.cget("text")
         assert saved == [True]
         assert config.load_settings("BUILD_DEFERRED").to_dict() == config.load_settings("BUILD_SYNC").to_dict()
-        for name in ("buy_fee_pct", "sell_fee_pct", "sell_tax_pct"):
-            assert getattr(config.load_settings("BUILD_DEFERRED"), name) == getattr(initial, name)
         deferred.shared_rsi_period.set("13")
         deferred.save()
         assert config.load_settings("BUILD_DEFERRED").rule_parameters["rsi_period"] == 13

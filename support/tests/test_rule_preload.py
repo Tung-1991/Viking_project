@@ -100,13 +100,11 @@ def test_changed_hidden_form_is_replaced_using_current_settings(ui_root, rule_ap
         pump(ui_root, lambda: not old._building)
     app.settings.rule_parameters["buy_ema_fast"] = 4
     app.settings.rule_parameters["buy_ema_slow"] = 9
-    app.settings.buy_fee_pct = .12
     app._rule_settings()
     popup = app._rule_settings_popup
     assert popup is not old and not old.top.winfo_exists()
     pump(ui_root, lambda: not popup._building)
     assert popup.buy_ema_fast.get() == "4" and popup.buy_ema_slow.get() == "9"
-    assert popup.settings.buy_fee_pct == .12
     assert app._rule_preload_after is None
     assert not app.saved
 
@@ -137,9 +135,6 @@ def test_trace_and_other_settings_replacement_reuses_form_and_saves_latest_objec
     current.signal_trace_interval_minutes = 3
     current.telegram_enabled = True
     current.watchlist = ["IDC"]
-    current.buy_fee_pct = .06
-    current.sell_fee_pct = .07
-    current.sell_tax_pct = .11
     config.save_settings(current, app.account_id)
     app.settings = current
     app._rule_settings()
@@ -151,9 +146,6 @@ def test_trace_and_other_settings_replacement_reuses_form_and_saves_latest_objec
     assert app.saved[-1]["signal_trace_interval_minutes"] == 3
     assert app.saved[-1]["telegram_enabled"] is True
     assert app.saved[-1]["watchlist"] == ["IDC"]
-    assert app.saved[-1]["buy_fee_pct"] == .06
-    assert app.saved[-1]["sell_fee_pct"] == .07
-    assert app.saved[-1]["sell_tax_pct"] == .11
 
 
 def test_close_discards_draft_and_schedules_next_hidden_form(ui_root, rule_app):

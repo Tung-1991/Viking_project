@@ -244,7 +244,7 @@ class DashboardActionsMixin:
         if gross <= 0:
             return 0.0
         if str(mode or "PAPER").upper() == "PAPER":
-            return gross * self.settings.buy_fee_pct / 100.0
+            return gross * config.PAPER_BUY_FEE_RATE
         rate = self._cached_fee_rate(symbol, "BUY")
         return gross * rate if rate is not None else None
 
@@ -3116,7 +3116,7 @@ class DashboardActionsMixin:
             exposure = self.settings.market_phase_override_exposure_pct / 100.0
         return PortfolioContextBuilder(
             self.queue, self.trade_state, self.rule_state,
-            buy_fee_rate=lambda: self.settings.buy_fee_pct / 100.0 if fee_rate is None else fee_rate,
+            buy_fee_rate=lambda: config.DEFAULT_BUY_FEE_PCT / 100.0 if fee_rate is None else fee_rate,
         ).build(
             symbol, execution_mode=mode, balance=balance, positions=positions,
             tick=tick, exposure=exposure, max_positions=int(params.get("max_positions", 5)),
@@ -3153,7 +3153,7 @@ class DashboardActionsMixin:
         if decision_is_fresh(decision, symbol, mode):
             checks = (decision.get("details") or {}).get("entry_checks") or {}
             tick.setdefault("ceiling_price", checks.get("buy_budget_price", 0.0))
-        fee_rate = settings.buy_fee_pct / 100.0
+        fee_rate = config.DEFAULT_BUY_FEE_PCT / 100.0
         if mode == "REAL":
             fee_rate = getattr(self, "_fee_rates", {}).get((symbol, "BUY"), fee_rate)
         checks = PortfolioContextBuilder(
@@ -3199,8 +3199,8 @@ class DashboardActionsMixin:
                     if settings.market_phase_override_enabled
                     else params.exposure.get(self.rule_state.confirmed_market_state(), 0.0))
         if fee_rate is None:
-            fee_rate = (getattr(self, "_fee_rates", {}).get((symbol, "BUY"), settings.buy_fee_pct / 100.0)
-                        if mode == "REAL" else settings.buy_fee_pct / 100.0)
+            fee_rate = (getattr(self, "_fee_rates", {}).get((symbol, "BUY"), config.DEFAULT_BUY_FEE_PCT / 100.0)
+                        if mode == "REAL" else config.PAPER_BUY_FEE_RATE)
         checks = PortfolioContextBuilder(
             self.queue, self.trade_state, self.rule_state, buy_fee_rate=lambda: fee_rate,
         ).build(

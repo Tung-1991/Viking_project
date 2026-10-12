@@ -1621,14 +1621,6 @@ class BacktestPopup:
         self.mode1_slots.insert(0, f"{params.get('max_positions', 5)}")
         self.cooldown_entry.delete(0, "end")
         self.cooldown_entry.insert(0, str(params.get("loss_lock_hours", 24)))
-        for key, value in (
-            ("buy_fee_pct", self.settings.buy_fee_pct),
-            ("sell_fee_pct", self.settings.sell_fee_pct),
-            ("sell_tax_pct", self.settings.sell_tax_pct),
-        ):
-            entry = self.cost_entries[key]
-            entry.delete(0, "end")
-            entry.insert(0, f"{float(value):g}")
         self.sell_wait.set(
             "BÁN THEO YÊU CẦU CŨ" if self.settings.sell_wait_policy == "KEEP" else "KIỂM TRA LẠI ĐIỀU KIỆN"
         )

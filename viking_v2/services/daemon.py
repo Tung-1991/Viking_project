@@ -216,16 +216,11 @@ def run(account_id: str | None = None) -> int:
     queue = OrderQueue(bridge.pending_orders_path)
     queue.discard_unsubmitted_bot_buys("Restart: bỏ BUY tự động chưa gửi")
     portfolio_builder = PortfolioContextBuilder(
-        queue, trades, rule_state, buy_fee_rate=lambda: settings.buy_fee_pct / 100.0,
+        queue, trades, rule_state, buy_fee_rate=lambda: config.DEFAULT_BUY_FEE_PCT / 100.0,
     )
     paper = PaperBroker(
         bridge.paper_state_path,
         initial_balance=settings.paper_initial_balance,
-        fee_rates=lambda: (
-            settings.buy_fee_pct / 100.0,
-            settings.sell_fee_pct / 100.0,
-            settings.sell_tax_pct / 100.0,
-        ),
         tick_provider=market.get_tick,
         working_dates_provider=lambda: [
             value for value in client.get_working_dates()

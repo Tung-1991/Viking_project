@@ -103,7 +103,7 @@ def app_fixture(broker, queue, trades, rules):
     app.settings = AppSettings(watchlist=["FPT"], priority_symbols=["FPT"],
         priority_capital_enabled=True, priority_total_capital=10_000_000,
         priority_allocations={"FPT": {"limit_vnd": 10_000_000, "use_pct": 100, "max_orders": 1}},
-        buy_fee_pct=0, market_phase_override_enabled=True,
+        market_phase_override_enabled=True,
         market_phase_override_exposure_pct=100).normalize()
     app._io_executor = SimpleNamespace(submit=lambda task: task())
     app._post_ui = lambda callback: callback()
@@ -743,11 +743,11 @@ def test_pending_replace_holds_bigger_cap_until_confirmed_or_rejected(tmp_path):
     service.process_due(phase="OPEN", execution_mode="REAL")
     queue.mark_broker_replaced(intent.id, quantity=200, broker_quantity=200, limit_price=50)
     context = app._build_entry_limits("FPT", "REAL", fresh_quote(), broker.get_balance(), [], 1)
-    assert context["priority_capital"]["committed_vnd"] == 10_000_000
+    assert context["priority_capital"]["committed_vnd"] == 10_004_500
     assert context["order_budget"] == 0
     queue.reject_broker_replace(intent.id, "FAKE_REJECTED")
     context = app._build_entry_limits("FPT", "REAL", fresh_quote(), broker.get_balance(), [], 1)
-    assert context["priority_capital"]["committed_vnd"] == 5_000_000
+    assert context["priority_capital"]["committed_vnd"] == 5_002_250
 
 
 def test_edit_fetches_fresh_order_detail_instead_of_cached_working_status(tmp_path):

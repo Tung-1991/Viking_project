@@ -222,7 +222,7 @@ def test_ticket_auto_preview_uses_own_book_and_p1_without_any_bot_decision(tmp_p
     builder = _builder(tmp_path)
     ticket = Ticket()
     ticket.settings = config.AppSettings.from_dict({"market_phase_override_enabled": override,
-        "market_phase_override_exposure_pct": 100, "priority_symbols": [], "buy_fee_pct": 0.045})
+        "market_phase_override_exposure_pct": 100, "priority_symbols": []})
     ticket.mode = SimpleNamespace(get=lambda: mode)
     ticket.symbol = SimpleNamespace(get=lambda: "AAA")
     ticket.order_type = SimpleNamespace(get=lambda: "MARKET")
@@ -291,7 +291,7 @@ def test_dashboard_rechecks_batch_and_changes_before_submission(tmp_path, mode):
     settings = config.AppSettings.from_dict({
         "watchlist": PRIORITY + ["MBB"], "priority_symbols": PRIORITY,
         "priority_capital_enabled": True, "priority_total_capital": 60_000_000,
-        "priority_allocations": ALLOCATIONS, "buy_fee_pct": 0,
+        "priority_allocations": ALLOCATIONS,
         "market_phase_override_enabled": True, "market_phase_override_exposure_pct": 100,
         "rule_parameters": {"force_min_lot_enabled": True, "no_compound_enabled": False},
     })

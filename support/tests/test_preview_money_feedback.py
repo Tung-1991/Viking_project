@@ -102,8 +102,9 @@ def test_msn_zero_budget_explains_reserved_cap_not_empty_account(tmp_path):
 @pytest.mark.parametrize("pending_status", ["PENDING", "WAITING_TOKEN", "WORKING"])
 def test_vps_pending_msn_buy_uses_remaining_cap_and_recovers_after_cancel(tmp_path, mode, pending_status):
     view = ticket(tmp_path, mode)
-    view.settings.buy_fee_pct = 0.12
     view._fee_rates = {("MSN", "BUY"): 0.0012}
+    fee_rate = 0.0012 if mode == "REAL" else config.PAPER_BUY_FEE_RATE
+    pending_cost = 7_420_000 * (1 + fee_rate)
     view.settings.priority_allocations = {
         symbol: {"limit_vnd": (5 if symbol == "IDC" else 15) * 1_000_000, "use_pct": 100}
         for symbol in ("MSN", "CTS", "HDB", "IDC")
@@ -118,16 +119,17 @@ def test_vps_pending_msn_buy_uses_remaining_cap_and_recovers_after_cancel(tmp_pa
     assert checks["available_cash"] == 50_000_000
     assert checks["symbol_pending_buy_count"] == 1
     assert checks["symbol_pending_buy_quantity"] == 100
-    assert checks["priority_capital"]["pending_cost_vnd"] == pytest.approx(7_428_904)
+    assert checks["priority_capital"]["pending_cost_vnd"] == pytest.approx(pending_cost)
     assert checks["priority_capital"]["holding_cost_vnd"] == 0
     quantity, budget, forced = view._suggested_order_quantity(74.2, status, "MSN")
     assert (quantity, forced) == (0, False)
-    assert budget == pytest.approx((15_000_000 - 7_428_904) / 1.0012)
+    assert budget == pytest.approx((15_000_000 - pending_cost) / (1 + fee_rate))
     feedback = view._preview_auto_feedback
     assert feedback["reason"] == "BUY ĐANG CHỜ"
     assert feedback["pending"] is True
     assert "100 CP chưa khớp" in feedback["hint"]
-    assert "7.43 tr" in feedback["hint"] and "7.57 tr" in feedback["hint"] and "7.94 tr" in feedback["hint"]
+    expected_money = ("7.43 tr", "7.57 tr", "7.94 tr") if mode == "REAL" else ("7.42 tr", "7.58 tr", "7.93 tr")
+    assert all(value in feedback["hint"] for value in expected_money)
     assert "hủy yêu cầu cũ" in feedback["hint"]
     assert len(feedback["hint"].splitlines()) == 5
     assert len(view.queue.list_all()) == 1
