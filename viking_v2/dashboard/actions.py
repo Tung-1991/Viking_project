@@ -1136,18 +1136,24 @@ class DashboardActionsMixin:
         )
 
     def _rule_settings(self) -> None:
+        if getattr(self, "_rule_popup_opening", False):
+            return
         popup = self._rule_settings_popup
         if popup and popup.top.winfo_exists():
             popup.show()
             return
-        self._rule_settings_popup = RuleSettingsPopup(
-            self,
-            self.settings,
-            self.account_id,
-            self._settings_saved,
-            lambda visible: self._set_tool_popup_state("RULE", visible),
-            trade_state=self.trade_state,
-        )
+        self._rule_popup_opening = True
+        try:
+            self._rule_settings_popup = RuleSettingsPopup(
+                self,
+                self.settings,
+                self.account_id,
+                self._settings_saved,
+                lambda visible: self._set_tool_popup_state("RULE", visible),
+                trade_state=self.trade_state, defer_build=True,
+            )
+        finally:
+            self._rule_popup_opening = False
 
     def _set_tool_popup_state(self, name: str, visible: bool) -> None:
         button = self.rule_button if name == "RULE" else self.connection_button

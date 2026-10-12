@@ -164,6 +164,9 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 - RULE đọc danh sách khóa lỗ ở nền. Trong lúc chờ DB, nút mở khóa bị vô hiệu hóa
   và hiện “ĐANG ĐỌC KHÓA LỖ”; đọc lỗi hiện “KHÔNG ĐỌC ĐƯỢC KHÓA”, không coi là không có khóa.
   Việc tính rule và ghi/mở khóa trong ledger giữ nguyên cơ chế hiện có.
+- Mở RULE từ dashboard hiện khung trước, rồi tạo các nhóm cấu hình qua từng lượt Tk.
+  Trong lúc hiện “ĐANG TẢI RULE…”, tab và nút Lưu tạm vô hiệu hóa; chỉ cho lưu khi đủ
+  mọi trường. Đóng/ẩn vẫn hoạt động. Mở lại popup còn tồn tại dùng cùng cửa sổ.
 - Nếu muốn giao diện có cùng độ lớn, dùng cùng Windows Scale và độ phân giải cho console/remote;
   100% là lựa chọn dễ đối chiếu. Đổi DNS không xử lý được vòng vẽ UI.
 - Khi app báo Not responding, ghi lại thời điểm/nút vừa bấm và các dòng cuối của log UI;

@@ -33,7 +33,7 @@ class RuleSettingsPopup:
         account_id: str,
         on_saved: Callable[[], None],
         on_visibility_changed: Callable[[bool], None] | None = None,
-        *, trade_state: Any = None,
+        *, trade_state: Any = None, defer_build: bool = False,
     ):
         self.parent = parent
         self.settings, self.account_id, self.on_saved = settings, account_id, on_saved
@@ -45,6 +45,9 @@ class RuleSettingsPopup:
         self._block_future = None
         self._block_poll_after = None
         self._block_refresh_again = False
+        self._building = defer_build
+        self._build_after = None
+        self._build_steps = []
         # The strategy still computes one RSI series for BUY and E. Mirror the
         # setting in both cards so editing either place cannot silently diverge.
         self.shared_rsi_period = tk.StringVar(value=str(self.params.rsi_period))
@@ -76,24 +79,70 @@ class RuleSettingsPopup:
         )
         self.tabs.grid(row=0, column=0, sticky="nsew", padx=12, pady=(12, 5))
         self._tab_font(self.tabs, 12)
-        self._business_tab(self.tabs.add("NGHIỆP VỤ"))
-        self._exit_manager_tab(self.tabs.add("E/M"))
-        self._execution_tab(self.tabs.add("THỰC THI"))
-        self._install_execution_preview()
+        business, exit_manager, execution = (
+            self.tabs.add("NGHIỆP VỤ"), self.tabs.add("E/M"), self.tabs.add("THỰC THI"),
+        )
+        if defer_build:
+            self._business_tab(business, populate=False)
+            self._build_steps = [
+                lambda: self._phase1(self._phase_frames[0]),
+                lambda: self._phase2(self._phase_frames[1]),
+                lambda: self._phase3(self._phase_frames[2]),
+                lambda: self._exit_manager_tab(exit_manager),
+                lambda: self._execution_tab(execution),
+                self._install_execution_preview,
+            ]
+            self.tabs.configure(state="disabled")
+            self.phase_tabs.configure(state="disabled")
+        else:
+            self._business_tab(business)
+            self._exit_manager_tab(exit_manager)
+            self._execution_tab(execution)
+            self._install_execution_preview()
 
         footer = ctk.CTkFrame(self.top, fg_color="transparent")
         footer.grid(row=1, column=0, sticky="ew", padx=14, pady=(3, 12))
         self.status = ctk.CTkLabel(
-            footer, text="Các thay đổi được daemon nhận tự động sau khi lưu.",
+            footer, text=("ĐANG TẢI RULE…" if defer_build
+                          else "Các thay đổi được daemon nhận tự động sau khi lưu."),
             font=("Segoe UI", 12), text_color=self.TEXT,
         )
         self.status.pack(side="left")
-        ctk.CTkButton(
+        self.save_button = ctk.CTkButton(
             footer, text="LƯU THAY ĐỔI", width=170, height=38,
             font=("Segoe UI", 12, "bold"), fg_color=self.GREEN,
             hover_color="#16A34A", command=self.save,
-        ).pack(side="right")
+            state="disabled" if defer_build else "normal",
+        )
+        self.save_button.pack(side="right")
         self.show()
+        if defer_build:
+            self._build_after = self.top.after(50, self._build_next)
+
+    def _build_next(self) -> None:
+        self._build_after = None
+        if not self.top.winfo_exists():
+            return
+        try:
+            self._build_steps.pop(0)()
+        except Exception:
+            self._build_steps.clear()
+            self.status.configure(text="KHÔNG TẢI ĐƯỢC RULE · ĐÓNG VÀ MỞ LẠI", text_color="#EF4444")
+            logger = getattr(self.parent, "logger", None)
+            if logger is not None:
+                logger.exception("RULE window build failed")
+            return
+        if not self.top.winfo_exists():
+            return
+        if self._build_steps:
+            # Let Tk paint and process input between complete setting sections.
+            self._build_after = self.top.after(30, self._build_next)
+        else:
+            self._building = False
+            self.tabs.configure(state="normal")
+            self.phase_tabs.configure(state="normal")
+            self.save_button.configure(state="normal")
+            self.status.configure(text="Các thay đổi được daemon nhận tự động sau khi lưu.")
 
     def show(self) -> None:
         if self.trade_state and hasattr(self, "block_book"):
@@ -111,6 +160,10 @@ class RuleSettingsPopup:
             self.on_visibility_changed(False)
 
     def _close(self) -> None:
+        if self._build_after is not None:
+            self.top.after_cancel(self._build_after)
+            self._build_after = None
+        self._build_steps.clear()
         if self._block_poll_after is not None:
             self.top.after_cancel(self._block_poll_after)
             self._block_poll_after = None
@@ -138,7 +191,7 @@ class RuleSettingsPopup:
         except AttributeError:
             pass
 
-    def _business_tab(self, frame: ctk.CTkFrame) -> None:
+    def _business_tab(self, frame: ctk.CTkFrame, *, populate: bool = True) -> None:
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(0, weight=1)
         phases = ctk.CTkTabview(
@@ -150,9 +203,12 @@ class RuleSettingsPopup:
         self.phase_tabs = phases
         phases.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
         self._tab_font(phases, 12)
-        self._phase1(phases.add("PHASE 1 · THỊ TRƯỜNG"))
-        self._phase2(phases.add("PHASE 2 · ENTRY BUY"))
-        self._phase3(phases.add("PHASE 3 · VỐN & BẢO VỆ"))
+        self._phase_frames = [phases.add(name) for name in (
+            "PHASE 1 · THỊ TRƯỜNG", "PHASE 2 · ENTRY BUY", "PHASE 3 · VỐN & BẢO VỆ",
+        )]
+        if populate:
+            for build, phase in zip((self._phase1, self._phase2, self._phase3), self._phase_frames):
+                build(phase)
 
     def _content(
         self,
@@ -1261,6 +1317,8 @@ class RuleSettingsPopup:
         )
 
     def save(self) -> None:
+        if self._building:
+            return
         try:
             ma_period = int(self._number(self.ma_period, "MA dài hạn"))
             pivot_left = int(self._number(self.pivot_left, "Pivot Left"))
