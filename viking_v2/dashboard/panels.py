@@ -34,6 +34,7 @@ from .windows import (
     fit_entry_text,
     fit_label_text,
 )
+from .quote_direction import PRICE_DIRECTION_HINT, quote_background
 
 
 def _auto_quantity_feedback(
@@ -392,9 +393,10 @@ class DashboardPanelsMixin:
         )
         self.lbl_price = ctk.CTkLabel(
             quote, text="---", font=("Cascadia Mono", 36, "bold"),
-            text_color=COL_TEXT, anchor="center",
+            text_color=COL_TEXT, anchor="center", corner_radius=4,
         )
         self.lbl_price.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 0))
+        _HoverHint(self.lbl_price, PRICE_DIRECTION_HINT)
         self.lbl_market = ctk.CTkLabel(
             quote, text="CHỜ DỮ LIỆU", font=("Segoe UI", 11, "bold"),
             text_color=COL_WARN, anchor="center",
@@ -952,7 +954,10 @@ class DashboardPanelsMixin:
                 _HoverHint(value, hint, placement="inside")
             return value
 
-        self.preview_live_value = metric_card(0, "GIÁ TT", hint=self._quote_health_hint)
+        self.preview_live_value = metric_card(
+            0, "GIÁ TT", hint=lambda: self._quote_health_hint() + "\n" + PRICE_DIRECTION_HINT,
+        )
+        self.preview_live_value.configure(corner_radius=4)
         self.preview_entry_value = metric_card(1, "GIÁ VÀO", hint="Giá ước tính khớp để preview TP/SL; LO dùng giá nhập.\nKhi giữ vốn Priority, VỐN + PHÍ dự trù theo giá trần, không phải giá khớp chắc chắn.")
         self.preview_qty_value = metric_card(2, "KL", hint=self._auto_quantity_hint)
         self.preview_cash_value = metric_card(3, "VỐN + PHÍ", hint=self._ticket_money_hint)
@@ -2148,6 +2153,7 @@ class DashboardPanelsMixin:
                 if live_price > 0 else "NA"
             ),
             text_color=COL_WARN if live_price > 0 and frozen else COL_TEXT,
+            fg_color=quote_background(self, "preview", symbol, live_price, tick, market_status, frozen=frozen),
         )
         self.preview_entry_value.configure(
             text=(

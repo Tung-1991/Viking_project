@@ -58,6 +58,7 @@ from .view import (
     _price_unit, _order_form_key, _render_order_notice,
 )
 from .info import InfoPopup
+from .quote_direction import quote_background
 from .windows import (
     FONT_KEY,
     FONT_MONO_VALUE,
@@ -481,7 +482,13 @@ class DashboardActionsMixin:
         else:
             price_color = change_color if display_price > 0 else COL_PREVIEW_TEXT
 
-        self.lbl_price.configure(text=_display_price(display_price), text_color=price_color)
+        self.lbl_price.configure(
+            text=_display_price(display_price), text_color=price_color,
+            fg_color=quote_background(
+                self, "main", self.symbol.get(), display_price, tick, market_status,
+                frozen=price_is_frozen or order_type != "MARKET",
+            ),
+        )
         self.lbl_change.configure(
             text=(
                 f"REF {_display_price(reference)} · "

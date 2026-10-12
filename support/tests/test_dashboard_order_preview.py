@@ -21,6 +21,7 @@ class _Label:
 
 def _main_quote_subject(order_type: str, price: str = ""):
     subject = DashboardActionsMixin()
+    subject.symbol = _Value("MSN")
     subject.order_type = _Value(order_type)
     subject.price = _Value(price)
     subject._current_tick_price = 69.2

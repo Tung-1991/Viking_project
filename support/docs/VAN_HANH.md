@@ -160,6 +160,10 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 
 ## UI khi vào lại máy ảo / remote
 
+- Ô giá chính khi chọn MARKET và ô PREVIEW → GIÁ TT đổi nền theo giá hiển thị trước đó:
+  xanh khi tăng, đỏ khi giảm; giá đứng giữ màu lần đổi gần nhất. Lần đầu, đổi mã,
+  ngoài phiên hoặc giá cũ quá 10 giây trở về xám. Màu chữ ô giá chính và dòng REF vẫn theo tham chiếu.
+  Giá nhập LO/giá ước tính ATO, ATC ở ô chính giữ nền xám; màu nền chỉ là thông tin UI.
 - Windows trong VM có DPI/Scale riêng. Đổi giữa console và remote có thể đổi độ phóng UI.
   Bản sửa DPI giữ kích thước logic, gom callback resize và tránh vẽ lồng nhau ở scrollbar/menu.
 - PREVIEW chỉ cập nhật chữ/màu khi giá trị thay đổi; chỉ báo, hạn mức và trạng thái vẫn được
