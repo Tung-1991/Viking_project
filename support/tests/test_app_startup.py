@@ -171,6 +171,12 @@ with tempfile.TemporaryDirectory(prefix="money-hunter-startup-") as directory:
         app.bridge.read_status = saved_read_status
         app._cached_fee_rate = saved_cached_fee
         app.snapshots = {}
+        app.mode.set("REAL")
+        app._paint_account()
+        app.update_idletasks()
+        font = tkfont.Font(root=app, font=app.lbl_equity._label.cget("font"))
+        assert app.lbl_equity.cget("text") == "CHỜ TÀI KHOẢN"
+        assert font.measure(app.lbl_equity.cget("text")) <= app.lbl_equity.winfo_width()
         app.quantity.delete(0, tk.END)
         app.order_type.set("MARKET")
         app.mode.set(os.environ.get("STARTUP_SMOKE_MODE", "PAPER"))

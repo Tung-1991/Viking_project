@@ -13,6 +13,7 @@ from ..trading.orders import CLAIMABLE_STATUSES, FINAL_STATUSES, LOCALLY_CONTROL
 from ..trading.portfolio import account_price
 from ..trading.validation import decision_is_fresh, decisions_for_mode
 from .view import _compact_vnd, _display_price, _number, _price_unit
+from .account_money import displayed_account_snapshot
 
 
 RUNNING_COLUMNS = (
@@ -192,7 +193,7 @@ class DashboardTablesMixin:
         # One fresh read per render, not one full ledger decode per visible row.
         # These indexes are local display snapshots; no trading decision uses them.
         needs_cycles = (
-            any(self.snapshots.get(mode, ({}, [], []))[1] for mode in self.trees)
+            any(displayed_account_snapshot(self, mode)[1] for mode in self.trees)
             or any(local_by_mode.values())
         )
         cycles = self.trade_state.list_cycles() if needs_cycles else []
@@ -217,7 +218,7 @@ class DashboardTablesMixin:
             self._running_row_actions[mode] = {}
             if tuple(tree["columns"]) != columns:
                 self._configure_tree(tree, columns)
-            balance, positions, broker_orders = self.snapshots.get(mode, ({}, [], []))
+            balance, positions, broker_orders = displayed_account_snapshot(self, mode)
             params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
             take_profit_pct = float(params.get("take_profit_pct", 7.0) or 7.0)
             normal_tp = float(params.get("normal_arm_pct", 7.0) or 7.0)

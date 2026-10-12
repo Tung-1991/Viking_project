@@ -12,6 +12,30 @@ IDLE_POLL_SECONDS = 300.0
 IDLE_ALERT_SECONDS = 600.0
 
 
+def end_of_day_order_pause(failure: dict, phase: str) -> bool:
+    """Recognize this broker response only after the exchange has closed."""
+    detail = str(failure.get("error") or failure.get("detail") or "").lower()
+    return bool(
+        str(phase).upper() == "CLOSED"
+        and failure.get("endpoint") == "GET /accounts/*/orders"
+        and failure.get("status") == 400
+        and "ngừng giao dịch" in detail and "cuối ngày" in detail
+    )
+
+
+def rest_is_end_of_day_order_pause(rest: dict, phase: str) -> bool:
+    raw = rest.get("snapshot_errors")
+    failures = list(raw.values()) if isinstance(raw, dict) else []
+    if not failures or not all(isinstance(row, dict) and end_of_day_order_pause(row, phase) for row in failures):
+        return False
+    status = rest.get("last_status")
+    if isinstance(status, (int, float)) and 200 <= status < 300 and not rest.get("last_error"):
+        return True
+    return end_of_day_order_pause(
+        {"endpoint": rest.get("last_endpoint"), "status": status, "error": rest.get("last_error")}, phase,
+    )
+
+
 def account_poll_interval(
     phase: str, orders: Iterable[Any] | None, *, symbol_phases: dict | None = None,
 ) -> float:

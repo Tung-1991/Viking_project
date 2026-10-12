@@ -14,6 +14,177 @@ from viking_v2.dashboard.actions import DashboardActionsMixin
 from viking_v2.dashboard.panels import DashboardPanelsMixin
 from viking_v2.rules.state import RuleStateStore
 
+END_OF_DAY = "Hệ thống đã chuyển trạng thái ngừng giao dịch để xử lý các công việc cuối ngày!"
+
+
+@pytest.fixture
+def closed_order_dashboard(dashboard, broker, tmp_path):
+    from viking_v2.connections.dnse.paper import PaperBroker
+    from viking_v2.models import OrderIntent, TradeCycle
+    from viking_v2.storage import DailyFeeTracker, JSONLineJournal
+    from viking_v2.trading.execution import ExecutionService
+    from viking_v2.trading.orders import OrderQueue
+    from viking_v2.trading.state import TradeStateStore
+
+    view, clock = dashboard
+    client, session, broker_clock = broker
+    view.account_id = "FAKEACCOUNT"
+    view.real = client
+    view.queue = OrderQueue(tmp_path / "orders.json")
+    view.trade_state = TradeStateStore(tmp_path / "trades.json")
+    cycle = TradeCycle("HDB-REAL", "HDB", execution_mode="REAL", loan_package_id="1", opened_at=900)
+    cycle.record_buy_fill(600, 22.65, 0)
+    view.trade_state.save(cycle)
+    intent = view.queue.add(OrderIntent.create("HDB", "BUY", 600, "MARKET", execution_mode="REAL", trade_id=cycle.id))
+    view.queue._update(intent.id, status="FILLED", broker_order_id="236032", filled_quantity=600, remaining_quantity=0)
+    view.settings.rule_parameters = {}
+    view.daily_fees = DailyFeeTracker(tmp_path / "order_history.csv", tmp_path / "stats.json")
+    view.execution = ExecutionService(client, PaperBroker(tmp_path / "paper.json"), view.queue,
+                                      JSONLineJournal(tmp_path / "journal.jsonl"), trade_state=view.trade_state)
+    view.snapshots = {"REAL": ({}, [], [])}  # Cold restart, as in the reported screenshot.
+    view.orders_error = (400, END_OF_DAY)
+    view.balance_error = None
+    position = {"id": "HDB-deal", "symbol": "HDB", "loanPackageId": "1", "openQuantity": 600,
+                "tradeQuantity": 0, "costPrice": 22650, "marketPrice": 22600}
+    def request(method, url, **kwargs):
+        session.calls.append((method, url))
+        assert method == "GET", "Account display must never send an order"
+        endpoint = url.rsplit("/", 1)[-1]
+        status, message = 200, ""
+        if endpoint == "balances":
+            payload = {"netAssetValue": 49951941, "stock": {"availableCash": 36391941}}
+            if view.balance_error:
+                status, message = view.balance_error
+        elif endpoint == "positions":
+            payload = [position]
+        elif endpoint == "orders":
+            payload = [{"orderId": "236032", "symbol": "HDB", "side": "NB", "quantity": 600,
+                        "fillQuantity": 600, "averagePrice": 22650, "orderStatus": "Filled", "loanPackageId": "1"}]
+            if view.orders_error:
+                status, message = view.orders_error
+        else:
+            raise AssertionError(f"Unexpected read endpoint: {endpoint}")
+        return SimpleNamespace(status_code=status, headers={}, text=message,
+                               json=lambda: {"message": message} if status != 200 else payload)
+    session.request = request
+    class Label:
+        def configure(self, **options):
+            self.options = options
+    for name in ("equity", "equity_title", "account", "pnl", "cash"):
+        setattr(view, f"lbl_{name}", Label())
+    return view, clock, broker_clock, session
+
+
+def test_cold_restart_orders_400_keeps_money_and_holdings_visible_without_reconciling(closed_order_dashboard):
+    view, _clock, _broker_clock, session = closed_order_dashboard
+    ledger_before = [cycle.to_dict() for cycle in view.trade_state.list_cycles()]
+    queue_before = [order.to_dict() for order in view.queue.list_all()]
+    view._refresh_snapshots()
+    view._paint_account()
+    assert view.lbl_equity.options["text"] == "49,951,941 ₫"
+    assert view.lbl_account.options["text"].endswith("36,391,941")
+    assert view._account_display_snapshots["REAL"][1][0]["openQuantity"] == 600
+    assert view._account_snapshot_faults["REAL"]["stage"] == "ORDERS_SNAPSHOT"
+    # The partial display must never masquerade as a full trading snapshot.
+    assert view.snapshots["REAL"] == ({}, [], [])
+    assert [cycle.to_dict() for cycle in view.trade_state.list_cycles()] == ledger_before
+    assert [order.to_dict() for order in view.queue.list_all()] == queue_before
+    assert len(session.calls) == 3 and all(method == "GET" for method, _url in session.calls)
+    with pytest.raises(BrokerSnapshotError, match="HTTP 400"):
+        view.real.get_orders(force=True)
+    with pytest.raises(BrokerSnapshotError, match="HTTP 400"):
+        view.execution.account_snapshot("REAL")
+
+
+def test_orders_recovery_replaces_partial_display_and_clears_fault(closed_order_dashboard):
+    view, clock, broker_clock, _session = closed_order_dashboard
+    view._refresh_snapshots()
+    view.orders_error = None
+    clock["now"] += 300
+    broker_clock["now"] += 300
+    view._refresh_snapshots()
+    assert "REAL" not in view._account_snapshot_faults
+    assert view.snapshots["REAL"][2][0]["orderId"] == "236032"
+    assert view._account_display_snapshots["REAL"] == view.snapshots["REAL"]
+    assert view.trade_state.get("HDB-REAL").open_quantity == 600
+
+
+def test_bad_balance_does_not_fabricate_money_from_partial_orders(closed_order_dashboard):
+    view, _clock, _broker_clock, _session = closed_order_dashboard
+    view.balance_error = (503, "UNAVAILABLE")
+    view._refresh_snapshots()
+    view._paint_account()
+    assert view.lbl_equity.options["text"] == "CHỜ TÀI KHOẢN"
+    assert view._account_snapshot_faults["REAL"]["stage"] == "ACCOUNT_SNAPSHOT"
+    assert not getattr(view, "_account_display_snapshots", {}).get("REAL")
+
+
+def test_partial_display_keeps_unknown_order_unresolved_and_does_not_send(closed_order_dashboard):
+    from viking_v2.models import OrderIntent
+    view, _clock, _broker_clock, session = closed_order_dashboard
+    intent = view.queue.add(OrderIntent.create("MSN", "BUY", 100, "MARKET", execution_mode="REAL"))
+    view.queue._update(intent.id, status="UNKNOWN", handed_off_at=950)
+    before = view.queue.get(intent.id).to_dict()
+    view._refresh_snapshots()
+    assert view.queue.get(intent.id).to_dict() == before
+    assert view.real._account_poll_seconds == 5
+    assert all(method == "GET" for method, _url in session.calls)
+    assert view.snapshots["REAL"] == ({}, [], [])
+
+
+@pytest.mark.parametrize("phase,error,extra", [
+    ("CLOSED", (400, END_OF_DAY), None),
+    ("OPEN", (400, END_OF_DAY), None),
+    ("CLOSED", (400, "INVALID_PARAMETER"), None),
+    ("CLOSED", (503, "UNAVAILABLE"), None),
+    ("CLOSED", (400, END_OF_DAY), "BALANCE"),
+    ("CLOSED", (400, END_OF_DAY), "OTHER_REQUEST"),
+    ("CLOSED", (400, END_OF_DAY), "RULE_ERROR"),
+])
+def test_end_of_day_warning_never_hides_other_faults(closed_order_dashboard, phase, error, extra):
+    from copy import deepcopy
+    view, clock, _broker_clock, _session = closed_order_dashboard
+    view.orders_error = error
+    view._refresh_snapshots()
+    rest = deepcopy(view.real.api_health())
+    status = {"heartbeat_at": clock["now"], "daemon_status": "RUNNING", "market_status": phase}
+    failure = rest["snapshot_errors"]["orders"]
+    status.update(error=failure["error"], cycle_error_context={"stage": "ACCOUNT_SNAPSHOT", "snapshot_error": failure})
+    if extra == "BALANCE":
+        rest["snapshot_errors"]["balance"] = {"endpoint": "GET /accounts/*/balances", "status": 503, "error": "UNAVAILABLE"}
+    elif extra == "OTHER_REQUEST":
+        rest.update(last_endpoint="GET /working-dates", last_status=500, last_error="OTHER_FAILURE")
+    elif extra == "RULE_ERROR":
+        status.update(error="Rule evaluation failed", cycle_error_context={"stage": "RULE_EVALUATION"})
+    subject = DashboardPanelsMixin()
+    subject.real = SimpleNamespace(api_health=lambda: rest, configured=lambda: True, has_trading_token=lambda: True)
+    subject.mode, subject.symbol = view.mode, SimpleNamespace(get=lambda: "MSN")
+    for name in ("title", "daemon", "core", "ws", "rest", "token", "trade"):
+        label = SimpleNamespace(options={})
+        label.configure = lambda _label=label, **kwargs: _label.options.update(kwargs)
+        setattr(subject, f"preview_health_{name}", label)
+    subject._refresh_api_health_panel(status)
+    warning = phase == "CLOSED" and error == (400, END_OF_DAY) and extra is None
+    assert subject.preview_health_title.options["text"] == ("HEALTH CẢNH BÁO" if warning else "HEALTH LỖI")
+    if warning:
+        assert subject.preview_health_rest.options["text"] == "API CUỐI NGÀY"
+        subject._health_hint_status = lambda: status
+        subject._quote_health_hint = lambda: "MSN"
+        assert "đối soát lệnh chờ API hoạt động lại" in subject._api_health_hint()
+
+
+def test_failed_later_balance_read_does_not_make_old_display_a_trading_snapshot(closed_order_dashboard):
+    view, clock, broker_clock, _session = closed_order_dashboard
+    view._refresh_snapshots()
+    view.balance_error = (503, "UNAVAILABLE")
+    clock["now"] += 300
+    broker_clock["now"] += 300
+    view._refresh_snapshots()
+    view._paint_account()
+    assert view.lbl_equity.options["text"] == "49,951,941 ₫"  # Retain the last displayed value.
+    assert view._account_snapshot_faults["REAL"]["stage"] == "ACCOUNT_SNAPSHOT"
+    assert view.snapshots["REAL"] == ({}, [], [])
+
 
 @pytest.mark.parametrize("state", ["SENDING", "WORKING", "PARTIAL", "UNKNOWN", "CANCEL_PENDING", "REPLACE_PENDING"])
 def test_unresolved_real_orders_keep_fast_closed_account_reads(state):

@@ -10,7 +10,10 @@ from typing import Any
 import customtkinter as ctk
 
 from ..branding import APP_NAME, APP_VERSION
-from ..connections.dnse.snapshot_health import FAST_POLL_SECONDS, IDLE_POLL_SECONDS, snapshot_failure_summary
+from ..connections.dnse.snapshot_health import (
+    FAST_POLL_SECONDS, IDLE_POLL_SECONDS, end_of_day_order_pause,
+    rest_is_end_of_day_order_pause, safe_detail, snapshot_failure_summary,
+)
 from ..rules.business import average_true_range_pct, indicator_snapshot, protect_level
 from ..rules.observations import ema_cross_caption, finite
 from ..trading.market import VN_TZ, exchange_close_minute, market_now, market_phase, merge_tick_into_daily_bars
@@ -202,6 +205,9 @@ class DashboardPanelsMixin:
             text_color=COL_GREEN, anchor="w",
         )
         self.lbl_equity.grid(row=1, column=0, sticky="w", padx=(11, 5), pady=(0, 0))
+        self.lbl_equity.bind("<Configure>", lambda _event: fit_label_text(
+            self.lbl_equity, base_font=("Segoe UI", 30, "bold"), minimum_size=14,
+        ), add="+")
         _HoverHint(self.lbl_equity, self._account_money_hint)
         _HoverHint(self.lbl_equity_title, self._account_money_hint)
         session_box = ctk.CTkFrame(
@@ -1533,6 +1539,13 @@ class DashboardPanelsMixin:
             raw = rest.get("snapshot_errors") if isinstance(rest, dict) else None
             for row in (raw.values() if isinstance(raw, dict) else ()):
                 if isinstance(row, dict):
+                    if end_of_day_order_pause(row, phase):
+                        failures.append(
+                            "DNSE tạm ngừng đọc danh sách lệnh để xử lý cuối ngày (HTTP 400).\n"
+                            "Tiền/cổ hiển thị theo dữ liệu đọc được; đối soát lệnh chờ API hoạt động lại.\n"
+                            + safe_detail(row.get("error"), secrets=secrets)
+                        )
+                        continue
                     failures.append(snapshot_failure_summary(
                         row, IDLE_POLL_SECONDS if rest.get("account_poll_seconds") == IDLE_POLL_SECONDS else FAST_POLL_SECONDS,
                         secrets=secrets,
@@ -2677,15 +2690,19 @@ class DashboardPanelsMixin:
         daemon_rest = daemon_health.get("rest") if isinstance(daemon_health.get("rest"), dict) else {}
         ui_rest = self.real.api_health()
         rest_rows = [row for row in (ui_rest, daemon_rest) if isinstance(row, dict)]
+        market_status = str(status.get("market_status", "OFFLINE") or "OFFLINE").upper()
         # Each process has its own request counter. A busy healthy daemon must
         # not conceal an account/API failure in the UI client, or vice versa.
         observed_rest = [row for row in rest_rows if int(row.get("total_requests", 0) or 0) > 0]
-        rest_error = any(
-            not isinstance(row.get("last_status"), (int, float))
-            or not 200 <= row["last_status"] < 300
-            or bool(row.get("last_error"))
-            for row in observed_rest
-        ) or any(bool(row.get("snapshot_errors")) for row in rest_rows)
+        problem_rest = [row for row in rest_rows if bool(row.get("snapshot_errors")) or (
+            int(row.get("total_requests", 0) or 0) > 0 and (
+                not isinstance(row.get("last_status"), (int, float))
+                or not 200 <= row["last_status"] < 300
+                or bool(row.get("last_error"))
+            )
+        )]
+        rest_error = bool(problem_rest)
+        order_pause = rest_error and all(rest_is_end_of_day_order_pause(row, market_status) for row in problem_rest)
 
         heartbeat_age = max(0.0, time.time() - _number(status.get("heartbeat_at")))
         daemon_state = str(status.get("daemon_status") or "STARTING").upper()
@@ -2708,16 +2725,15 @@ class DashboardPanelsMixin:
 
         configured = self.real.configured()
         rest_ok = bool(observed_rest) and not rest_error
-        rest_state = "ERROR" if rest_error else "OK" if rest_ok else "WAIT"
-        dnse_ok = configured and rest_state != "ERROR"
-        dnse_text = "OK" if dnse_ok else "CHỜ" if not configured else "LỖI"
+        rest_state = "ORDER_PAUSE" if order_pause else "ERROR" if rest_error else "OK" if rest_ok else "WAIT"
+        dnse_ok = configured and rest_state not in {"ERROR", "ORDER_PAUSE"}
+        dnse_text = "CUỐI NGÀY" if order_pause else "OK" if dnse_ok else "CHỜ" if not configured else "LỖI"
         ws_online = bool(ws.get("connected") and ws.get("authenticated"))
         ws_connecting = bool(ws.get("running")) and not ws_online
-        market_status = str(status.get("market_status", "OFFLINE") or "OFFLINE").upper()
         market_active = market_status in {"ATO", "OPEN", "CONTINUOUS", "ATC"}
         self.preview_health_core.configure(
             text=f"DNSE {dnse_text}",
-            text_color=COL_GREEN if dnse_ok else COL_RED if configured else COL_WARN,
+            text_color=COL_WARN if order_pause else COL_GREEN if dnse_ok else COL_RED if configured else COL_WARN,
         )
         self.preview_health_ws.configure(
             text=f"WS {'OK' if ws_online else 'CHỜ' if ws_connecting else 'OFF'}",
@@ -2730,8 +2746,8 @@ class DashboardPanelsMixin:
         )
 
         self.preview_health_rest.configure(
-            text={"OK": "API OK", "WAIT": "API CHỜ", "ERROR": "API LỖI"}[rest_state],
-            text_color=COL_GREEN if rest_ok else COL_RED if rest_state == "ERROR" else COL_PREVIEW_TEXT,
+            text={"OK": "API OK", "WAIT": "API CHỜ", "ERROR": "API LỖI", "ORDER_PAUSE": "API CUỐI NGÀY"}[rest_state],
+            text_color=COL_WARN if order_pause else COL_GREEN if rest_ok else COL_RED if rest_state == "ERROR" else COL_PREVIEW_TEXT,
         )
         mode = self.mode.get()
         token_ready = self.real.has_trading_token()
@@ -2778,6 +2794,11 @@ class DashboardPanelsMixin:
         )
 
         current_cycle_error = bool(str(status.get("error") or "").strip())
+        context = status.get("cycle_error_context") or {}
+        if (order_pause and isinstance(context, dict) and context.get("stage") == "ACCOUNT_SNAPSHOT"
+                and isinstance(context.get("snapshot_error"), dict)
+                and end_of_day_order_pause(context["snapshot_error"], market_status)):
+            current_cycle_error = False
         ws_error = bool(configured and market_active and not ws_online and not ws_connecting)
         price_error = bool(market_active and not data_ok)
         has_error = bool(
@@ -2795,6 +2816,7 @@ class DashboardPanelsMixin:
                 or not configured
                 or ws_connecting
                 or rest_state == "WAIT"
+                or order_pause
                 or (mode == "REAL" and not token_ready)
             )
         )

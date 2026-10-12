@@ -25,6 +25,7 @@ from ..backtest.data import HistoricalDataStore
 from .. import config
 from ..branding import APP_NAME
 from ..config import AppSettings, save_settings
+from ..connections.dnse.client import BrokerSnapshotError
 from ..connections.telegram import SignalTelegramService, TelegramClient
 from ..connections.window import ConnectionPopup
 from ..connections.dnse.snapshot_health import (
@@ -60,7 +61,7 @@ from .view import (
 from .info import InfoPopup
 from .quote_direction import quote_background
 from .trade_history import history_datetime, history_groups
-from .account_money import account_money, account_money_hint
+from .account_money import account_money, account_money_hint, displayed_account_snapshot
 from ..services.technical_notifications import notification_session, technical_delivery, TECHNICAL_CATEGORIES
 from .windows import (
     FONT_KEY,
@@ -69,6 +70,7 @@ from .windows import (
     DataTablePopup,
     HistoryPopup,
     _HoverHint,
+    fit_label_text,
     minimize_popup,
 )
 
@@ -4134,8 +4136,10 @@ class DashboardActionsMixin:
             dict[str, tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]],
             list[dict[str, Any]],
             dict[str, tuple[Exception, str]],
+            dict[str, tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]],
         ]:
             values = {}
+            display_values = {}
             errors: dict[str, tuple[Exception, str]] = {}
             try:
                 values["PAPER"] = self.execution.account_snapshot("PAPER")
@@ -4155,20 +4159,33 @@ class DashboardActionsMixin:
                         values["REAL"] = snapshot
                     except Exception as exc:
                         errors["REAL"] = (exc, stage)
+                        if (stage == "ACCOUNT_SNAPSHOT" and isinstance(exc, BrokerSnapshotError)
+                                and exc.endpoint == "GET /accounts/*/orders"):
+                            try:
+                                # Balance/positions were already read successfully before
+                                # orders failed. Reuse the client cache for display only;
+                                # skip reconciliation and leave the trading snapshot alone.
+                                display_values["REAL"] = (
+                                    self.real.get_balance() or {}, self.real.get_positions(), [],
+                                )
+                                errors["REAL"] = (exc, "ORDERS_SNAPSHOT")
+                            except Exception as read_error:
+                                errors["REAL"] = (read_error, "ACCOUNT_SNAPSHOT")
             # A failed REAL refresh/reconciliation must not throw away PAPER's
             # successful balance (and vice versa). Failed books keep their
             # previous snapshot; we never fabricate a zero balance.
-            return values, external_sells, errors
+            return values, external_sells, errors, display_values
 
         future = self._io_executor.submit(work)
 
         def completed(result: Any) -> None:
             try:
-                values, external_sells, errors = result.result()
+                values, external_sells, errors, display_values = result.result()
             except Exception as exc:
                 values = {}
                 external_sells = []
                 errors = {"": (exc, "WORKER")}
+                display_values = {}
 
             def apply() -> None:
                 self._snapshot_busy = False
@@ -4191,12 +4208,14 @@ class DashboardActionsMixin:
                     failed_book = failed_book or str(self.mode.get() or "").upper()
                     detail = error_summary(error, secrets=secrets)
                     previous = faults.get(failed_book) or {}
-                    idle = failed_book == "REAL" and stage == "ACCOUNT_SNAPSHOT" and poll_seconds == IDLE_POLL_SECONDS
+                    idle = failed_book == "REAL" and stage in {"ACCOUNT_SNAPSHOT", "ORDERS_SNAPSHOT"} and poll_seconds == IDLE_POLL_SECONDS
                     faults[failed_book] = {
                         "since": previous.get("since", now), "detail": detail, "stage": stage,
                         "last_success_at": last_good.get(failed_book, 0.0),
                     }
-                    step = "đối soát giao dịch ngoài app" if stage == "RECONCILE" else "đọc tiền/vị thế/lệnh" if stage == "ACCOUNT_SNAPSHOT" else "luồng đồng bộ tài khoản"
+                    step = ("đọc danh sách lệnh (tiền/cổ đã đọc được)" if stage == "ORDERS_SNAPSHOT" else
+                            "đối soát giao dịch ngoài app" if stage == "RECONCILE" else
+                            "đọc tiền/vị thế/lệnh" if stage == "ACCOUNT_SNAPSHOT" else "luồng đồng bộ tài khoản")
                     summary = f"Lỗi {step}: {detail}"
                     if detail != previous.get("detail"):
                         self.logger.warning("[%s] Account refresh failed: %s", failed_book, summary)
@@ -4218,6 +4237,10 @@ class DashboardActionsMixin:
                         severity="WARNING" if idle else "ERROR",
                     )
                 self.snapshots.update(values)
+                account_display = getattr(self, "_account_display_snapshots", {})
+                self._account_display_snapshots = account_display
+                account_display.update(values)
+                account_display.update(display_values)
                 if "PAPER" in values:
                     self.histories["PAPER"] = list(values["PAPER"][2])
                 warning_keys = getattr(self, "_external_reconcile_warning_keys", set())
@@ -4258,9 +4281,15 @@ class DashboardActionsMixin:
 
     def _paint_account(self) -> None:
         mode = self.mode.get()
-        balance, positions, _orders = self.snapshots.get(mode, ({}, [], []))
+        balance, positions, _orders = displayed_account_snapshot(self, mode)
         money = account_money(balance, positions)
-        self.lbl_equity.configure(text=f"{money['value']:,.0f} ₫" if money["value"] is not None else "CHỜ TÀI KHOẢN")
+        fault = getattr(self, "_account_snapshot_faults", {}).get(mode) or {}
+        old_money = bool(fault and fault.get("stage") != "ORDERS_SNAPSHOT")
+        self.lbl_equity.configure(
+            text=f"{money['value']:,.0f} ₫" if money["value"] is not None else "CHỜ TÀI KHOẢN",
+            text_color=COL_GREEN if money["value"] is not None and not old_money else COL_WARN,
+        )
+        fit_label_text(self.lbl_equity, base_font=("Segoe UI", 30, "bold"), minimum_size=14)
         title = getattr(self, "lbl_equity_title", None)
         if title is not None:
             title.configure(text="TỔNG TÀI SẢN / NAV" if money["kind"] == "NAV" else
@@ -4296,8 +4325,15 @@ class DashboardActionsMixin:
         self.lbl_account.configure(text=f"ID: {self.account_id}  ·  {mode}  ·  TIỀN KHẢ DỤNG {cash_text}")
 
     def _account_money_hint(self) -> str:
-        balance, positions, _orders = self.snapshots.get(self.mode.get(), ({}, [], []))
-        return account_money_hint(account_money(balance, positions))
+        mode = self.mode.get()
+        balance, positions, _orders = displayed_account_snapshot(self, mode)
+        text = account_money_hint(account_money(balance, positions))
+        fault = getattr(self, "_account_snapshot_faults", {}).get(mode) or {}
+        if fault.get("stage") == "ORDERS_SNAPSHOT":
+            text += "\nTiền/cổ đã đọc được; danh sách lệnh chưa đọc được, chưa hoàn tất đối soát."
+        elif fault:
+            text += "\nĐồng bộ đang lỗi; dữ liệu đang hiển thị là lần đọc trước đó."
+        return text
 
     def _reset_daily_stats(self) -> None:
         mode = self.mode.get()

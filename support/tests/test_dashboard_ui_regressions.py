@@ -665,6 +665,30 @@ def _running_subject(tree, mode, items=(), positions=(), broker_orders=(), cycle
     return subject
 
 
+def test_running_table_shows_confirmed_tplus_holdings_when_orders_api_is_unavailable(ui_root):
+    from tkinter import ttk
+    from viking_v2.models import TradeCycle
+    tree = ttk.Treeview(ui_root, show="headings")
+    cycle = TradeCycle("HDB-REAL", "HDB", execution_mode="REAL")
+    cycle.record_buy_fill(600, 22.65, 0)
+    subject = _running_subject(tree, "REAL", cycles=[cycle])
+    position = {"symbol": "HDB", "openQuantity": 600, "tradeQuantity": 0, "price_unit": "VND",
+                "costPrice": 22650, "marketPrice": 22600}
+    subject._account_display_snapshots = {"REAL": ({"netAssetValue": 49951941}, [position], [])}
+    try:
+        subject._render_tables({})
+        iid, = tree.get_children()
+        values = tree.item(iid, "values")
+        assert "HDB" in values[RUNNING_COLUMNS.index("Order")]
+        assert "600" in values[RUNNING_COLUMNS.index("Order")]
+        assert "BÁN ĐƯỢC 0 CP" in values[RUNNING_COLUMNS.index("Status")]
+        assert "CHỜ VỀ 600 CP" in values[RUNNING_COLUMNS.index("Status")]
+        assert subject.snapshots["REAL"] == ({}, [], [])
+        assert cycle.open_quantity == 600
+    finally:
+        tree.destroy()
+
+
 @pytest.mark.parametrize("mode", ["REAL", "PAPER"])
 def test_unchanged_rows_do_not_rebuild_table_or_reset_operator_state(ui_root, monkeypatch, mode):
     from tkinter import ttk

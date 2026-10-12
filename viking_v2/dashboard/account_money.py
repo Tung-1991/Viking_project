@@ -7,6 +7,13 @@ from typing import Any
 from ..trading.portfolio import account_price, position_quantity
 
 
+def displayed_account_snapshot(view: Any, mode: str) -> tuple[dict, list, list]:
+    """Display-only partial reads must never replace a trading snapshot."""
+    return getattr(view, "_account_display_snapshots", {}).get(
+        mode, view.snapshots.get(mode, ({}, [], [])),
+    )
+
+
 def _value(body: dict, *keys: str) -> float | None:
     for key in keys:
         raw = body.get(key)
