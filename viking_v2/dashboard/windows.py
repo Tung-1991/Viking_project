@@ -513,7 +513,7 @@ class _StableToplevel(ctk.CTkToplevel):
     _deactivate_windows_window_header_manipulation = True
 
 
-class _HistoryTabview(ctk.CTkTabview):
+class StableTabview(ctk.CTkTabview):
     def _grid_forget_all_tabs(self, exclude_name=None):
         # CTk queues this 100 ms after set(). A stale callback must not hide
         # the new current tab if the user switches again before it executes.
@@ -531,6 +531,8 @@ def _window(parent: ctk.CTk, title: str, geometry: str = "560x420") -> ctk.CTkTo
 
 def minimize_popup(popup: Any) -> bool:
     """Minimize a persistent popup without destroying or withdrawing it."""
+    if getattr(popup, "_has_been_shown", True) is False:
+        return False
     top = getattr(popup, "top", None)
     if top is None or not top.winfo_exists():
         return False
@@ -1027,7 +1029,7 @@ class HistoryPopup:
             hover_color=PALETTE["BLUE_HOVER"], command=self.refresh,
         ).grid(row=0, column=1, rowspan=2, sticky="e")
 
-        self.tabs = _HistoryTabview(
+        self.tabs = StableTabview(
             self.top, fg_color=PALETTE["PANEL"], border_width=1,
             command=self._history_tab_changed,
             border_color=PALETTE["BORDER"],

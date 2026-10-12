@@ -804,6 +804,7 @@ class DashboardTablesMixin:
 
     def close(self) -> None:
         self.running = False
+        self._cancel_rule_preload()
         self.execution.stopping = True
         if getattr(self, "telegram", None):
             self.telegram.cancel_pending_buys()

@@ -1138,20 +1138,60 @@ class DashboardActionsMixin:
     def _rule_settings(self) -> None:
         if getattr(self, "_rule_popup_opening", False):
             return
+        self._rule_popup_opening = True
+        try:
+            self._cancel_rule_preload()
+            popup = self._rule_settings_popup
+            if popup and popup.top.winfo_exists():
+                if not popup._has_been_shown and not popup.matches_settings(self.settings):
+                    popup._close()
+                else:
+                    # History and Connection may replace the settings object.
+                    # Retain an opened form's draft while saving into current settings.
+                    popup.settings = self.settings
+                    popup.show()
+                    return
+            self._rule_settings_popup = self._create_rule_popup()
+        finally:
+            self._rule_popup_opening = False
+
+    def _create_rule_popup(self, *, show: bool = True) -> RuleSettingsPopup:
+        return RuleSettingsPopup(
+            self, self.settings, self.account_id, self._settings_saved,
+            lambda visible: self._set_tool_popup_state("RULE", visible),
+            trade_state=self.trade_state, defer_build=True,
+            show_on_create=show, on_closed=self._schedule_rule_preload,
+        )
+
+    def _schedule_rule_preload(self) -> None:
+        if not self.running or getattr(self, "_rule_popup_opening", False):
+            return
         popup = self._rule_settings_popup
         if popup and popup.top.winfo_exists():
-            popup.show()
+            return
+        if getattr(self, "_rule_preload_after", None) is None:
+            # Let the main window and startup services settle first. All widget
+            # work remains on Tk's thread, split into the existing small stages.
+            self._rule_preload_after = self.after(2000, self._preload_rule_settings)
+
+    def _cancel_rule_preload(self) -> None:
+        handle = getattr(self, "_rule_preload_after", None)
+        if handle is not None:
+            self.after_cancel(handle)
+            self._rule_preload_after = None
+
+    def _preload_rule_settings(self) -> None:
+        self._rule_preload_after = None
+        if not self.running or getattr(self, "_rule_popup_opening", False):
+            return
+        popup = self._rule_settings_popup
+        if popup and popup.top.winfo_exists():
             return
         self._rule_popup_opening = True
         try:
-            self._rule_settings_popup = RuleSettingsPopup(
-                self,
-                self.settings,
-                self.account_id,
-                self._settings_saved,
-                lambda visible: self._set_tool_popup_state("RULE", visible),
-                trade_state=self.trade_state, defer_build=True,
-            )
+            self._rule_settings_popup = self._create_rule_popup(show=False)
+        except Exception:
+            self.logger.exception("RULE preload failed; opening RULE can retry")
         finally:
             self._rule_popup_opening = False
 

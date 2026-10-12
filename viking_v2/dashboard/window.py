@@ -133,6 +133,7 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         self._history_popup: HistoryPopup | None = None
         self._info_popup: InfoPopup | None = None
         self._rule_settings_popup: RuleSettingsPopup | None = None
+        self._rule_preload_after = None
         self._advanced_popup: ConnectionPopup | None = None
         self._backtest_popup: BacktestPopup | None = None
         self._telegram_signature: tuple[Any, ...] | None = None
@@ -147,6 +148,7 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         self.after(250, self._poll_runtime)
         self.after(600, self._process_orders)
         self.after(800, self._refresh_snapshots)
+        self._schedule_rule_preload()
 
     def _build_window(self) -> None:
         self.title(window_title("CKCS — Static Rule"))

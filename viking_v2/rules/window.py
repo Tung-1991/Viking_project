@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import datetime
+import sys
 import tkinter as tk
 from tkinter import messagebox
 from typing import Any, Callable
@@ -10,12 +12,19 @@ import customtkinter as ctk
 
 from ..config import AppSettings, account_root, load_settings, save_settings
 from ..branding import APP_NAME, window_title
-from ..dashboard.windows import FONT_KEY, FONT_VALUE, PALETTE, _HoverHint, _window
+from ..dashboard.windows import FONT_KEY, FONT_VALUE, PALETTE, StableTabview, _HoverHint, _window
 from .business import StaticRuleParameters
 from ..trading.market import validate_buy_window
 
 
 class RuleSettingsPopup:
+    _FORM_SETTINGS = (
+        "rule_parameters", "signal_mode", "realtime_indicator_interval", "paper_mode",
+        "market_phase_override_enabled", "market_phase_override", "market_phase_override_exposure_pct",
+        "manual_sell_pause_minutes", "bot_order_mode", "allow_ato", "allow_atc", "skip_order_popups",
+        "bot_em_modes", "bot_sl_enabled", "buy_fee_pct", "sell_fee_pct", "sell_tax_pct",
+        "sell_wait_policy", "corporate_actions", "priority_symbols",
+    )
     BG = "#181B20"
     SURFACE = "#22262D"
     BORDER = "#30353D"
@@ -34,11 +43,17 @@ class RuleSettingsPopup:
         on_saved: Callable[[], None],
         on_visibility_changed: Callable[[bool], None] | None = None,
         *, trade_state: Any = None, defer_build: bool = False,
+        show_on_create: bool = True, on_closed: Callable[[], None] | None = None,
     ):
         self.parent = parent
         self.settings, self.account_id, self.on_saved = settings, account_id, on_saved
         self.on_visibility_changed = on_visibility_changed
         self.trade_state = trade_state
+        self.on_closed = on_closed
+        self._has_been_shown = False
+        self._hidden_layout_attributes = None
+        self._build_failed = False
+        self._form_settings = self._settings_values(settings)
         self.params = StaticRuleParameters.from_dict(settings.rule_parameters)
         self._setting_traces = []
         self._block_executor = None
@@ -70,7 +85,7 @@ class RuleSettingsPopup:
         self.top.protocol("WM_DELETE_WINDOW", self._close)
         self.top.bind("<Escape>", lambda _event: self.hide(), add="+")
 
-        self.tabs = ctk.CTkTabview(
+        self.tabs = StableTabview(
             self.top, fg_color=self.BG, border_width=1, border_color=self.BORDER,
             segmented_button_selected_color=self.BLUE,
             segmented_button_selected_hover_color="#245C92",
@@ -115,7 +130,29 @@ class RuleSettingsPopup:
             state="disabled" if defer_build else "normal",
         )
         self.save_button.pack(side="right")
-        self.show()
+        if show_on_create:
+            self.show()
+        elif defer_build and sys.platform == "win32":
+            # A withdrawn Tk window keeps unrealized geometry: its first map
+            # otherwise lays out hundreds of controls in one blocking burst.
+            # Lay out the stages in an invisible, disabled tool window instead.
+            # Disabled prevents focus/input; toolwindow keeps it off the taskbar.
+            self._hidden_layout_attributes = {
+                key: self.top.attributes(key) for key in ("-alpha", "-disabled", "-toolwindow")
+            }
+            self.top.attributes("-alpha", 0.0)
+            self.top.attributes("-disabled", True)
+            self.top.attributes("-toolwindow", True)
+            self.top.deiconify()
+            # Prime each page's geometry too, so switching to E/M or another
+            # phase does not pay its initial layout cost after the user opens.
+            phase_names = list(self.phase_tabs._tab_dict)
+            self._build_steps.extend(
+                [lambda name=name: self._prime_page(self.phase_tabs, name) for name in phase_names[1:]]
+                + [lambda: self._prime_page(self.tabs, "E/M"), lambda: self._prime_page(self.tabs, "THỰC THI"),
+                   lambda: self._prime_page(self.tabs, "NGHIỆP VỤ"),
+                   lambda: self._prime_page(self.phase_tabs, phase_names[0])]
+            )
         if defer_build:
             self._build_after = self.top.after(50, self._build_next)
 
@@ -126,6 +163,7 @@ class RuleSettingsPopup:
         try:
             self._build_steps.pop(0)()
         except Exception:
+            self._build_failed = True
             self._build_steps.clear()
             self.status.configure(text="KHÔNG TẢI ĐƯỢC RULE · ĐÓNG VÀ MỞ LẠI", text_color="#EF4444")
             logger = getattr(self.parent, "logger", None)
@@ -144,7 +182,30 @@ class RuleSettingsPopup:
             self.save_button.configure(state="normal")
             self.status.configure(text="Các thay đổi được daemon nhận tự động sau khi lưu.")
 
+    def _prime_page(self, tabs, name: str) -> None:
+        if not self._has_been_shown:
+            tabs.set(name)
+
+    def _finish_hidden_layout(self) -> None:
+        attributes = self._hidden_layout_attributes
+        if attributes is not None:
+            self.tabs.set("NGHIỆP VỤ")
+            self.phase_tabs.set(next(iter(self.phase_tabs._tab_dict)))
+            # Restore visibility last, after input and normal window chrome.
+            for key in ("-toolwindow", "-disabled", "-alpha"):
+                self.top.attributes(key, attributes[key])
+            self._hidden_layout_attributes = None
+
+    @classmethod
+    def _settings_values(cls, settings: AppSettings) -> dict:
+        return deepcopy({key: getattr(settings, key) for key in cls._FORM_SETTINGS})
+
+    def matches_settings(self, settings: AppSettings) -> bool:
+        return not self._build_failed and self._form_settings == self._settings_values(settings)
+
     def show(self) -> None:
+        self._finish_hidden_layout()
+        self._has_been_shown = True
         if self.trade_state and hasattr(self, "block_book"):
             self._refresh_blocks()
         self.top.deiconify()
@@ -177,10 +238,12 @@ class RuleSettingsPopup:
             variable.trace_remove("write", handle)
         self._preview_traces = []
         self._setting_traces = []
-        if self.on_visibility_changed:
+        if self.on_visibility_changed and self._has_been_shown:
             self.on_visibility_changed(False)
         if self.top.winfo_exists():
             self.top.destroy()
+        if self.on_closed:
+            self.on_closed()
 
     @staticmethod
     def _tab_font(tabview: ctk.CTkTabview, size: int) -> None:
@@ -194,7 +257,7 @@ class RuleSettingsPopup:
     def _business_tab(self, frame: ctk.CTkFrame, *, populate: bool = True) -> None:
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(0, weight=1)
-        phases = ctk.CTkTabview(
+        phases = StableTabview(
             frame, fg_color="#15181D",
             segmented_button_selected_color=self.GREEN,
             segmented_button_selected_hover_color="#16A34A",
@@ -1243,6 +1306,8 @@ class RuleSettingsPopup:
         return value
 
     def _refresh_blocks(self) -> None:
+        if not self._has_been_shown:
+            return
         if self._block_future is not None:
             self._block_refresh_again = True
             return
@@ -1317,7 +1382,7 @@ class RuleSettingsPopup:
         )
 
     def save(self) -> None:
-        if self._building:
+        if self._building or not self._has_been_shown:
             return
         try:
             ma_period = int(self._number(self.ma_period, "MA dài hạn"))
@@ -1532,6 +1597,7 @@ class RuleSettingsPopup:
                             "signal_trace_start", "signal_trace_end"):
                     setattr(self.settings, key, getattr(recording, key))
             save_settings(self.settings, self.account_id)
+            self._form_settings = self._settings_values(self.settings)
             self._saved_execution_preview = self._execution_preview_values()
             self._saved_execution_flags = {"SL": self.bot_sl_enabled.get(), **{key: value.get() for key, value in self.bot_em_vars.items()}}
             self._refresh_execution_preview()

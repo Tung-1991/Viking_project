@@ -184,7 +184,14 @@ def test_copy_and_details_use_selected_observation_and_do_not_include_secrets(ui
 
 
 @pytest.mark.parametrize("scaling", [1.0, 1.5])
-def test_single_settings_button_layout_and_small_form_fit_at_remote_scaling(ui_root, tmp_path, scaling):
+def test_single_settings_button_layout_and_small_form_fit_at_remote_scaling(ui_root, tmp_path, scaling, monkeypatch):
+    # The mapped layout probe must never wait for a native modal dialog.
+    # Collect any unexpected dialogs so a callback still fails this test.
+    dialogs = []
+    for name in ("showinfo", "showwarning", "showerror"):
+        monkeypatch.setattr(f"viking_v2.dashboard.windows.messagebox.{name}",
+                            lambda *args, **kwargs: dialogs.append((args, kwargs)))
+    monkeypatch.setattr("viking_v2.dashboard.windows.filedialog.asksaveasfilename", lambda **_kw: "")
     ctk.set_widget_scaling(scaling)
     configured = AppSettings()
     before = configured.to_dict()
@@ -228,6 +235,7 @@ def test_single_settings_button_layout_and_small_form_fit_at_remote_scaling(ui_r
         popup.top.geometry("1600x820+0+0")
         popup.signal_tree.item("symbol:2026-10-09:HDB", open=True)
         _capture_ui(ui_root, popup.top, f"signal-history-{scaling}")
+        assert not dialogs, dialogs
     finally:
         if hasattr(popup, "recording_popup") and popup.recording_popup.top.winfo_exists():
             popup.recording_popup.top.destroy()

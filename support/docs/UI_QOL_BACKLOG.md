@@ -1,8 +1,8 @@
-# QOL giao diện để làm sau
+# QOL giao diện
 
 ## RULE: nạp sẵn popup trước lần mở đầu tiên
 
-Ghi nhận ngày 12/10/2026. Trạng thái: để làm sau, khi chuẩn bị bán sản phẩm.
+Ghi nhận ngày 12/10/2026. Trạng thái: đã triển khai nạp sẵn riêng popup RULE và kiểm thử offline.
 
 Mục tiêu: bấm RULE thấy các trường đã dựng, giảm hiện tượng khung xuất hiện rồi nội dung các tab tải lần lượt.
 
@@ -18,4 +18,4 @@ Các điểm cần xử lý khi triển khai:
 - Hủy callback khi đóng app; xử lý mở lại sau khi người dùng đóng hẳn popup.
 - Đo lần vẽ đầu tiên trên VM/RDP: dựng sẵn widget không bảo đảm toàn bộ chi phí vẽ khi hiện cửa sổ biến mất.
 
-Đánh giá: đáng làm để hoàn thiện trải nghiệm trước khi bán; ưu tiên thấp hiện tại vì tốc độ trên VM đã cải thiện rõ theo phản hồi người dùng. Chỉ tối ưu RULE trước, không mở rộng sang mọi popup trong cùng thay đổi.
+Đã thực hiện các điểm trên cho RULE; xem [kiểm chứng nạp sẵn RULE](RULE_PRELOAD_VERIFICATION_2026-10-12.md). Các popup khác giữ luồng hiện có.
