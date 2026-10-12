@@ -22,7 +22,7 @@ class RuleSettingsPopup:
         "rule_parameters", "signal_mode", "realtime_indicator_interval", "paper_mode",
         "market_phase_override_enabled", "market_phase_override", "market_phase_override_exposure_pct",
         "manual_sell_pause_minutes", "bot_order_mode", "allow_ato", "allow_atc", "skip_order_popups",
-        "bot_em_modes", "bot_sl_enabled", "buy_fee_pct", "sell_fee_pct", "sell_tax_pct",
+        "bot_em_modes", "bot_sl_enabled",
         "sell_wait_policy", "corporate_actions", "priority_symbols",
     )
     BG = "#181B20"
@@ -1116,20 +1116,10 @@ class RuleSettingsPopup:
             _HoverHint(label, lambda widget=label: "PREVIEW đọc bản nháp ở tab E/M; cần LƯU để áp dụng.\n" + widget.cget("text"))
             self.execution_preview[key] = label
 
-        costs = self._card(
-            body, "PHÍ VÀ THUẾ",
-            "Dùng cho hai việc: chừa sẵn tiền phí khi tính khối lượng mua, và tính lãi lỗ "
-            "cho tài khoản giấy. Mặc định là biểu phí DNSE.",
-            2, 0,
-        )
-        self.buy_fee = self._field(costs, "Phí mua (%)", self.settings.buy_fee_pct, "Mặc định 0.045% theo biểu phí DNSE.")
-        self.sell_fee = self._field(costs, "Phí bán (%)", self.settings.sell_fee_pct, "Mặc định 0.045% theo biểu phí DNSE.")
-        self.sell_tax = self._field(costs, "Thuế bán (%)", self.settings.sell_tax_pct, "0.1% theo luật, không đổi được ngoài đời.")
-
         settlement = self._card(
             body, "SELL CHỜ T+",
             "Áp dụng cho SL, TP, PROTECT và E khi cổ phiếu chưa về đủ để bán; T+2 chỉ sẵn sàng từ phiên chiều.",
-            2, 1,
+            2, 0, span=2,
         )
         self.sell_wait_policy = tk.StringVar(
             value="VẪN BÁN" if self.settings.sell_wait_policy == "KEEP" else "KIỂM TRA LẠI"
@@ -1581,9 +1571,6 @@ class RuleSettingsPopup:
             )
             self.settings.market_phase_override = self.market_phase_override.get()
             self.settings.market_phase_override_exposure_pct = override_exposure
-            self.settings.buy_fee_pct = min(5.0, self._nonnegative(self.buy_fee, "Phí mua"))
-            self.settings.sell_fee_pct = min(5.0, self._nonnegative(self.sell_fee, "Phí bán"))
-            self.settings.sell_tax_pct = min(5.0, self._nonnegative(self.sell_tax, "Thuế bán"))
             self.settings.sell_wait_policy = (
                 "KEEP" if self.sell_wait_policy.get() == "VẪN BÁN" else "RECHECK"
             )

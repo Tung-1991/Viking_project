@@ -59,6 +59,8 @@ def test_deferred_load_cannot_save_partial_settings_and_matches_full_constructor
         assert "ĐÃ LƯU" in deferred.status.cget("text")
         assert saved == [True]
         assert config.load_settings("BUILD_DEFERRED").to_dict() == config.load_settings("BUILD_SYNC").to_dict()
+        for name in ("buy_fee_pct", "sell_fee_pct", "sell_tax_pct"):
+            assert getattr(config.load_settings("BUILD_DEFERRED"), name) == getattr(initial, name)
         deferred.shared_rsi_period.set("13")
         deferred.save()
         assert config.load_settings("BUILD_DEFERRED").rule_parameters["rsi_period"] == 13

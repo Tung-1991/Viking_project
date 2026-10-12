@@ -41,7 +41,7 @@ RULE_BUTTON_PROBE = r'''
               os.environ.get("RULE_BUTTON_DPI"), round(time.monotonic() - started, 3),
               "max_input_gap", round(max(gaps), 3), flush=True)
         assert popup.save_button.cget("state") == "normal"
-        assert popup.buy_ema_fast.get() and popup.sell_ema_fast.get() and popup.buy_fee.get()
+        assert popup.buy_ema_fast.get() and popup.sell_ema_fast.get() and popup.sell_wait_policy.get()
         assert sum(isinstance(child, ctk.CTkToplevel) for child in app.winfo_children()) == window_count + 1
         app._rule_settings()
         assert app._rule_settings_popup is popup

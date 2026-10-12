@@ -45,7 +45,7 @@ PRELOAD_PROBE = r'''
         assert not popup._has_been_shown
         assert not read_calls and not focus_calls
         assert app.focus_get() is initial_focus
-        assert popup.buy_ema_fast.get() and popup.sell_ema_fast.get() and popup.buy_fee.get()
+        assert popup.buy_ema_fast.get() and popup.sell_ema_fast.get() and popup.sell_wait_policy.get()
         assert app.settings.to_dict() == settings_before
         assert app.bridge.read_config().to_dict() == runtime_before
         assert not app.queue.list_all()
