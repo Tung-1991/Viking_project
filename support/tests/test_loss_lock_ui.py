@@ -1,12 +1,23 @@
 """Native loss-lock controls, with isolated state and no broker/Telegram calls."""
 from __future__ import annotations
 
+import time
+import tkinter as tk
 import customtkinter as ctk
 import pytest
 
 from viking_v2.config import AppSettings, load_settings
 from viking_v2.rules.window import RuleSettingsPopup
 from viking_v2.trading.state import TradeStateStore
+
+
+def settle_blocks(rule):
+    deadline = time.monotonic() + 5
+    while rule._block_future is not None:
+        assert time.monotonic() < deadline, "Loss-lock display did not finish"
+        ready = tk.BooleanVar(master=rule.top, value=False)
+        rule.top.after(20, lambda: ready.set(True))
+        rule.top.wait_variable(ready)
 
 
 @pytest.fixture
@@ -25,6 +36,7 @@ def make_rule(ui_root, tmp_path):
         rule = RuleSettingsPopup(ui_root, settings, f"LOSS_UI_{sequence}", lambda: None,
                                  trade_state=trades)
         popups.append(rule)
+        settle_blocks(rule)
         return rule
 
     yield create
@@ -76,11 +88,13 @@ def test_empty_book_and_existing_manual_locks_remain_clear_in_timed_mode(make_ru
     monkeypatch.setattr("viking_v2.rules.window.messagebox.askyesno",
                         lambda *_a, **_kw: pytest.fail("Empty book must not prompt"))
     rule._unlock_block()
+    settle_blocks(rule)
 
     _block(trades, "FPT", "PAPER")
     _block(trades, "SSI", "PAPER")
     _block(trades, "MSN", "REAL")
     rule._refresh_blocks()
+    settle_blocks(rule)
     assert rule.block_symbol.cget("values") == ["FPT", "SSI"]
     assert rule.block_symbol.cget("state") == "normal"
     assert rule.block_unlock.cget("text") == "MỞ KHÓA MÃ"
@@ -88,6 +102,7 @@ def test_empty_book_and_existing_manual_locks_remain_clear_in_timed_mode(make_ru
     assert rule.loss_unlock_row.winfo_manager() == "pack"
     rule.block_symbol.set("SSI")
     rule._refresh_blocks()
+    settle_blocks(rule)
     assert rule.block_symbol.get() == "SSI"
     rule.loss_block.set(True)
     rule.loss_block.set(False)
@@ -95,12 +110,14 @@ def test_empty_book_and_existing_manual_locks_remain_clear_in_timed_mode(make_ru
 
     rule.block_book.set("REAL")
     rule._refresh_blocks()
+    settle_blocks(rule)
     assert rule.block_symbol.get() == "MSN"
     assert rule.block_symbol.cget("values") == ["MSN"]
 
     # The other book's locks keep its selector reachable when this book is empty.
     trades.unlock_loss_block("MSN", "REAL")
     rule._refresh_blocks()
+    settle_blocks(rule)
     assert rule.block_unlock.cget("state") == "disabled"
     assert rule.loss_unlock_row.winfo_manager() == "pack"
 
@@ -112,6 +129,7 @@ def test_timed_cooldown_is_not_mislabeled_as_manual_lock(make_rule):
     _block(trades, "FPT", "PAPER")
     assert trades.is_loss_locked("FPT", "PAPER", lock_mode="TIMED")
     rule._refresh_blocks()
+    settle_blocks(rule)
     assert rule.block_symbol.get() == "Không có mã"
     assert rule.block_unlock.cget("state") == "disabled"
     assert rule.loss_unlock_row.winfo_manager() == ""
@@ -139,13 +157,16 @@ def test_unlock_cancel_success_and_stale_book_selection(make_rule, monkeypatch):
     _block(trades, "FPT", "PAPER")
     _block(trades, "FPT", "REAL")
     rule._refresh_blocks()
+    settle_blocks(rule)
     monkeypatch.setattr("viking_v2.rules.window.messagebox.askyesno", lambda *_a, **_kw: False)
     rule._unlock_block()
+    settle_blocks(rule)
     assert trades.loss_blocks("PAPER") == ["FPT"]
     assert trades.loss_streak("FPT", "PAPER") == 3
 
     monkeypatch.setattr("viking_v2.rules.window.messagebox.askyesno", lambda *_a, **_kw: True)
     rule._unlock_block()
+    settle_blocks(rule)
     assert trades.loss_blocks("PAPER") == []
     assert trades.loss_streak("FPT", "PAPER") == 0
     assert trades.loss_blocks("REAL") == ["FPT"]
@@ -158,6 +179,7 @@ def test_unlock_cancel_success_and_stale_book_selection(make_rule, monkeypatch):
     monkeypatch.setattr("viking_v2.rules.window.messagebox.askyesno",
                         lambda *_a, **_kw: pytest.fail("Stale selection must not prompt"))
     rule._unlock_block()
+    settle_blocks(rule)
     assert trades.loss_blocks("REAL") == ["FPT"]
     assert rule.block_symbol.get() == "Không có mã"
 
@@ -167,6 +189,7 @@ def test_lock_removed_while_confirmation_open_does_not_claim_success(make_rule, 
     trades = rule.trade_state
     _block(trades, "FPT", "PAPER")
     rule._refresh_blocks()
+    settle_blocks(rule)
 
     def confirm(*_a, **_kw):
         trades.unlock_loss_block("FPT", "PAPER")
@@ -174,6 +197,7 @@ def test_lock_removed_while_confirmation_open_does_not_claim_success(make_rule, 
 
     monkeypatch.setattr("viking_v2.rules.window.messagebox.askyesno", confirm)
     rule._unlock_block()
+    settle_blocks(rule)
     assert rule.status.cget("text") == "KHÓA ĐÃ THAY ĐỔI · FPT · PAPER"
     assert rule.block_unlock.cget("state") == "disabled"
 

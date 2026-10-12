@@ -414,6 +414,14 @@ def test_minimal_setting_controls_construct_save_and_unlock_offline(tmp_path, ui
         trades = TradeStateStore(tmp_path / "state.json", loss_lock_policy=lambda: (3, "BLOCK"))
         _losses(trades, mode="PAPER")
         rule = RuleSettingsPopup(root, settings, "CONTROL_TEST", lambda: None, trade_state=trades)
+        import tkinter as tk
+        import time
+        deadline = time.monotonic() + 5
+        while rule._block_future is not None:
+            assert time.monotonic() < deadline
+            loaded = tk.BooleanVar(master=root, value=False)
+            root.after(20, lambda: loaded.set(True))
+            root.wait_variable(loaded)
         assert rule.block_symbol.get() == "FPT"
         rule.loss_block.set(True)
         rule.save()
@@ -434,6 +442,8 @@ def test_minimal_setting_controls_construct_save_and_unlock_offline(tmp_path, ui
         connection._configure_priority_symbol("FPT")
         root.update_idletasks()
     finally:
+        if "rule" in locals():
+            rule._close()
         for child in root.winfo_children():
             if child not in previous_children:
                 child.destroy()

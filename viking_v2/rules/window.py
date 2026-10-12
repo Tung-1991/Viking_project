@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import tkinter as tk
 from tkinter import messagebox
@@ -40,6 +41,10 @@ class RuleSettingsPopup:
         self.trade_state = trade_state
         self.params = StaticRuleParameters.from_dict(settings.rule_parameters)
         self._setting_traces = []
+        self._block_executor = None
+        self._block_future = None
+        self._block_poll_after = None
+        self._block_refresh_again = False
         # The strategy still computes one RSI series for BUY and E. Mirror the
         # setting in both cards so editing either place cannot silently diverge.
         self.shared_rsi_period = tk.StringVar(value=str(self.params.rsi_period))
@@ -106,6 +111,15 @@ class RuleSettingsPopup:
             self.on_visibility_changed(False)
 
     def _close(self) -> None:
+        if self._block_poll_after is not None:
+            self.top.after_cancel(self._block_poll_after)
+            self._block_poll_after = None
+        if self._block_future is not None:
+            self._block_future.cancel()
+            self._block_future = None
+        if self._block_executor is not None:
+            self._block_executor.shutdown(wait=False, cancel_futures=True)
+            self._block_executor = None
         for variable, handle in [*getattr(self, "_preview_traces", []), *self._setting_traces]:
             variable.trace_remove("write", handle)
         self._preview_traces = []
@@ -1173,7 +1187,48 @@ class RuleSettingsPopup:
         return value
 
     def _refresh_blocks(self) -> None:
-        values = self.trade_state.loss_blocks(self.block_book.get())
+        if self._block_future is not None:
+            self._block_refresh_again = True
+            return
+        # Account reads can wait for the ledger writer. Never hold Tk while
+        # fetching this display-only list; the worker does not touch widgets.
+        executor = getattr(self.parent, "_io_executor", None)
+        if executor is None:
+            if self._block_executor is None:
+                self._block_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="rule-locks")
+            executor = self._block_executor
+        self.block_symbol.configure(state="disabled")
+        self.block_unlock.configure(state="disabled", text="ĐANG ĐỌC KHÓA LỖ")
+        state = self.trade_state
+        self._block_future = executor.submit(lambda: {mode: state.loss_blocks(mode) for mode in ("REAL", "PAPER")})
+        self._block_poll_after = self.top.after(30, self._poll_blocks)
+
+    def _poll_blocks(self) -> None:
+        self._block_poll_after = None
+        future = self._block_future
+        if future is None:
+            return
+        if not future.done():
+            self._block_poll_after = self.top.after(30, self._poll_blocks)
+            return
+        self._block_future = None
+        try:
+            snapshot = future.result()
+        except Exception:
+            # A failed read must stay distinguishable from an empty lock list.
+            self.block_symbol.configure(state="disabled")
+            self.block_unlock.configure(state="disabled", text="KHÔNG ĐỌC ĐƯỢC KHÓA")
+            self.loss_unlock_row.pack(fill="x", padx=12, pady=6)
+        else:
+            self._render_blocks(snapshot)
+        if self._block_refresh_again:
+            self._block_refresh_again = False
+            self._refresh_blocks()
+
+    def _render_blocks(self, snapshot: dict[str, list[str]]) -> None:
+        # Both books were read by the same job. Use the current selection even
+        # if the operator switched REAL/PAPER while that job was waiting.
+        values = snapshot[self.block_book.get()]
         self.block_symbol.configure(values=values or ["Không có mã"], state="normal" if values else "disabled")
         if self.block_symbol.get() not in values:
             self.block_symbol.set(values[0] if values else "Không có mã")
@@ -1183,7 +1238,7 @@ class RuleSettingsPopup:
         )
         # Only show the book/symbol selector when there is a permanent lock
         # to manage. Keep both books reachable even if the selected one is empty.
-        if self.trade_state.loss_blocks("REAL") or self.trade_state.loss_blocks("PAPER"):
+        if snapshot["REAL"] or snapshot["PAPER"]:
             self.loss_unlock_row.pack(fill="x", padx=12, pady=6)
         else:
             self.loss_unlock_row.pack_forget()

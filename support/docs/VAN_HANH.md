@@ -161,6 +161,9 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   kiểm tra mỗi vòng như trước. Mở popup để Tk xử lý layout ở vòng sự kiện bình thường,
   tránh ép vẽ lại các cửa sổ khác ngay trong lúc dựng popup. Lần mở đầu vẫn phải tạo widget;
   mở lại popup còn tồn tại dùng cùng cửa sổ đã tạo.
+- RULE đọc danh sách khóa lỗ ở nền. Trong lúc chờ DB, nút mở khóa bị vô hiệu hóa
+  và hiện “ĐANG ĐỌC KHÓA LỖ”; đọc lỗi hiện “KHÔNG ĐỌC ĐƯỢC KHÓA”, không coi là không có khóa.
+  Việc tính rule và ghi/mở khóa trong ledger giữ nguyên cơ chế hiện có.
 - Nếu muốn giao diện có cùng độ lớn, dùng cùng Windows Scale và độ phân giải cho console/remote;
   100% là lựa chọn dễ đối chiếu. Đổi DNS không xử lý được vòng vẽ UI.
 - Khi app báo Not responding, ghi lại thời điểm/nút vừa bấm và các dòng cuối của log UI;
