@@ -155,6 +155,9 @@ def test_preset_details_are_reviewed_before_confirmation_without_writes(workspac
         assert "[TIN HIEU] Gui ngay" in review and "khong doi gio mua" in review
         assert "BUY gui ngay (co the chon GOM TIN trong app)" in review
         assert "gian 60 phut/ma/so" in review and "[HE THONG] Gian canh bao 30 phut" in review
+        assert "[TRACE] ON, 2 phut/lan tu 14:00 den 14:30; gom ca moc cuoi" in review
+        assert "MSN, CTS, HDB, IDC: 16 mau/ma/so, 64 mau/4 ma/so; ke ca KHONG BUY" in review
+        assert "App chay suot khung gio" in review and "LAM MOI" in review
         assert "local-chat-only" not in review and "LOCAL_TOKEN_KEY" not in review
         assert "[y/N]" in prompt
         assert (root / "settings.json").read_bytes() == original
@@ -306,3 +309,74 @@ def test_portable_preset_contains_no_secrets_or_runtime_fields():
     assert set(raw) == tool.PRESET_FIELDS
     assert not any(word in tool.PRESET_PATH.read_text(encoding="utf-8").lower()
                    for word in ("token", "api_key", "secret", "chat_id"))
+
+
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+@pytest.mark.parametrize("bot_on", [False, True])
+def test_actual_va_preset_captures_four_symbols_at_all_sixteen_slots_without_buy(
+    workspace, ui_root, tmp_path, monkeypatch, mode, bot_on,
+):
+    from copy import deepcopy
+    from datetime import datetime, timedelta
+    from openpyxl import load_workbook
+    from viking_v2.dashboard.windows import HistoryPopup
+    from viking_v2.services.indicator_comparison import DNSEIndicatorNormalizer
+    from viking_v2.services.signal_trace import SignalTraceStore
+    from viking_v2.trading.market import VN_TZ
+    from support.tests.test_signal_trace import status
+
+    root, _old, _env = workspace
+    tool.apply_preset("PARTNER")
+    configured = config.load_settings("PARTNER")
+    assert configured.watchlist == ["MSN", "CTS", "HDB", "IDC"]
+    assert configured.priority_symbols == configured.watchlist
+    store = SignalTraceStore(tmp_path / "trace.sqlite3")
+    start = datetime(2026, 10, 12, 14, 0, 2, tzinfo=VN_TZ)
+    settings_before = (root / "settings.json").read_bytes()
+    for index in range(16):
+        observed = start + timedelta(minutes=index * 2)
+        source = status(observed, mode=mode, signal="", rsi=65)
+        template = source["decisions_by_mode"][mode]["IDC"]
+        source["bot_enabled"] = bot_on
+        source["active_symbols"] = configured.watchlist
+        source["decisions_by_mode"][mode] = {
+            symbol: {**deepcopy(template), "symbol": symbol} for symbol in configured.watchlist
+        }
+        source["ticks"] = {
+            symbol: {"symbol": symbol, "price": 35.2, "source": "WS", "timestamp": observed.timestamp()}
+            for symbol in configured.watchlist
+        }
+        before = deepcopy(source)
+        assert store.capture(source, configured, active_mode=mode, now=observed) == 4
+        assert SignalTraceStore(store.path).capture(source, configured, active_mode=mode, now=observed) == 0
+        assert source == before
+    rows = store.read()
+    assert len(rows) == 64 and all(row["bot_on"] is bot_on for row in rows)
+    assert all(row["rule_action"] == "WAIT" and row["entry"] is False for row in rows)
+    expected = {(start + timedelta(minutes=index * 2)).replace(second=0).isoformat() for index in range(16)}
+    for symbol in configured.watchlist:
+        assert {row["scheduled_at"] for row in rows if row["symbol"] == symbol} == expected
+    assert (root / "settings.json").read_bytes() == settings_before
+    assert (root / "pending_orders.json").read_bytes() == b"existing runtime must stay identical"
+    popup = HistoryPopup(
+        ui_root, lambda _mode: [], signals_provider=lambda: [], trace_store=store,
+        indicator_normalizer=DNSEIndicatorNormalizer(tmp_path / "market_bars.json"),
+    )
+    try:
+        tree = popup.signal_tree
+        assert len(tree.get_children("day:2026-10-12")) == 4
+        assert "0 sự kiện · 64 mẫu" in tree.item("day:2026-10-12", "text")
+        for symbol in configured.watchlist:
+            leaves = tree.get_children(f"symbol:2026-10-12:{symbol}")
+            assert len(leaves) == 16
+            assert all(tree.set(leaf, "display_signal") == "ĐỊNH KỲ" for leaf in leaves)
+        export_path = tmp_path / "va-trace.xlsx"
+        monkeypatch.setattr("viking_v2.dashboard.windows.filedialog.asksaveasfilename", lambda **_kw: str(export_path))
+        popup._export_signals()
+        workbook = load_workbook(export_path)
+        try:
+            assert workbook["TRACE"].max_row == workbook["DNSE GỐC"].max_row == 65
+        finally:
+            workbook.close()
+    finally:
+        popup.close()

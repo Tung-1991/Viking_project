@@ -127,7 +127,16 @@ def main() -> int:
         print(f"[HE THONG] Gian canh bao {settings.telegram_cooldown_minutes['system']} phut.")
         print("[PROTECT] Bat tin cham muc; khong thay doi cong tac bao ve hay AUTO/ALERT.")
         print("[ENTRY] Bat EMA vua cat len + RSI phien truoc; khong ep mua khi EMA da o tren.")
-        print("[TRACE] ON, 2 phut/lan tu 14:00 den 14:30; lich su -> TIN HIEU -> GHI TIN HIEU; mau nam chung tung ma.")
+        trace_start = datetime.strptime(settings.signal_trace_start, "%H:%M")
+        trace_end = datetime.strptime(settings.signal_trace_end, "%H:%M")
+        samples_per_symbol = int((trace_end - trace_start).total_seconds() //
+                                 (settings.signal_trace_interval_minutes * 60)) + 1
+        print(f"[TRACE] ON, {settings.signal_trace_interval_minutes} phut/lan tu "
+              f"{settings.signal_trace_start} den {settings.signal_trace_end}; gom ca moc cuoi.")
+        print(f"[TRACE] {', '.join(settings.watchlist)}: {samples_per_symbol} mau/ma/so, "
+              f"{samples_per_symbol * len(settings.watchlist)} mau/{len(settings.watchlist)} ma/so; ke ca KHONG BUY.")
+        print("[TRACE] App chay suot khung gio; LICH SU > TIN HIEU > LAM MOI > Ngay > Ma > DINH KY. "
+              "Khong bu moc bo lo, khong gui Telegram.")
         print("[GIU] API, token, chat ID, cong tac Telegram tong, cac gian tin khac, chu ky EMA/RSI, SL/PROTECT/TP, gio mua va giao dich.")
         print(f"[GIO MUA] {'Tu ' + str(settings.rule_parameters['buy_window_start']) if settings.rule_parameters['buy_window_enabled'] else 'Trong phien, theo tin hieu'}")
         if not args.yes and input("Nap vao dung tai khoan nay? [y/N]: ").strip().lower() != "y":

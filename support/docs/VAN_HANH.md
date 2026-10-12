@@ -43,6 +43,11 @@ Telegram tổng/token/chat, EMA/RSI, giờ mua, SL/TP/PROTECT của máy đó; b
 Preset bật cả 9 loại tin Telegram, BUY gửi ngay, BUY kỹ thuật/MẤT BUY giãn 60 phút, hệ thống 30 phút.
 Không tự bật công tắc Telegram tổng nếu máy đang OFF; các khoảng giãn khác giữ lựa chọn tại máy.
 Backup setting cũ nằm cạnh `settings.json` (`settings.before-va-*.bak`), không lên Git.
+Preset bật **TRACE ON, 14:00–14:30, mỗi 2 phút** cho **MSN / CTS / HDB / IDC**.
+Có cả mốc 14:30: **16 mẫu/mã/sổ, 64 mẫu cho bốn mã mỗi sổ**, kể cả không BUY.
+App phải chạy suốt khung giờ; mở muộn không bù mốc đã bỏ lỡ. Xem ở
+**LỊCH SỬ → TÍN HIỆU → LÀM MỚI → Ngày → Mã → ĐỊNH KỲ**.
+Ghi chú preset: [VA — lịch ghi bốn mã](../presets/README.md).
 RULE → P1 bật OVERRIDE, CP **100%**; tối đa mã BOT **4**.
 KẾT NỐI → MÃ CK → VỐN RIÊNG ON, tổng **50 triệu**, ⚙ từng mã:
 
