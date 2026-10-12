@@ -153,6 +153,15 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   E AUTO không gửi tin E ALERT; khi bán hết có tin BOT đã đóng. Telegram cần bật tổng, token/chat đúng.
   Cập nhật Git giữ các lựa chọn OFF đã lưu; nạp lại preset VA là thao tác chủ động bật cả 9 loại tin.
 
+## UI khi vào lại máy ảo / remote
+
+- Windows trong VM có DPI/Scale riêng. Đổi giữa console và remote có thể đổi độ phóng UI.
+  Bản sửa DPI giữ kích thước logic, gom callback resize và tránh vẽ lồng nhau ở scrollbar/menu.
+- Nếu muốn giao diện có cùng độ lớn, dùng cùng Windows Scale và độ phân giải cho console/remote;
+  100% là lựa chọn dễ đối chiếu. Đổi DNS không xử lý được vòng vẽ UI.
+- Khi app báo Not responding, ghi lại thời điểm/nút vừa bấm và các dòng cuối của log UI;
+  lỗi DNS và lỗi UI cần đối chiếu riêng. Kiểm thử đổi DPI không thay thế quan sát phiên remote thực tế.
+
 ## Lịch sử tín hiệu / đối chiếu
 
 - TÍN HIỆU xổ **ngày → mã → giờ ghi nhận**; giữ sổ REAL/PAPER, ưu tiên và slot lúc ghi.

@@ -2894,7 +2894,7 @@ class DashboardPanelsMixin:
                     panel.configure(height=target_height)
                     canvas.yview_moveto(0)
                     # Recheck after Tk has recalculated the canvas scrollregion.
-                    self.after_idle(self._sync_preview_scrollbar)
+                    self.after(25, self._sync_preview_scrollbar)
                     return
             bounds = canvas.bbox("all")
             content_height = int(bounds[3] - bounds[1]) if bounds else 0

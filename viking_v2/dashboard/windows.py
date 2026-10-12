@@ -21,6 +21,9 @@ from ..services.signal_history import (
 )
 from ..rules.observations import ema_cross_caption
 from ..trading.market import VN_TZ
+from .ui_compat import install_dpi_resize_guard
+
+install_dpi_resize_guard()
 
 # One palette for every popup, so the app cannot drift into four colour schemes.
 PALETTE = {

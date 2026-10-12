@@ -188,5 +188,16 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         self.bind("<Configure>", self._on_dashboard_resize, add="+")
 
     def _on_dashboard_resize(self, _event=None) -> None:
-        self.after_idle(self._sync_left_scrollbar)
-        self.after_idle(self._sync_preview_scrollbar)
+        # DPI updates emit Configure for many descendants. One deferred pass
+        # lets layout settle without creating thousands of recursive idle jobs.
+        if not self.running or getattr(self, "_dashboard_resize_after", None) is not None:
+            return
+        self._dashboard_resize_after = self.after(25, self._flush_dashboard_resize)
+
+    def _flush_dashboard_resize(self) -> None:
+        try:
+            if self.running:
+                self._sync_left_scrollbar()
+                self._sync_preview_scrollbar()
+        finally:
+            self._dashboard_resize_after = None
