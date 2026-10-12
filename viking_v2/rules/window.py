@@ -43,7 +43,6 @@ class RuleSettingsPopup:
         # The strategy still computes one RSI series for BUY and E. Mirror the
         # setting in both cards so editing either place cannot silently diverge.
         self.shared_rsi_period = tk.StringVar(value=str(self.params.rsi_period))
-        parent.update_idletasks()
         screen_w = max(1100, int(parent.winfo_screenwidth() or 1100))
         screen_h = max(700, int(parent.winfo_screenheight() or 700))
         width, height = min(1080, screen_w - 60), min(720, screen_h - 90)

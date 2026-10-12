@@ -29,6 +29,7 @@ from .windows import (
     FONT_KEY,
     FONT_MONO_VALUE,
     FONT_VALUE,
+    StatusLabel,
     _HoverHint,
     fit_entry_text,
     fit_label_text,
@@ -886,14 +887,14 @@ class DashboardPanelsMixin:
         order_header.grid_columnconfigure(0, weight=0, minsize=230)
         order_header.grid_columnconfigure(1, weight=1)
         order_header.grid_columnconfigure(2, weight=0)
-        self.preview_order_title = ctk.CTkLabel(
+        self.preview_order_title = StatusLabel(
             order_header, text="--- · PAPER · BUY · MARKET",
             width=230, height=22, font=("Segoe UI", 12, "bold"), text_color=COL_TITLE, anchor="w",
         )
         self.preview_order_title.grid(
             row=0, column=0, sticky="ew", padx=(2, 5)
         )
-        self.preview_status_reason = ctk.CTkLabel(
+        self.preview_status_reason = StatusLabel(
             order_header, text="--", width=1, height=22, font=("Segoe UI", 11),
             text_color=COL_PREVIEW_TEXT, fg_color=COL_SURFACE_2, corner_radius=5,
             anchor="w", justify="left",
@@ -902,7 +903,7 @@ class DashboardPanelsMixin:
             row=0, column=1, sticky="ew", padx=5
         )
         _HoverHint(self.preview_status_reason, self._order_status_hint, placement="inside")
-        self.preview_status_badge = ctk.CTkLabel(
+        self.preview_status_badge = StatusLabel(
             order_header, text="CHỜ", width=82, height=24,
             font=("Segoe UI", 10, "bold"), fg_color="#4A3B16",
             text_color="#FFF3B0", corner_radius=6,
@@ -927,7 +928,7 @@ class DashboardPanelsMixin:
             card = ctk.CTkFrame(metrics, width=1, fg_color=COL_SURFACE_2, corner_radius=6)
             card.grid(row=0, column=column, sticky="nsew", padx=3, pady=3)
             card.grid_columnconfigure(0, weight=1)
-            title_widget = ctk.CTkLabel(
+            title_widget = StatusLabel(
                 card, text=f"{title}{'  ⓘ' if hint else ''}", height=22,
                 font=("Segoe UI", 12, "bold", "italic"),
                 text_color=title_color, anchor="w",
@@ -939,7 +940,7 @@ class DashboardPanelsMixin:
                 _HoverHint(title_widget, hint, placement="inside")
             title_widget.bind("<Configure>", lambda _event, widget=title_widget: fit_label_text(
                 widget, base_font=("Segoe UI", 12, "bold", "italic"), minimum_size=5), add="+")
-            value = ctk.CTkLabel(
+            value = StatusLabel(
                 card, text="NA", width=1, height=30,
                 font=("Cascadia Mono", 13), text_color=COL_TEXT,
                 anchor="w", justify="left", wraplength=0,
@@ -984,17 +985,17 @@ class DashboardPanelsMixin:
                 sticky="nsew", padx=3, pady=3,
             )
             card.grid_columnconfigure(0, weight=1)
-            title_widget = ctk.CTkLabel(
+            title_widget = StatusLabel(
                 card, text=title, width=1, height=16, font=("Segoe UI", 11, "bold", "italic"),
                 text_color=title_color, anchor="w",
             )
             title_widget.grid(row=0, column=0, sticky="ew", padx=9, pady=(3, 0))
-            value = ctk.CTkLabel(
+            value = StatusLabel(
                 card, text="NA", width=1, height=18, font=("Cascadia Mono", 12),
                 text_color=title_color, anchor="w",
             )
             value.grid(row=1, column=0, sticky="ew", padx=9, pady=(1, 0))
-            detail = ctk.CTkLabel(
+            detail = StatusLabel(
                 card, text="", width=1, height=14, font=("Segoe UI", 10),
                 text_color=COL_PREVIEW_TEXT, anchor="w",
             )
@@ -1036,7 +1037,7 @@ class DashboardPanelsMixin:
         rule_header = ctk.CTkFrame(rule_group, height=18, fg_color="transparent")
         rule_header.grid(row=0, column=0, sticky="ew", padx=8, pady=(4, 2))
         rule_header.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(
+        StatusLabel(
             rule_header, text="QUYẾT ĐỊNH HỆ THỐNG", height=14, font=("Segoe UI", 13, "bold"),
             text_color="#60A5FA", anchor="w",
         ).grid(row=0, column=0, sticky="w")
@@ -1053,7 +1054,7 @@ class DashboardPanelsMixin:
             "P3: vốn, số position và khóa bảo vệ.\n"
             "SL, TP, PROTECT và E bật/tắt theo từng vị thế; OFF chỉ chặn BUY BOT mới, vẫn quản lý vị thế.",
         )
-        self.preview_rule_title = ctk.CTkLabel(
+        self.preview_rule_title = StatusLabel(
             rule_header, text="MUA · OFF", width=72, height=16,
             font=("Segoe UI", 11, "bold"), text_color=COL_RED,
             fg_color=COL_SURFACE_2, corner_radius=5,
@@ -1065,7 +1066,7 @@ class DashboardPanelsMixin:
             card.grid(row=row, column=0, sticky="nsew", padx=8, pady=2)
             card.grid_columnconfigure(0, weight=0)
             card.grid_columnconfigure(1, weight=1)
-            title_widget = ctk.CTkLabel(
+            title_widget = StatusLabel(
                 card, text=f"{title}{'  ⓘ' if hint else ''}", height=18, font=("Segoe UI", 12, "bold", "italic"),
                 text_color="#60A5FA", anchor="w",
             )
@@ -1084,7 +1085,7 @@ class DashboardPanelsMixin:
             return card
 
         phase1 = phase_card(1, "P1 · VNINDEX", self._market_confirmation_hint)
-        self.preview_rule_market = ctk.CTkLabel(
+        self.preview_rule_market = StatusLabel(
             phase1, text="VNINDEX --", width=1, height=16,
             font=("Segoe UI", 12), text_color=COL_PREVIEW_TEXT,
             anchor="w", justify="left", wraplength=0,
@@ -1093,7 +1094,7 @@ class DashboardPanelsMixin:
         self.preview_rule_market.bind("<Configure>", lambda _event: fit_label_text(
             self.preview_rule_market, base_font=("Segoe UI", 12)), add="+")
         _HoverHint(self.preview_rule_market, self._market_confirmation_hint, placement="inside")
-        self.preview_rule_market_detail = ctk.CTkLabel(
+        self.preview_rule_market_detail = StatusLabel(
             phase1, text="CHỜ PHÂN LOẠI", height=14, font=("Segoe UI", 10),
             text_color=COL_PREVIEW_TEXT, anchor="w",
         )
@@ -1137,17 +1138,17 @@ class DashboardPanelsMixin:
         phase2._viking_title_widget.grid(columnspan=2)
         phase2.grid_columnconfigure(1, weight=2)
         phase2.grid_columnconfigure(2, weight=1)
-        self.preview_rule_cross_title = ctk.CTkLabel(
+        self.preview_rule_cross_title = StatusLabel(
             phase2, text="CẮT EMA · BẬT", width=1, height=18,
             font=("Segoe UI", 10, "bold"), text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_cross_title.grid(row=0, column=2, sticky="ew", padx=(8, 8), pady=4)
-        self.preview_rule_cross = ctk.CTkLabel(
+        self.preview_rule_cross = StatusLabel(
             phase2, text="CHƯA ĐỦ DỮ LIỆU", width=1, height=28,
             font=("Segoe UI", 11, "bold"), text_color=COL_MUTED, anchor="w",
         )
         self.preview_rule_cross.grid(row=1, column=2, rowspan=2, sticky="ew", padx=8)
-        self.preview_rule_cross_detail = ctk.CTkLabel(
+        self.preview_rule_cross_detail = StatusLabel(
             phase2, text="TRƯỚC: —", width=1, height=14,
             font=("Segoe UI", 10), text_color=COL_PREVIEW_TEXT, anchor="w",
         )
@@ -1159,14 +1160,14 @@ class DashboardPanelsMixin:
                 value, base_font=base, minimum_size=7), add="+")
             _HoverHint(widget, self._indicator_preview_hint, placement="inside")
         for row, name in ((1, "buy_ema"), (2, "sell_ema"), (3, "rsi")):
-            key = ctk.CTkLabel(
+            key = StatusLabel(
                 phase2, text="--:", width=1, height=14,
                 font=("Segoe UI", 11), text_color=COL_PREVIEW_TEXT, anchor="w",
             )
             key.grid(row=row, column=0, sticky="w", padx=(8, 6), pady=(0, 3) if row == 3 else 0)
             setattr(self, f"preview_rule_{name}_key", key)
             _HoverHint(key, self._indicator_preview_hint, placement="inside")
-        self.preview_rule_ema = ctk.CTkLabel(
+        self.preview_rule_ema = StatusLabel(
             phase2, text="-- / --", width=1, height=14,
             font=("Cascadia Mono", 12), text_color=COL_PREVIEW_TEXT,
             anchor="w", justify="left", wraplength=0,
@@ -1174,7 +1175,7 @@ class DashboardPanelsMixin:
         self.preview_rule_ema.grid(
             row=1, column=1, sticky="ew", padx=(0, 8), pady=0
         )
-        self.preview_rule_sell_ema = ctk.CTkLabel(
+        self.preview_rule_sell_ema = StatusLabel(
             phase2, text="-- / --", width=1, height=14,
             font=("Cascadia Mono", 12), text_color=COL_PREVIEW_TEXT,
             anchor="w", justify="left", wraplength=0,
@@ -1182,7 +1183,7 @@ class DashboardPanelsMixin:
         self.preview_rule_sell_ema.grid(
             row=2, column=1, sticky="ew", padx=(0, 8), pady=0
         )
-        self.preview_rule_rsi = ctk.CTkLabel(
+        self.preview_rule_rsi = StatusLabel(
             phase2, text="--", width=1, height=14,
             font=("Cascadia Mono", 12), text_color=COL_PREVIEW_TEXT,
             anchor="w", justify="left", wraplength=0,
@@ -1229,7 +1230,7 @@ class DashboardPanelsMixin:
             "P3 · VỐN & KHÓA",
             self._entry_capital_hint,
         )
-        self.preview_rule_phase3 = ctk.CTkLabel(
+        self.preview_rule_phase3 = StatusLabel(
             phase3, text="--/-- · --/MÃ", width=1, height=18, font=("Segoe UI", 11),
             text_color=COL_PREVIEW_TEXT, anchor="w",
         )
@@ -1239,7 +1240,7 @@ class DashboardPanelsMixin:
         self.preview_rule_phase3.bind("<Configure>", lambda _event: fit_label_text(
             self.preview_rule_phase3, base_font=("Segoe UI", 11), minimum_size=7), add="+")
         _HoverHint(self.preview_rule_phase3, self._entry_capital_hint, placement="inside")
-        self.preview_rule_phase3_detail = ctk.CTkLabel(
+        self.preview_rule_phase3_detail = StatusLabel(
             phase3, text="AUTO --", width=1, height=16, font=("Segoe UI", 12),
             text_color=COL_PREVIEW_TEXT, anchor="w",
         )
@@ -1248,13 +1249,13 @@ class DashboardPanelsMixin:
         )
         self.preview_rule_phase3_detail.bind("<Configure>", lambda _event: fit_label_text(
             self.preview_rule_phase3_detail, base_font=("Segoe UI", 12), minimum_size=7), add="+")
-        self.preview_rule_phase3_guard = ctk.CTkLabel(
+        self.preview_rule_phase3_guard = StatusLabel(
             phase3, text="WHIPSAW -- · LOSS --", font=("Segoe UI", 11),
             text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_phase3_guard.grid_remove()
 
-        self.preview_rule_reason = ctk.CTkLabel(
+        self.preview_rule_reason = StatusLabel(
             rule_group, text="CHỜ DỮ LIỆU", width=1, height=22,
             font=("Segoe UI", 9, "bold"), text_color=COL_WARN,
             fg_color=COL_SURFACE_2, corner_radius=6,
@@ -1277,14 +1278,14 @@ class DashboardPanelsMixin:
         health_title.grid(row=0, column=0, sticky="ew", padx=3, pady=5)
         health_title.grid_propagate(False)
         health_title.grid_columnconfigure(0, weight=1)
-        self.preview_health_title = ctk.CTkLabel(
+        self.preview_health_title = StatusLabel(
             health_title, text="HEALTH", width=1,
             height=20,
             font=("Segoe UI", 10, "bold", "italic"),
             text_color="#60A5FA", anchor="w",
         )
         self.preview_health_title.grid(row=0, column=0, sticky="ew", padx=(8, 1))
-        self.preview_health_hint = ctk.CTkLabel(
+        self.preview_health_hint = StatusLabel(
             health_title, text="ⓘ", width=20, height=20,
             font=("Segoe UI Symbol", 10, "bold"), text_color=COL_TEXT,
             fg_color="#343A43", corner_radius=5,
@@ -1297,7 +1298,7 @@ class DashboardPanelsMixin:
         )
 
         def health_cell(column: int, text: str) -> ctk.CTkLabel:
-            label = ctk.CTkLabel(
+            label = StatusLabel(
                 health_group, text=text, width=1, height=24,
                 font=("Cascadia Mono", 11), text_color=COL_PREVIEW_TEXT,
                 fg_color=COL_SURFACE_2, corner_radius=5,

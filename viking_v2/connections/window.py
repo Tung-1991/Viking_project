@@ -68,7 +68,6 @@ class VolumeScannerPopup:
         self.rows: tuple[VolumeScanRow, ...] = ()
         self.busy = False
 
-        parent.update_idletasks()
         screen_w = max(1100, int(parent.winfo_screenwidth() or 1100))
         screen_h = max(700, int(parent.winfo_screenheight() or 700))
         width, height = min(1050, screen_w - 50), min(700, screen_h - 70)
@@ -460,7 +459,6 @@ class ConnectionPopup:
         )
         self._volume_popup: VolumeScannerPopup | None = None
 
-        parent.update_idletasks()
         screen_w = max(1100, int(parent.winfo_screenwidth() or 1100))
         screen_h = max(700, int(parent.winfo_screenheight() or 700))
         width, height = min(1080, screen_w - 60), min(720, screen_h - 70)

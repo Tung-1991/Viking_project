@@ -54,6 +54,18 @@ FONT_TABLE_VALUE = ("Segoe UI", 14)
 HINT_FONT = ("Segoe UI", 20)
 
 
+class StatusLabel(ctk.CTkLabel):
+    """Avoid redrawing unchanged text and colours on periodic UI refreshes."""
+
+    _stable_options = frozenset({"text", "text_color", "text_color_disabled", "fg_color"})
+
+    def configure(self, require_redraw=False, **kwargs):
+        changed = {key: value for key, value in kwargs.items()
+                   if key not in self._stable_options or self.cget(key) != value}
+        if changed or require_redraw:
+            super().configure(require_redraw=require_redraw, **changed)
+
+
 def fit_entry_text(
     entry: ctk.CTkEntry,
     text: str,
@@ -610,7 +622,6 @@ class DataTablePopup:
         self.summary_provider = summary_provider
         self.on_visibility_changed = on_visibility_changed
         self.columns = columns
-        parent.update_idletasks()
         screen_w = max(1100, int(parent.winfo_screenwidth() or 1100))
         screen_h = max(700, int(parent.winfo_screenheight() or 700))
         parent_w = max(0, int(parent.winfo_width() or 0))
@@ -978,7 +989,6 @@ class HistoryPopup:
         self._normalization_executor = None
         self._normalization_generation = 0
         self.on_visibility_changed = on_visibility_changed
-        parent.update_idletasks()
         screen_w = max(1100, int(parent.winfo_screenwidth() or 1100))
         screen_h = max(700, int(parent.winfo_screenheight() or 700))
         width = min(screen_w - 48, max(1120, int(parent.winfo_width() or 0) - 36))

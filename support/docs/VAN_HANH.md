@@ -157,6 +157,10 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 
 - Windows trong VM có DPI/Scale riêng. Đổi giữa console và remote có thể đổi độ phóng UI.
   Bản sửa DPI giữ kích thước logic, gom callback resize và tránh vẽ lồng nhau ở scrollbar/menu.
+- PREVIEW chỉ cập nhật chữ/màu khi giá trị thay đổi; chỉ báo, hạn mức và trạng thái vẫn được
+  kiểm tra mỗi vòng như trước. Mở popup để Tk xử lý layout ở vòng sự kiện bình thường,
+  tránh ép vẽ lại các cửa sổ khác ngay trong lúc dựng popup. Lần mở đầu vẫn phải tạo widget;
+  mở lại popup còn tồn tại dùng cùng cửa sổ đã tạo.
 - Nếu muốn giao diện có cùng độ lớn, dùng cùng Windows Scale và độ phân giải cho console/remote;
   100% là lựa chọn dễ đối chiếu. Đổi DNS không xử lý được vòng vẽ UI.
 - Khi app báo Not responding, ghi lại thời điểm/nút vừa bấm và các dòng cuối của log UI;

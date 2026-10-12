@@ -218,7 +218,6 @@ class BacktestPopup:
         self.scenarios = self._load_scenarios()
         self._rule_entries: dict[str, ctk.CTkEntry] = {}
 
-        parent.update_idletasks()
         screen_w = max(1100, int(parent.winfo_screenwidth() or 1100))
         screen_h = max(700, int(parent.winfo_screenheight() or 700))
         width, height = min(1180, screen_w - 60), min(800, screen_h - 80)
