@@ -565,6 +565,32 @@ def test_health_hint_includes_actual_failure_and_retry_schedule_without_raw_secr
     assert "OTP: cần khi gửi/sửa/hủy" in hint
 
 
+def test_health_copy_includes_ui_and_daemon_non_snapshot_errors_without_credentials():
+    subject = DashboardPanelsMixin()
+    subject._quote_health_hint = lambda: "MSN · ngoài phiên"
+    subject._health_hint_status = lambda: {"market_status": "CLOSED", "api_health": {"rest": {
+        "total_requests": 5, "last_status": 403, "last_endpoint": "GET /accounts/*/loan-packages",
+        "last_error": "FORBIDDEN PRIVATEKEY",
+    }}}
+    ui = {"total_requests": 1, "last_status": 400, "last_endpoint": "GET /accounts/*/orders/history",
+          "last_error": "HISTORY_UNAVAILABLE PRIVATESECRET"}
+    subject.real = SimpleNamespace(api_health=lambda: ui, api_key="PRIVATEKEY", api_secret="PRIVATESECRET")
+    captured, scheduled = [], []
+    subject.clipboard_clear = lambda: captured.clear()
+    subject.clipboard_append = captured.append
+    subject.preview_health_hint = SimpleNamespace(configure=lambda **_options: None)
+    subject.after = lambda delay, callback: scheduled.append((delay, callback))
+    subject._copy_api_health_hint()
+    text = captured[0]
+    assert "UI · Lần REST gần nhất:" in text and "orders/history · HTTP 400" in text
+    assert "DAEMON · Lần REST gần nhất:" in text and "loan-packages · HTTP 403" in text
+    assert "PRIVATEKEY" not in text and "PRIVATESECRET" not in text
+    assert len(scheduled) == 1
+    # A recovered last request must not leave yesterday's failure in copied diagnostics.
+    ui.update(last_status=200, last_error="")
+    assert "UI · Lần REST gần nhất:" not in subject._api_health_hint()
+
+
 def test_health_badge_remains_failed_after_unrelated_rest_success_until_account_recovers(dashboard):
     view, clock = dashboard
     subject = DashboardPanelsMixin()

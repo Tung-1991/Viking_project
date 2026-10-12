@@ -177,6 +177,39 @@ with tempfile.TemporaryDirectory(prefix="money-hunter-startup-") as directory:
         font = tkfont.Font(root=app, font=app.lbl_equity._label.cget("font"))
         assert app.lbl_equity.cget("text") == "CHỜ TÀI KHOẢN"
         assert font.measure(app.lbl_equity.cget("text")) <= app.lbl_equity.winfo_width()
+        # A fitted loading message must not leave numeric NAV stuck at the
+        # smallest font when account data arrives or the amount changes.
+        for balance, positions, expected in (
+            ({"stock": {"totalCash": 2192, "availableCash": 2192, "totalDebt": 0}}, [], "2,192 ₫"),
+            ({"stock": {"totalCash": 36392140, "availableCash": 36390023, "totalDebt": 0}},
+             [{"symbol": "HDB", "openQuantity": 600, "marketPrice": 22600, "price_unit": "VND"}], "49,952,140 ₫"),
+        ):
+            app.snapshots["REAL"] = (balance, positions, [])
+            app._paint_account()
+            app.update_idletasks()
+            app._paint_account()
+            app.update_idletasks()
+            assert app.lbl_equity.cget("text") == expected
+            assert abs(app.lbl_equity.cget("font")[1]) >= 26, app.lbl_equity.cget("font")
+            font = tkfont.Font(root=app, font=app.lbl_equity._label.cget("font"))
+            assert font.measure(expected) <= app.lbl_equity.winfo_width()
+            if os.environ.get("VIKING_CAPTURE_UI") == "1":
+                settled_nav = tk.BooleanVar(master=app, value=False)
+                app.after(200, lambda: settled_nav.set(True))
+                app.wait_variable(settled_nav)
+                ImageGrab.grab(window=hwnd).save(capture_dir / f"nav-{expected.split()[0]}-{os.environ['STARTUP_SMOKE_SCALING']}.png")
+        app.snapshots = {}
+        # Exercise the actual clickable HEALTH icon; isolate the clipboard so
+        # this offline test never reads or overwrites the user's clipboard.
+        copied = []
+        original_clear, original_append = app.clipboard_clear, app.clipboard_append
+        app.clipboard_clear = copied.clear
+        app.clipboard_append = copied.append
+        app.preview_health_hint._label.event_generate("<Button-1>")
+        app.update_idletasks()
+        assert copied and "Bấm ⓘ cạnh HEALTH" in copied[0]
+        assert app.preview_health_hint.cget("text") == "✓"
+        app.clipboard_clear, app.clipboard_append = original_clear, original_append
         app.quantity.delete(0, tk.END)
         app.order_type.set("MARKET")
         app.mode.set(os.environ.get("STARTUP_SMOKE_MODE", "PAPER"))

@@ -198,13 +198,13 @@ class DashboardPanelsMixin:
         account.grid_columnconfigure(1, weight=0, minsize=180)
 
         self.lbl_equity_title = ctk.CTkLabel(account, text="TỔNG TÀI SẢN / NAV",
-                                            font=("Segoe UI", 11, "bold"), text_color=COL_MUTED, anchor="w")
+                                            font=("Segoe UI", 13, "bold"), text_color=COL_MUTED, anchor="w")
         self.lbl_equity_title.grid(row=0, column=0, sticky="w", padx=11, pady=(4, 0))
         self.lbl_equity = ctk.CTkLabel(
             account, text="----", font=("Segoe UI", 30, "bold"),
             text_color=COL_GREEN, anchor="w",
         )
-        self.lbl_equity.grid(row=1, column=0, sticky="w", padx=(11, 5), pady=(0, 0))
+        self.lbl_equity.grid(row=1, column=0, sticky="ew", padx=(11, 5), pady=(0, 0))
         self.lbl_equity.bind("<Configure>", lambda _event: fit_label_text(
             self.lbl_equity, base_font=("Segoe UI", 30, "bold"), minimum_size=14,
         ), add="+")
@@ -1310,6 +1310,7 @@ class DashboardPanelsMixin:
             fg_color="#343A43", corner_radius=5,
         )
         self.preview_health_hint.grid(row=0, column=1, sticky="e", padx=(1, 3), pady=2)
+        self.preview_health_hint.bind("<Button-1>", self._copy_api_health_hint, add="+")
         _HoverHint(
             self.preview_health_hint,
             self._api_health_hint,
@@ -1535,7 +1536,21 @@ class DashboardPanelsMixin:
         ui_rest = self.real.api_health() if hasattr(getattr(self, "real", None), "api_health") else {}
         failures = []
         secrets = tuple(getattr(getattr(self, "real", None), key, "") for key in ("api_key", "api_secret", "trading_token"))
-        for rest in (ui_rest or {}, daemon_rest):
+        for origin, rest in (("UI", ui_rest or {}), ("DAEMON", daemon_rest)):
+            if not isinstance(rest, dict):
+                continue
+            last_status = rest.get("last_status")
+            if int(rest.get("total_requests", 0) or 0) > 0 and (
+                not isinstance(last_status, (int, float)) or not 200 <= last_status < 300
+                or rest.get("last_error")
+            ):
+                code = (f"HTTP {int(last_status)}" if isinstance(last_status, (int, float)) and math.isfinite(last_status) and last_status
+                        else "MẠNG/TIMEOUT" if not last_status else "HTTP CHƯA RÕ")
+                detail = safe_detail(
+                    f"{rest.get('last_endpoint') or 'chưa rõ endpoint'} · {code} · {rest.get('last_error') or 'chưa có chi tiết'}",
+                    secrets=secrets,
+                )
+                failures.append(f"{origin} · Lần REST gần nhất: {detail}")
             raw = rest.get("snapshot_errors") if isinstance(rest, dict) else None
             for row in (raw.values() if isinstance(raw, dict) else ()):
                 if isinstance(row, dict):
@@ -1559,7 +1574,19 @@ class DashboardPanelsMixin:
             self._quote_health_hint() + "\n" + extra
             + "\nOTP: cần khi gửi/sửa/hủy lệnh REAL; PAPER không cần OTP."
             + "\nMất/phục hồi giá: có ghi trong daemon.log, không ghi mỗi tick."
+            + "\nBấm ⓘ cạnh HEALTH để sao chép chẩn đoán này."
         )
+
+    def _copy_api_health_hint(self, _event: Any = None) -> None:
+        # Copy the same sanitized, read-only text as the tooltip, without I/O.
+        self.clipboard_clear()
+        self.clipboard_append(self._api_health_hint())
+        self.preview_health_hint.configure(text="✓")
+
+        def restore() -> None:
+            if self.running and self.preview_health_hint.winfo_exists():
+                self.preview_health_hint.configure(text="ⓘ")
+        self.after(1500, restore)
 
     def _ticket_money_hint(self) -> str:
         return str(getattr(self, "_preview_ticket_money", {}).get("hint") or "Chờ tính vốn và phí của lệnh đang xem.")
