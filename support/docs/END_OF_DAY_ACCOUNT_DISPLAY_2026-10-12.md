@@ -38,4 +38,25 @@ HEALTH ⓘ vẫn hiện tooltip khi rê chuột, và bấm để sao chép cùng
 
 Cache tài khoản và lỗi đọc nằm riêng trong RAM của mỗi DNSE client ở từng tiến trình; nhịp đọc thông thường là 5 giây trong phiên, 300 giây khi xác nhận đóng phiên và không có lệnh REAL chưa rõ/đang xử lý. Mở lại app tạo client/cache mới. `START_SYSTEM.bat` mục 2 gọi `support/launcher.ps1:Update-Code` để fetch upstream và cập nhật source, yêu cầu app đã dừng; mục 3 mở app. Mục cập nhật không tự nạp preset hoặc xóa lịch sử/runtime. Không chạy launcher Update/Start trên tài khoản thật trong lượt kiểm tra này.
 
-Hồi quy riêng lượt cỡ chữ/chẩn đoán: **265 passed, 69.66 giây**, không lỗi/skip, tại `.artifacts/nav_font_health_20261012/verified.xml`. Bao gồm HEALTH/cache, cảnh báo cuối ngày, che thông tin xác thực, click sao chép native, số NAV tăng trở lại và UI/preview/refresh. Ảnh cửa sổ dùng dữ liệu giả: `.artifacts/ui-review/nav-49,952,140-1.0.png`, `nav-2,192-1.0.png` và các bản scale 1.5. Không cộng với 482 ca của lượt trước vì có ca trùng. Chưa xác định nguyên nhân đèn đỏ hiện tại trên VM; cần chẩn đoán hiện tại từ nút sao chép.
+Hồi quy riêng lượt cỡ chữ/chẩn đoán: **265 passed, 69.66 giây**, không lỗi/skip, tại `.artifacts/nav_font_health_20261012/verified.xml`. Bao gồm HEALTH/cache, cảnh báo cuối ngày, che thông tin xác thực, click sao chép native, số NAV tăng trở lại và UI/preview/refresh. Ảnh cửa sổ dùng dữ liệu giả: `.artifacts/ui-review/nav-49,952,140-1.0.png`, `nav-2,192-1.0.png` và các bản scale 1.5. Không cộng với 482 ca của lượt trước vì có ca trùng. Khi hoàn tất lượt này chưa có nguyên nhân đèn đỏ; chẩn đoán nhận tiếp theo và bản sửa được ghi bên dưới.
+
+## Bổ sung: lệnh đã khớp bị tra cứu qua endpoint chi tiết hiện tại
+
+Chẩn đoán người dùng sao chép: `UI · GET /accounts/*/orders/* · HTTP 400 · OrderRepository: cannot find object with id: 236032`. NAV và HDB 600 CP vẫn hiện trên UI. Đây là phản hồi API cho lần đọc chi tiết ID, không phải bằng chứng mất kết nối DNS hoặc cổ đã bị xóa.
+
+Nguyên nhân trong `trading/execution.py:900`: `reconcile_working` tiếp tục chọn cả lệnh kết thúc nếu còn broker ID. Khi ID không có trong danh sách hiện tại, dòng 925 hỏi lại chi tiết ID. `connections/dnse/client.py:get_order_detail` trả None khi đọc lỗi; `_cached` không lưu None nên worker có thể hỏi lại ở các vòng tiếp theo. Mỗi lỗi 400 ghi vào REST health, khiến API/DNSE đỏ dù tiền/cổ đọc được. Máy/tài khoản không có record lệnh này sẽ không chạy nhánh tra cứu ID đó.
+
+Đối chứng trước sửa tại `support/tests/test_terminal_order_history.py`: broker giả xác nhận 600 HDB đã khớp, sau đó trả danh sách hiện tại rỗng và chi tiết 236032 trả đúng 400. Kiểm thử thất bại vì vẫn gọi `/orders/236032`. Mong đợi: giữ fill đã xác nhận, đối chiếu lịch sử cho phí muộn và không tiếp tục hỏi chi tiết một lệnh đã kết thúc.
+
+Mức độ vừa: gọi API thừa và báo lỗi gây khó theo dõi; trong đối chứng không làm mất 600 cổ. Điều kiện kích hoạt rõ: local đã kết thúc, ID mất khỏi danh sách hiện tại và API chi tiết không còn trả được. Khi đủ điều kiện này, nhánh lỗi tái hiện được; không gán tỷ lệ xảy ra cho mọi tài khoản/phiên. Việc broker ngừng trả chi tiết ID đúng vào thời điểm nào chưa được xác minh bằng API tài khoản thật.
+
+Bản sửa ở `trading/execution.py:859` và `:920`:
+
+- Lệnh đã kết thúc mà không còn trong danh sách hiện tại được tra cứu qua lịch sử; không gọi lại endpoint chi tiết. Nguồn lịch sử theo ngày và endpoint riêng được mô tả trong [SDK DNSE chính thức](https://github.com/dnse-tech/dnse-py/blob/main/src/dnse/resources/orders.py).
+- Chia sẻ cache lịch sử cùng ngày trong service, đọc tối đa một lần mỗi 5 phút. Ngày lấy theo thời điểm handoff/claim/create ở giờ VN. ID có tiền tố ngày chỉ được chuẩn hóa trong đúng ngày truy vấn; ghép thêm mã, BUY/SELL và gói giao dịch. ID lịch sử gốc vẫn giữ trong raw audit.
+- Tiếp tục dùng transaction/inbox và tiến độ tích lũy có sẵn để đối soát phí/fill. History thiếu hoặc lỗi không đảo fill, không điền phí giả, không gửi lại lệnh. Phí trả muộn hoặc xác nhận 0 được áp dụng một lần.
+- UNKNOWN, SENDING, WORKING, PARTIAL, CANCEL_PENDING, REPLACE_PENDING vẫn dùng đối soát hiện tại/chi tiết; lỗi không tìm thấy ở các trạng thái này vẫn hiện là lỗi. Không đổi rule EMA/RSI hoặc điều kiện gửi lệnh.
+
+**465 passed, 37.59 giây**, không lỗi/skip, tại `.artifacts/terminal_order_history_20261012/verified.xml`. Bao gồm 16 ca mới: ID thường/tiền tố ngày, ngày/mã/chiều/gói không khớp, phí muộn/0, lịch sử thiếu/lỗi, crash giữa lúc ghi phí và restart, hủy một phần giữ số đã khớp và không gửi phần còn lại, cùng sáu trạng thái chưa kết thúc. Hồi quy rộng có execution, broker reconciliation, live safety, review regressions, vốn/Priority, lịch sử, account health và preview. Các lượt có ca trùng nhau nên không cộng số passed. Tất cả chạy offline với broker giả và runtime tạm.
+
+Phí thực tế và thời điểm lịch sử DNSE cung cấp đủ dữ liệu vẫn phụ thuộc broker. Nếu lịch sử không trả phí thì UI tiếp tục ghi `CHỜ DNSE`; bản sửa không biến phí ước tính thành phí thật.

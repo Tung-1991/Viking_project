@@ -7,12 +7,13 @@ import json
 import math
 from dataclasses import asdict
 from dataclasses import replace
+from datetime import datetime
 from typing import Callable
 from typing import Any
 
 from ..connections.dnse.client import DNSEClient, BrokerSnapshotError
 from ..connections.dnse.paper import PaperBroker
-from .market import market_phase
+from .market import VN_TZ, market_phase
 from ..models import BrokerOrderResult, OrderIntent, TradeCycle
 from .orders import OrderQueue
 from .portfolio import (
@@ -855,6 +856,40 @@ class ExecutionService:
             return self.paper.get_balance(), self.paper.get_positions(), self.paper.get_orders()
         return self.real.get_balance() or {}, self.real.get_positions(), self.real.get_orders()
 
+    def _finished_order_history(self, broker: Any, intent: OrderIntent, ids: set[str]) -> list[dict[str, Any]]:
+        """Read late costs from history without polling a finished live ID."""
+        history_reader = getattr(broker, "get_order_history", None)
+        if not ids or not callable(history_reader):
+            return []
+        day = datetime.fromtimestamp(intent.handed_off_at or intent.claimed_at or intent.created_at, VN_TZ).strftime("%Y-%m-%d")
+        now = time.time()
+        cache = getattr(self, "_finished_histories", {})
+        self._finished_histories = cache
+        previous = cache.get(day)
+        if previous is None or now - previous[0] >= 300:
+            try:
+                rows = list(history_reader(day, day) or [])
+            except Exception:
+                # A missing historical row/fee cannot undo a confirmed fill.
+                # The adapter still records HTTP failures in API diagnostics.
+                rows = []
+            cache[day] = (now, rows)
+        rows = cache[day][1]
+        prefix = day.replace("-", "") + "_"
+        matches = []
+        for row in rows:
+            raw_id = str(row.get("orderId", row.get("id", "")) or "")
+            broker_id = raw_id[len(prefix):] if raw_id.startswith(prefix) else raw_id
+            if broker_id not in ids or str(row.get("symbol", "")).upper() != intent.symbol:
+                continue
+            if str(row.get("side", "")).upper() not in ({"NB", "BUY"} if intent.side == "BUY" else {"NS", "SELL"}):
+                continue
+            if intent.loan_package_id and str(row.get("loanPackageId", "")) != intent.loan_package_id:
+                continue
+            # Date-prefixed IDs are normalized only within this queried day.
+            matches.append({**row, "orderId": broker_id, "history_order_id": raw_id})
+        return matches
+
     def reconcile_working(self, execution_mode: str) -> list[OrderIntent]:
         self.recover_results()
         mode = str(execution_mode or "PAPER").upper()
@@ -882,6 +917,9 @@ class ExecutionService:
                 or (intent.request_tag and intent.request_tag == str(row.get("remark", "") or ""))
             )]
             missing_ids = ids - {str(row.get("orderId", row.get("id", ""))) for row in matches}
+            if intent.status in FINAL_STATUSES:
+                matches.extend(self._finished_order_history(broker, intent, missing_ids))
+                missing_ids = set()
             if hasattr(broker, "get_order_detail"):
                 for broker_id in missing_ids:
                     row = broker.get_order_detail(broker_id)
