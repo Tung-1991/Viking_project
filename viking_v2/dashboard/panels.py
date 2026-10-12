@@ -202,9 +202,8 @@ class DashboardPanelsMixin:
             text_color=COL_GREEN, anchor="w",
         )
         self.lbl_equity.grid(row=1, column=0, sticky="w", padx=(11, 5), pady=(0, 0))
-        _HoverHint(self.lbl_equity,
-                   "NAV: tổng tài sản broker báo; mua cổ phiếu chuyển tiền thành cổ phiếu nên không giảm bằng giá trị lệnh.\n"
-                   "Nếu DNSE chỉ trả tiền, tiêu đề ghi TIỀN KHẢ DỤNG. Đây là số từ snapshot tài khoản.")
+        _HoverHint(self.lbl_equity, self._account_money_hint)
+        _HoverHint(self.lbl_equity_title, self._account_money_hint)
         session_box = ctk.CTkFrame(
             account, width=180, height=52, fg_color="transparent",
         )

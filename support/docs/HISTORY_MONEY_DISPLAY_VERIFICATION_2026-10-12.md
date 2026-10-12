@@ -18,9 +18,11 @@ Khớp từng phần dùng lượng khớp tăng thêm và lượng đặt của
 
 CSV/Excel bổ sung các cột `fee_known`, `tax_known`, `fill_price_vnd`, `fill_delta_quantity`, `broker_quantity`; schema cũ được nâng cấp và giữ bản ghi cũ. Số 0 của bản ghi cũ không được tự khẳng định là miễn phí nếu thiếu thông tin xác nhận.
 
-Số lớn trên dashboard được đặt tiêu đề theo dữ liệu thực có: `TỔNG TÀI SẢN / NAV` khi broker cung cấp NAV, hoặc `TIỀN KHẢ DỤNG · DNSE` khi chỉ có tiền. Dòng tài khoản ghi riêng tiền khả dụng. BUY chuyển tiền thành cổ phiếu nên NAV không giảm bằng toàn bộ giá trị BUY; PNL NGÀY chỉ cộng giao dịch đã đóng.
+Số lớn trên dashboard ưu tiên NAV trực tiếp từ broker và ghi `TỔNG TÀI SẢN / NAV`. Nếu API không có NAV nhưng đủ `totalCash`, `totalDebt`, số cổ đang giữ và giá thị trường, UI tính `tổng tiền + giá trị cổ đang giữ − tổng nợ` và ghi `NAV ƯỚC TÍNH · API`. Cổ chờ về cũng thuộc tài sản; không dùng giá mua thay giá thị trường. Thiếu dữ liệu định giá thì hiện `TIỀN KHẢ DỤNG · DNSE`; thiếu cả tiền thì hiện `CHỜ TÀI KHOẢN`, không tự điền 0. Dòng tài khoản ghi riêng tiền khả dụng.
 
-Ảnh UI không chứa payload số dư DNSE, nên chưa đủ để kết luận nguyên nhân broker/snapshot vẫn báo 50 triệu sau BUY. Bản sửa không tự trừ tiền ước đoán vào snapshot. Việc đối chiếu số tiền thực cần tiền khả dụng/NAV/phí trên ứng dụng DNSE; không cần secrets.
+Kaiser đã xác nhận **49.951.941đ là NAV trên ứng dụng DNSE**, khác số 50 triệu trong ảnh Money Hunter. Chưa có các số thành phần trong snapshot thật nên chưa xác nhận phép tính của UI sẽ khớp con số này. Chênh 48.059đ không được tự coi là phí. NAV ước tính có thể khác DNSE do các thành phần tài sản/điều chỉnh khác hoặc thời điểm snapshot. Rê chuột lên số lớn/tiêu đề để xem tiền khả dụng, tổng tiền, tổng nợ, giá trị cổ và nguồn NAV; chỉ đọc snapshot đã có, không gọi thêm API. Hàm mới chỉ phục vụ hiển thị, không cấp vốn cho rule, sửa ledger hoặc sửa phí.
+
+SDK chính thức DNSE mô tả `total_cash`, `total_debt`, `available_cash` trong [StockBalance](https://github.com/dnse-tech/dnse-py/blob/main/src/dnse/models/accounts.py). Đây là căn cứ về các trường dữ liệu; công thức cơ bản của UI là **ước tính**, không khẳng định là công thức NAV đầy đủ của DNSE.
 
 ## Mốc chốt và Excel
 
@@ -39,3 +41,5 @@ Tăng font lịch sử/tín hiệu từ 14 lên 18; ngày/nhóm từ 12 lên 16.
 25 kiểm thử mới tại `support/tests/test_trade_history_display.py`: ví dụ HDB, ID theo ngày, UTC/GMT+7, khớp từng phần, phí thiếu/0/dương/điều chỉnh, xác nhận 0 sau khớp, số dư/NAV, chốt 15:00 qua restart/đêm, reset tay, preset migration và native UI.
 
 Lượt hồi quy cuối: **871 passed, 101.83 giây**, ghi tại `.artifacts/history_display_20261012/verified.xml`; ảnh UI dùng dữ liệu giả ở cùng thư mục. Bao gồm execution kernel, phí/fill, vốn/slot/UNKNOWN, log/TRACE, settings/preset, UI/startup và chặn tín hiệu Telegram sau phiên. Kiểm tra lại ảnh native sau khi tab chuyển xong: 2 passed, tại `native.xml`. Không chạy kiểm thử nào với broker thật.
+
+Bổ sung sau khi xác nhận số DNSE là NAV: **324 passed, 76.14 giây**, tại `.artifacts/nav_display_20261012/verified.xml`. Bao gồm 17 ca mới trong `support/tests/test_account_money_display.py`, lịch sử/preview, UI/startup, refresh, vốn và Priority. Kiểm tra NAV trực tiếp, NAV ước tính, tiền khả dụng riêng, 0 so với thiếu dữ liệu, giá VND/giá bảng, cổ T+, thiếu giá thị trường và thay snapshot cũ bằng snapshot mới. Các số tiền/nợ dùng để tính ra 49.951.941đ trong fixture là dữ liệu giả kiểm tra số học, không phải payload tài khoản thật. Không cộng số test của hai lượt vì có ca trùng nhau.

@@ -245,7 +245,7 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 ## TRACE / kiểm tra ENTRY trong phiên
 
 - **LỊCH SỬ → CKCS REAL/PAPER**: ngày → giao dịch → lệnh tổng hợp. Xổ lệnh để xem các lần gửi/khớp/đối soát; giờ Việt Nam, nguồn DNSE cùng ID được ghép với sổ app.
-- **PHÍ NGÀY** dùng phí đã ghi nhận. `CHỜ DNSE` là chưa có phí; `~` ở bảng lệnh là ước tính. Số lớn ghi rõ NAV hoặc tiền khả dụng theo dữ liệu broker.
+- **PHÍ NGÀY** dùng phí đã ghi nhận. `CHỜ DNSE` là chưa có phí; `~` ở bảng lệnh là ước tính. Số lớn ưu tiên NAV broker báo; khi tự tính từ tổng tiền + giá trị cổ − tổng nợ thì ghi **NAV ƯỚC TÍNH**. Thiếu dữ liệu tính NAV thì ghi **TIỀN KHẢ DỤNG**. Rê chuột lên số lớn để xem nguồn và các số thành phần; NAV ước tính có thể khác ứng dụng DNSE.
 - **KẾT NỐI → THỐNG KÊ**: mặc định chốt 15:00 Việt Nam, giữ số trên màn hình đến 09:00 sáng hôm sau. Excel audit ghi từng sự kiện ngay, không đợi chốt ngày.
 - **LỊCH SỬ → TÍN HIỆU → ⚙ GHI TÍN HIỆU**: mặc định ON, 2 phút/lần, 14:00–14:30 giờ Việt Nam.
   Có thể tắt, chỉnh nhịp 1–30 phút và giờ bắt đầu/kết thúc. Độc lập nhịp EMA/RSI, không tạo lệnh hay tin Telegram.

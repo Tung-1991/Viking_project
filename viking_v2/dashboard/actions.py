@@ -54,12 +54,13 @@ from ..trading.portfolio import (
 from ..trading.validation import decision_is_fresh, decisions_for_mode, quote_is_fresh
 from .view import (
     COL_GRAY, COL_GREEN, COL_MUTED, COL_PREVIEW_TEXT, COL_RED, COL_SURFACE_2,
-    COL_TEXT, COL_TITLE, COL_WARN, _cash, _compact_vnd, _display_price, _equity, _number,
+    COL_TEXT, COL_TITLE, COL_WARN, _cash, _compact_vnd, _display_price, _number,
     _price_unit, _order_form_key, _render_order_notice,
 )
 from .info import InfoPopup
 from .quote_direction import quote_background
 from .trade_history import history_datetime, history_groups
+from .account_money import account_money, account_money_hint
 from ..services.technical_notifications import notification_session, technical_delivery, TECHNICAL_CATEGORIES
 from .windows import (
     FONT_KEY,
@@ -4257,13 +4258,14 @@ class DashboardActionsMixin:
 
     def _paint_account(self) -> None:
         mode = self.mode.get()
-        balance = self.snapshots.get(mode, ({}, [], []))[0]
-        self.lbl_equity.configure(text=f"{_equity(balance):,.0f} ₫" if balance else "CHỜ TÀI KHOẢN")
+        balance, positions, _orders = self.snapshots.get(mode, ({}, [], []))
+        money = account_money(balance, positions)
+        self.lbl_equity.configure(text=f"{money['value']:,.0f} ₫" if money["value"] is not None else "CHỜ TÀI KHOẢN")
         title = getattr(self, "lbl_equity_title", None)
         if title is not None:
-            stock = balance.get("stock") if isinstance(balance.get("stock"), dict) else {}
-            has_nav = any(key in body for body in (balance, stock) for key in ("equity", "nav", "netAssetValue", "totalAsset"))
-            title.configure(text="TỔNG TÀI SẢN / NAV" if has_nav else "TIỀN KHẢ DỤNG · DNSE" if mode == "REAL" else "TIỀN KHẢ DỤNG")
+            title.configure(text="TỔNG TÀI SẢN / NAV" if money["kind"] == "NAV" else
+                            "NAV ƯỚC TÍNH · API" if money["kind"] == "ESTIMATED_NAV" else
+                            "TIỀN KHẢ DỤNG · DNSE" if mode == "REAL" else "TIỀN KHẢ DỤNG")
         stats_mode = str(getattr(self.settings, "daily_stats_mode", "DAILY") or "DAILY").upper()
         summary_provider = getattr(self.daily_fees, "display_summary", self.daily_fees.summary)
         summary = summary_provider(
@@ -4290,8 +4292,12 @@ class DashboardActionsMixin:
                  else f"PHÍ {period}: CHỜ DNSE" if summary.get("fees_pending") else f"PHÍ {period}: 0",
             text_color=COL_WARN,
         )
-        cash_text = f"{_cash(balance):,.0f}" if balance else "—"
+        cash_text = f"{money['available']:,.0f}" if money["available"] is not None else "—"
         self.lbl_account.configure(text=f"ID: {self.account_id}  ·  {mode}  ·  TIỀN KHẢ DỤNG {cash_text}")
+
+    def _account_money_hint(self) -> str:
+        balance, positions, _orders = self.snapshots.get(self.mode.get(), ({}, [], []))
+        return account_money_hint(account_money(balance, positions))
 
     def _reset_daily_stats(self) -> None:
         mode = self.mode.get()
