@@ -1166,8 +1166,11 @@ class DashboardPanelsMixin:
         phase2._viking_title_widget.grid(columnspan=2)
         phase2.grid_columnconfigure(1, weight=2, minsize=145)
         phase2.grid_columnconfigure(2, weight=2, minsize=140)
-        cross_header = ctk.CTkFrame(phase2, fg_color="transparent")
+        # Reserve one stable width for both mode captions.  Otherwise Tk lets
+        # the longer VA+XP caption move the entire P2 value column on swap.
+        cross_header = ctk.CTkFrame(phase2, width=140, height=24, fg_color="transparent")
         cross_header.grid(row=0, column=2, sticky="ew", padx=(4, 6), pady=3)
+        cross_header.grid_propagate(False)
         cross_header.grid_columnconfigure(0, weight=1)
         self.preview_rule_cross_title = StatusLabel(
             cross_header, text="∞ VA", width=1, height=18,
@@ -1885,8 +1888,11 @@ class DashboardPanelsMixin:
             text=f"{label}: {text}", text_color=color)
         self.preview_rule_cross_detail._viking_full_detail_text = ("OFF · " if tracking and not required else "") + f"{label}: {text}"
         when = str(evidence.get("cross_at", ""))
-        short_date = f"{when[8:10]}/{when[5:7]}" if len(when) >= 10 else "—"
-        self.preview_rule_cross_detail._viking_compact_detail_text = (f"CẮT {short_date}" if required else f"OFF · {short_date}") if tracking else f"{label}: {text}"
+        short_date = f"{when[8:10]}/{when[5:7]}" if len(when) >= 10 else ""
+        self.preview_rule_cross_detail._viking_compact_detail_text = (
+            (f"CẮT {short_date}" if short_date else "CHƯA GHI NHẬN") if required
+            else f"OFF · {short_date or 'CHƯA LƯU'}"
+        ) if tracking else f"{label}: {text}"
         fit = getattr(self, "_fit_phase2_row", None)
         if callable(fit) and widget.master.winfo_width() > 1:
             fit()
@@ -1907,6 +1913,7 @@ class DashboardPanelsMixin:
                    if active == "VA" and self.settings.rule_parameters.get("buy_ema_va_lookback_enabled") else "")
         return (f"RULE: {active}{va_scan} · {'BẬT' if enabled else 'OFF'}. Đang xem: {evidence.get('mode', active)}.\n"
                 "⇄ đổi góc xem VA/X PHIÊN, không đổi rule hoặc tạo lệnh. Dùng dữ liệu đã lưu, kể cả khi rule OFF.\n"
+                "CHƯA GHI NHẬN: mode đang xem chưa lưu được lần cắt lên; lần cắt có thể xảy ra trước khi theo dõi.\n"
                 + remaining + memory_hint(evidence))
 
     def _atr_preview_hint(self) -> str:

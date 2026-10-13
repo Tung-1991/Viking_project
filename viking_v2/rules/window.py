@@ -567,6 +567,7 @@ class RuleSettingsPopup:
             "∞ VA: chỉ nhớ từ khi thêm mã, giữ tới khi dùng.\n"
             "VA + QUÉT X PHIÊN: lấy lần cắt cũ trong X phiên trước lúc bật, rồi VA giữ tới khi dùng.\n"
             "⏳ X PHIÊN: quét thêm X phiên trước và phần phiên hiện tại; giữ X phiên từ lần cắt, tính cả phiên cắt, bỏ ngày nghỉ.\n"
+            "Ô SỐ PHIÊN luôn hiện; VA không bật QUÉT TRƯỚC thì ô này làm mờ vì không sử dụng.\n"
             "Lần cắt hết hạn/đã dùng không mua lại. BUY vẫn cần EMA nhanh > chậm, RSI và các điều kiện khác đạt."
         )
         self.buy_signal_require_ema_cross = self._switch(
@@ -579,27 +580,30 @@ class RuleSettingsPopup:
         memory_row = ctk.CTkFrame(self.buy_ema_memory_group, fg_color="transparent")
         memory_row.pack(fill="x", padx=12, pady=(0, 8))
         memory_row.grid_columnconfigure(0, weight=1)
-        ctk.CTkSegmentedButton(memory_row, values=["∞ VA", "⏳ X PHIÊN"], variable=self.buy_ema_cross_mode,
-                              selected_color=self.BLUE, font=("Segoe UI", 12, "bold")).grid(row=0, column=0, sticky="ew")
-        self.buy_ema_cross_sessions = ctk.CTkEntry(
-            memory_row, width=55, height=32, justify="right", font=FONT_VALUE,
-            fg_color="#181B20", border_color="#444B55", text_color=self.TEXT)
-        self.buy_ema_cross_sessions.insert(0, str(self.params.buy_ema_cross_sessions))
-        self.buy_ema_cross_sessions.grid(row=0, column=1, padx=(6, 0))
+        memory_row.grid_columnconfigure(1, weight=0)
+        self.buy_ema_mode_selector = ctk.CTkSegmentedButton(
+            memory_row, values=["∞ VA", "⏳ X PHIÊN"], variable=self.buy_ema_cross_mode,
+            selected_color=self.BLUE, font=("Segoe UI", 12, "bold"))
+        self.buy_ema_mode_selector.grid(row=0, column=0, sticky="ew")
+        self.buy_ema_mode_hint = self._hint_icon(memory_row, memory_hint)
+        self.buy_ema_mode_hint.grid(row=0, column=1, padx=(6, 0))
         self.buy_ema_va_lookback_switch = ctk.CTkSwitch(
             memory_row, text="VA QUÉT TRƯỚC", variable=self.buy_ema_va_lookback_enabled,
             font=("Segoe UI", 11), width=105, switch_width=34, switch_height=18)
         self.buy_ema_va_lookback_switch.grid(row=1, column=0, columnspan=2, sticky="w", pady=(5, 0))
-        self._hint_icon(memory_row, memory_hint).grid(row=0, column=2, padx=(6, 0))
+        ctk.CTkLabel(memory_row, text="SỐ PHIÊN QUÉT / GIỮ", font=("Segoe UI", 11),
+                     text_color=self.TEXT, anchor="w").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.buy_ema_cross_sessions = ctk.CTkEntry(
+            memory_row, width=55, height=32, justify="right", font=FONT_VALUE,
+            fg_color="#181B20", border_color="#444B55", text_color=self.TEXT)
+        self.buy_ema_cross_sessions.insert(0, str(self.params.buy_ema_cross_sessions))
+        self.buy_ema_cross_sessions.grid(row=2, column=1, padx=(6, 0), pady=(6, 0))
+        _HoverHint(self.buy_ema_cross_sessions, memory_hint)
         def refresh_memory_field(*_args):
             va = self.buy_ema_cross_mode.get() == "∞ VA"
             self.buy_ema_va_lookback_switch.configure(state="normal" if va else "disabled")
-            if not va or self.buy_ema_va_lookback_enabled.get():
-                self.buy_ema_cross_sessions.configure(state="normal")
-                self.buy_ema_cross_sessions.grid()
-            else:
-                self.buy_ema_cross_sessions.configure(state="disabled")
-                self.buy_ema_cross_sessions.grid_remove()
+            self.buy_ema_cross_sessions.configure(
+                state="normal" if not va or self.buy_ema_va_lookback_enabled.get() else "disabled")
         self.buy_ema_cross_mode.trace_add("write", refresh_memory_field)
         self.buy_ema_va_lookback_enabled.trace_add("write", refresh_memory_field)
         refresh_memory_field()

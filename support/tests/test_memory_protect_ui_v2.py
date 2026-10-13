@@ -19,14 +19,21 @@ def test_compact_ema_group_keeps_controls_inside_on_remote_scaling(ui_root,scale
         ui_root.update_idletasks()
         entry = popup.buy_ema_cross_sessions
         row = entry.master
+        def geometry(widget):
+            return widget.winfo_x(), widget.winfo_y(), widget.winfo_width(), widget.winfo_height()
+        controls = (popup.buy_ema_mode_selector, popup.buy_ema_mode_hint,
+                    popup.buy_ema_va_lookback_switch, entry)
+        positions = tuple(map(geometry, controls))
         assert entry.winfo_x()+entry.winfo_width() <= row.winfo_width()
         assert entry.winfo_x() >= 0 and entry.winfo_width() > 0
         popup.buy_ema_cross_mode.set('∞ VA')
         ui_root.update_idletasks()
-        assert not entry.winfo_manager()
+        assert entry.winfo_manager() == 'grid' and entry.cget('state') == 'disabled'
+        assert tuple(map(geometry, controls)) == positions
         popup.buy_ema_va_lookback_enabled.set(True)
         ui_root.update_idletasks()
-        assert entry.winfo_manager() == 'grid'
+        assert entry.winfo_manager() == 'grid' and entry.cget('state') == 'normal'
+        assert tuple(map(geometry, controls)) == positions
         assert entry.winfo_x()+entry.winfo_width() <= row.winfo_width()
         popup.buy_ema_va_lookback_enabled.set(False)
         popup.buy_ema_cross_mode.set('⏳ X PHIÊN')
@@ -63,7 +70,7 @@ def test_rule_save_keeps_modes_bases_and_repeats_independent(ui_root,tmp_path,mo
         assert popup.buy_signal_require_ema_cross._viking_row.master is popup.buy_ema_memory_group
         assert popup.buy_ema_cross_sessions.master.master is popup.buy_ema_memory_group
         assert popup.buy_rsi_period.master.master is not popup.buy_ema_memory_group
-        assert bool(popup.buy_ema_cross_sessions.winfo_manager()) == (memory_mode == "⏳ X PHIÊN")
+        assert popup.buy_ema_cross_sessions.winfo_manager() == 'grid'
         if memory_mode == "⏳ X PHIÊN":
             popup.buy_ema_cross_sessions.delete(0,"end")
             popup.buy_ema_cross_sessions.insert(0,"5")

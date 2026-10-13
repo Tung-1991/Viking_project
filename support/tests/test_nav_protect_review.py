@@ -159,6 +159,7 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
         }})
         ui_root.update_idletasks()
         assert "CHỜ CẮT LÊN" in subject.preview_rule_cross.cget("text")
+        assert subject.preview_rule_cross_detail.cget("text") == "CHƯA GHI NHẬN"
         assert "⏸" not in subject.preview_rule_cross.cget("text")
     finally:
         top.destroy()
@@ -181,34 +182,50 @@ def test_protect_policy_is_common_to_arm_and_dynamic_and_saves_alert(ui_root, tm
 
 
 @pytest.mark.parametrize("mode", ["VA", "SESSIONS"])
-def test_off_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, monkeypatch, mode):
+@pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
+@pytest.mark.parametrize("required,width", [(False, 1000), (True, 1000), (True, 1600)])
+def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, monkeypatch, mode, scale, required, width):
     from copy import deepcopy
     from datetime import datetime
     import customtkinter as ctk
     from viking_v2.trading.market import VN_TZ
+
+    ctk.set_widget_scaling(scale)
     now = datetime(2026, 10, 13, 13, tzinfo=VN_TZ)
     monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: now)
     top = ctk.CTkToplevel(ui_root)
-    top.geometry("1000x720+0+0")
+    top.geometry(f"{width}x720+0+0")
     subject = DashboardPanelsMixin()
     subject.settings = AppSettings()
-    subject.settings.rule_parameters.update(buy_signal_require_ema_cross=False, buy_ema_cross_mode=mode)
+    subject.settings.rule_parameters.update(buy_signal_require_ema_cross=required, buy_ema_cross_mode=mode)
     subject._build_order_preview_tab(top)
     source = {"tracking_version": 2, "initialized": True, "current_ready": True,
               "current_fast": 23, "current_slow": 22, "up_count": 0, "down_count": 0,
               "lookback_ready": True, "lookback_up_count": 1, "lookback_down_count": 0,
               "lookback_cross": {"cross_id": "EMA:HISTORY:TEST", "cross_at": "2026-10-12T14:10:00+07:00",
-                                 "cross_timestamp": now.timestamp()-86400, "used": False}}
+                                  "cross_timestamp": now.timestamp()-86400, "used": False,
+                                  "previous_fast": 250.12, "previous_slow": 250.42}}
     details = {"ema_memory_preview_source": source}
     before = deepcopy((subject.settings.to_dict(), details))
     try:
         top.deiconify()
         top.update()
         subject._render_ema_cross_preview(details)
+        positions = None
         for alternate in (False, True, False):
             if getattr(subject, "_preview_ema_alternate", False) != alternate:
                 subject.preview_ema_swap.invoke()
             ui_root.update_idletasks()
+            widgets = (subject.preview_rule_cross.master, subject.preview_rule_cross_title.master,
+                       subject.preview_rule_cross_title, subject.preview_ema_swap,
+                       subject.preview_rule_cross, subject.preview_rule_cross_detail,
+                       subject.preview_rule_ema, subject.preview_rule_rsi)
+            current_positions = tuple((w.winfo_rootx(), w.winfo_rooty(), w.winfo_width(), w.winfo_height())
+                                      for w in widgets)
+            if positions is None:
+                positions = current_positions
+            else:
+                assert current_positions == positions
             evidence = subject._preview_ema_cross_evidence[1]
             viewing_history = (mode == "SESSIONS") != alternate
             assert evidence["mode"] == ("SESSIONS" if viewing_history else "VA")
@@ -217,10 +234,13 @@ def test_off_preview_can_swap_cached_va_and_history_without_changing_rules(ui_ro
             assert subject.preview_rule_cross_title.cget("text") == ("⏳ 3P" if viewing_history else "∞ VA")
             assert int(subject.preview_rule_cross.grid_info()["column"]) == 2
             assert int(subject.preview_rule_cross_detail.grid_info()["column"]) == 2
+            if subject.preview_rule_cross.master._viking_cross_narrow and viewing_history:
+                assert subject.preview_rule_cross_detail.cget("text") == ("CẮT 12/10" if required else "OFF · 12/10")
             assert int(subject.preview_focus_panel.cget("height")) == 300
             assert (subject.settings.to_dict(), details) == before
     finally:
         top.destroy()
+        ctk.set_widget_scaling(1.0)
 
 
 def test_alternate_history_preview_marks_absent_cache_as_unknown(ui_root, monkeypatch):
