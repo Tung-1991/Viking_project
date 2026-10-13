@@ -205,6 +205,44 @@ def test_closed_preview_recovers_latest_book_observation_after_restart_without_w
     assert view.rule_state.store.read() == before
 
 
+def test_closed_preview_prefers_newer_durable_ema_memory_over_stale_decision(monkeypatch):
+    now = datetime(2026, 10, 13, 15, tzinfo=VN_TZ)
+    monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: now)
+    monkeypatch.setattr("viking_v2.dashboard.panels.decision_is_fresh", lambda *_args, **_kwargs: False)
+    view = subject("REAL")
+    view._symbol_exchange = lambda *_args: "HOSE"
+    old = {"profile": "3/6", "tracking_version": 2, "initialized": True,
+           "current_ready": True, "current_fast": 34.5, "current_slow": 34.6,
+           "up_count": 19, "down_count": 18, "observed_at_epoch": now.timestamp() - 600}
+    current = {**old, "current_fast": 34.86, "current_slow": 34.78,
+               "up_count": 27, "down_count": 26,
+               "observed_at_epoch": now.timestamp() - 30}
+    view.rule_state = SimpleNamespace(session_cross=lambda *_args: deepcopy(current))
+    status = {"symbol_phases": {"AAA": "CLOSED"}, "decisions_by_mode": {"REAL": {"AAA": {
+        "details": {"updated_at": (now - timedelta(minutes=10)).isoformat(), "ema_cross": old},
+    }}}}
+    result = view._preview_indicator_details(status, "AAA")
+    assert result["ema_memory_preview_source"]["up_count"] == 27
+    assert result["ema_memory_preview_source"]["down_count"] == 26
+    assert result["ema_cross"]["state"] == "MARKET_CLOSED"
+    assert not result["ema_cross"]["valid"]
+    assert status["decisions_by_mode"]["REAL"]["AAA"]["details"]["ema_cross"] == old
+
+
+def test_preview_ignores_newer_memory_for_different_ema_pair():
+    view = subject("REAL")
+    view._symbol_exchange = lambda *_args: "HOSE"
+    saved = {"profile": "3/6", "tracking_version": 2, "initialized": True,
+             "current_ready": True, "current_fast": 12, "current_slow": 11,
+             "up_count": 2, "down_count": 1, "observed_at_epoch": 100}
+    view.rule_state = SimpleNamespace(session_cross=lambda *_args: {
+        **saved, "profile": "5/10", "up_count": 99, "observed_at_epoch": 200})
+    result = view._preview_indicator_details({"decisions_by_mode": {"REAL": {"AAA": {
+        "details": {"ema_cross": saved},
+    }}}}, "AAA")
+    assert result["ema_memory_preview_source"]["up_count"] == 2
+
+
 def test_closed_preview_uses_completed_daily_cache_when_saved_observation_is_wrong_profile(monkeypatch):
     now = market_now().replace(hour=17, minute=29)
     monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: now)

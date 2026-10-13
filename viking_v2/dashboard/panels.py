@@ -1718,12 +1718,17 @@ class DashboardPanelsMixin:
         if source != "DECISION":
             details.pop("ema_cross", None)  # A price-only fallback cannot prove an observed crossing.
         phase = str((status.get("symbol_phases") or {}).get(symbol) or status.get("market_status") or "").upper()
-        memory = dict(saved_cross)
-        if (memory.get("tracking_version") != 2
-                and callable(getattr(getattr(self, "rule_state", None), "session_cross", None))):
-            memory = self.rule_state.session_cross(symbol, mode)
-        if memory.get("profile") not in {None, "", f"{params.buy_ema_fast}/{params.buy_ema_slow}"}:
-            memory = {}
+        read_memory = getattr(getattr(self, "rule_state", None), "session_cross", None)
+        current_memory = dict(read_memory(symbol, mode) or {}) if callable(read_memory) else {}
+        profile = f"{params.buy_ema_fast}/{params.buy_ema_slow}"
+        # The displayed decision may be stale after the market closes. Prefer
+        # the newest book-local durable memory, including a newer watch reset.
+        candidates = (current_memory, saved_cross)
+        memory = max(
+            (row for row in candidates if row and row.get("profile") in {None, "", profile}),
+            key=lambda row: finite(row.get("observed_at_epoch")) or finite(row.get("started_at_epoch")) or 0,
+            default={},
+        )
         if memory.get("tracking_version") == 2:
             from ..rules.ema_memory import refresh_memory
             details["ema_memory_preview_source"] = dict(memory)
