@@ -297,6 +297,17 @@ class DNSEClient:
                     if require_token and response.status_code == 401 and "token" in message.lower():
                         self.trading_token = ""
                         self.trading_token_expires_at = 0.0
+                    if (
+                        method.upper() in {"GET", "HEAD"}
+                        and not require_token
+                        and response.status_code == 401
+                        and "token invalid" in (message or response.text).lower()
+                        and attempt < retries
+                    ):
+                        # A fresh signed read can recover from a transient DNSE
+                        # authentication rejection without failing the snapshot.
+                        time.sleep(0.5)
+                        continue
                     if response.status_code == 429 and attempt < retries:
                         try:
                             delay = float(response.headers.get("Retry-After", "") or 0.0)

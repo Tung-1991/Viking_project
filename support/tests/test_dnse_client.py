@@ -52,18 +52,34 @@ def client(session):
     return value
 
 
-def test_read_401_token_invalid_preserves_trading_token_and_recovers():
+def test_read_401_token_invalid_retries_with_new_signature_and_preserves_trading_token(monkeypatch):
+    monkeypatch.setattr("viking_v2.connections.dnse.client.time.sleep", lambda _seconds: None)
     session = Session([
         Response(status=401, data={"message": "token invalid"}),
         Response(data={"positions": []}),
     ])
     value = client(session)
+    assert value.get_positions(force=True) == []
+    assert len(session.calls) == 2
+    assert [call[0] for call in session.calls] == ["GET", "GET"]
+    assert value.has_trading_token()
+    assert all("trading-token" not in call[2]["headers"] for call in session.calls)
+    assert session.calls[0][2]["headers"]["X-Signature"] != session.calls[1][2]["headers"]["X-Signature"]
+    assert value.api_health()["snapshot_errors"] == {}
+
+
+def test_read_persistent_401_token_invalid_still_fails_closed(monkeypatch):
+    monkeypatch.setattr("viking_v2.connections.dnse.client.time.sleep", lambda _seconds: None)
+    session = Session([
+        Response(status=401, data={"message": "token invalid"}),
+        Response(status=401, data={"message": "token invalid"}),
+    ])
+    value = client(session)
     with pytest.raises(BrokerSnapshotError, match="HTTP 401"):
         value.get_positions(force=True)
+    assert len(session.calls) == 2
     assert value.has_trading_token()
-    assert "trading-token" not in session.calls[0][2]["headers"]
-    assert value.get_positions(force=True) == []
-    assert value.has_trading_token()
+    assert value.api_health()["snapshot_errors"]
 
 
 def test_write_401_token_invalid_clears_rejected_trading_token():
@@ -71,6 +87,7 @@ def test_write_401_token_invalid_clears_rejected_trading_token():
     value = client(session)
     ok, _body, status, _message = value._request("POST", "/accounts/123/orders", require_token=True)
     assert not ok and status == 401
+    assert len(session.calls) == 1
     assert session.calls[0][2]["headers"]["trading-token"] == "token"
     assert not value.has_trading_token()
 
