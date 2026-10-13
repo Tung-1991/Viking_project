@@ -180,6 +180,7 @@ BACKTEST_RULE_KEYS = PHASE_PARAMETER_KEYS | {
     "buy_signal_use_ema", "buy_signal_use_rsi",
     "buy_signal_require_ema_cross",
     "buy_signal_session_cross_enabled", "buy_ema_cross_mode", "buy_ema_cross_sessions",
+    "buy_ema_va_lookback_enabled",
     "normal_sell_basis", "dynamic_sell_basis", "dynamic_repeat_enabled", "protect_config_version",
     "sell_signal_use_ema", "sell_signal_use_rsi",
     "buy_confirmation_enabled", "buy_confirmation_minutes",
@@ -1404,13 +1405,19 @@ class BacktestPopup:
             "REPLAY quan sát nến trong phiên; DAILY chỉ xác minh tại các nến ngày, không tái tạo giao cắt trong phiên.",
         ).grid(row=1, column=3, padx=10, pady=(8, 0))
         self.buy_ema_cross_mode = ctk.StringVar(value="∞ VA" if params.buy_ema_cross_mode == "VA" else "⏳ X PHIÊN")
+        self.buy_ema_va_lookback_enabled = ctk.BooleanVar(value=params.buy_ema_va_lookback_enabled)
         ctk.CTkSegmentedButton(signal_toggle_row, values=["∞ VA", "⏳ X PHIÊN"], variable=self.buy_ema_cross_mode,
                                font=(FONT, 12)).grid(row=2, column=0, columnspan=2, sticky="w", pady=8)
         self.buy_ema_cross_sessions = self._entry(signal_toggle_row, str(params.buy_ema_cross_sessions), 80)
         self.buy_ema_cross_sessions.grid(row=2, column=2, sticky="w")
-        self.buy_ema_cross_mode.trace_add("write", lambda *_: self.buy_ema_cross_sessions.configure(
-            state="normal" if self.buy_ema_cross_mode.get() == "⏳ X PHIÊN" else "disabled"))
-        self.buy_ema_cross_sessions.configure(state="normal" if params.buy_ema_cross_mode == "SESSIONS" else "disabled")
+        ctk.CTkCheckBox(signal_toggle_row, text="VA quét trước", variable=self.buy_ema_va_lookback_enabled,
+                        font=(FONT, 11)).grid(row=2, column=3, sticky="w")
+        def refresh_ema_lookback(*_):
+            enabled = self.buy_ema_cross_mode.get() == "⏳ X PHIÊN" or self.buy_ema_va_lookback_enabled.get()
+            self.buy_ema_cross_sessions.configure(state="normal" if enabled else "disabled")
+        self.buy_ema_cross_mode.trace_add("write", refresh_ema_lookback)
+        self.buy_ema_va_lookback_enabled.trace_add("write", refresh_ema_lookback)
+        refresh_ema_lookback()
         rule_toggle_row = ctk.CTkFrame(card, fg_color="transparent")
         rule_toggle_row.grid(row=4, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
         self.volume_confirmation = ctk.BooleanVar(value=params.volume_confirmation)
@@ -1605,10 +1612,11 @@ class BacktestPopup:
         self.buy_signal_require_ema_cross.set(bool(params.get("buy_signal_require_ema_cross", True)))
         self.buy_signal_session_cross_enabled.set(bool(params.get("buy_signal_session_cross_enabled", True)))
         self.buy_ema_cross_mode.set("∞ VA" if params.get("buy_ema_cross_mode", "VA") == "VA" else "⏳ X PHIÊN")
+        self.buy_ema_va_lookback_enabled.set(bool(params.get("buy_ema_va_lookback_enabled", False)))
         self.buy_ema_cross_sessions.configure(state="normal")
         self.buy_ema_cross_sessions.delete(0, "end")
         self.buy_ema_cross_sessions.insert(0, str(params.get("buy_ema_cross_sessions", 3)))
-        self.buy_ema_cross_sessions.configure(state="normal" if self.buy_ema_cross_mode.get() == "⏳ X PHIÊN" else "disabled")
+        self.buy_ema_cross_sessions.configure(state="normal" if self.buy_ema_cross_mode.get() == "⏳ X PHIÊN" or self.buy_ema_va_lookback_enabled.get() else "disabled")
         self.sell_signal_ema.set(bool(params.get("sell_signal_use_ema", True)))
         self.sell_signal_rsi.set(bool(params.get("sell_signal_use_rsi", True)))
         indicator_exit_policy = str(
@@ -1777,6 +1785,7 @@ class BacktestPopup:
         params["buy_signal_session_cross_enabled"] = True
         params["buy_ema_cross_mode"] = "VA" if self.buy_ema_cross_mode.get() == "∞ VA" else "SESSIONS"
         params["buy_ema_cross_sessions"] = int(self.buy_ema_cross_sessions.get())
+        params["buy_ema_va_lookback_enabled"] = bool(self.buy_ema_va_lookback_enabled.get())
         params["sell_signal_use_ema"] = bool(self.sell_signal_ema.get())
         params["sell_signal_use_rsi"] = bool(self.sell_signal_rsi.get())
         params["indicator_exit_policy"] = self.indicator_exit_policy.get()

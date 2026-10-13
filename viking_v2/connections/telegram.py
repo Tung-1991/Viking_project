@@ -421,9 +421,11 @@ class SignalTelegramService:
         self, *, symbol: str, price: float, indicators: dict[str, Any],
         ema_enabled: bool, rsi_enabled: bool, observed_at: str,
         execution_mode: str = "", delayed: bool = False, session_closed: bool = False,
+        position_context: dict | None = None,
     ) -> bool:
+        holding = bool(position_context and position_context.get("held_quantity", 0) > 0)
         lines = [
-            f"⚫ MẤT BUY · {str(symbol).upper()} · {str(execution_mode).upper()} · {observed_at[11:19]}",
+            f"⚫ MẤT BUY{' · ĐANG GIỮ' if holding else ''} · {str(symbol).upper()} · {str(execution_mode).upper()} · {observed_at[11:19]}",
             f"Giá {self._price(price)}",
         ]
         if ema_enabled:
@@ -436,7 +438,10 @@ class SignalTelegramService:
                 f"RSI{int(indicators['rsi_period'])} nay / phiên trước: "
                 + self._comparison(indicators["rsi"], indicators["rsi_previous"])
             )
-        lines.append("Chưa tạo lệnh.")
+        from ..services.position_notifications import position_notice_lines
+        if holding or (position_context and position_context.get("pending_sell_quantity", 0) > 0):
+            lines.extend(position_notice_lines(position_context))
+        lines.append("Chỉ báo kỹ thuật yếu đi; không xác nhận đã bán." if holding else "Chưa tạo lệnh.")
         if delayed:
             lines.append(self._technical_delivery_note(observed_at, session_closed))
         return self._send("\n".join(lines))

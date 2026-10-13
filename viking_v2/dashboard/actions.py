@@ -1245,7 +1245,7 @@ class DashboardActionsMixin:
         technical = (DashboardActionsMixin._technical_buy_snapshot(self, decision, price)
                      if session["active"] else None)
         if technical:
-            technical.update(session=session, observed_at=session["observed_at"])
+            technical["session"] = session
         settings = getattr(self, "settings", None)
         rules = getattr(settings, "rule_parameters", {}) or {}
         session_key = "|".join(str(value) for value in (
@@ -1463,12 +1463,19 @@ class DashboardActionsMixin:
             "buy_ema_slow_period": marks.get("buy_ema_slow_period") or rules.get("buy_ema_slow", 6),
             "rsi_period": marks.get("rsi_period") or rules.get("rsi_period", 14),
         })
+        indicator_price = marks.get("indicator_price")
+        try:
+            sampled_price = _price_unit(float(indicator_price)) if indicator_price is not None else price
+        except (TypeError, ValueError, OverflowError):
+            sampled_price = price
+        if not math.isfinite(sampled_price) or sampled_price <= 0:
+            return None
         return {
             "valid": (not ema_enabled or values["buy_ema_fast"] > values["buy_ema_slow"])
                      and (not rsi_enabled or values["rsi"] > values["rsi_previous"]),
-            "price": price, "indicators": values,
+            "price": sampled_price, "indicators": values,
             "ema_enabled": ema_enabled, "rsi_enabled": rsi_enabled,
-            "observed_at": datetime.fromtimestamp(time.time(), VN_TZ).isoformat(),
+            "observed_at": str(marks.get("indicator_observed_at") or datetime.fromtimestamp(time.time(), VN_TZ).isoformat()),
         }
 
     def _notify_buy_lost(self, watch: dict[str, Any]) -> None:
@@ -1550,8 +1557,7 @@ class DashboardActionsMixin:
                         self.rule_state.discard_telegram_notice(notice["id"])
                     else:
                         payload = {**notice["payload"], **delivery}
-                        if notice["category"] == "blocked_buy":
-                            payload["position_context"] = DashboardActionsMixin._technical_position_context(self, notice["symbol"], notice["execution_mode"])
+                        payload["position_context"] = DashboardActionsMixin._technical_position_context(self, notice["symbol"], notice["execution_mode"])
                         selected.append({**notice, "payload": payload})
                 delivered = service.notify_technical_digest(selected)
             except Exception as exc:
@@ -1600,8 +1606,7 @@ class DashboardActionsMixin:
                     method = (service.notify_technical_buy if notice["category"] == "blocked_buy"
                               else service.notify_buy_lost)
                     payload = {**notice["payload"], **(delivery or {})}
-                    if notice["category"] == "blocked_buy":
-                        payload["position_context"] = DashboardActionsMixin._technical_position_context(self, notice["symbol"], notice["execution_mode"])
+                    payload["position_context"] = DashboardActionsMixin._technical_position_context(self, notice["symbol"], notice["execution_mode"])
                     sent = bool(method(**payload))
             except Exception as exc:
                 logger = getattr(self, "logger", None)
@@ -1670,7 +1675,7 @@ class DashboardActionsMixin:
             symbol, occurrence,
             {
                 "symbol": symbol,
-                "price": price,
+                "price": snapshot["price"],
                 "market_state": decision.market_state,
                 "indicators": snapshot["indicators"],
                 "ema_enabled": snapshot["ema_enabled"],

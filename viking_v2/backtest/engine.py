@@ -44,7 +44,8 @@ from .replay import ReplayDataStore
 
 def _historical_ema_memory(row, history, params, at, exchange, holidays, *, replay=None, symbol=""):
     """Seed X-session evidence using past data only, on the live EMA price basis."""
-    if params.buy_ema_cross_mode != "SESSIONS":
+    if params.buy_ema_cross_mode != "SESSIONS" and not (
+            params.buy_ema_cross_mode == "VA" and params.buy_ema_va_lookback_enabled):
         return row
     row = dict(row or {})
     if row.get("tracking_version") != 2:
@@ -92,7 +93,8 @@ def _historical_ema_memory(row, history, params, at, exchange, holidays, *, repl
     if first_at and start.timestamp() <= first_at.timestamp() <= cutoff:
         observations.append((first_at,first))
     seeded = seed_lookback(row,observations,start=start,now=at,
-        pair=f'{params.buy_ema_fast}/{params.buy_ema_slow}',mode='SESSIONS',sessions=params.buy_ema_cross_sessions,
+        pair=f'{params.buy_ema_fast}/{params.buy_ema_slow}',mode=params.buy_ema_cross_mode,
+        sessions=params.buy_ema_cross_sessions, va_lookback_enabled=params.buy_ema_va_lookback_enabled,
         exchange=exchange,holidays=holidays)
     if seeded.get('lookback_ready') and not row.get('initialized'):
         when,marks = observations[-1]
@@ -1248,6 +1250,7 @@ class BacktestEngine:
                     pair=f"{params.buy_ema_fast}/{params.buy_ema_slow}", mode=params.buy_ema_cross_mode,
                     sessions=params.buy_ema_cross_sessions, exchange=settings.symbol_exchanges.get(symbol, "HOSE"),
                     holidays=getattr(settings, "trading_holidays", None),
+                    va_lookback_enabled=params.buy_ema_va_lookback_enabled,
                 )
             # DNSE has no VNINDEX bar on a few sessions the market did trade.
             # Re-reading the same series on those days would count one candle
@@ -2583,12 +2586,14 @@ class BacktestEngine:
                             session_crosses.get(symbol), opening_marks, now=now - timedelta(microseconds=1),
                             pair=f"{params.buy_ema_fast}/{params.buy_ema_slow}", mode=params.buy_ema_cross_mode,
                             sessions=params.buy_ema_cross_sessions, exchange=symbol_exchanges[symbol],
+                            va_lookback_enabled=params.buy_ema_va_lookback_enabled,
                         )
                     session_crosses[symbol] = advance_memory(
                         session_crosses.get(symbol), current_indicators, now=now,
                         pair=f"{params.buy_ema_fast}/{params.buy_ema_slow}", mode=params.buy_ema_cross_mode,
                         sessions=params.buy_ema_cross_sessions, exchange=symbol_exchanges[symbol],
                         holidays=getattr(settings, "trading_holidays", None),
+                        va_lookback_enabled=params.buy_ema_va_lookback_enabled,
                     )
                     position = positions.get(symbol)
                     event_count_before_exit = len(events)

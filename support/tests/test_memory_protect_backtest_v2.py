@@ -30,8 +30,8 @@ def replay_book(tmp_path, days, prices, *, daily_price=8):
     return BacktestEngine(store, replay)
 
 
-@pytest.mark.parametrize("mode,expected", [("VA",0),("SESSIONS",1)])
-def test_starting_replay_after_a_prior_session_cross_uses_lookback_only_in_sessions(tmp_path,mode,expected):
+@pytest.mark.parametrize("mode,va_lookback,expected", [("VA",False,0),("VA",True,1),("SESSIONS",False,1)])
+def test_starting_replay_after_a_prior_session_cross_uses_configured_lookback(tmp_path,mode,va_lookback,expected):
     day = datetime(2026,10,5,tzinfo=VN_TZ)
     earlier = [day-timedelta(days=i) for i in range(60,0,-1) if (day-timedelta(days=i)).weekday()<5]
     days = [at.date().isoformat() for at in earlier]+['2026-10-05']
@@ -47,7 +47,8 @@ def test_starting_replay_after_a_prior_session_cross_uses_lookback_only_in_sessi
     carry = {}
     result = engine.run(BacktestConfig(['FPT'],'2026-10-05','2026-10-05',initial_capital=100e6,
         fixed_market_phase='UPTREND',fixed_exposure_pct=100,simulation_mode='REPLAY',fill_session='CONTINUOUS',
-        rule_parameters={'buy_ema_cross_mode':mode,'buy_ema_cross_sessions':3,'buy_signal_use_rsi':False,
+         rule_parameters={'buy_ema_cross_mode':mode,'buy_ema_cross_sessions':3,
+                          'buy_ema_va_lookback_enabled':va_lookback,'buy_signal_use_rsi':False,
                          'buy_window_enabled':True,'buy_window_start':'14:00','whipsaw_enabled':False}),save=False,carry=carry)
     buys = [event for event in result.events if event.side == 'BUY']
     assert len(buys) == expected

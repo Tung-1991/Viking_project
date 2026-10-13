@@ -86,6 +86,30 @@ def test_loss_requires_a_buy_notice_that_was_really_sent(subject):
     assert client.sent == []
 
 
+def test_technical_notice_uses_indicator_bucket_price_and_observation_time(subject):
+    value, client = subject
+    observe(value, indicator_price=21.1, indicator_observed_at='2026-10-12T09:15:00+07:00')
+    assert len(client.sent) == 1
+    assert 'Giá 21,100đ' in client.sent[0]
+    assert '09:15:00' in client.sent[0]
+
+
+def test_lost_buy_with_unsettled_position_does_not_imply_sale(subject):
+    value, client = subject
+    assert value.telegram.notify_buy_lost(
+        symbol='HDB', price=21.1, observed_at='2026-10-12T09:15:00+07:00',
+        execution_mode='REAL', ema_enabled=True, rsi_enabled=True,
+        indicators={'buy_ema_fast_period':3,'buy_ema_slow_period':6,
+                    'buy_ema_fast':21.69,'buy_ema_slow':21.75,
+                    'rsi_period':14,'rsi':46.43,'rsi_previous':70.94},
+        position_context={'held_quantity':600,'bought_quantity':600,'sold_quantity':0,
+                          'sellable_quantity':0,'pending_sell_quantity':0},
+    )
+    assert 'MẤT BUY · ĐANG GIỮ' in client.sent[0]
+    assert 'Chờ cổ về 600 CP' in client.sent[0]
+    assert 'không xác nhận đã bán' in client.sent[0]
+
+
 def test_failed_buy_delivery_does_not_produce_orphan_loss(subject, monkeypatch):
     value, client = subject
     monkeypatch.setattr(value.telegram, "notify_technical_buy", lambda **_kwargs: False)

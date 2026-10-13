@@ -81,6 +81,38 @@ def test_va_still_ignores_pre_admission_and_never_fetches_lookback(tmp_path):
     assert broker.calls == [] and 'chỉ ghi nhận từ khi thêm mã' in memory_hint(result)
 
 
+def test_va_opt_in_scans_prior_three_sessions_then_retains_cross_across_restart(tmp_path):
+    broker, state, service, params, rows, sample = setup(tmp_path, mode='VA')
+    params.buy_ema_va_lookback_enabled = True
+    result = sample()
+    assert result['state'] == 'SESSION_ACTIVE'
+    assert result['cross_at'] == broker.crossed.isoformat()
+    assert result['cross_source'] == 'VA_HISTORY'
+    assert result['expires_at'] == 0
+    assert '↑1 ↓0' in memory_caption(result)
+    assert broker.calls
+    assert state.claim_session_cross('TEST', 'REAL', result['cross_id'], now=NOW.timestamp())
+    restarted = SessionCrossService(SessionPriceCache(tmp_path/'minutes.json', broker),
+                                    RuleStateStore(tmp_path/'rules.json'))
+    later = restarted.observe('TEST', 'REAL', rows, indicator_snapshot(rows,3,6,14),
+                              params, NOW+timedelta(days=1), 'HOSE')
+    assert later['cross_id'] == result['cross_id'] and later['used']
+    assert later['state'] == 'SESSION_USED' and later['expires_at'] == 0
+
+
+def test_va_lookback_reactivation_scans_from_new_activation_not_old_x_window(tmp_path):
+    _, _, _, params, _, sample = setup(tmp_path)
+    first = sample()
+    assert first['cross_source'] == 'HISTORY'
+    params.buy_ema_cross_mode = 'VA'
+    params.buy_ema_va_lookback_enabled = False
+    assert not sample().get('cross_id')
+    params.buy_ema_va_lookback_enabled = True
+    later = sample(NOW + timedelta(days=4))
+    assert later['lookback_started_at'] == '2026-10-06T00:00:00+07:00'
+    assert not later.get('cross_id') and not later['valid']
+
+
 def test_first_fresh_quote_up_against_historical_minute_cannot_leak_into_va(tmp_path):
     broker,_,_,params,_,sample = setup(tmp_path,crossed='2026-10-05')
     broker.crossed = NOW  # The completed history was below; first current quote is above.

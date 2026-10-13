@@ -10,6 +10,7 @@ import time
 from typing import Any, Iterable
 
 from ...config import WS_URL
+from ...trading.market import market_phase
 
 
 logger = logging.getLogger("VIKING_V2.market_ws")
@@ -213,8 +214,11 @@ class DNSEMarketWS:
             tick = self._ticks.setdefault(symbol, {"symbol": symbol})
             last = _float(data.get("matchPrice"), None)
             expected = _float(data.get("expectedPrice"), None)
+            auction = market_phase()[0] in {"ATO", "ATC"}
             if last is not None and last > 0:
                 tick["price"] = last
+                tick["price_source"] = "MATCH"
+                tick.pop("stale", None)
                 tick["high"] = _float(data.get("highestPrice"), tick.get("high", 0.0))
                 tick["low"] = _float(data.get("lowestPrice"), tick.get("low", 0.0))
                 tick["open"] = _float(data.get("openPrice"), tick.get("open", 0.0))
@@ -222,7 +226,15 @@ class DNSEMarketWS:
                 tick["volume"] = int(_float(data.get("totalVolumeTraded"), tick.get("volume", 0)) or 0)
             if expected is not None and expected > 0:
                 tick["expected_price"] = expected
-                tick["price"] = expected
+                # DNSE can carry an old auction estimate alongside a current
+                # match. It must never replace the matched price in OPEN.
+                if (last is None or last <= 0) and auction:
+                    tick["price"] = expected
+                    tick["price_source"] = "EXPECTED"
+                    tick.pop("stale", None)
+            if not auction and tick.get("price_source") == "EXPECTED":
+                tick.pop("price", None)
+                tick["stale"] = True
             bid = _best(data.get("bid"))
             ask = _best(data.get("offer", data.get("ask")))
             if bid is not None:

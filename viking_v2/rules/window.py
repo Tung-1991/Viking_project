@@ -565,6 +565,7 @@ class RuleSettingsPopup:
         self.buy_ema_memory_group.pack(fill="x", padx=8, pady=(6, 8))
         memory_hint = (
             "∞ VA: chỉ nhớ từ khi thêm mã, giữ tới khi dùng.\n"
+            "VA + QUÉT X PHIÊN: lấy lần cắt cũ trong X phiên trước lúc bật, rồi VA giữ tới khi dùng.\n"
             "⏳ X PHIÊN: quét thêm X phiên trước và phần phiên hiện tại; giữ X phiên từ lần cắt, tính cả phiên cắt, bỏ ngày nghỉ.\n"
             "Lần cắt hết hạn/đã dùng không mua lại. BUY vẫn cần EMA nhanh > chậm, RSI và các điều kiện khác đạt."
         )
@@ -574,6 +575,7 @@ class RuleSettingsPopup:
         )
         self.buy_signal_session_cross_enabled = tk.BooleanVar(value=True)
         self.buy_ema_cross_mode = tk.StringVar(value="∞ VA" if self.params.buy_ema_cross_mode == "VA" else "⏳ X PHIÊN")
+        self.buy_ema_va_lookback_enabled = tk.BooleanVar(value=self.params.buy_ema_va_lookback_enabled)
         memory_row = ctk.CTkFrame(self.buy_ema_memory_group, fg_color="transparent")
         memory_row.pack(fill="x", padx=12, pady=(0, 8))
         memory_row.grid_columnconfigure(0, weight=1)
@@ -584,15 +586,22 @@ class RuleSettingsPopup:
             fg_color="#181B20", border_color="#444B55", text_color=self.TEXT)
         self.buy_ema_cross_sessions.insert(0, str(self.params.buy_ema_cross_sessions))
         self.buy_ema_cross_sessions.grid(row=0, column=1, padx=(6, 0))
+        self.buy_ema_va_lookback_switch = ctk.CTkSwitch(
+            memory_row, text="VA QUÉT TRƯỚC", variable=self.buy_ema_va_lookback_enabled,
+            font=("Segoe UI", 11), width=105, switch_width=34, switch_height=18)
+        self.buy_ema_va_lookback_switch.grid(row=1, column=0, columnspan=2, sticky="w", pady=(5, 0))
         self._hint_icon(memory_row, memory_hint).grid(row=0, column=2, padx=(6, 0))
         def refresh_memory_field(*_args):
-            if self.buy_ema_cross_mode.get() == "⏳ X PHIÊN":
+            va = self.buy_ema_cross_mode.get() == "∞ VA"
+            self.buy_ema_va_lookback_switch.configure(state="normal" if va else "disabled")
+            if not va or self.buy_ema_va_lookback_enabled.get():
                 self.buy_ema_cross_sessions.configure(state="normal")
                 self.buy_ema_cross_sessions.grid()
             else:
                 self.buy_ema_cross_sessions.configure(state="disabled")
                 self.buy_ema_cross_sessions.grid_remove()
         self.buy_ema_cross_mode.trace_add("write", refresh_memory_field)
+        self.buy_ema_va_lookback_enabled.trace_add("write", refresh_memory_field)
         refresh_memory_field()
 
         mode = self._card(
@@ -1562,6 +1571,7 @@ class RuleSettingsPopup:
             self.params.buy_signal_session_cross_enabled = True
             self.params.buy_ema_cross_mode = "VA" if self.buy_ema_cross_mode.get() == "∞ VA" else "SESSIONS"
             self.params.buy_ema_cross_sessions = cross_sessions
+            self.params.buy_ema_va_lookback_enabled = bool(self.buy_ema_va_lookback_enabled.get())
             self.params.buy_volume_enabled = bool(self.buy_volume_enabled.get())
             self.params.buy_volume_average_sessions = buy_volume_average
             self.params.buy_volume_min_ratio = buy_volume_minimum / 100.0

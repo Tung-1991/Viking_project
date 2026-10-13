@@ -1164,8 +1164,8 @@ class DashboardPanelsMixin:
             self._indicator_preview_hint,
         )
         phase2._viking_title_widget.grid(columnspan=2)
-        phase2.grid_columnconfigure(1, weight=2)
-        phase2.grid_columnconfigure(2, weight=1)
+        phase2.grid_columnconfigure(1, weight=2, minsize=145)
+        phase2.grid_columnconfigure(2, weight=2, minsize=140)
         cross_header = ctk.CTkFrame(phase2, fg_color="transparent")
         cross_header.grid(row=0, column=2, sticky="ew", padx=(4, 6), pady=3)
         cross_header.grid_columnconfigure(0, weight=1)
@@ -1240,8 +1240,8 @@ class DashboardPanelsMixin:
             if getattr(phase2, "_viking_cross_narrow", None) != narrow:
                 phase2._viking_cross_narrow = narrow
                 panel._viking_content_min_height = 300
-                phase2.grid_columnconfigure(1, weight=3)
-                phase2.grid_columnconfigure(2, weight=1, minsize=75)
+                phase2.grid_columnconfigure(1, weight=2, minsize=145)
+                phase2.grid_columnconfigure(2, weight=2, minsize=140)
                 phase2._viking_title_widget.grid(columnspan=2)
                 phase2._viking_title_widget.configure(text="P2 · BUY/E  ⓘ" if narrow else "P2 · BUY / E  ⓘ")
                 for value in (self.preview_rule_ema, self.preview_rule_sell_ema, self.preview_rule_rsi):
@@ -1719,7 +1719,8 @@ class DashboardPanelsMixin:
             details["ema_memory_preview_source"] = dict(memory)
             memory = refresh_memory(memory, now=datetime.now(VN_TZ), mode=params.buy_ema_cross_mode,
                                     sessions=params.buy_ema_cross_sessions, exchange=self._symbol_exchange(symbol),
-                                    holidays=self.settings.trading_holidays)
+                                    holidays=self.settings.trading_holidays,
+                                    va_lookback_enabled=params.buy_ema_va_lookback_enabled)
             if phase in {"CLOSED", "WEEKEND", "HOLIDAY"}:
                 memory.update(state="MARKET_CLOSED", valid=False)
             elif source != "DECISION":
@@ -1793,7 +1794,9 @@ class DashboardPanelsMixin:
             buy_ema_rule = (
                 "BUY cần lần cắt lên; X phiên quét thêm X phiên trước và phần phiên hiện tại, giữ đúng tuổi lần cắt."
                 if params.get("buy_ema_cross_mode", "VA") == "SESSIONS"
-                else "BUY cần lần cắt lên sau khi thêm mã; ∞ VA giữ tới khi dùng, kể cả restart."
+                else (f"BUY dùng lần cắt trong {params.get('buy_ema_cross_sessions', 3)} phiên trước khi bật; ∞ VA giữ tới khi dùng."
+                      if params.get("buy_ema_va_lookback_enabled") else
+                      "BUY cần lần cắt lên sau khi thêm mã; ∞ VA giữ tới khi dùng, kể cả restart.")
             ) + " Mỗi lần cắt chỉ dùng một lần."
         text = (
             f"EMA: nhanh so với chậm. {buy_ema_rule} Vẫn kiểm tra các điều kiện vào lệnh khác.\n"
@@ -1833,8 +1836,9 @@ class DashboardPanelsMixin:
                 raw["cross_source"] = "LIVE"
             evidence = refresh_memory(raw, now=market_now(), mode=view_mode,
                                       sessions=int(params.get("buy_ema_cross_sessions", 3)),
-                                      exchange=raw.get("exchange") or "HOSE", holidays=self.settings.trading_holidays)
-            if view_mode == "SESSIONS" and raw.get("lookback_ready") is not True and raw.get("cross_source") != "LIVE":
+                                      exchange=raw.get("exchange") or "HOSE", holidays=self.settings.trading_holidays,
+                                      va_lookback_enabled=bool(params.get("buy_ema_va_lookback_enabled", False)))
+            if (view_mode == "SESSIONS" or (view_mode == "VA" and params.get("buy_ema_va_lookback_enabled"))) and raw.get("lookback_ready") is not True and raw.get("cross_source") != "LIVE":
                 evidence.update(ready=False, valid=False, state="UNKNOWN")
             if details.get("ema_cross_preview_closed"):
                 evidence["valid"] = False
@@ -1852,12 +1856,18 @@ class DashboardPanelsMixin:
         if tracking:
             from ..rules.ema_memory import memory_fields
             fields = memory_fields(evidence)
-            glyph = widget._viking_full_cross_text.rsplit(" · ", 1)[-1]
-            widget._viking_compact_cross_text = f"↑{fields['ema_memory_up_count']} ↓{fields['ema_memory_down_count']}\n{glyph}"
+            state_label = {
+                "SESSION_ACTIVE": "ĐÃ CẮT", "SESSION_USED": "ĐÃ DÙNG", "EXPIRED": "HẾT HẠN",
+                "WAIT_UP": "CHỜ LÊN", "WAIT_DOWN": "CHỜ XUỐNG",
+                "UNKNOWN": "CHỜ DỮ LIỆU", "MARKET_CLOSED": "ĐÃ ĐÓNG",
+            }.get(evidence.get("state"), "CHỜ")
+            widget._viking_compact_cross_text = (
+                f"↑{fields['ema_memory_up_count']} ↓{fields['ema_memory_down_count']} · {state_label}"
+            )
         else:
             widget._viking_compact_cross_text = ("CHỜ DL" if widget._viking_full_cross_text == "CHƯA ĐỦ DỮ LIỆU"
                                                 else widget._viking_full_cross_text)
-        title = ("∞ VA" if view_mode == "VA" else f"⏳ {int(params.get('buy_ema_cross_sessions', 3))}P")
+        title = (f"∞ VA+{int(params.get('buy_ema_cross_sessions', 3))}P" if params.get("buy_ema_va_lookback_enabled") else "∞ VA") if view_mode == "VA" else f"⏳ {int(params.get('buy_ema_cross_sessions', 3))}P"
         self.preview_rule_cross_title.configure(text=title, text_color=COL_WARN if getattr(self, "_preview_ema_alternate", False) else COL_PREVIEW_TEXT)
         widget.configure(text=caption.removeprefix("CẮT EMA · "),
                          text_color={"ok": COL_GREEN, "wait": COL_WARN}.get(role, COL_MUTED))
@@ -1892,7 +1902,9 @@ class DashboardPanelsMixin:
                        and self.settings.rule_parameters.get("buy_signal_require_ema_cross", True))
         remaining = (f"X phiên: còn {evidence.get('remaining_sessions', 0)}/{evidence.get('sessions', 3)} phiên.\n"
                      if evidence.get("mode") == "SESSIONS" else "")
-        return (f"RULE: {active} · {'BẬT' if enabled else 'OFF'}. Đang xem: {evidence.get('mode', active)}.\n"
+        va_scan = (f" · QUÉT {self.settings.rule_parameters.get('buy_ema_cross_sessions', 3)} PHIÊN"
+                   if active == "VA" and self.settings.rule_parameters.get("buy_ema_va_lookback_enabled") else "")
+        return (f"RULE: {active}{va_scan} · {'BẬT' if enabled else 'OFF'}. Đang xem: {evidence.get('mode', active)}.\n"
                 "⇄ đổi góc xem VA/X PHIÊN, không đổi rule hoặc tạo lệnh. Dùng dữ liệu đã lưu, kể cả khi rule OFF.\n"
                 + remaining + memory_hint(evidence))
 

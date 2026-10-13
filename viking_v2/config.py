@@ -129,6 +129,7 @@ DEFAULT_RULE_PARAMETERS: dict[str, Any] = {
     "buy_signal_session_cross_enabled": True,
     "buy_ema_cross_mode": "VA",
     "buy_ema_cross_sessions": 3,
+    "buy_ema_va_lookback_enabled": False,
     "buy_volume_enabled": False,
     "buy_volume_average_sessions": 20,
     "buy_volume_min_ratio": 1.0,

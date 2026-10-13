@@ -219,7 +219,7 @@ class InfoPopup:
         ) or "OFF"
         phase2_items = [
             ("BUY", buy_conditions, PALETTE["GREEN"]),
-            ("NHỚ EMA", "∞ VA" if p.buy_ema_cross_mode == "VA" else f"⏳ {p.buy_ema_cross_sessions} PHIÊN", PALETTE["TEXT"]),
+            ("NHỚ EMA", (f"∞ VA + QUÉT {p.buy_ema_cross_sessions} PHIÊN" if p.buy_ema_va_lookback_enabled else "∞ VA") if p.buy_ema_cross_mode == "VA" else f"⏳ {p.buy_ema_cross_sessions} PHIÊN", PALETTE["TEXT"]),
             ("TÍN HIỆU", signal_mode, PALETTE["TEXT"]),
             (
                 "XÁC NHẬN BUY",

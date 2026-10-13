@@ -24,11 +24,32 @@ def test_compact_ema_group_keeps_controls_inside_on_remote_scaling(ui_root,scale
         popup.buy_ema_cross_mode.set('∞ VA')
         ui_root.update_idletasks()
         assert not entry.winfo_manager()
+        popup.buy_ema_va_lookback_enabled.set(True)
+        ui_root.update_idletasks()
+        assert entry.winfo_manager() == 'grid'
+        assert entry.winfo_x()+entry.winfo_width() <= row.winfo_width()
+        popup.buy_ema_va_lookback_enabled.set(False)
         popup.buy_ema_cross_mode.set('⏳ X PHIÊN')
         assert entry.get() == '3' and entry.winfo_manager() == 'grid'
     finally:
         popup._close()
         ctk.set_widget_scaling(1.0)
+
+
+def test_rule_popup_saves_va_lookback_without_changing_mode(ui_root, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, 'ACCOUNTS_ROOT', tmp_path / 'accounts')
+    popup = RuleSettingsPopup(ui_root, AppSettings(), 'VA_HISTORY', lambda: None)
+    try:
+        popup.buy_ema_cross_mode.set('∞ VA')
+        popup.buy_ema_va_lookback_enabled.set(True)
+        popup.buy_ema_cross_sessions.delete(0, 'end')
+        popup.buy_ema_cross_sessions.insert(0, '3')
+        popup.save()
+        saved = StaticRuleParameters.from_dict(config.load_settings('VA_HISTORY').rule_parameters)
+        assert saved.buy_ema_cross_mode == 'VA'
+        assert saved.buy_ema_va_lookback_enabled and saved.buy_ema_cross_sessions == 3
+    finally:
+        popup._close()
 
 
 @pytest.mark.parametrize("memory_mode", ["∞ VA", "⏳ X PHIÊN"])

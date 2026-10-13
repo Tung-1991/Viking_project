@@ -324,6 +324,7 @@ class StaticRuleParameters:
     buy_signal_session_cross_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["buy_signal_session_cross_enabled"])
     buy_ema_cross_mode: str = "VA"
     buy_ema_cross_sessions: int = 3
+    buy_ema_va_lookback_enabled: bool = False
     buy_volume_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["buy_volume_enabled"])
     buy_volume_average_sessions: int = int(DEFAULT_RULE_PARAMETERS["buy_volume_average_sessions"])
     buy_volume_min_ratio: float = float(DEFAULT_RULE_PARAMETERS["buy_volume_min_ratio"])
@@ -398,6 +399,7 @@ class StaticRuleParameters:
         self.buy_signal_require_ema_cross = bool(self.buy_signal_require_ema_cross)
         self.buy_signal_session_cross_enabled = bool(self.buy_signal_session_cross_enabled)
         self.buy_ema_cross_mode = str(self.buy_ema_cross_mode).upper()
+        self.buy_ema_va_lookback_enabled = bool(self.buy_ema_va_lookback_enabled)
         if self.buy_ema_cross_mode not in {"VA", "SESSIONS"}:
             raise ValueError("Giữ EMA phải là VA hoặc SESSIONS")
         self.buy_ema_cross_sessions = int(self.buy_ema_cross_sessions)

@@ -122,18 +122,27 @@ class SessionCrossService:
         from ..rules.business import indicator_snapshot
         from ..rules.ema_memory import lookback_start, seed_lookback
         from ..trading.market import exchange_close_minute, is_working_day
-        if params.buy_ema_cross_mode != "SESSIONS":
+        if params.buy_ema_cross_mode != "SESSIONS" and not (
+                params.buy_ema_cross_mode == "VA" and params.buy_ema_va_lookback_enabled):
             return row
         if row.get("tracking_version") != 2:
             row = {"tracking_version": 2, "watch_id": f"{args['pair']}:{now.timestamp()}",
                    "started_at": now.isoformat(), "started_at_epoch": now.timestamp(),
                    "initialized": False, "up_count": 0, "down_count": 0}
-        key = f"{args['pair']}:{params.buy_ema_cross_sessions}:{observation_mode}"
-        if row.get("lookback_key") == key and row.get("lookback_ready"):
+        key = f"{args['pair']}:{params.buy_ema_cross_sessions}:{observation_mode}:{params.buy_ema_cross_mode}"
+        activated = (params.buy_ema_cross_mode != "VA" or row.get("va_lookback_active") is True)
+        if row.get("lookback_key") == key and row.get("lookback_ready") and activated:
             return row
         row = dict(row)
-        if row.get("lookback_key") != key:
-            row.update(lookback_key=key, lookback_requested_at=now.isoformat(), lookback_ready=False)
+        if row.get("lookback_key") != key or not activated:
+            if row.get("cross_source") in {"HISTORY", "VA_HISTORY"}:
+                from ..rules.ema_memory import _CROSS_KEYS
+                for field in _CROSS_KEYS:
+                    row.pop(field, None)
+                row.pop("cross_source", None)
+            row.update(lookback_key=key, lookback_requested_at=now.isoformat(),
+                       lookback_ready=False, lookback_cross={},
+                       lookback_up_count=0, lookback_down_count=0)
         requested = datetime.fromisoformat(row["lookback_requested_at"])
         start = lookback_start(requested, params.buy_ema_cross_sessions,
                                args.get("working_dates"), args.get("holidays"))
@@ -146,7 +155,7 @@ class SessionCrossService:
         cutoff = min(baseline_at.timestamp() if baseline_at else float(row.get("started_at_epoch", requested.timestamp())),
                      requested.timestamp())
         if cutoff <= start.timestamp():
-            return {**row, "lookback_ready": True, "lookback_started_at": row.get("started_at"),
+            return {**row, "lookback_ready": True, "lookback_started_at": start.isoformat(),
                     "lookback_up_count": 0, "lookback_down_count": 0, "lookback_cross": {}}
         prior = [bar for bar in bars if bool(bar.get("closed", True))
                  and datetime.fromtimestamp(float(bar["time"]), VN_TZ).date() < start.date()]
@@ -201,7 +210,8 @@ class SessionCrossService:
             row["profile"] = "RESET:MODE"
         args = dict(pair=f"{params.buy_ema_fast}/{params.buy_ema_slow}", mode=params.buy_ema_cross_mode,
                     sessions=params.buy_ema_cross_sessions, exchange=exchange,
-                    working_dates=working_dates, holidays=holidays)
+                     working_dates=working_dates, holidays=holidays,
+                     va_lookback_enabled=params.buy_ema_va_lookback_enabled)
         completed = [bar for bar in bars if bool(bar.get("closed", True))]
         def marks(values):
             return indicator_snapshot(values, params.buy_ema_fast, params.buy_ema_slow, params.rsi_period)
@@ -304,7 +314,8 @@ class SessionCrossService:
             row["profile"] = "RESET:MODE"
         args = dict(pair=f"{params.buy_ema_fast}/{params.buy_ema_slow}",
                     mode=params.buy_ema_cross_mode, sessions=params.buy_ema_cross_sessions,
-                    exchange=exchange, working_dates=working_dates, holidays=holidays)
+                     exchange=exchange, working_dates=working_dates, holidays=holidays,
+                     va_lookback_enabled=params.buy_ema_va_lookback_enabled)
         if row.get("profile") not in {None, "", args["pair"]}:
             # A changed pair starts a new baseline now, not in recovered history.
             row = advance_memory(row, indicators, now=now, **args)

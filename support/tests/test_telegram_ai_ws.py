@@ -958,13 +958,36 @@ def test_websocket_decodes_msgpack_and_merges_tick_quote():
     assert tick["source"] == "WS"
 
 
-def test_ato_atc_zero_expected_price_does_not_erase_last_valid_price():
+def test_ato_atc_zero_expected_price_does_not_erase_last_valid_price(monkeypatch):
     ws = DNSEMarketWS("key", "secret")
     ws._ingest({"symbol": "FPT", "matchPrice": 100})
     ws._ingest({"symbol": "FPT", "matchPrice": 0, "expectedPrice": 0})
     assert ws.latest_tick("FPT")["price"] == 100
+    monkeypatch.setattr("viking_v2.connections.dnse.websocket.market_phase", lambda: ("ATC", "ATC"))
     ws._ingest({"symbol": "FPT", "expectedPrice": 101.5})
     assert ws.latest_tick("FPT")["price"] == 101.5
+
+
+def test_open_market_estimate_cannot_replace_matched_price(monkeypatch):
+    monkeypatch.setattr("viking_v2.connections.dnse.websocket.market_phase", lambda: ("OPEN", "MỞ"))
+    ws = DNSEMarketWS("key", "secret")
+    ws._ingest({"symbol": "HDB", "matchPrice": 23.0, "expectedPrice": 21.1})
+    assert ws.latest_tick("HDB")["price"] == 23.0
+    ws._ingest({"symbol": "HDB", "expectedPrice": 21.1})
+    assert ws.latest_tick("HDB")["price"] == 23.0
+
+
+def test_auction_estimate_is_stale_until_first_open_market_match(monkeypatch):
+    phase = ["ATO"]
+    monkeypatch.setattr("viking_v2.connections.dnse.websocket.market_phase", lambda: (phase[0], phase[0]))
+    ws = DNSEMarketWS("key", "secret")
+    ws._ingest({"symbol": "HDB", "expectedPrice": 21.1})
+    assert ws.latest_tick("HDB")["price"] == 21.1
+    phase[0] = "OPEN"
+    ws._ingest({"symbol": "HDB", "expectedPrice": 21.1})
+    assert ws.latest_tick("HDB").get("stale") and "price" not in ws.latest_tick("HDB")
+    ws._ingest({"symbol": "HDB", "matchPrice": 23.0})
+    assert ws.latest_tick("HDB")["price"] == 23.0 and not ws.latest_tick("HDB").get("stale")
 
 
 def test_websocket_auth_and_tls_path_are_legacy_compatible(monkeypatch):
