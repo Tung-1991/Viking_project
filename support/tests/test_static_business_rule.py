@@ -28,7 +28,7 @@ def test_whipsaw_counts_daily_ema_crosses_not_each_intraday_signal_flip():
     # Same provisional daily candle observed at 13:00, 13:40, then after 14:00.
     counts = [crossover_count(_bars(history + [price], last_closed=False), window=7)
               for price in (101.0, 101.0, 96.0)]
-    assert counts == [2, 2, 1]  # Recomputed from daily bars; not an accumulating tick counter.
+    assert counts == [1, 1, 0]  # Equality does not count as a cross; no accumulating tick counter.
     rule = StaticRule()
     decisions = [rule.evaluate(
         {"symbol": "TEST", "bars": _bars(history + [price], last_closed=False),

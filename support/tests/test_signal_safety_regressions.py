@@ -31,7 +31,7 @@ def test_reference_ema_and_wilder_rsi_arithmetic():
 
 def test_whipsaw_daily_counter_and_threshold_control():
     bars = [dict(close=price, closed=True) for price in [10, 9, 11, 8, 12]]
-    assert crossover_count(bars, 1, 2, 4) == 4
+    assert crossover_count(bars, 1, 2, 4) == 3
     source = dict(symbol='MSN', bars=bars, signal_mode='REALTIME',
                   confirmed_market_state='UPTREND')
     p = dict(available_capital=100_000_000)
@@ -43,6 +43,12 @@ def test_whipsaw_daily_counter_and_threshold_control():
         assert result.action == action
         if enabled:
             assert result.reason == 'WHIPSAW_LOCK'
+
+
+def test_whipsaw_ignores_equal_ema_until_strict_side_change():
+    bars = [dict(close=price, closed=True) for price in [10, 7, 8, 10]]
+    assert crossover_count(bars, 1, 2, 3) == 1
+    assert crossover_count(bars[:3], 1, 2, 3) == 0
 
 
 def test_normalization_reference_units_dates_and_original_evidence(tmp_path):

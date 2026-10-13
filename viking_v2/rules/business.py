@@ -271,12 +271,20 @@ def crossover_count(rows: Iterable[dict[str, Any]], fast: int = 3, slow: int = 6
     fast_values = ema(values, fast)
     slow_values = ema(values, slow)
     start = max(1, len(values) - max(1, int(window or 10)))
-    return sum(
-        1
-        for index in range(start, len(values))
-        if (fast_values[index - 1] <= slow_values[index - 1] and fast_values[index] > slow_values[index])
-        or (fast_values[index - 1] >= slow_values[index - 1] and fast_values[index] < slow_values[index])
-    )
+    # Equality is neutral, just as it is in the live EMA memory. Find the
+    # latest real side before this window, then count strict side changes.
+    previous = 0
+    for index in range(start - 1, -1, -1):
+        previous = 1 if fast_values[index] > slow_values[index] else -1 if fast_values[index] < slow_values[index] else 0
+        if previous:
+            break
+    count = 0
+    for index in range(start, len(values)):
+        current = 1 if fast_values[index] > slow_values[index] else -1 if fast_values[index] < slow_values[index] else 0
+        if current:
+            count += int(previous != 0 and current != previous)
+            previous = current
+    return count
 
 def pivot_points(rows: list[dict[str, Any]], left: int = 3, right: int = 3) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:
     left = max(1, int(left or 3))
