@@ -161,7 +161,7 @@ with tempfile.TemporaryDirectory(prefix="money-hunter-startup-") as directory:
                 assert font.measure(label.cget("text")) <= label.winfo_width(), (
                     label.cget("text"), font.measure(label.cget("text")), label.winfo_width(),
                     [(ancestor.winfo_class(), ancestor.winfo_width(), ancestor.winfo_height(), ancestor.winfo_ismapped())
-                     for ancestor in (label.master, label.master.master, app.preview_scroll, app.log_tabview, app)])
+                     for ancestor in (label.master, label.master.master, app.preview_container, app.log_tabview, app)])
             app.order_type.set("LO")
             app.price.delete(0, tk.END)
             app.price.insert(0, "74,200")
@@ -215,7 +215,42 @@ with tempfile.TemporaryDirectory(prefix="money-hunter-startup-") as directory:
         app.mode.set(os.environ.get("STARTUP_SMOKE_MODE", "PAPER"))
         for tab in ("Manual", "Bot", "PREVIEW"):
             app._select_info_tab(tab)
+            app.update()
             assert app.log_tabview.get() == tab
+            for name in ("PREVIEW", "Manual", "Bot"):
+                assert app.log_tabview.tab(name).winfo_ismapped() == (name == tab)
+            assert app.preview_health_group.master is app.info_panel
+            assert app.preview_health_group.winfo_ismapped()
+            assert app.preview_health_group.winfo_y() >= app.log_tabview.winfo_y() + app.log_tabview.winfo_height()
+        assert not hasattr(app, "preview_scroll")
+        for page in ("LỆNH", "HỆ THỐNG", "LỆNH"):
+            app._select_preview_tab(page)
+            app.update()
+            assert app._preview_active_tab == page
+            page_widget = app.preview_pages[page]
+            assert page_widget.master.winfo_children()[-1] is page_widget
+            for label in ((app.preview_rule_reason, app.preview_rule_phase3_detail, app.preview_rule_cross_detail)
+                          if page == "HỆ THỐNG" else (app.preview_entry_value, app.preview_tp_value, app.preview_exit_detail)):
+                assert label.winfo_rooty() + label.winfo_height() <= app.preview_health_group.winfo_rooty()
+            if os.environ.get("VIKING_CAPTURE_UI") == "1":
+                repainted = tk.BooleanVar(master=app, value=False)
+                app.after(150, lambda: repainted.set(True))
+                app.wait_variable(repainted)
+                hwnd = ctypes.windll.user32.GetParent(app.winfo_id())
+                ImageGrab.grab(window=hwnd).save(capture_dir / f"preview-{page}-{os.environ['STARTUP_SMOKE_SCALING']}.png")
+        app._set_info_panel_collapsed(True)
+        app.update_idletasks()
+        assert app.preview_health_group.winfo_ismapped()
+        assert app.preview_health_group.winfo_y() + app.preview_health_group.winfo_height() <= app.info_panel.winfo_height()
+        app._set_info_panel_collapsed(False)
+        app.update()
+        for label in (app.preview_tp_value, app.preview_sl_value, app.preview_atr,
+                      app.preview_normal_value, app.preview_exit_value):
+            card = label.master
+            assert max(child.winfo_y() + child.winfo_height() for child in card.winfo_children()) <= card.winfo_height()
+        for label in (app.preview_health_title, app.preview_health_token):
+            font = tkfont.Font(root=app, font=label._label.cget("font"))
+            assert font.measure(label.cget("text")) <= label._label.winfo_width()
         app._set_log_unread("bot", True)
         app._set_log_unread("manual", True)
         app._select_info_tab("Bot")

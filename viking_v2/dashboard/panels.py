@@ -157,14 +157,6 @@ def _dynamic_atr_preview_text(
     return f"DYN · ATR {atr:.2f}% · BÁN {sell:g}%"
 
 
-def _preview_panel_height(viewport_pixels: int, widget_scaling: float) -> int:
-    """Convert Tk's scaled viewport pixels back to CustomTkinter logical units."""
-
-    scaling = max(0.1, float(widget_scaling or 1.0))
-    logical_height = int(round(max(0, viewport_pixels) / scaling))
-    return max(300, logical_height - 4)
-
-
 def _rsi_comparison_preview(current: Any, previous: Any) -> tuple[str, str]:
     """Show the rule's daily RSI baseline, not a previous-tick comparison."""
     def valid(value: Any) -> float | None:
@@ -781,7 +773,7 @@ class DashboardPanelsMixin:
         self.info_title.grid(row=0, column=0, sticky="w", padx=(2, 12))
         self.info_tab_selector = ctk.CTkSegmentedButton(
             info_header, values=["PREVIEW", "Manual", "Bot"],
-            width=300, height=28, dynamic_resizing=False,
+            width=240, height=28, dynamic_resizing=False,
             font=("Segoe UI", 11, "bold"),
             fg_color=COL_SURFACE_2,
             selected_color="#2563A6",
@@ -791,13 +783,15 @@ class DashboardPanelsMixin:
             command=self._select_info_tab,
         )
         self.info_tab_selector.grid(row=0, column=1)
+        def fit_info_header(_event=None):
+            compact = info_header.winfo_width() / info_header._get_widget_scaling() < 600
+            self.info_title.configure(text="ⓘ" if compact else "HỆ THỐNG  ⓘ")
+        info_header.bind("<Configure>", fit_info_header, add="+")
         # CTkSegmentedButton.bind raises NotImplementedError; attach the
         # explanation to a stable label, not to the composite tab control.
         _HoverHint(
             self.info_title,
-            "PREVIEW: tính thử, không gửi lệnh.\n"
-            "Manual: thao tác tay, kể cả lần bị chặn. Bot: lệnh tự động và quản lý thoát.\n"
-            "Từ bản này, nhật ký lưu kèm tab trên máy; mở lại app nạp dòng gần nhất. * = có dòng mới chưa đọc.",
+            "PREVIEW: xem lệnh và tín hiệu.\nManual / Bot: nhật ký thao tác tay / tự động.\n* = có dòng mới chưa đọc.",
             placement="inside",
         )
         self._info_collapsed = False
@@ -844,17 +838,8 @@ class DashboardPanelsMixin:
         self.log_tabview._segmented_button.grid_forget()
         preview_tab.grid_columnconfigure(0, weight=1)
         preview_tab.grid_rowconfigure(0, weight=1)
-        self.preview_scroll = ctk.CTkScrollableFrame(
-            preview_tab,
-            fg_color="transparent",
-            corner_radius=0,
-            scrollbar_fg_color="#111318",
-            scrollbar_button_color="#343A43",
-            scrollbar_button_hover_color="#4B515B",
-        )
-        self.preview_scroll.grid(row=0, column=0, sticky="nsew")
-        self.preview_scroll.grid_columnconfigure(0, weight=1)
-        self._build_order_preview_tab(self.preview_scroll)
+        self.preview_container = preview_tab
+        self._build_order_preview_tab(preview_tab, health_parent=log_frame)
 
         for frame, target in ((manual_tab, "manual"), (bot_tab, "bot")):
             frame.grid_columnconfigure(0, weight=1)
@@ -887,43 +872,56 @@ class DashboardPanelsMixin:
         self.log_bot.insert(
             "end", "Mua tự động khởi động OFF; vị thế đang giữ vẫn được quản lý.\n"
         )
-        self.log_tabview.set("PREVIEW")
-        self.info_tab_selector.set("PREVIEW")
-        self._refresh_full_order_preview()
+        self._select_info_tab("PREVIEW")
         self._refresh_api_health_panel(self.bridge.read_status())
-        self.after_idle(self._sync_preview_scrollbar)
 
-    def _build_order_preview_tab(self, parent: ctk.CTkFrame) -> None:
+    def _build_order_preview_tab(self, parent: ctk.CTkFrame, *, health_parent=None) -> None:
         parent.grid_columnconfigure(0, weight=1)
-        parent.grid_rowconfigure(0, weight=0)
-        # Keep the original compact height; explanations belong in hover hints.
-        panel = ctk.CTkFrame(parent, height=300, fg_color=COL_SURFACE_2, corner_radius=8)
-        panel.grid(row=0, column=0, sticky="ew")
+        parent.grid_rowconfigure(0, weight=1)
+        panel = ctk.CTkFrame(parent, height=260, fg_color=COL_SURFACE_2, corner_radius=8)
+        panel.grid(row=0, column=0, sticky="nsew")
         panel.grid_propagate(False)
         self.preview_focus_panel = panel
-        panel.grid_columnconfigure(0, weight=3, uniform="preview_groups")
-        panel.grid_columnconfigure(1, weight=2, uniform="preview_groups")
-        panel.grid_rowconfigure(0, weight=1)
-        panel.grid_rowconfigure(1, weight=0)
-
-        order_group = ctk.CTkFrame(panel, width=1, fg_color=COL_SURFACE, corner_radius=7)
-        order_group.grid(row=0, column=0, sticky="nsew", padx=(7, 3), pady=(7, 3))
+        panel.grid_columnconfigure(0, weight=1)
+        panel.grid_rowconfigure(1, weight=1)
+        page_header = ctk.CTkFrame(panel, height=28, fg_color="transparent")
+        page_header.grid(row=0, column=0, sticky="ew", padx=6, pady=(3, 2))
+        page_header.grid_propagate(False)
+        page_header.grid_columnconfigure(0, weight=1)
+        self.preview_tab_selector = ctk.CTkSegmentedButton(
+            page_header, values=["LỆNH", "HỆ THỐNG"], width=240, height=26,
+            dynamic_resizing=False, font=("Segoe UI", 11, "bold"),
+            selected_color="#2563A6", selected_hover_color="#2E73BB",
+            unselected_color=COL_GRAY, unselected_hover_color="#4B515B",
+            command=self._select_preview_tab,
+        )
+        self.preview_tab_selector.grid(row=0, column=0)
+        pages = ctk.CTkFrame(panel, width=1, fg_color="transparent")
+        pages.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
+        pages.grid_propagate(False)
+        pages.grid_columnconfigure(0, weight=1)
+        pages.grid_rowconfigure(0, weight=1)
+        # Keep both pages measured in the same slot; switching only raises a
+        # page, so changing tabs cannot resize the panel or shift its values.
+        order_group = ctk.CTkFrame(pages, width=1, fg_color=COL_SURFACE, corner_radius=7)
+        order_group.grid(row=0, column=0, sticky="nsew")
         order_group.grid_propagate(False)
-        rule_group = ctk.CTkFrame(panel, width=1, fg_color=COL_SURFACE, corner_radius=7)
-        rule_group.grid(row=0, column=1, sticky="nsew", padx=(3, 7), pady=(7, 3))
+        rule_group = ctk.CTkFrame(pages, width=1, fg_color=COL_SURFACE, corner_radius=7)
+        rule_group.grid(row=0, column=0, sticky="nsew")
         rule_group.grid_propagate(False)
+        self.preview_pages = {"LỆNH": order_group, "HỆ THỐNG": rule_group}
 
         order_group.grid_columnconfigure(0, weight=1)
         order_group.grid_rowconfigure(1, weight=0)
         order_group.grid_rowconfigure(2, weight=1)
         order_header = ctk.CTkFrame(order_group, width=1, height=32, fg_color="transparent")
         order_header.grid(row=0, column=0, sticky="ew", padx=10, pady=(5, 1))
-        order_header.grid_columnconfigure(0, weight=0, minsize=230)
-        order_header.grid_columnconfigure(1, weight=1)
+        order_header.grid_columnconfigure(0, weight=2)
+        order_header.grid_columnconfigure(1, weight=3)
         order_header.grid_columnconfigure(2, weight=0)
         self.preview_order_title = StatusLabel(
             order_header, text="--- · PAPER · BUY · MARKET",
-            width=230, height=22, font=("Segoe UI", 12, "bold"), text_color=COL_TITLE, anchor="w",
+            width=1, height=22, font=("Segoe UI", 12, "bold"), text_color=COL_TITLE, anchor="w",
         )
         self.preview_order_title.grid(
             row=0, column=0, sticky="ew", padx=(2, 5)
@@ -945,8 +943,23 @@ class DashboardPanelsMixin:
         self.preview_status_badge.grid(
             row=0, column=2, sticky="e", padx=(5, 0)
         )
+        def fit_order_header(_event=None):
+            narrow = order_header.winfo_width() / order_header._get_widget_scaling() < 600
+            if getattr(order_header, "_viking_narrow", None) != narrow:
+                order_header._viking_narrow = narrow
+                order_header.configure(height=52 if narrow else 32)
+                self.preview_order_title.grid_configure(columnspan=2 if narrow else 1)
+                self.preview_status_reason.grid_configure(row=1 if narrow else 0,
+                                                         column=0 if narrow else 1,
+                                                         columnspan=3 if narrow else 1)
+            fit_label_text(self.preview_order_title, base_font=("Segoe UI", 12, "bold"), minimum_size=10)
+            fit_label_text(self.preview_status_reason, base_font=("Segoe UI", 11), minimum_size=10)
+        order_header.bind("<Configure>", fit_order_header, add="+")
+        for widget in (self.preview_order_title, self.preview_status_reason):
+            widget.bind("<Configure>", fit_order_header, add="+")
+        self._fit_order_preview_header = fit_order_header
 
-        metrics = ctk.CTkFrame(order_group, height=76, fg_color="transparent")
+        metrics = ctk.CTkFrame(order_group, height=62, fg_color="transparent")
         metrics.grid(row=1, column=0, sticky="ew", padx=6, pady=(3, 2))
         metrics.grid_propagate(False)
         for column in range(6):
@@ -963,11 +976,11 @@ class DashboardPanelsMixin:
             card.grid(row=0, column=column, sticky="nsew", padx=3, pady=3)
             card.grid_columnconfigure(0, weight=1)
             title_widget = StatusLabel(
-                card, text=f"{title}{'  ⓘ' if hint else ''}", height=22,
+                card, text=f"{title}{'  ⓘ' if hint else ''}", height=18,
                 font=("Segoe UI", 12, "bold", "italic"),
                 text_color=title_color, anchor="w",
             )
-            title_widget.grid(row=0, column=0, sticky="ew", padx=2, pady=(6, 0))
+            title_widget.grid(row=0, column=0, sticky="ew", padx=2, pady=(4, 0))
             if title == "KL":
                 self.preview_qty_title = title_widget
             if hint:
@@ -975,11 +988,11 @@ class DashboardPanelsMixin:
             title_widget.bind("<Configure>", lambda _event, widget=title_widget: fit_label_text(
                 widget, base_font=("Segoe UI", 12, "bold", "italic"), minimum_size=5), add="+")
             value = StatusLabel(
-                card, text="NA", width=1, height=30,
+                card, text="NA", width=1, height=24,
                 font=("Cascadia Mono", 13), text_color=COL_TEXT,
                 anchor="w", justify="left", wraplength=0,
             )
-            value.grid(row=1, column=0, sticky="ew", padx=2, pady=(1, 6))
+            value.grid(row=1, column=0, sticky="ew", padx=2, pady=(1, 4))
             value.bind("<Configure>", lambda _event, widget=value: fit_label_text(
                 widget, base_font=("Cascadia Mono", 13), minimum_size=5), add="+")
             if hint:
@@ -987,10 +1000,10 @@ class DashboardPanelsMixin:
             return value
 
         self.preview_live_value = metric_card(
-            0, "GIÁ TT", hint=lambda: self._quote_health_hint() + "\n" + PRICE_DIRECTION_HINT,
+            0, "GIÁ TT", hint=self._quote_health_hint,
         )
         self.preview_live_value.configure(corner_radius=4)
-        self.preview_entry_value = metric_card(1, "GIÁ VÀO", hint="Giá ước tính khớp để preview TP/SL; LO dùng giá nhập.\nKhi giữ vốn Priority, VỐN + PHÍ dự trù theo giá trần, không phải giá khớp chắc chắn.")
+        self.preview_entry_value = metric_card(1, "GIÁ VÀO", hint="Giá dùng tính TP/SL; LO lấy giá nhập.\nVốn MARKET có thể dự trù theo giá trần.")
         self.preview_qty_value = metric_card(2, "KL", hint=self._auto_quantity_hint)
         self.preview_cash_value = metric_card(3, "VỐN + PHÍ", hint=self._ticket_money_hint)
         self.preview_fee_value = metric_card(4, "FEE", COL_WARN, self._ticket_fee_hint)
@@ -1019,24 +1032,26 @@ class DashboardPanelsMixin:
             card = ctk.CTkFrame(management, width=1, fg_color=COL_SURFACE_2, corner_radius=6)
             card.grid(
                 row=row, column=column, columnspan=columnspan,
-                sticky="nsew", padx=3, pady=3,
+                sticky="nsew", padx=3, pady=2,
             )
             card.grid_columnconfigure(0, weight=1)
             title_widget = StatusLabel(
-                card, text=title, width=1, height=16, font=("Segoe UI", 11, "bold", "italic"),
+                card, text=title, width=1, height=14, font=("Segoe UI", 11, "bold", "italic"),
                 text_color=title_color, anchor="w",
             )
-            title_widget.grid(row=0, column=0, sticky="ew", padx=9, pady=(3, 0))
+            title_widget.grid(row=0, column=0, sticky="ew", padx=9, pady=(1, 0))
             value = StatusLabel(
-                card, text="NA", width=1, height=18, font=("Cascadia Mono", 12),
+                card, text="NA", width=1, height=16, font=("Cascadia Mono", 12),
                 text_color=title_color, anchor="w",
             )
-            value.grid(row=1, column=0, sticky="ew", padx=9, pady=(1, 0))
+            value.grid(row=1, column=0, sticky="ew", padx=9, pady=0)
             detail = StatusLabel(
-                card, text="", width=1, height=14, font=("Segoe UI", 10),
+                card, text="", width=1, height=12, font=("Segoe UI", 10),
                 text_color=COL_PREVIEW_TEXT, anchor="w",
             )
-            detail.grid(row=2, column=0, sticky="ew", padx=9, pady=(0, 2))
+            detail.grid(row=2, column=0, sticky="ew", padx=9, pady=(0, 1))
+            detail.bind("<Configure>", lambda _event: fit_label_text(
+                detail, base_font=("Segoe UI", 10), minimum_size=9), add="+")
             return title_widget, value, detail
 
         _tp_title, self.preview_tp_value, self.preview_tp_detail = level_card(0, 0, "TP MANUAL", COL_GREEN)
@@ -1088,10 +1103,7 @@ class DashboardPanelsMixin:
         rule_hint.grid(row=0, column=1, sticky="e", padx=(4, 5))
         _HoverHint(
             rule_hint,
-            "P1: trạng thái VNINDEX từ dữ liệu 1D DNSE.\n"
-            "P2: tín hiệu BUY/SELL từ các chỉ báo EMA/RSI đang bật.\n"
-            "P3: vốn, số position và khóa bảo vệ.\n"
-            "SL, TP, PROTECT và E bật/tắt theo từng vị thế; OFF chỉ chặn BUY BOT mới, vẫn quản lý vị thế.",
+            "P1: tỷ trọng cổ / tiền.\nP2: EMA và RSI.\nP3: vốn và khóa BUY.",
         )
         self.preview_rule_title = StatusLabel(
             rule_header, text="MUA · OFF", width=72, height=16,
@@ -1251,27 +1263,9 @@ class DashboardPanelsMixin:
             _HoverHint(value, self._indicator_preview_hint, placement="inside")
 
         def fit_phase2_row(_event=None):
-            logical_width = panel.winfo_width() / panel._get_widget_scaling()
-            stacked = logical_width < 900
-            if getattr(panel, "_viking_stacked_preview", None) != stacked:
-                panel._viking_stacked_preview = stacked
-                panel.configure(height=600 if stacked else 300)
-                panel._viking_content_min_height = 600 if stacked else 300
-                panel.grid_rowconfigure(1, weight=1 if stacked else 0)
-                order_group.grid_configure(row=0, column=0, columnspan=2 if stacked else 1,
-                                           padx=(7, 7) if stacked else (7, 3))
-                rule_group.grid_configure(row=1 if stacked else 0, column=0 if stacked else 1,
-                                          columnspan=2 if stacked else 1,
-                                          padx=(7, 7) if stacked else (3, 7))
-            balanced = logical_width < 650
-            if getattr(panel, "_viking_balanced_preview", None) != balanced:
-                panel._viking_balanced_preview = balanced
-                panel.grid_columnconfigure(0, weight=11 if balanced else 3)
-                panel.grid_columnconfigure(1, weight=9 if balanced else 2)
             narrow = phase2.winfo_width() / phase2._get_widget_scaling() < 440
             if getattr(phase2, "_viking_cross_narrow", None) != narrow:
                 phase2._viking_cross_narrow = narrow
-                panel._viking_content_min_height = 600 if stacked else 300
                 phase2.grid_columnconfigure(1, weight=2, minsize=165)
                 phase2.grid_columnconfigure(2, weight=2, minsize=140)
                 phase2._viking_title_widget.grid(columnspan=2)
@@ -1330,6 +1324,7 @@ class DashboardPanelsMixin:
         )
         self.preview_rule_phase3_detail.bind("<Configure>", lambda _event: fit_label_text(
             self.preview_rule_phase3_detail, base_font=("Segoe UI", 12), minimum_size=7), add="+")
+        _HoverHint(self.preview_rule_phase3_detail, self._whipsaw_preview_hint, placement="inside")
         self.preview_rule_phase3_guard = StatusLabel(
             phase3, text="WHIPSAW -- · LOSS --", font=("Segoe UI", 11),
             text_color=COL_PREVIEW_TEXT, anchor="w",
@@ -1345,16 +1340,19 @@ class DashboardPanelsMixin:
         self.preview_rule_reason.grid(row=4, column=0, sticky="ew", padx=8, pady=(2, 6))
         _HoverHint(self.preview_rule_reason, self._rule_decision_hint, placement="inside")
 
+        health_host = health_parent if health_parent is not None else parent
         health_group = ctk.CTkFrame(
-            panel, fg_color=COL_SURFACE, corner_radius=7, height=36,
+            health_host, fg_color=COL_SURFACE, corner_radius=7, height=38,
             border_width=1, border_color=COL_BORDER,
         )
-        health_group.grid(row=1, column=0, columnspan=2, sticky="ew", padx=7, pady=(3, 7))
+        health_group.grid(row=2 if health_parent is not None else 1, column=0,
+                          sticky="ew", padx=8, pady=(3, 6))
+        self.preview_health_group = health_group
         health_group.grid_propagate(False)
-        for column in range(7):
-            health_group.grid_columnconfigure(column, weight=1, uniform="health_pills")
+        for column, weight in enumerate((20, 18, 14, 10, 14, 12, 16)):
+            health_group.grid_columnconfigure(column, weight=weight, uniform="health_pills")
         health_title = ctk.CTkFrame(
-            health_group, width=1, height=24, fg_color=COL_SURFACE_2, corner_radius=5,
+            health_group, width=1, height=26, fg_color=COL_SURFACE_2, corner_radius=5,
         )
         health_title.grid(row=0, column=0, sticky="ew", padx=3, pady=5)
         health_title.grid_propagate(False)
@@ -1366,6 +1364,7 @@ class DashboardPanelsMixin:
             text_color="#60A5FA", anchor="w",
         )
         self.preview_health_title.grid(row=0, column=0, sticky="ew", padx=(8, 1))
+        self.preview_health_title.bind("<Configure>", self._fit_preview_health_title, add="+")
         self.preview_health_hint = StatusLabel(
             health_title, text="ⓘ", width=20, height=20,
             font=("Segoe UI Symbol", 10, "bold"), text_color=COL_TEXT,
@@ -1375,17 +1374,23 @@ class DashboardPanelsMixin:
         self.preview_health_hint.bind("<Button-1>", self._copy_api_health_hint, add="+")
         _HoverHint(
             self.preview_health_hint,
-            self._api_health_hint,
+            self._api_health_preview_hint,
             placement="inside",
         )
 
         def health_cell(column: int, text: str) -> ctk.CTkLabel:
             label = StatusLabel(
-                health_group, text=text, width=1, height=24,
-                font=("Cascadia Mono", 11), text_color=COL_PREVIEW_TEXT,
+                health_group, text=text, width=1, height=26,
+                font=("Segoe UI", 10), text_color=COL_PREVIEW_TEXT,
                 fg_color=COL_SURFACE_2, corner_radius=5,
             )
             label.grid(row=0, column=column, sticky="ew", padx=3, pady=5)
+            def fit_cell(_event=None):
+                label.configure(wraplength=0 if column == 5 else max(
+                    1, label.winfo_width() / label._get_widget_scaling() - 6))
+                if column == 5:
+                    fit_label_text(label, base_font=("Segoe UI", 10), minimum_size=8)
+            label.bind("<Configure>", fit_cell, add="+")
             return label
 
         self.preview_health_daemon = health_cell(1, "DAEMON --")
@@ -1395,6 +1400,24 @@ class DashboardPanelsMixin:
         self.preview_health_token = health_cell(5, "TOKEN --")
         self.preview_health_trade = health_cell(6, "GIÁ --")
         _HoverHint(self.preview_health_trade, self._quote_health_hint, placement="inside")
+        self._select_preview_tab("LỆNH")
+
+    def _select_preview_tab(self, name: str) -> None:
+        if name not in self.preview_pages:
+            return
+        self.preview_pages[name].tkraise()
+        self.preview_tab_selector.set(name)
+        self._preview_active_tab = name
+
+    def _fit_preview_health_title(self, _event=None) -> None:
+        label = self.preview_health_title
+        if not isinstance(label, ctk.CTkLabel):
+            return
+        full = getattr(label, "_viking_health_full_text", "HEALTH")
+        compact = label.winfo_width() / label._get_widget_scaling() < 120
+        short = "CHÚ Ý" if full == "HEALTH CẢNH BÁO" else full.removeprefix("HEALTH ")
+        label.configure(text=short if compact else full)
+        fit_label_text(label, base_font=("Segoe UI", 10, "bold", "italic"), minimum_size=8)
 
     @staticmethod
     def _preview_level_details(
@@ -1510,11 +1533,9 @@ class DashboardPanelsMixin:
     @staticmethod
     def _order_lifecycle_hint() -> str:
         return (
-            "PREVIEW / ĐẶT: mới kiểm tra, chưa gửi lệnh.\n"
-            "CACHE / CHỜ GỬI / CHỜ OTP: yêu cầu còn trong app.\n"
-            "ĐÃ GỬI: DNSE đã nhận; chưa có nghĩa đã khớp.\n"
-            "KHỚP x/y: đã mua/bán x trên y CP đặt; x < y là khớp một phần.\n"
-            "Telegram BUY báo đã xếp yêu cầu, không xác nhận khớp."
+            "ĐẶT / CACHE / CHỜ OTP: yêu cầu còn trong app.\n"
+            "ĐÃ GỬI: DNSE nhận lệnh.\n"
+            "KHỚP x/y: x CP đã khớp trên y CP đặt."
         )
 
     def _rule_decision_hint(self) -> str:
@@ -1526,12 +1547,11 @@ class DashboardPanelsMixin:
         if decision.get("reason") == "BUY_WINDOW_WAIT":
             status_text = f"Có tín hiệu; chờ từ {window.get('start') or 'giờ mua đã cài'} và kiểm tra lại điều kiện."
         elif not decision:
-            status_text = "Chưa có quyết định mới; xem hint GIÁ/HEALTH để biết dữ liệu có hợp lệ không."
+            status_text = "Chưa có quyết định mới."
         return "\n".join(filter(None, (
             status_text,
-            "Có tín hiệu ≠ đã gửi lệnh. Bị chặn/chờ giờ: chưa gửi.",
-            "BUY đủ điều kiện vẫn cần BOT ON, vốn và OTP REAL hợp lệ.",
-            "Đã gửi/khớp: xem cột Trạng thái và KL KHỚP trong bảng lệnh.",
+            "BUY cần BOT ON, đủ vốn và OTP REAL.",
+            "Lệnh gửi/khớp: xem bảng lệnh.",
         )))
 
     def _health_hint_status(self) -> dict[str, Any]:
@@ -1567,10 +1587,14 @@ class DashboardPanelsMixin:
         else:
             state = "HỢP LỆ" if details["valid"] else f"BỊ LOẠI: {details['reason_text']}"
         return (
-            f"{symbol} · nguồn: {source}\n"
-            f"Nhận lúc {received} (giờ VN) · {age_text}\n"
-            f"{state} · giới hạn {details['max_age_seconds']:g}s trong phiên.\n"
-            "WS OK chỉ là kết nối; giá từng mã được kiểm tra riêng. Giá này không bảo đảm khớp."
+            f"{symbol} · nguồn: {source} · nhận {received}\n"
+            f"{state} · {age_text} · hạn {details['max_age_seconds']:g}s trong phiên."
+        )
+
+    def _api_health_preview_hint(self) -> str:
+        return (
+            "DAEMON: xử lý rule · DNSE/API: đọc tài khoản · WS: nhận giá.\n"
+            "OTP: quyền gửi lệnh REAL.\nBấm ⓘ để sao chép chi tiết lỗi."
         )
 
     def _api_health_hint(self) -> str:
@@ -1635,6 +1659,7 @@ class DashboardPanelsMixin:
         return (
             self._quote_health_hint() + "\n" + extra
             + "\nOTP: cần khi gửi/sửa/hủy lệnh REAL; PAPER không cần OTP."
+            + "\nWS OK chỉ là kết nối; xem GIÁ để biết mẫu còn mới."
             + "\nMất/phục hồi giá: có ghi trong daemon.log, không ghi mỗi tick."
             + "\nBấm ⓘ cạnh HEALTH để sao chép chẩn đoán này."
         )
@@ -1660,12 +1685,11 @@ class DashboardPanelsMixin:
         return f"Phí mua {money['fee']:,.0f} đ đã nằm trong VỐN + PHÍ; không cộng lần nữa. Không gồm phí/thuế bán."
 
     def _auto_quantity_hint(self) -> str:
-        return (
-            "KL AUTO: ô trống; số CP hiện mờ là gợi ý theo ngân sách, chưa phải lệnh đã mua.\n"
-            "KL TAY: nhập 100, 200… CP; vẫn giữ vốn Priority, không tự chia lại hạn mức. Xóa hết để trở lại AUTO.\n"
-            + str((getattr(self, "_preview_manual_feedback", {}) if self.quantity.get().strip()
-                   else getattr(self, "_preview_auto_feedback", {})).get("hint", "Chờ tính vốn."))
-        )
+        feedback = (getattr(self, "_preview_manual_feedback", {}) if self.quantity.get().strip()
+                    else getattr(self, "_preview_auto_feedback", {}))
+        current = str(feedback.get("hint") or "").splitlines()
+        return ("KL AUTO: để trống, app tính theo vốn.\nKL TAY: nhập số CP. Xóa hết để trở lại AUTO."
+                + (f"\n{current[0]}" if current else ""))
 
     def _book_preview_status(self, status: dict[str, Any] | None = None) -> dict[str, Any]:
         """Select the viewed book, never borrow a decision from the other book."""
@@ -1817,44 +1841,26 @@ class DashboardPanelsMixin:
         source = preview.get("source", "MISSING")
         params = self.settings.rule_parameters
         buy_ema_rule = (
-            "BUY cần EMA nhanh vừa vượt từ < lên > EMA chậm."
+            "BUY cần EMA nhanh cắt từ dưới lên trên EMA chậm."
             if params.get("buy_signal_require_ema_cross", True)
-            else "BUY chỉ cần EMA nhanh hiện tại > EMA chậm, không bắt vừa vượt lên."
+            else "BUY chỉ cần EMA nhanh > EMA chậm, không cần lần cắt."
         ) if params.get("buy_signal_use_ema", True) else "BUY không dùng điều kiện EMA."
         rsi_basis = (
-            "RSI 1D: phiên trước đã đóng → phiên hiện tại theo giá realtime; không so với tick trước."
+            "RSI: phiên trước → phiên nay, không so với tick trước."
             if str(self.settings.signal_mode).upper() == "REALTIME"
-            else "RSI 1D: hai phiên đã đóng liên tiếp, trái trước → phải sau; không so với tick trước."
+            else "RSI: hai phiên đã đóng liên tiếp, không so với tick trước."
         )
-        if (str(self.settings.signal_mode).upper() == "REALTIME"
-                and params.get("buy_signal_session_cross_enabled", True)
-                and params.get("buy_signal_use_ema", True) and params.get("buy_signal_require_ema_cross", True)):
-            buy_ema_rule = (
-                "BUY cần lần cắt lên; quét X phiên trước mốc theo dõi mã, giữ đúng tuổi lần cắt."
-                if params.get("buy_ema_cross_mode", "VA") == "SESSIONS"
-                else (f"BUY quét {params.get('buy_ema_cross_sessions', 3)} phiên trước mốc bắt đầu theo dõi mã; ∞ VA giữ tới khi dùng."
-                      if params.get("buy_ema_va_lookback_enabled") else
-                      "BUY cần lần cắt lên sau khi thêm mã; ∞ VA giữ tới khi dùng, kể cả restart.")
-            ) + " Mỗi lần cắt chỉ dùng một lần."
+        basis = "cập nhật theo giá trong phiên" if str(self.settings.signal_mode).upper() == "REALTIME" else "chỉ dùng nến đã đóng"
         text = (
-            f"EMA 3/6 của nến ngày 1D: trong REALTIME, giá hiện tại thay giá đóng tạm của nến hôm nay theo tick/mẫu phút; không phải EMA tính trên chuỗi tick. "
-            f"{buy_ema_rule} Vẫn kiểm tra các điều kiện vào lệnh khác.\n"
-            f"{rsi_basis}\n"
-            f"Lọc RSI: BUY {'BẬT' if params.get('buy_signal_use_rsi', True) else 'TẮT'} / "
-            f"E {'BẬT' if params.get('sell_signal_use_rsi', True) else 'TẮT'}. BUY cần tăng, E cần giảm; bằng không đạt. Không phải công tắc tự mua/bán.\n"
-            "Bot OFF vẫn tính chỉ số. Preview không tạo tín hiệu hoặc đặt lệnh."
-            "\nCẮT EMA: CHỜ XUỐNG = đang ở trên từ trước; CHỜ LÊN = đang dưới. Bằng nhau chưa tính cắt. "
-            "ĐÃ LÊN = backend ghi nhận lần vượt lên. RSI có thể đạt sau khi lần cắt còn hiệu lực; vẫn cần các khóa/vốn. "
-            "Tín hiệu chờ giờ còn hiệu lực không cần cắt lại đúng 14h."
-            "\nTRƯỚC: EMA trước lần cắt. CUỐI + giờ: mẫu gần nhất đã lưu trước đóng phiên. "
-            "ĐÓNG + ngày: EMA từ nến ngày đã đóng khi chưa có mẫu trong phiên. "
-            "Xanh >, đỏ <, vàng =. Các số ngoài phiên chỉ để xem lại; HẾT PHIÊN không cho BUY."
+            f"EMA 1D: {basis}.\n{buy_ema_rule}\n"
+            f"{rsi_basis} BUY cần tăng, E cần giảm; bằng không đạt.\n"
+            "Preview chỉ để xem, không tạo tín hiệu hoặc đặt lệnh."
         )
         if preview.get("signal_ready") is False:
-            return text + "\nChờ mẫu phút hoàn tất với giá mới; chỉ số nền 1D chưa dùng để BUY/E."
+            return text + "\nChờ mẫu phút; chỉ số nền 1D chưa dùng để BUY/E."
         if source == "MISSING":
             return text + "\nDấu --: chưa đủ nến; chờ daemon tải lịch sử."
-        return text + f"\nNguồn: {'quyết định bot' if source == 'DECISION' else 'preview nến'} · {preview.get('symbol', '')} · {preview.get('asof', '')}."
+        return text
 
     def _render_ema_cross_preview(self, details: dict[str, Any]) -> None:
         widget = getattr(self, "preview_rule_cross", None)
@@ -1947,19 +1953,20 @@ class DashboardPanelsMixin:
         self._render_ema_cross_preview(getattr(self, "_preview_ema_details", {}))
 
     def _ema_memory_preview_hint(self) -> str:
-        from ..rules.ema_memory import memory_hint
+        from ..rules.ema_memory import memory_count_scope, memory_fields
         _caption, evidence = getattr(self, "_preview_ema_cross_evidence", ("", {}))
         active = self.settings.rule_parameters.get("buy_ema_cross_mode", "VA")
         enabled = bool(self.settings.rule_parameters.get("buy_signal_use_ema", True)
                        and self.settings.rule_parameters.get("buy_signal_require_ema_cross", True))
-        remaining = (f"X phiên: còn {evidence.get('remaining_sessions', 0)}/{evidence.get('sessions', 3)} phiên.\n"
-                     if evidence.get("mode") == "SESSIONS" else "")
-        va_scan = (f" · QUÉT {self.settings.rule_parameters.get('buy_ema_cross_sessions', 3)} PHIÊN"
-                   if active == "VA" and self.settings.rule_parameters.get("buy_ema_va_lookback_enabled") else "")
-        return (f"RULE: {active}{va_scan} · {'BẬT' if enabled else 'OFF'}. Đang xem: {evidence.get('mode', active)}.\n"
-                "⇄ đổi góc xem VA/X PHIÊN, không đổi rule hoặc tạo lệnh. Dùng dữ liệu đã lưu, kể cả khi rule OFF.\n"
-                "CHƯA GHI NHẬN: mode đang xem chưa lưu được lần cắt lên; lần cắt có thể xảy ra trước khi theo dõi.\n"
-                + remaining + memory_hint(evidence, holidays=self.settings.trading_holidays))
+        fields = memory_fields(evidence)
+        scope = memory_count_scope(evidence, holidays=self.settings.trading_holidays)
+        span = f"{scope['start']} → {scope['end']} ({scope['sessions']} phiên)" if scope else "chưa có mốc đếm"
+        mode = evidence.get("mode", active)
+        policy = (f"X phiên: còn {evidence.get('remaining_sessions', 0)}/{evidence.get('sessions', 3)} phiên."
+                  if mode == "SESSIONS" else "VA: giữ lần cắt tới khi dùng.")
+        return (f"RULE {active} · {'BẬT' if enabled else 'OFF'}. ⇄ chỉ đổi góc xem.\n"
+                f"{int(fields['ema_memory_up_count'] or 0)} lên + {int(fields['ema_memory_down_count'] or 0)} xuống · {span}.\n"
+                f"{policy} Quét trước dùng giá đóng từng phút.")
 
     def _atr_preview_hint(self) -> str:
         from datetime import datetime
@@ -1970,9 +1977,9 @@ class DashboardPanelsMixin:
         except (TypeError, ValueError, OSError, OverflowError):
             asof = "chưa có đủ nến"
         return (
-            "ATR14: mức biến động 14 nến ngày đã đóng; không dùng nến hôm nay chưa đóng.\n"
-            "Dynamic: START = ATR × hệ số bắt đầu; LÙI = ATR × hệ số lùi. Ví dụ ATR 4% × 0,55 → START 2,2%.\n"
-            f"Phiên cuối: {asof}. -- = chưa đủ dữ liệu, không phải 0."
+            "ATR14: biến động của 14 nến ngày đã đóng.\n"
+            "START / LÙI = ATR × hệ số trong RULE.\n"
+            f"Phiên cuối: {asof}."
         )
 
     def _market_confirmation_hint(self) -> str:
@@ -1988,17 +1995,17 @@ class DashboardPanelsMixin:
         alternate = bool(current.get("alternate_view"))
         if manual_view:
             headline = f"TỶ TRỌNG CHỌN TAY: CP {active_pct:g}% / TIỀN {100 - active_pct:g}%.\n"
-            explanation = "Tỷ trọng nhập trong RULE, không phải xu hướng VNINDEX thực tế.\n"
+            explanation = "Tỷ trọng chọn tay trong RULE.\n"
         elif current.get("confirmation_pending"):
             from ..rules.business import StaticRuleParameters
             candidate_pct = StaticRuleParameters.from_dict(self.settings.rule_parameters).exposure.get(state)
             target = f" (CP {candidate_pct * 100:g}% / TIỀN {100 - candidate_pct * 100:g}%)" if candidate_pct is not None else ""
             explanation = (
-                f"Xác nhận {labels.get(state, 'ĐANG TÍNH')}: {count}/{required} phiên{target}. "
-                f"Cần {required} phiên liên tiếp mới đổi; đang chờ vẫn dùng {active}.\n"
+                f"Xác nhận {labels.get(state, 'ĐANG TÍNH')}: {count}/{required} phiên{target}; "
+                f"đang chờ vẫn dùng {active}.\n"
             )
         else:
-            explanation = "Hiện không có trạng thái mới đang chờ xác nhận.\n"
+            explanation = "Tỷ trọng theo VNINDEX.\n"
         if alternate:
             headline = headline.replace("ĐANG DÙNG:", "THEO RULE:").rstrip() + " THAM KHẢO.\n"
         if current.get("override_enabled") and not manual_view:
@@ -2012,21 +2019,22 @@ class DashboardPanelsMixin:
             if nav is not None else "Chờ snapshot tài khoản để tính số tiền theo P1.\n"
         )
         return (f"{headline}{explanation}"
-                "CP% / TIỀN% tính trên NAV = tiền + giá trị cổ phiếu của sổ đang xem.\n"
                 f"{example}"
-                "⇄ chỉ đổi góc xem, không đổi setting. Đây là giới hạn vốn, không phải lệnh mua/bán.")
+                "⇄ chỉ đổi góc xem.")
 
     def _entry_capital_hint(self) -> str:
         summary = getattr(self, "_preview_entry_summary", "chờ dữ liệu")
-        whipsaw = getattr(self, "_preview_whipsaw_summary", "WHIPSAW: chờ dữ liệu")
-        # The ticket hint already explains money; this hint explains slots.
         return (
             f"{summary}.\n"
-            "Mã BOT 0/4 = đang giữ hoặc chờ mua 0 mã, tối đa 4 mã; không phải số lệnh.\n"
-            "Vốn mua là gợi ý cho mã đang chọn, chưa phí. Ví dụ 50 triệu × 90% / 5 mã = 9 triệu/mã; Priority dùng hạn mức riêng.\n"
-            f"{whipsaw}. Ví dụ 0/3 · 7 nến 1D: 0 lần EMA nhanh/chậm đổi phía giữa 7 nến ngày gần nhất; đủ 3 lần thì khóa BUY mới. Trong REALTIME, nến hôm nay còn tạm tính. Khác VA: VA nhớ các lần cắt khi giá đổi trong phiên; Whipsaw không cộng từng tick. LỖ = chuỗi lỗ / ngưỡng khóa. Không chặn SELL.\n"
-            "MANUAL nhập KL tự chọn, vẫn kiểm tra tiền/phí và điều kiện lệnh; không dùng giới hạn số lần BUY BOT."
+            "Mã = số mã đang giữ hoặc chờ mua / tối đa.\n"
+            "Vốn mua: ngân sách mã đang chọn, chưa phí; MANUAL dùng KL nhập tay."
         )
+
+    def _whipsaw_preview_hint(self) -> str:
+        summary = getattr(self, "_preview_whipsaw_summary", "WHIPSAW: chờ dữ liệu")
+        return (f"{summary}.\n"
+                "Số lần cắt / ngưỡng khóa BUY; đếm giữa nến ngày, không cộng từng tick VA.\n"
+                "LỖ: chuỗi lỗ / ngưỡng khóa. SELL vẫn hoạt động.")
 
     def _protect_preview_hint(self) -> str:
         preview = getattr(self, "_preview_protect_prices", {})
@@ -2039,21 +2047,13 @@ class DashboardPanelsMixin:
         if actual is not None and actual > 0:
             example = f"Mốc bán của vị thế: {_display_price(actual)} đ; theo đỉnh đã ghi nhận.\n"
         return (
-            "ARM: mức lãi bắt đầu bảo vệ theo đỉnh. BÁN: giá lùi khỏi đỉnh kích hoạt PROTECT.\n"
+            "ARM: bắt đầu theo đỉnh. Đỉnh cao hơn → mốc BÁN tăng.\n"
             f"{example}"
-            "Đỉnh cao hơn → mốc bán tăng theo; đây không phải giá khớp được bảo đảm.\n"
-            f"ARM {preview.get('arm_pct', 7):g}% · TRAIL {preview.get('trail_pct', 2.5):g}% · "
-            f"BÁN {preview.get('sell_pct', 100):g}% phần còn lại. Khi bật PROTECT: AUTO tự bán; ALERT chỉ báo."
-            " Dynamic có thể bảo vệ trước ARM."
+            "AUTO bán; ALERT chỉ báo. Dynamic có thể chạy trước ARM."
         )
 
     def _fit_protect_preview(self) -> None:
         label = self.preview_normal_detail
-        value = self.preview_normal_value
-        if (isinstance(value, ctk.CTkLabel)
-                and getattr(getattr(self, "preview_focus_panel", None), "_viking_balanced_preview", False)
-                and value.cget("text").startswith("ARM:")):
-            value.configure(text=value.cget("text").replace(": ", ":").replace(" · ", " ·"))
         full, compact = getattr(self, "_preview_protect_detail", ("", ""))
         if isinstance(label, ctk.CTkLabel) and full:
             narrow = label.winfo_width() / label._get_widget_scaling() < 300
@@ -2072,18 +2072,14 @@ class DashboardPanelsMixin:
         policy = preview.get("policy", "ALERT")
         status = ("CHƯA CÓ CỔ" if quantity <= 0 else
                   "CÓ TÍN HIỆU THOÁT" if signal == "SELL" else "CHỜ TÍN HIỆU THOÁT")
-        mode = str(self.mode.get()).upper() if hasattr(self, "mode") else "PAPER"
-        book = "REAL: cổ trong tài khoản thật" if mode == "REAL" else "PAPER: cổ mô phỏng"
         behavior = ("tự gửi bán 100% phần còn lại khi có tín hiệu và đủ điều kiện lệnh."
                     if policy == "AUTO" else "chỉ báo tín hiệu, không đặt lệnh.")
         behavior = (f"{policy}: {behavior}" if enabled else
                     f"OFF: chỉ preview. Khi bật {policy}: {behavior}")
         return (
-            "E thoát theo EMA SELL/RSI, không có một giá kích hoạt cố định như SL.\n"
-            f"{book} · Đang giữ {quantity:,} CP. Hai sổ có số cổ độc lập.\n"
-            f"Giá thị trường: {price_text} · {status}.\n"
-            f"{behavior}\n"
-            "Giá hiển thị để tham khảo, không bảo đảm giá khớp. Chưa có cổ thì không gửi SELL."
+            f"E thoát theo EMA/RSI · giữ {quantity:,} CP · {status}.\n"
+            f"Giá TT: {price_text}.\n"
+            f"{behavior}"
         )
 
     def _exit_preview_quantity(self, details: dict[str, Any], symbol: str) -> int:
@@ -2361,6 +2357,9 @@ class DashboardPanelsMixin:
             text=reason,
             text_color=badge_fg if invalid_reason else COL_PREVIEW_TEXT,
         )
+        fit_header = getattr(self, "_fit_order_preview_header", None)
+        if callable(fit_header):
+            fit_header()
         self.preview_live_value.configure(
             text=(
                 _display_price(live_price)
@@ -2398,20 +2397,14 @@ class DashboardPanelsMixin:
         )
         fit_label_text(self.preview_fee_value, base_font=("Cascadia Mono", 13), minimum_size=5)
         self.preview_tp_value.configure(
-            text=(
-                tp_value.split('·')[-1].strip()
-                if tp_pnl is not None and tp_pnl >= 0 else tp_value
-            ),
+            text=tp_value.split('·')[-1].strip(),
             text_color=COL_GREEN if tp_pnl is not None and tp_pnl >= 0 else COL_TEXT,
         )
         self.preview_tp_detail.configure(
             text=f"+{_compact_vnd(tp_pnl)}" if tp_pnl is not None and tp_pnl >= 0 else ""
         )
         self.preview_sl_value.configure(
-            text=(
-                sl_value.split('·')[-1].strip()
-                if sl_pnl is not None and sl_pnl <= 0 else sl_value
-            ),
+            text=sl_value.split('·')[-1].strip(),
             text_color=COL_RED if sl_pnl is not None and sl_pnl <= 0 else COL_TEXT,
         )
         self.preview_sl_detail.configure(
@@ -2805,8 +2798,10 @@ class DashboardPanelsMixin:
         name = str(name or "PREVIEW").removesuffix(" *")
         if getattr(self, "_info_collapsed", False):
             self._set_info_panel_collapsed(False)
-        self.log_tabview.set(name)
-        self._on_log_tab_change()
+        # CTkTabview.set defers hiding other pages by 100ms. Use its native
+        # click path so fast clicks cannot leave a previous log over PREVIEW.
+        self.log_tabview._segmented_button.set(name)
+        self.log_tabview._segmented_button_callback(name)
 
     def _toggle_info_panel(self) -> None:
         self._set_info_panel_collapsed(not getattr(self, "_info_collapsed", False))
@@ -2817,15 +2812,15 @@ class DashboardPanelsMixin:
         self._info_collapsed = bool(collapsed)
         if self._info_collapsed:
             self.log_tabview.grid_remove()
-            self.info_panel.configure(height=44)
+            self.info_panel.configure(height=84)
             self.info_panel.grid_rowconfigure(1, weight=0, minsize=0)
-            self.right.grid_rowconfigure(2, weight=0, minsize=44)
+            self.right.grid_rowconfigure(2, weight=0, minsize=84)
             self.info_collapse_button.configure(text="⌄")
         else:
             self.log_tabview.grid()
-            self.info_panel.configure(height=320)
+            self.info_panel.configure(height=360)
             self.info_panel.grid_rowconfigure(1, weight=1, minsize=0)
-            self.right.grid_rowconfigure(2, weight=0, minsize=320)
+            self.right.grid_rowconfigure(2, weight=0, minsize=360)
             self.info_collapse_button.configure(text="⌃")
 
     def _render_exit_sell_preview(
@@ -2869,7 +2864,6 @@ class DashboardPanelsMixin:
             self._set_log_unread(target, False)
         if active == "PREVIEW":
             self._refresh_full_order_preview()
-            self.after_idle(self._sync_preview_scrollbar)
         if hasattr(self, "info_tab_selector"):
             self.info_tab_selector.set(active)
 
@@ -3030,10 +3024,14 @@ class DashboardPanelsMixin:
                 or (mode == "REAL" and not token_ready)
             )
         )
+        health_title = "HEALTH LỖI" if has_error else "HEALTH CẢNH BÁO" if has_warning else "HEALTH OK"
+        self.preview_health_title._viking_health_full_text = health_title
         self.preview_health_title.configure(
-            text="HEALTH LỖI" if has_error else "HEALTH CẢNH BÁO" if has_warning else "HEALTH OK",
+            text=health_title,
             text_color=COL_RED if has_error else COL_WARN if has_warning else COL_GREEN,
         )
+        self._fit_preview_health_title()
+        fit_label_text(self.preview_health_token, base_font=("Segoe UI", 10), minimum_size=8)
 
     def _show_running_legend(self) -> None:
         top = ctk.CTkToplevel(self)
@@ -3109,41 +3107,6 @@ class DashboardPanelsMixin:
         try:
             canvas = self.left._parent_canvas
             scrollbar = self.left._scrollbar
-            bounds = canvas.bbox("all")
-            content_height = int(bounds[3] - bounds[1]) if bounds else 0
-            needs_scroll = content_height > canvas.winfo_height() + 2
-            visible = scrollbar.winfo_manager() == "grid"
-            if needs_scroll and not visible:
-                scrollbar.grid()
-            elif not needs_scroll and visible:
-                scrollbar.grid_remove()
-                canvas.yview_moveto(0)
-        except (AttributeError, tk.TclError):
-            return
-
-    def _sync_preview_scrollbar(self) -> None:
-        """Fit PREVIEW to its viewport, retaining room for a stacked narrow layout."""
-        preview = getattr(self, "preview_scroll", None)
-        if not self.running or preview is None or not preview.winfo_exists():
-            return
-        try:
-            canvas = preview._parent_canvas
-            scrollbar = preview._scrollbar
-            panel = self.preview_focus_panel
-            viewport_height = int(canvas.winfo_height())
-            if viewport_height > 50:
-                target_height = _preview_panel_height(
-                    viewport_height,
-                    float(panel._get_widget_scaling()),
-                )
-                target_height = max(target_height, getattr(panel, "_viking_content_min_height", 300))
-                current_height = int(float(panel.cget("height")))
-                if abs(current_height - target_height) > 1:
-                    panel.configure(height=target_height)
-                    canvas.yview_moveto(0)
-                    # Recheck after Tk has recalculated the canvas scrollregion.
-                    self.after(25, self._sync_preview_scrollbar)
-                    return
             bounds = canvas.bbox("all")
             content_height = int(bounds[3] - bounds[1]) if bounds else 0
             needs_scroll = content_height > canvas.winfo_height() + 2

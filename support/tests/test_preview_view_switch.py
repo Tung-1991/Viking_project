@@ -116,8 +116,8 @@ def test_e_shows_market_price_and_signal_without_fabricating_a_fixed_exit(policy
     else:
         assert detail == ("SELL · 100%" if signal == "SELL" else "CHỜ SELL · 100%")
     hint = view._exit_preview_hint()
-    assert "không có một giá kích hoạt cố định" in hint
-    assert "74,200 đ" in hint and "không bảo đảm giá khớp" in hint
+    assert "E thoát theo EMA/RSI" in hint
+    assert "74,200 đ" in hint
     if not enabled:
         assert view.preview_exit_value.options["text_color"] == COL_MUTED
         assert "OFF: chỉ preview" in hint

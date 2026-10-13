@@ -48,7 +48,7 @@ def test_rsi_comparison_preview_is_precise_and_validated(current, previous, text
 
 
 @pytest.mark.parametrize("mode,expected", [
-    ("REALTIME", "phiên trước đã đóng → phiên hiện tại theo giá realtime"),
+    ("REALTIME", "phiên trước → phiên nay"),
     ("CLOSED", "hai phiên đã đóng liên tiếp"),
 ])
 def test_indicator_hint_explains_daily_rsi_baseline_and_strict_comparison(mode, expected):

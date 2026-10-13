@@ -306,7 +306,8 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
                        subject.preview_rule_cross_title, subject.preview_ema_swap,
                        subject.preview_rule_cross_counts, subject.preview_rule_cross,
                        subject.preview_rule_cross_detail,
-                       subject.preview_rule_ema, subject.preview_rule_rsi)
+                       subject.preview_rule_ema, subject.preview_rule_rsi,
+                       subject.preview_focus_panel, subject.preview_health_group)
             current_positions = tuple((w.winfo_rootx(), w.winfo_rooty(), w.winfo_width(), w.winfo_height())
                                       for w in widgets)
             if positions is None:
@@ -327,9 +328,6 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
             assert int(subject.preview_rule_cross_detail.grid_info()["column"]) == 2
             if subject.preview_rule_cross.master._viking_cross_narrow and viewing_history:
                 assert subject.preview_rule_cross_detail.cget("text") == ("CẮT 12/10" if required else "OFF · 12/10")
-            assert int(subject.preview_focus_panel.cget("height")) == (
-                600 if subject.preview_focus_panel._viking_stacked_preview else 300
-            )
             assert (subject.settings.to_dict(), details) == before
     finally:
         top.destroy()

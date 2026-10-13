@@ -195,6 +195,5 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         try:
             if self.running:
                 self._sync_left_scrollbar()
-                self._sync_preview_scrollbar()
         finally:
             self._dashboard_resize_after = None

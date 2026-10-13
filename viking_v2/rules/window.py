@@ -564,15 +564,15 @@ class RuleSettingsPopup:
         self.buy_ema_memory_group = ctk.CTkFrame(buy_group, fg_color="#222831", corner_radius=7)
         self.buy_ema_memory_group.pack(fill="x", padx=8, pady=(6, 8))
         memory_hint = (
-            "∞ VA: chỉ nhớ từ khi thêm mã, giữ tới khi dùng.\n"
-            "VA + QUÉT X PHIÊN: dựng lần cắt cũ từ giá đóng mỗi phút trong X phiên trước khi bắt đầu theo dõi mã, rồi VA giữ tới khi dùng.\n"
-            "⏳ X PHIÊN: quét giá đóng mỗi phút của X phiên trước khi bắt đầu theo dõi mã; giữ X phiên từ lần cắt, tính cả phiên cắt, bỏ ngày nghỉ.\n"
-            "Ô SỐ PHIÊN luôn hiện; VA không bật QUÉT TRƯỚC thì ô này làm mờ vì không sử dụng.\n"
-            "Lần cắt hết hạn/đã dùng không mua lại. BUY vẫn cần EMA nhanh > chậm, RSI và các điều kiện khác đạt."
+            "VA: giữ lần cắt tới khi dùng.\n"
+            "X PHIÊN: giữ tối đa X phiên, tính cả phiên cắt.\n"
+            "Mỗi lần cắt chỉ dùng để BUY một lần."
         )
         self.buy_signal_require_ema_cross = self._switch(
             self.buy_ema_memory_group, "BUY CẦN EMA CẮT LÊN", self.params.buy_signal_require_ema_cross,
-            memory_hint + "\nChưa có lần cắt hợp lệ: đang trên thì chờ xuống rồi lên; đang dưới thì chờ lên. Bằng nhau chưa tính cắt. OFF chỉ cần EMA nhanh > chậm.",
+            "EMA nhanh từ dưới vượt lên EMA chậm mới được BUY.\n"
+            "Đang dưới: chờ lên. Đang trên mà chưa có lần cắt: chờ xuống rồi lên.\n"
+            "OFF: chỉ cần EMA nhanh > EMA chậm.",
         )
         self.buy_signal_session_cross_enabled = tk.BooleanVar(value=True)
         self.buy_ema_cross_mode = tk.StringVar(value="∞ VA" if self.params.buy_ema_cross_mode == "VA" else "⏳ X PHIÊN")
@@ -591,14 +591,19 @@ class RuleSettingsPopup:
             memory_row, text="VA QUÉT TRƯỚC", variable=self.buy_ema_va_lookback_enabled,
             font=("Segoe UI", 11), width=105, switch_width=34, switch_height=18)
         self.buy_ema_va_lookback_switch.grid(row=1, column=0, columnspan=2, sticky="w", pady=(5, 0))
-        ctk.CTkLabel(memory_row, text="X PHIÊN TRƯỚC / GIỮ", font=("Segoe UI", 11),
+        _HoverHint(self.buy_ema_va_lookback_switch,
+                   "BẬT: quét X phiên trước lúc thêm mã, bằng giá đóng từng phút.\n"
+                   "TẮT: chỉ theo dõi từ lúc thêm mã.")
+        ctk.CTkLabel(memory_row, text="SỐ PHIÊN (X)", font=("Segoe UI", 11),
                      text_color=self.TEXT, anchor="w").grid(row=2, column=0, sticky="w", pady=(6, 0))
         self.buy_ema_cross_sessions = ctk.CTkEntry(
             memory_row, width=55, height=32, justify="right", font=FONT_VALUE,
             fg_color="#181B20", border_color="#444B55", text_color=self.TEXT)
         self.buy_ema_cross_sessions.insert(0, str(self.params.buy_ema_cross_sessions))
         self.buy_ema_cross_sessions.grid(row=2, column=1, padx=(6, 0), pady=(6, 0))
-        _HoverHint(self.buy_ema_cross_sessions, memory_hint)
+        _HoverHint(self.buy_ema_cross_sessions,
+                   "VA + QUÉT: số phiên nhìn lại.\n"
+                   "X PHIÊN: số phiên nhìn lại và thời hạn lần cắt.")
         def refresh_memory_field(*_args):
             va = self.buy_ema_cross_mode.get() == "∞ VA"
             self.buy_ema_va_lookback_switch.configure(state="normal" if va else "disabled")
@@ -817,13 +822,13 @@ class RuleSettingsPopup:
                 "Không có mã: sổ này chưa có khóa tay. Khóa theo giờ tự hết, không hiện ở đây.")
             self._refresh_blocks()
 
-        whip = self._card(body, "WHIPSAW", "Đếm số lần EMA nhanh/chậm đổi phía giữa các nến ngày 1D trong X phiên gần nhất. Khác bộ nhớ VA: VA có thể ghi nhiều lần cắt khi giá đổi trong cùng một phiên. Nếu dùng REALTIME, nến hôm nay còn tạm tính tới lúc đóng phiên. Chỉ khóa BUY mới khi đạt N; không bán cổ đang giữ.", 1, 2)
+        whip = self._card(body, "WHIPSAW", "Đếm EMA đổi phía giữa nến ngày trong X phiên.\nĐủ N lần → khóa BUY mới.\nKhông cộng lần cắt trong phiên của VA.", 1, 2)
         self.whipsaw_enabled = self._switch(
             whip, "BẬT WHIPSAW", self.params.whipsaw_enabled,
-            "Ví dụ 0/3 · 7 nến 1D: chưa có lần EMA đổi phía giữa 7 nến ngày gần nhất; đạt 3 lần thì khóa BUY/Re-entry mới. Không cộng từng tick và không can thiệp vị thế đang giữ.",
+            "Bật để khóa BUY khi số lần cắt ≥ N.\nVị thế đang giữ vẫn được quản lý.",
         )
-        self.whipsaw_n = self._field(whip, "Số lần (N)", self.params.whipsaw_n, "Ngưỡng số lần EMA 1D đổi phía trong X nến ngày; mặc định 3 lần sẽ khóa BUY/Re-entry.")
-        self.whipsaw_x = self._field(whip, "Cửa sổ (phiên)", self.params.whipsaw_x, "Số nến ngày gần nhất để đếm Whipsaw; trong REALTIME gồm nến hôm nay còn tạm tính. Mặc định 7.")
+        self.whipsaw_n = self._field(whip, "Số lần (N)", self.params.whipsaw_n, "Đạt N lần cắt → khóa BUY mới. Mặc định 3.")
+        self.whipsaw_x = self._field(whip, "Cửa sổ (phiên)", self.params.whipsaw_x, "Đếm trong X nến ngày gần nhất. Mặc định 7.\nREALTIME tính cả nến hôm nay đang chạy.")
 
     def _exit_manager_tab(self, frame: ctk.CTkFrame) -> None:
         frame.grid_columnconfigure(0, weight=1)

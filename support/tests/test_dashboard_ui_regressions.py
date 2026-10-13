@@ -9,7 +9,6 @@ from viking_v2.dashboard.actions import DashboardActionsMixin
 from viking_v2.dashboard.panels import (
     DashboardPanelsMixin,
     _dynamic_atr_preview_text,
-    _preview_panel_height,
 )
 from viking_v2.dashboard.view import COL_GRAY, COL_GREEN, COL_TEXT, COL_TITLE, COL_WARN
 from viking_v2.dashboard.tables import (
@@ -56,10 +55,35 @@ def test_dynamic_atr_preview_uses_the_selected_symbols_completed_daily_atr() -> 
     assert _dynamic_atr_preview_text({"normal_atr_pct": 4.118}, params) == text
 
 
-def test_preview_height_reverses_customtkinter_dpi_scaling() -> None:
-    assert _preview_panel_height(600, 2.0) == 300
-    assert _preview_panel_height(720, 2.0) == 356
-    assert _preview_panel_height(290, 1.0) == 300
+@pytest.mark.parametrize("scaling", [1.0, 1.5])
+def test_preview_pages_share_full_width_and_keep_health_outside(ui_root, scaling) -> None:
+    import customtkinter as ctk
+    top = ctk.CTkToplevel(ui_root)
+    top.geometry("1000x400+0+0")
+    ctk.set_widget_scaling(scaling)
+    view = DashboardPanelsMixin()
+    try:
+        view._build_order_preview_tab(top)
+        top.update()
+        health = view.preview_health_group
+        geometry = None
+        for name in ("LỆNH", "HỆ THỐNG", "LỆNH"):
+            view._select_preview_tab(name)
+            top.update_idletasks()
+            page = view.preview_pages[name]
+            current = (page.winfo_x(), page.winfo_y(), page.winfo_width(), page.winfo_height(),
+                       health.winfo_y(), health.winfo_height())
+            if geometry is None:
+                geometry = current
+            assert current == geometry
+            assert page.winfo_width() >= view.preview_focus_panel.winfo_width() - 16 * scaling
+            assert health.master is top
+            assert health.winfo_y() >= view.preview_focus_panel.winfo_y() + view.preview_focus_panel.winfo_height()
+            assert not hasattr(view, "preview_scroll")
+            assert page.master.winfo_children()[-1] is page
+    finally:
+        top.destroy()
+        ctk.set_widget_scaling(1.0)
 
 
 def test_operator_typography_separates_keys_from_values() -> None:
@@ -554,12 +578,11 @@ def test_rule_and_order_hints_distinguish_waiting_queue_sent_and_partial_fill():
         "reason": "BUY_WINDOW_WAIT", "details": {"buy_window": {"start": "14:00"}},
     }
     assert "Có tín hiệu; chờ từ 14:00" in subject._rule_decision_hint()
-    assert "Có tín hiệu ≠ đã gửi lệnh" in subject._rule_decision_hint()
+    assert "Lệnh gửi/khớp: xem bảng lệnh" in subject._rule_decision_hint()
     hint = subject._order_lifecycle_hint()
-    assert "CACHE / CHỜ GỬI / CHỜ OTP" in hint
-    assert "DNSE đã nhận; chưa có nghĩa đã khớp" in hint
-    assert "x < y là khớp một phần" in hint
-    assert "Telegram BUY báo đã xếp yêu cầu" in hint
+    assert "ĐẶT / CACHE / CHỜ OTP" in hint
+    assert "ĐÃ GỬI: DNSE nhận lệnh" in hint
+    assert "KHỚP x/y: x CP đã khớp trên y CP đặt" in hint
 
 
 @pytest.mark.parametrize("ui,daemon,label", [
@@ -913,24 +936,27 @@ class _Selector(_Tabs):
         self._buttons_dict = {name: _Label() for name in ("PREVIEW", "Manual", "Bot")}
 
 
-def test_log_tabs_show_unread_star_and_clear_it_when_selected() -> None:
+def test_log_tabs_show_unread_star_and_clear_it_when_selected(ui_root) -> None:
+    import customtkinter as ctk
     subject = DashboardPanelsMixin()
-    subject.log_tabview = _Tabs()
+    subject.log_tabview = ctk.CTkTabview(ui_root, command=subject._on_log_tab_change)
+    for name in ("PREVIEW", "Manual", "Bot"):
+        subject.log_tabview.add(name)
     subject.info_tab_selector = _Selector()
     subject.log_tab_keys = {"manual": "Manual", "bot": "Bot"}
     subject.log_tab_unread = {"manual": False, "bot": False}
 
-    subject._set_log_unread("bot", True)
-
-    assert subject.log_tab_unread["bot"] is True
-    assert subject.info_tab_selector._buttons_dict["Bot"].options["text"] == "Bot *"
-
-    subject._select_info_tab("Bot *")
-
-    assert subject.log_tabview.get() == "Bot"
-    assert subject.log_tab_unread["bot"] is False
-    assert subject.info_tab_selector._buttons_dict["Bot"].options["text"] == "Bot"
-    assert not hasattr(DashboardPanelsMixin, "_sync_info_selector_mode")
+    try:
+        subject._set_log_unread("bot", True)
+        assert subject.log_tab_unread["bot"] is True
+        assert subject.info_tab_selector._buttons_dict["Bot"].options["text"] == "Bot *"
+        subject._select_info_tab("Bot *")
+        assert subject.log_tabview.get() == "Bot"
+        assert subject.log_tab_unread["bot"] is False
+        assert subject.info_tab_selector._buttons_dict["Bot"].options["text"] == "Bot"
+        assert not hasattr(DashboardPanelsMixin, "_sync_info_selector_mode")
+    finally:
+        subject.log_tabview.destroy()
 
 
 def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> None:

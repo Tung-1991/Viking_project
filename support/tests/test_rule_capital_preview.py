@@ -121,13 +121,13 @@ def test_rule_preview_keeps_current_money_in_hint_not_an_extra_row(budget):
     assert f"Vốn mua: {expected}" in view.preview_rule_phase3.options["text"]
     hint = view._market_confirmation_hint()
     assert "NAV" in hint and "45.00 tr" in hint and "5.00 tr" in hint
-    assert "không phải lệnh mua/bán" in hint
+    assert "⇄ chỉ đổi góc xem" in hint
     assert "1/3" in hint
     assert hint.startswith("ĐANG DÙNG: TĂNG")
     assert "đang chờ vẫn dùng TĂNG" in hint
     assert "CP 10% / TIỀN 90%" in hint
     assert len(hint.splitlines()) <= 5
-    assert "9 triệu/mã" in view._entry_capital_hint()
+    assert "ngân sách mã đang chọn" in view._entry_capital_hint()
     assert f"Vốn mua: {expected}" in view._entry_capital_hint()
     assert "MANUAL" in view._entry_capital_hint()
 
@@ -163,7 +163,7 @@ def test_rsi_preview_shows_daily_comparison_not_the_overall_signal_color(current
     assert view.preview_rule_sell_ema.options["text"] == "-- / --"
     assert view.preview_rule_buy_ema_key.options["text"] == "EMA BUY 3/6:"
     assert view.preview_rule_rsi_key.options["text"] == "RSI14:"
-    assert "công tắc tự mua/bán" in view._indicator_preview_hint()
+    assert "không tạo tín hiệu hoặc đặt lệnh" in view._indicator_preview_hint()
 
 
 @pytest.mark.parametrize("enabled,crosses,expected", [
@@ -191,8 +191,8 @@ def test_whipsaw_preview_shows_actual_count_window_and_lock_without_mutating_rul
     view._refresh_rule_preview(status, "AAA")
     assert view.preview_rule_phase3_detail.options["text"] == f"{expected} · LỖ: 0/3"
     assert view.preview_rule_phase3_guard.options["text"].startswith(expected)
-    assert expected in view._entry_capital_hint()
-    assert "không cộng từng tick" in view._entry_capital_hint()
+    assert expected in view._whipsaw_preview_hint()
+    assert "không cộng từng tick" in view._whipsaw_preview_hint()
     assert status == before
     assert view.settings.to_dict() == settings_before
     if enabled and crosses is not None and crosses >= 3:
@@ -293,10 +293,12 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
             assert int(key.grid_info()["column"]) == 0 and int(value.grid_info()["column"]) == 1
             assert key.winfo_x() + key.winfo_width() <= value.winfo_x()
         assert not hasattr(view, "preview_rule_market_money")
-        stacked = width / scaling < 900
-        assert int(view.preview_focus_panel.cget("height")) == (600 if stacked else 300)
-        assert view.preview_focus_panel._viking_stacked_preview == stacked
-        assert int(view.preview_rule_market.master.master.grid_info()["row"]) == (1 if stacked else 0)
+        assert view.preview_pages["HỆ THỐNG"] is view.preview_rule_market.master.master
+        assert view.preview_pages["LỆNH"].master is view.preview_pages["HỆ THỐNG"].master
+        panel_geometry = (view.preview_focus_panel.winfo_width(), view.preview_focus_panel.winfo_height())
+        assert view.preview_health_group.winfo_y() >= (
+            view.preview_focus_panel.winfo_y() + view.preview_focus_panel.winfo_height()
+        )
         assert int(view.preview_rule_market_detail.grid_info()["row"]) == 1
         assert view.preview_rule_market_detail.winfo_y() + view.preview_rule_market_detail.winfo_height() <= card.winfo_height()
         assert view.preview_rule_reason.winfo_y() + view.preview_rule_reason.winfo_height() <= view.preview_rule_reason.master.winfo_height()
@@ -329,7 +331,7 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
                 assert rendered_font.measure(label.cget("text")) <= label.winfo_width(), (
                     label.cget("text"), label.winfo_width())
             assert view.preview_p1_swap.winfo_x() + view.preview_p1_swap.winfo_width() <= card.winfo_width()
-            assert int(view.preview_focus_panel.cget("height")) == (600 if stacked else 300)
+            assert (view.preview_focus_panel.winfo_width(), view.preview_focus_panel.winfo_height()) == panel_geometry
         # OFF must not hide the available threshold of an existing position.
         status["decisions"]["AAA"]["details"].update(
             current_profit_pct=8, normal_trigger_price=7.7, normal_state="ARM",

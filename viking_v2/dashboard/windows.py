@@ -122,7 +122,11 @@ def fit_label_text(
     if not isinstance(label, ctk.CTkLabel) or label.winfo_width() <= 1:
         return
     text = str(label.cget("text") or "")
-    available = max(0, label.winfo_width() - 4 * label._get_widget_scaling())
+    # CTk reserves the corner radius on both sides of its native text label.
+    # Measuring only the outer frame let rounded health/status pills clip.
+    padding = max(4, 2 * min(float(label.cget("corner_radius")),
+                            label.winfo_height() / label._get_widget_scaling() / 2))
+    available = max(0, label.winfo_width() - padding * label._get_widget_scaling())
     signature = (text, available, base_font, minimum_size, label._get_widget_scaling())
     if getattr(label, "_viking_fit_label_signature", None) == signature:
         return
