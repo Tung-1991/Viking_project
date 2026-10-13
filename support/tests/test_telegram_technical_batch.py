@@ -305,3 +305,60 @@ def test_single_popup_option_is_a_draft_and_reuses_batch_minutes(ui_root, monkey
     finally:
         popup._close()
         client.close()
+
+
+def test_t_plus_exit_wait_is_reported_as_unsold_in_a_technical_digest(subject, tmp_path):
+    from viking_v2.trading.orders import OrderQueue
+    from viking_v2.trading.state import TradeStateStore
+    app, client, clock = subject
+    app.trade_state = TradeStateStore(tmp_path / "trades.json")
+    trade = app.trade_state.create("HDB", "REAL")
+    app.trade_state.record_buy_fill(trade.id, 600, 22.65, 0)
+    app.queue = OrderQueue(tmp_path / "orders.json")
+    intent = OrderIntent.create("HDB", "SELL", 100, "MARKET", execution_mode="REAL",
+                                trade_id=trade.id, action="CLOSE", details={"sell_share_pct": 33})
+    intent.status = "WAITING_SETTLEMENT"
+    app.queue.add(intent)
+    app.snapshots = {"REAL": ({}, [{"symbol": "HDB", "openQuantity": 600, "tradeQuantity": 0}], [])}
+    before = deepcopy((app.trade_state.get(trade.id).to_dict(), app.queue.get(intent.id).to_dict()))
+    observe(app)
+    flush(app, clock)
+    assert len(client.sent) == 1
+    text = client.sent[0]
+    assert "đang giữ 600 CP · Đã bán khớp 0 CP" in text
+    assert "Chờ cổ về 600 CP" in text and "SELL còn chờ 100 CP · CHỜ CỔ VỀ" in text
+    assert "Tỷ lệ yêu cầu 33%" in text
+    assert (app.trade_state.get(trade.id).to_dict(), app.queue.get(intent.id).to_dict()) == before
+
+
+def test_digest_reads_fill_progress_at_delivery_instead_of_buy_observation(subject, tmp_path):
+    from viking_v2.trading.state import TradeStateStore
+    app, client, clock = subject
+    app.trade_state = TradeStateStore(tmp_path / "trades.json")
+    trade = app.trade_state.create("HDB", "REAL")
+    app.trade_state.record_buy_fill(trade.id, 600, 22.65, 0)
+    app.snapshots = {"REAL": ({}, [{"symbol": "HDB", "openQuantity": 600, "tradeQuantity": 600}], [])}
+    observe(app)
+    assert not client.sent
+    app.trade_state.record_sell_fill(trade.id, 100, 23, 0)
+    flush(app, clock)
+    assert "đang giữ 500 CP · Đã bán khớp 100 CP (16.67% của 600 CP đã mua)" in client.sent[0]
+    assert "đang giữ 600 CP" not in client.sent[0]
+
+
+@pytest.mark.parametrize("sold", [0, 100, 600])
+def test_individual_notice_labels_a_held_position_without_claiming_a_rebuy(subject, tmp_path, sold):
+    from viking_v2.trading.state import TradeStateStore
+    app, client, _clock = subject
+    app.settings.telegram_buy_delivery_mode = "IMMEDIATE"
+    app.trade_state = TradeStateStore(tmp_path / "trades.json")
+    trade = app.trade_state.create("HDB", "REAL")
+    app.trade_state.record_buy_fill(trade.id, 600, 22.65, 0)
+    if sold:
+        app.trade_state.record_sell_fill(trade.id, sold, 23, 0)
+    observe(app)
+    assert len(client.sent) == 1
+    text = client.sent[0]
+    assert f"đang giữ {600-sold} CP · Đã bán khớp {sold} CP" in text
+    assert ("EMA/RSI BUY · ĐANG GIỮ · HDB" in text) == (sold < 600)
+    assert ("Vị thế chưa đóng" in text) == (sold < 600)

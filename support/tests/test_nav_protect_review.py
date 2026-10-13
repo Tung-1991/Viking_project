@@ -170,3 +170,94 @@ def test_protect_policy_is_common_to_arm_and_dynamic_and_saves_alert(ui_root, tm
         assert settings.rule_parameters["normal_retention_pct"] == 72
     finally:
         popup._close()
+
+
+@pytest.mark.parametrize("mode", ["VA", "SESSIONS"])
+def test_off_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, monkeypatch, mode):
+    from copy import deepcopy
+    from datetime import datetime
+    import customtkinter as ctk
+    from viking_v2.trading.market import VN_TZ
+    now = datetime(2026, 10, 13, 13, tzinfo=VN_TZ)
+    monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: now)
+    top = ctk.CTkToplevel(ui_root)
+    top.geometry("1000x720+0+0")
+    subject = DashboardPanelsMixin()
+    subject.settings = AppSettings()
+    subject.settings.rule_parameters.update(buy_signal_require_ema_cross=False, buy_ema_cross_mode=mode)
+    subject._build_order_preview_tab(top)
+    source = {"tracking_version": 2, "initialized": True, "current_ready": True,
+              "current_fast": 23, "current_slow": 22, "up_count": 0, "down_count": 0,
+              "lookback_ready": True, "lookback_up_count": 1, "lookback_down_count": 0,
+              "lookback_cross": {"cross_id": "EMA:HISTORY:TEST", "cross_at": "2026-10-12T14:10:00+07:00",
+                                 "cross_timestamp": now.timestamp()-86400, "used": False}}
+    details = {"ema_memory_preview_source": source}
+    before = deepcopy((subject.settings.to_dict(), details))
+    try:
+        top.deiconify()
+        top.update()
+        subject._render_ema_cross_preview(details)
+        for alternate in (False, True, False):
+            if getattr(subject, "_preview_ema_alternate", False) != alternate:
+                subject.preview_ema_swap.invoke()
+            ui_root.update_idletasks()
+            evidence = subject._preview_ema_cross_evidence[1]
+            viewing_history = (mode == "SESSIONS") != alternate
+            assert evidence["mode"] == ("SESSIONS" if viewing_history else "VA")
+            assert evidence["valid"] == viewing_history
+            assert f"↑{int(viewing_history)} ↓0" in subject.preview_rule_cross.cget("text")
+            assert subject.preview_rule_cross_title.cget("text") == ("⏳ 3P" if viewing_history else "∞ VA")
+            assert int(subject.preview_rule_cross.grid_info()["column"]) == 2
+            assert int(subject.preview_rule_cross_detail.grid_info()["column"]) == 2
+            assert int(subject.preview_focus_panel.cget("height")) == 300
+            assert (subject.settings.to_dict(), details) == before
+    finally:
+        top.destroy()
+
+
+def test_alternate_history_preview_marks_absent_cache_as_unknown(ui_root, monkeypatch):
+    from datetime import datetime
+    import customtkinter as ctk
+    from viking_v2.trading.market import VN_TZ
+    monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: datetime(2026, 10, 13, 13, tzinfo=VN_TZ))
+    top = ctk.CTkToplevel(ui_root)
+    subject = DashboardPanelsMixin()
+    subject.settings = AppSettings()
+    subject.settings.rule_parameters["buy_ema_cross_mode"] = "VA"
+    subject._build_order_preview_tab(top)
+    try:
+        subject._render_ema_cross_preview({"ema_cross": {"tracking_version": 2, "initialized": True,
+            "current_ready": True, "current_fast": 23, "current_slow": 22, "up_count": 0, "down_count": 0}})
+        subject.preview_ema_swap.invoke()
+        assert subject._preview_ema_cross_evidence[1]["state"] == "UNKNOWN"
+        assert not subject._preview_ema_cross_evidence[1]["valid"]
+        assert "?" in subject.preview_rule_cross.cget("text")
+    finally:
+        top.destroy()
+
+
+@pytest.mark.parametrize("closed,state,valid", [(False, "SESSION_ACTIVE", True), (True, "MARKET_CLOSED", False)])
+def test_saved_version_two_live_cross_keeps_identity_and_respects_closed_preview(ui_root, monkeypatch, closed, state, valid):
+    from copy import deepcopy
+    from datetime import datetime
+    import customtkinter as ctk
+    from viking_v2.trading.market import VN_TZ
+    monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: datetime(2026, 10, 13, 13, tzinfo=VN_TZ))
+    top = ctk.CTkToplevel(ui_root)
+    subject = DashboardPanelsMixin()
+    subject.settings = AppSettings()
+    subject.settings.rule_parameters["buy_ema_cross_mode"] = "VA"
+    subject._build_order_preview_tab(top)
+    source = {"tracking_version": 2, "initialized": True, "current_ready": True,
+              "current_fast": 23, "current_slow": 22, "up_count": 1, "down_count": 0,
+              "cross_id": "EMA:OLD-V2:LIVE", "cross_at": "2026-10-12T14:10:00+07:00"}
+    before = deepcopy(source)
+    try:
+        subject._render_ema_cross_preview({"ema_cross": source, "ema_cross_preview_closed": closed})
+        subject.preview_ema_swap.invoke()
+        evidence = subject._preview_ema_cross_evidence[1]
+        assert evidence["cross_id"] == source["cross_id"] and evidence["cross_source"] == "LIVE"
+        assert evidence["state"] == state and evidence["valid"] == valid
+        assert source == before
+    finally:
+        top.destroy()

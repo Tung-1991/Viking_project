@@ -293,7 +293,7 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
             assert int(key.grid_info()["column"]) == 0 and int(value.grid_info()["column"]) == 1
             assert key.winfo_x() + key.winfo_width() <= value.winfo_x()
         assert not hasattr(view, "preview_rule_market_money")
-        assert int(view.preview_focus_panel.cget("height")) == (350 if view.preview_rule_ema.master._viking_cross_narrow else 300)
+        assert int(view.preview_focus_panel.cget("height")) == 300
         assert int(view.preview_rule_market_detail.grid_info()["row"]) == 1
         assert view.preview_rule_market_detail.winfo_y() + view.preview_rule_market_detail.winfo_height() <= card.winfo_height()
         assert view.preview_rule_reason.winfo_y() + view.preview_rule_reason.winfo_height() <= view.preview_rule_reason.master.winfo_height()
@@ -326,7 +326,7 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
                 assert rendered_font.measure(label.cget("text")) <= label.winfo_width(), (
                     label.cget("text"), label.winfo_width())
             assert view.preview_p1_swap.winfo_x() + view.preview_p1_swap.winfo_width() <= card.winfo_width()
-            assert int(view.preview_focus_panel.cget("height")) == (350 if view.preview_rule_ema.master._viking_cross_narrow else 300)
+            assert int(view.preview_focus_panel.cget("height")) == 300
         # OFF must not hide the available threshold of an existing position.
         status["decisions"]["AAA"]["details"].update(
             current_profit_pct=8, normal_trigger_price=7.7, normal_state="ARM",

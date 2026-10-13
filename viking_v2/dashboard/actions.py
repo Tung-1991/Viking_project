@@ -1512,6 +1512,16 @@ class DashboardActionsMixin:
         if identity and not batch:
             DashboardActionsMixin._dispatch_telegram_notice(self, identity, service)
 
+    def _technical_position_context(self, symbol: str, mode: str) -> dict | None:
+        from ..services.position_notifications import position_notice_context
+        read_cycles = getattr(getattr(self, "trade_state", None), "list_cycles", None)
+        read_intents = getattr(getattr(self, "queue", None), "list_all", None)
+        snapshot = getattr(self, "snapshots", {}).get(mode)
+        return position_notice_context(symbol, mode,
+            cycles=read_cycles() if callable(read_cycles) else (),
+            positions=snapshot[1] if snapshot is not None else None,
+            intents=read_intents() if callable(read_intents) else ())
+
     def _technical_telegram_notice_is_current(self, notice: dict) -> bool:
         watch = self.rule_state.telegram_buy_watch(notice["symbol"], notice["execution_mode"])
         return not (watch and notice.get("watch_id") and (
@@ -1539,7 +1549,10 @@ class DashboardActionsMixin:
                             or notice["destination"] != str(service.chat_id)):
                         self.rule_state.discard_telegram_notice(notice["id"])
                     else:
-                        selected.append({**notice, "payload": {**notice["payload"], **delivery}})
+                        payload = {**notice["payload"], **delivery}
+                        if notice["category"] == "blocked_buy":
+                            payload["position_context"] = DashboardActionsMixin._technical_position_context(self, notice["symbol"], notice["execution_mode"])
+                        selected.append({**notice, "payload": payload})
                 delivered = service.notify_technical_digest(selected)
             except Exception as exc:
                 logger = getattr(self, "logger", None)
@@ -1586,7 +1599,10 @@ class DashboardActionsMixin:
                 else:
                     method = (service.notify_technical_buy if notice["category"] == "blocked_buy"
                               else service.notify_buy_lost)
-                    sent = bool(method(**{**notice["payload"], **(delivery or {})}))
+                    payload = {**notice["payload"], **(delivery or {})}
+                    if notice["category"] == "blocked_buy":
+                        payload["position_context"] = DashboardActionsMixin._technical_position_context(self, notice["symbol"], notice["execution_mode"])
+                    sent = bool(method(**payload))
             except Exception as exc:
                 logger = getattr(self, "logger", None)
                 if logger:
@@ -2538,15 +2554,15 @@ class DashboardActionsMixin:
 
         top = ctk.CTkToplevel(self)
         top.title("Quản lý vị thế")
-        top.geometry("1040x610")
-        top.minsize(920, 570)
+        top.geometry("680x410")
+        top.minsize(620, 390)
         top.transient(self)
         top.grab_set()
         top.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             top, text=f"{symbol} · {mode} · {quantity:,} CP",
             font=("Segoe UI", 18, "bold"), text_color=COL_TITLE,
-        ).grid(row=0, column=0, sticky="w", padx=20, pady=(18, 4))
+        ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 2))
         ctk.CTkLabel(
             top,
             text=(
@@ -2554,44 +2570,24 @@ class DashboardActionsMixin:
                 else "Vị thế ngoài hệ thống · cần xác nhận bắt đầu quản lý"
             ),
             font=("Segoe UI", 11), text_color=COL_WARN if not cycle else COL_TEXT,
-        ).grid(row=1, column=0, sticky="w", padx=20, pady=(0, 10))
+        ).grid(row=1, column=0, sticky="w", padx=14, pady=(0, 6))
 
         summary = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
-        summary.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 8))
-        for col, weight in enumerate((3, 3, 4, 3, 5)):
-            summary.grid_columnconfigure(col, weight=weight, minsize=140)
+        summary.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 4))
         settle_short = settle
         if len(settle) == 10:
             settle_short = f"{settle[8:10]}/{settle[5:7]}/{settle[:4]}"
-        summary_values = (
-            ("GIÁ VÀO", _display_price(avg_price), COL_TEXT),
-            ("GIÁ HIỆN TẠI", _display_price(market_price), COL_TEXT),
-            ("PNL", f"{pnl:+,.0f}đ · {pnl_pct:+.2f}%", COL_GREEN if pnl >= 0 else COL_RED),
-            ("CÓ THỂ BÁN", f"{sellable:,} CP", COL_GREEN if sellable else COL_WARN),
-            (
-                "T+",
-                (f"{quantity - sellable:,} CP" + (f" · {settle_short}" if settle_short else ""))
-                if quantity > sellable else "ĐÃ VỀ",
-                COL_WARN if quantity > sellable else COL_GREEN,
-            ),
-        )
-        for col, (title, value, color) in enumerate(summary_values):
-            card_color = COL_GRAY if col % 2 == 0 else "#343A43"
-            card = ctk.CTkFrame(summary, fg_color=card_color, corner_radius=7)
-            card.grid(row=0, column=col, sticky="nsew", padx=4, pady=6)
-            ctk.CTkLabel(
-                card, text=title, font=FONT_KEY,
-                text_color=COL_TITLE,
-            ).pack(anchor="w", padx=12, pady=(9, 3))
-            ctk.CTkLabel(
-                card, text=value, font=FONT_MONO_VALUE,
-                text_color=color,
-            ).pack(anchor="w", padx=12, pady=(0, 10))
+        ctk.CTkLabel(summary, text=f"Vào {_display_price(avg_price)} · Giá {_display_price(market_price)} · PNL {pnl:+,.0f}đ ({pnl_pct:+.2f}%)",
+                    font=FONT_MONO_VALUE, text_color=COL_GREEN if pnl >= 0 else COL_RED,
+                    anchor="w").pack(fill="x", padx=10, pady=(4, 0))
+        ctk.CTkLabel(summary, text=f"Bán được {sellable:,} CP · Chờ về {max(0, quantity - sellable):,} CP" + (f" · {settle_short}" if settle_short else ""),
+                    font=("Segoe UI", 12), text_color=COL_WARN if quantity > sellable else COL_TEXT,
+                    anchor="w").pack(fill="x", padx=10, pady=(0, 4))
 
         selected = set(cycle.em_modes if cycle else [])
         buttons: dict[str, ctk.CTkButton] = {}
         mode_frame = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
-        mode_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=5)
+        mode_frame.grid(row=3, column=0, sticky="ew", padx=14, pady=3)
         for column, (key, label) in enumerate(EM_TACTICS):
             mode_frame.grid_columnconfigure(column, weight=1, uniform="em")
 
@@ -2617,13 +2613,13 @@ class DashboardActionsMixin:
                 text_color=COL_TEXT if active else COL_MUTED,
                 command=toggle,
             )
-            button.grid(row=0, column=column, sticky="ew", padx=5, pady=7)
+            button.grid(row=0, column=column, sticky="ew", padx=4, pady=4)
             buttons[key] = button
 
         targets = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
-        targets.grid(row=4, column=0, sticky="ew", padx=20, pady=8)
+        targets.grid(row=4, column=0, sticky="ew", padx=14, pady=4)
         targets.grid_columnconfigure((1, 3), weight=1)
-        ctk.CTkLabel(targets, text="TAKE PROFIT", font=FONT_KEY, text_color=COL_GREEN).grid(row=0, column=0, sticky="w", padx=(12, 8), pady=(10, 5))
+        ctk.CTkLabel(targets, text="TP", font=FONT_KEY, text_color=COL_GREEN).grid(row=0, column=0, sticky="w", padx=(10, 6), pady=(4, 2))
         tp_entry = ctk.CTkEntry(targets, font=FONT_MONO_VALUE, height=38)
         if cycle and cycle.tp_mode == "PRICE":
             tp_entry.insert(0, _display_price(cycle.tp_value))
@@ -2633,8 +2629,8 @@ class DashboardActionsMixin:
             # Was a dead field before, so a stray save must not now stamp a real
             # target onto the position.  AUTO means "dùng tactic TP nếu bật".
             tp_entry.insert(0, "AUTO")
-        tp_entry.grid(row=0, column=1, sticky="ew", padx=(0, 14), pady=(10, 5))
-        ctk.CTkLabel(targets, text="STOP LOSS", font=FONT_KEY, text_color=COL_RED).grid(row=0, column=2, sticky="w", padx=(12, 8), pady=(10, 5))
+        tp_entry.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=(4, 2))
+        ctk.CTkLabel(targets, text="SL", font=FONT_KEY, text_color=COL_RED).grid(row=0, column=2, sticky="w", padx=(8, 6), pady=(4, 2))
         sl_entry = ctk.CTkEntry(targets, font=FONT_MONO_VALUE, height=38)
         if cycle and cycle.sl_mode == "PRICE":
             sl_entry.insert(0, _display_price(cycle.sl_value))
@@ -2642,15 +2638,12 @@ class DashboardActionsMixin:
             sl_entry.insert(0, f"{-abs(cycle.sl_value):g}%")
         else:
             sl_entry.insert(0, "AUTO")
-        sl_entry.grid(row=0, column=3, sticky="ew", padx=(0, 12), pady=(10, 5))
+        sl_entry.grid(row=0, column=3, sticky="ew", padx=(0, 10), pady=(4, 2))
         tp_preview = ctk.CTkLabel(targets, text="", font=("Segoe UI", 11), text_color=COL_GREEN)
-        tp_preview.grid(row=1, column=0, columnspan=2, sticky="w", padx=12, pady=(2, 10))
+        tp_preview.grid(row=1, column=0, columnspan=2, sticky="w", padx=10, pady=(0, 4))
         sl_preview = ctk.CTkLabel(targets, text="", font=("Segoe UI", 11), text_color=COL_RED)
-        sl_preview.grid(row=1, column=2, columnspan=2, sticky="w", padx=12, pady=(2, 10))
+        sl_preview.grid(row=1, column=2, columnspan=2, sticky="w", padx=10, pady=(0, 4))
 
-        details = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
-        details.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 8))
-        details.grid_columnconfigure((0, 1, 2), weight=1, uniform="position_details")
         detail_values = (
             ("TP", f"Lãi chạm +{take_profit:g}% · bán sạch vị thế"),
             (
@@ -2666,15 +2659,11 @@ class DashboardActionsMixin:
                 else "Tín hiệu SELL · AUTO bán hết phần còn lại",
             ),
         )
-        for col, (title, value) in enumerate(detail_values):
-            card_color = COL_GRAY if col % 2 == 0 else "#343A43"
-            card = ctk.CTkFrame(details, fg_color=card_color, corner_radius=7)
-            card.grid(row=0, column=col, sticky="ew", padx=4, pady=6)
-            ctk.CTkLabel(card, text=title, font=FONT_KEY, text_color=COL_TITLE).pack(anchor="w", padx=12, pady=(9, 3))
-            ctk.CTkLabel(card, text=value, font=FONT_VALUE, text_color=COL_TEXT, wraplength=300, justify="left").pack(anchor="w", padx=12, pady=(0, 10))
+        for (key, _label), (_title, value) in zip(EM_TACTICS, detail_values):
+            _HoverHint(buttons[key], value, placement="inside")
 
-        status = ctk.CTkLabel(top, text="", font=("Segoe UI", 11), text_color=COL_WARN)
-        status.grid(row=6, column=0, sticky="w", padx=20, pady=(2, 0))
+        status = ctk.CTkLabel(top, text="", height=16, font=("Segoe UI", 11), text_color=COL_WARN)
+        status.grid(row=6, column=0, sticky="w", padx=14, pady=(2, 0))
 
         def parse_target(raw: str, *, stop: bool) -> tuple[str, float, float]:
             value = str(raw or "").strip().replace(",", "")
@@ -2708,7 +2697,7 @@ class DashboardActionsMixin:
                 sl_loss = (sl_price - avg_price) * quantity * 1000.0 if sl_price else 0.0
                 tp_preview.configure(
                     text=f"{_display_price(tp_price)} · {tp_gain:+,.0f}đ" if tp_price
-                    else "KHÔNG CHỐT LỜI · bật tactic TP hoặc gõ mức riêng",
+                    else "TP: AUTO · theo công tắc TP",
                 )
                 sl_preview.configure(text=f"{_display_price(sl_price)} · {sl_loss:+,.0f}đ")
                 status.configure(text="")
@@ -2776,7 +2765,7 @@ class DashboardActionsMixin:
                 button.configure(text=f"{label} · OFF", fg_color="#282D34", text_color=COL_MUTED)
 
         actions = ctk.CTkFrame(top, fg_color="transparent")
-        actions.grid(row=7, column=0, sticky="ew", padx=20, pady=(6, 16))
+        actions.grid(row=7, column=0, sticky="ew", padx=14, pady=(4, 10))
         actions.grid_columnconfigure(1, weight=1)
         ctk.CTkButton(
             actions, text="TẮT TOÀN BỘ E/M", width=170, height=40,

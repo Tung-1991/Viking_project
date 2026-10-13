@@ -226,9 +226,38 @@ def test_closed_preview_uses_completed_daily_cache_when_saved_observation_is_wro
 
 def test_live_preview_does_not_import_expired_observation_as_cross_evidence():
     view = subject()
-    view.rule_state = SimpleNamespace(session_cross=lambda *_args: pytest.fail("Live preview must use live evidence"))
+    # Cached memory can be read for the OFF/alternate view; obsolete session-only
+    # evidence still cannot become a live crossing just because it was read.
+    expired = {"profile": "3/6", "current_ready": True, "current_fast": 12, "current_slow": 11,
+               "expires_at": market_now().timestamp()-86400, "state": "EXPIRED", "valid": False}
+    view.rule_state = SimpleNamespace(session_cross=lambda *_args: deepcopy(expired))
     result = view._preview_indicator_details({"symbol_phases": {"AAA": "OPEN"}}, "AAA")
     assert "ema_cross_last_preview" not in result and "ema_cross" not in result
+
+
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+@pytest.mark.parametrize("profile,usable", [("3/6", True), ("5/10", False)])
+def test_off_live_preview_reads_own_cached_memory_without_authorizing_a_buy(tmp_path, monkeypatch, mode, profile, usable):
+    from viking_v2.rules.state import RuleStateStore
+    view = subject(mode)
+    view._symbol_exchange = lambda *_args: "HOSE"
+    view.settings.rule_parameters["buy_signal_require_ema_cross"] = False
+    state = RuleStateStore(tmp_path / "memory.json")
+    for book, up_count in (("REAL", 2), ("PAPER", 1)):
+        state.save_session_cross("AAA", book, {"profile": profile, "tracking_version": 2,
+            "initialized": True, "current_ready": True, "current_fast": 12, "current_slow": 11,
+            "up_count": up_count, "down_count": 0})
+    view.rule_state = state
+    before = deepcopy(state.store.read())
+    monkeypatch.setattr(state.store, "write", lambda *_args: pytest.fail("Preview must be read-only"))
+    result = view._preview_indicator_details({"symbol_phases": {"AAA": "OPEN"}}, "AAA")
+    if usable:
+        assert result["ema_memory_preview_source"]["up_count"] == (2 if mode == "REAL" else 1)
+        assert result["ema_cross"]["state"] == "UNKNOWN" and not result["ema_cross"]["valid"]
+    else:
+        assert "ema_memory_preview_source" not in result and "ema_cross" not in result
+    assert "action" not in result and "signal" not in result
+    assert state.store.read() == before
 
 
 class DeferredExecutor:

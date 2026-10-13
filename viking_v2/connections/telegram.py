@@ -328,10 +328,12 @@ class SignalTelegramService:
         self, *, symbol: str, price: float, market_state: str,
         indicators: dict[str, Any], ema_enabled: bool, rsi_enabled: bool,
         execution_mode: str = "", observed_at: str = "", delayed: bool = False, session_closed: bool = False,
+        position_context: dict | None = None,
     ) -> bool:
         """Report the technical BUY candidate, never an execution outcome."""
+        holding = bool(position_context and position_context.get("held_quantity", 0) > 0)
         lines = [
-            f"⚪ TÍN HIỆU BUY · {str(symbol).upper()}"
+            f"⚪ {'EMA/RSI BUY · ĐANG GIỮ' if holding else 'TÍN HIỆU BUY'} · {str(symbol).upper()}"
             + (f" · {str(execution_mode).upper()}" if execution_mode else "")
             + (f" · {observed_at[11:19]}" if observed_at else ""),
             f"Giá {self._price(price)} · {str(market_state).upper()}",
@@ -346,7 +348,11 @@ class SignalTelegramService:
                 f"RSI{int(indicators['rsi_period'])}: "
                 f"{float(indicators['rsi_previous']):.2f} → {float(indicators['rsi']):.2f} · tăng"
             )
+        from ..services.position_notifications import position_notice_lines
+        lines.extend(position_notice_lines(position_context))
         lines.append("Chỉ báo kỹ thuật; không xác nhận đã gửi/khớp lệnh.")
+        if holding:
+            lines.append("Vị thế chưa đóng; tin này không xác nhận mua lại hoặc mua thêm.")
         if delayed:
             lines.append(self._technical_delivery_note(observed_at, session_closed))
         return self._send("\n".join(lines))
@@ -380,6 +386,10 @@ class SignalTelegramService:
                 line += " · " + payload["observed_at"][11:16]
             if payload.get("session_closed"):
                 line += " · PHIÊN ĐÃ ĐÓNG"
+            from ..services.position_notifications import position_notice_lines
+            position_lines = position_notice_lines(payload.get("position_context"))
+            if position_lines:
+                line += "\n" + "\n".join(position_lines)
             if ids and len(text) + len(line) + 1 > 3800:
                 chunks.append((text, ids))
                 text, ids = header, []

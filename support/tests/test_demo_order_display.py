@@ -488,7 +488,7 @@ def _widgets(parent):
         yield from _widgets(child)
 
 
-@pytest.mark.parametrize("scaling", [1.0, 1.25])
+@pytest.mark.parametrize("scaling", [1.0, 1.25, 1.5])
 @pytest.mark.parametrize("popup", ["order", "position"])
 @pytest.mark.parametrize("target,value", [("SL", "nan%"), ("TP", "inf%"), ("TP", "0%")])
 def test_management_popups_reject_invalid_targets_without_saving(ui_root, monkeypatch, tmp_path, popup, target, value, scaling):
