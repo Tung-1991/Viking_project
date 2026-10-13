@@ -1857,19 +1857,20 @@ class DashboardPanelsMixin:
             from ..rules.ema_memory import memory_fields
             fields = memory_fields(evidence)
             state_label = {
-                "SESSION_ACTIVE": "ĐÃ CẮT", "SESSION_USED": "ĐÃ DÙNG", "EXPIRED": "HẾT HẠN",
-                "WAIT_UP": "CHỜ LÊN", "WAIT_DOWN": "CHỜ XUỐNG",
+                "SESSION_ACTIVE": "ĐÃ CẮT LÊN", "SESSION_USED": "ĐÃ DÙNG", "EXPIRED": "HẾT HẠN",
+                "WAIT_UP": "CHỜ CẮT LÊN", "WAIT_DOWN": "CHỜ XUỐNG→LÊN",
                 "UNKNOWN": "CHỜ DỮ LIỆU", "MARKET_CLOSED": "ĐÃ ĐÓNG",
             }.get(evidence.get("state"), "CHỜ")
-            widget._viking_compact_cross_text = (
-                f"↑{fields['ema_memory_up_count']} ↓{fields['ema_memory_down_count']} · {state_label}"
+            widget._viking_full_cross_text = (
+                f"↑{fields['ema_memory_up_count']} ↓{fields['ema_memory_down_count']}\n{state_label}"
             )
+            widget._viking_compact_cross_text = widget._viking_full_cross_text
         else:
             widget._viking_compact_cross_text = ("CHỜ DL" if widget._viking_full_cross_text == "CHƯA ĐỦ DỮ LIỆU"
                                                 else widget._viking_full_cross_text)
         title = (f"∞ VA+{int(params.get('buy_ema_cross_sessions', 3))}P" if params.get("buy_ema_va_lookback_enabled") else "∞ VA") if view_mode == "VA" else f"⏳ {int(params.get('buy_ema_cross_sessions', 3))}P"
         self.preview_rule_cross_title.configure(text=title, text_color=COL_WARN if getattr(self, "_preview_ema_alternate", False) else COL_PREVIEW_TEXT)
-        widget.configure(text=caption.removeprefix("CẮT EMA · "),
+        widget.configure(text=widget._viking_full_cross_text,
                          text_color={"ok": COL_GREEN, "wait": COL_WARN}.get(role, COL_MUTED))
         from ..services.indicator_comparison import number_comparison
         comparison = details.get("ema_cross_last_preview") or {}

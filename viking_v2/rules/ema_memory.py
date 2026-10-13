@@ -141,8 +141,9 @@ def advance_memory(row, current, *, now, pair, mode, sessions, exchange,
 
 def memory_caption(row):
     mode = (f"∞+{row.get('sessions', 3)}P" if row.get("va_lookback_enabled") else "∞") if row.get("mode", "VA") == "VA" else f"⏳{row.get('remaining_sessions', 0)}/{row.get('sessions', 3)}P"
-    symbol = {"SESSION_ACTIVE": "✓", "SESSION_USED": "☑", "EXPIRED": "⌛",
-              "WAIT_UP": "⏸", "WAIT_DOWN": "↓→↑", "UNKNOWN": "?"}.get(row.get("state"), "⏸")
+    symbol = {"SESSION_ACTIVE": "ĐÃ CẮT LÊN", "SESSION_USED": "ĐÃ DÙNG", "EXPIRED": "HẾT HẠN",
+              "WAIT_UP": "CHỜ CẮT LÊN", "WAIT_DOWN": "CHỜ XUỐNG RỒI LÊN",
+              "UNKNOWN": "CHỜ DỮ LIỆU"}.get(row.get("state"), "CHỜ")
     historical = row.get("mode") == "SESSIONS" or row.get("va_lookback_enabled")
     up = int(row.get('up_count', 0)) + (int(row.get('lookback_up_count', 0)) if historical else 0)
     down = int(row.get('down_count', 0)) + (int(row.get('lookback_down_count', 0)) if historical else 0)
@@ -156,9 +157,11 @@ def memory_hint(row):
                if row.get("va_lookback_enabled") else "∞: chỉ ghi nhận từ khi thêm mã, nhớ tới khi dùng.\n")
     start = row.get("lookback_started_at") if row.get("mode") == "SESSIONS" or row.get("va_lookback_enabled") else None
     return (history + "↑↓: số lần cắt trong dữ liệu theo dõi; ⏳: phiên còn/tổng.\n"
-            "✓: EMA đạt; ⏸: chưa đạt/ngoài phiên; ☑: đã dùng; ⌛: hết hạn; ?: thiếu dữ liệu.\n"
+            "EMA nhanh ≤ EMA chậm: chỉ chờ cắt LÊN, không cần xuống thêm lần nữa. "
+            "Nếu bắt đầu theo dõi khi EMA nhanh đã ở trên mà chưa có lần cắt hợp lệ: chờ xuống rồi lên.\n"
             f"Theo dõi: {start or row.get('started_at', '—')}. Cắt lên gần nhất: {row.get('cross_at', '—')}.\n"
-            "EMA xuống vẫn giữ ghi nhận; BUY kiểm tra EMA/RSI hiện tại. Lần cắt hết hạn/đã dùng không mua lại.")
+            "Sau khi ghi nhận cắt lên, VA giữ lần cắt tới khi dùng; RSI có thể đạt sau, không cần cắt lên lần nữa. "
+            "BUY vẫn kiểm tra EMA/RSI hiện tại và các khóa vào lệnh.")
 
 
 def memory_fields(row):

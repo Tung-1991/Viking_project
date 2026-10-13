@@ -152,6 +152,14 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
         assert "↑2" in subject.preview_rule_cross.cget("text") and "↓1" in subject.preview_rule_cross.cget("text")
         assert subject.preview_rule_cross.cget("font")[1] == 11
         assert subject.preview_rule_ema.cget("font")[1] == 12
+        subject._render_ema_cross_preview({"ema_cross": {
+            "tracking_version": 2, "initialized": True, "current_ready": True,
+            "current_fast": 19.35, "current_slow": 19.59,
+            "up_count": 0, "down_count": 0,
+        }})
+        ui_root.update_idletasks()
+        assert "CHỜ CẮT LÊN" in subject.preview_rule_cross.cget("text")
+        assert "⏸" not in subject.preview_rule_cross.cget("text")
     finally:
         top.destroy()
         ctk.set_widget_scaling(1.0)
@@ -231,7 +239,7 @@ def test_alternate_history_preview_marks_absent_cache_as_unknown(ui_root, monkey
         subject.preview_ema_swap.invoke()
         assert subject._preview_ema_cross_evidence[1]["state"] == "UNKNOWN"
         assert not subject._preview_ema_cross_evidence[1]["valid"]
-        assert "?" in subject.preview_rule_cross.cget("text")
+        assert "CHỜ DỮ LIỆU" in subject.preview_rule_cross.cget("text")
     finally:
         top.destroy()
 

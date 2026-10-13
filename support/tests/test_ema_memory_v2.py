@@ -86,7 +86,7 @@ def test_equality_is_neutral_and_caption_uses_current_ema_not_counts():
     row = observe({}, 99, 100, START)
     row = observe(row, 101, 100, START + timedelta(seconds=1))
     row = observe(row, 100, 100, START + timedelta(seconds=2))
-    assert not row["valid"] and "⏸" in memory_caption(row)
+    assert not row["valid"] and "CHỜ CẮT LÊN" in memory_caption(row)
     row = observe(row, 101, 100, START + timedelta(seconds=3))
     assert row["up_count"] == 1 and row["down_count"] == 0 and row["valid"]
 

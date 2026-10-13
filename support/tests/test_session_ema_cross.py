@@ -212,6 +212,19 @@ def test_rsi_and_indicator_readiness_still_required(tmp_path):
     assert rule.evaluate(rule_context(bars, marks, cross), portfolio()).action == "BUY"
 
 
+def test_one_up_cross_can_wait_for_rsi_without_requiring_another_cross(tmp_path):
+    service, _, _, bars, marks, first = observed(tmp_path)
+    assert first["up_count"] == 1 and first["down_count"] == 0
+    assert StaticRule(parameters()).evaluate(
+        rule_context(bars, {**marks, "rsi": marks["rsi_previous"] - 1}, first),
+        portfolio(),
+    ).action == "WAIT"
+    later = service.observe("TEST", "REAL", bars, marks, parameters(),
+                            NOW + timedelta(seconds=1), "HOSE")
+    assert later["cross_id"] == first["cross_id"] and later["up_count"] == 1
+    assert StaticRule(parameters()).evaluate(rule_context(bars, marks, later), portfolio()).action == "BUY"
+
+
 @pytest.mark.parametrize("mode", ["REAL", "PAPER"])
 def test_queue_claim_survives_restart_cancel_and_toggle_and_is_book_specific(tmp_path, clock, mode):
     _, state, _, bars, marks, cross = observed(tmp_path, stream=mode)
