@@ -222,15 +222,23 @@ with tempfile.TemporaryDirectory(prefix="money-hunter-startup-") as directory:
             assert app.preview_health_group.master is app.info_panel
             assert app.preview_health_group.winfo_ismapped()
             assert app.preview_health_group.winfo_y() >= app.log_tabview.winfo_y() + app.log_tabview.winfo_height()
+            assert app.preview_tab_selector.master is app.info_header
+            assert app.preview_tab_selector.winfo_ismapped() == (tab == "PREVIEW")
+        assert app.preview_rule_sell_ema_key.cget("text").startswith("E EXIT")
+        selectors = (app.info_title, app.preview_tab_selector, app.info_tab_selector, app.info_collapse_button)
+        for left, right in zip(selectors, selectors[1:]):
+            assert left.winfo_rootx() + left.winfo_width() <= right.winfo_rootx()
         assert not hasattr(app, "preview_scroll")
-        for page in ("LỆNH", "HỆ THỐNG", "LỆNH"):
+        for page in ("LỆNH", "HỆ THỐNG", "TỔNG QUAN", "LỆNH"):
             app._select_preview_tab(page)
             app.update()
             assert app._preview_active_tab == page
             page_widget = app.preview_pages[page]
             assert page_widget.master.winfo_children()[-1] is page_widget
             for label in ((app.preview_rule_reason, app.preview_rule_phase3_detail, app.preview_rule_cross_detail)
-                          if page == "HỆ THỐNG" else (app.preview_entry_value, app.preview_tp_value, app.preview_exit_detail)):
+                          if page == "HỆ THỐNG" else (app.preview_entry_value, app.preview_tp_value, app.preview_exit_detail,
+                                                     app.preview_rule_reason, app.preview_ema_entry_gate)
+                          if page == "TỔNG QUAN" else (app.preview_entry_value, app.preview_tp_value, app.preview_exit_detail)):
                 assert label.winfo_rooty() + label.winfo_height() <= app.preview_health_group.winfo_rooty()
             if os.environ.get("VIKING_CAPTURE_UI") == "1":
                 repainted = tk.BooleanVar(master=app, value=False)

@@ -763,9 +763,12 @@ class DashboardPanelsMixin:
         info_header = ctk.CTkFrame(log_frame, height=34, fg_color="transparent")
         info_header.grid(row=0, column=0, sticky="ew", padx=8, pady=(4, 2))
         info_header.grid_propagate(False)
-        info_header.grid_columnconfigure(0, weight=1, uniform="info_header_side")
+        self.info_header = info_header
+        info_header.grid_columnconfigure(0, weight=0)
         info_header.grid_columnconfigure(1, weight=0)
-        info_header.grid_columnconfigure(2, weight=1, uniform="info_header_side")
+        info_header.grid_columnconfigure(2, weight=1)
+        info_header.grid_columnconfigure(3, weight=0)
+        info_header.grid_columnconfigure(4, weight=0)
         self.info_title = ctk.CTkLabel(
             info_header, text="HỆ THỐNG  ⓘ", font=("Segoe UI", 14, "bold"),
             text_color=COL_TITLE, anchor="w",
@@ -782,10 +785,14 @@ class DashboardPanelsMixin:
             unselected_hover_color="#4B515B",
             command=self._select_info_tab,
         )
-        self.info_tab_selector.grid(row=0, column=1)
+        self.info_tab_selector.grid(row=0, column=3, padx=(8, 0))
         def fit_info_header(_event=None):
-            compact = info_header.winfo_width() / info_header._get_widget_scaling() < 600
-            self.info_title.configure(text="ⓘ" if compact else "HỆ THỐNG  ⓘ")
+            width = info_header.winfo_width() / info_header._get_widget_scaling()
+            compact = width < 760
+            self.info_title.configure(text="ⓘ" if compact else "HỆ THỐNG  ⓘ", width=20 if compact else 140)
+            self.info_tab_selector.configure(width=210 if width < 700 else 240)
+            if hasattr(self, "preview_tab_selector"):
+                self.preview_tab_selector.configure(width=300 if width < 700 else 320)
         info_header.bind("<Configure>", fit_info_header, add="+")
         # CTkSegmentedButton.bind raises NotImplementedError; attach the
         # explanation to a stable label, not to the composite tab control.
@@ -807,7 +814,7 @@ class DashboardPanelsMixin:
             text_color=COL_TEXT,
             command=self._toggle_info_panel,
         )
-        self.info_collapse_button.grid(row=0, column=2, sticky="e", padx=(8, 2))
+        self.info_collapse_button.grid(row=0, column=4, sticky="e", padx=(8, 2))
         _HoverHint(
             self.info_collapse_button,
             "Thu gọn hoặc mở rộng khối HỆ THỐNG để nhường chỗ cho bảng lệnh.",
@@ -839,7 +846,7 @@ class DashboardPanelsMixin:
         preview_tab.grid_columnconfigure(0, weight=1)
         preview_tab.grid_rowconfigure(0, weight=1)
         self.preview_container = preview_tab
-        self._build_order_preview_tab(preview_tab, health_parent=log_frame)
+        self._build_order_preview_tab(preview_tab, health_parent=log_frame, selector_parent=info_header)
 
         for frame, target in ((manual_tab, "manual"), (bot_tab, "bot")):
             frame.grid_columnconfigure(0, weight=1)
@@ -875,7 +882,7 @@ class DashboardPanelsMixin:
         self._select_info_tab("PREVIEW")
         self._refresh_api_health_panel(self.bridge.read_status())
 
-    def _build_order_preview_tab(self, parent: ctk.CTkFrame, *, health_parent=None) -> None:
+    def _build_order_preview_tab(self, parent: ctk.CTkFrame, *, health_parent=None, selector_parent=None) -> None:
         parent.grid_columnconfigure(0, weight=1)
         parent.grid_rowconfigure(0, weight=1)
         panel = ctk.CTkFrame(parent, height=260, fg_color=COL_SURFACE_2, corner_radius=8)
@@ -883,21 +890,25 @@ class DashboardPanelsMixin:
         panel.grid_propagate(False)
         self.preview_focus_panel = panel
         panel.grid_columnconfigure(0, weight=1)
-        panel.grid_rowconfigure(1, weight=1)
-        page_header = ctk.CTkFrame(panel, height=28, fg_color="transparent")
-        page_header.grid(row=0, column=0, sticky="ew", padx=6, pady=(3, 2))
-        page_header.grid_propagate(False)
-        page_header.grid_columnconfigure(0, weight=1)
+        panel.grid_rowconfigure(0 if selector_parent is not None else 1, weight=1)
+        if selector_parent is None:
+            page_header = ctk.CTkFrame(panel, height=28, fg_color="transparent")
+            page_header.grid(row=0, column=0, sticky="ew", padx=6, pady=(3, 2))
+            page_header.grid_propagate(False)
+            page_header.grid_columnconfigure(0, weight=1)
+        else:
+            page_header = selector_parent
         self.preview_tab_selector = ctk.CTkSegmentedButton(
-            page_header, values=["LỆNH", "HỆ THỐNG"], width=240, height=26,
+            page_header, values=["TỔNG QUAN", "LỆNH", "HỆ THỐNG"], width=320, height=28,
             dynamic_resizing=False, font=("Segoe UI", 11, "bold"),
             selected_color="#2563A6", selected_hover_color="#2E73BB",
             unselected_color=COL_GRAY, unselected_hover_color="#4B515B",
             command=self._select_preview_tab,
         )
-        self.preview_tab_selector.grid(row=0, column=0)
+        self.preview_tab_selector.grid(row=0, column=1 if selector_parent is not None else 0,
+                                       sticky="w" if selector_parent is not None else "")
         pages = ctk.CTkFrame(panel, width=1, fg_color="transparent")
-        pages.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
+        pages.grid(row=0 if selector_parent is not None else 1, column=0, sticky="nsew", padx=4, pady=4)
         pages.grid_propagate(False)
         pages.grid_columnconfigure(0, weight=1)
         pages.grid_rowconfigure(0, weight=1)
@@ -909,7 +920,9 @@ class DashboardPanelsMixin:
         rule_group = ctk.CTkFrame(pages, width=1, fg_color=COL_SURFACE, corner_radius=7)
         rule_group.grid(row=0, column=0, sticky="nsew")
         rule_group.grid_propagate(False)
-        self.preview_pages = {"LỆNH": order_group, "HỆ THỐNG": rule_group}
+        self.preview_pages = {"TỔNG QUAN": pages, "LỆNH": order_group, "HỆ THỐNG": rule_group}
+        self.preview_page_area = pages
+        pages.bind("<Configure>", self._layout_preview_pages, add="+")
 
         order_group.grid_columnconfigure(0, weight=1)
         order_group.grid_rowconfigure(1, weight=0)
@@ -962,6 +975,8 @@ class DashboardPanelsMixin:
         metrics = ctk.CTkFrame(order_group, height=62, fg_color="transparent")
         metrics.grid(row=1, column=0, sticky="ew", padx=6, pady=(3, 2))
         metrics.grid_propagate(False)
+        self._preview_metric_cards = []
+        self.preview_metrics = metrics
         for column in range(6):
             # Give the longer money value room without adding a second row.
             metrics.grid_columnconfigure(column, weight=2 if column == 3 else 1, uniform="preview_metrics")
@@ -997,6 +1012,7 @@ class DashboardPanelsMixin:
                 widget, base_font=("Cascadia Mono", 13), minimum_size=5), add="+")
             if hint:
                 _HoverHint(value, hint, placement="inside")
+            self._preview_metric_cards.append((card, title_widget, value, title_widget.cget("text")))
             return value
 
         self.preview_live_value = metric_card(
@@ -1017,6 +1033,7 @@ class DashboardPanelsMixin:
         management = ctk.CTkFrame(order_group, height=84, fg_color="transparent")
         management.grid(row=2, column=0, sticky="nsew", padx=6, pady=(3, 6))
         management.grid_propagate(False)
+        self._preview_level_cards = []
         management.grid_rowconfigure((0, 1), weight=1, uniform="preview_management_rows")
         for column in range(3):
             management.grid_columnconfigure(column, weight=1, uniform="preview_management")
@@ -1052,6 +1069,7 @@ class DashboardPanelsMixin:
             detail.grid(row=2, column=0, sticky="ew", padx=9, pady=(0, 1))
             detail.bind("<Configure>", lambda _event: fit_label_text(
                 detail, base_font=("Segoe UI", 10), minimum_size=9), add="+")
+            self._preview_level_cards.append((title_widget, value, detail))
             return title_widget, value, detail
 
         _tp_title, self.preview_tp_value, self.preview_tp_detail = level_card(0, 0, "TP MANUAL", COL_GREEN)
@@ -1186,9 +1204,19 @@ class DashboardPanelsMixin:
             "P2 · BUY / E",
             self._indicator_preview_hint,
         )
-        phase2._viking_title_widget.grid(columnspan=2)
+        phase2._viking_title_widget.grid(columnspan=1)
         phase2.grid_columnconfigure(1, weight=2, minsize=165)
         phase2.grid_columnconfigure(2, weight=2, minsize=140)
+        entry_gate_header = ctk.CTkFrame(phase2, width=165, height=24, fg_color="transparent")
+        entry_gate_header.grid(row=0, column=1, sticky="ew", padx=(0, 4), pady=3)
+        entry_gate_header.grid_propagate(False)
+        entry_gate_header.grid_columnconfigure(0, weight=1)
+        self.preview_ema_entry_gate = StatusLabel(
+            entry_gate_header, text="EMA CẮT: CHỜ", width=1, height=18,
+            font=("Segoe UI", 10, "bold"), text_color=COL_MUTED, anchor="w",
+        )
+        self.preview_ema_entry_gate.grid(row=0, column=0, sticky="ew")
+        _HoverHint(self.preview_ema_entry_gate, self._ema_entry_gate_hint, placement="inside")
         # Reserve one stable width for both mode captions.  Otherwise Tk lets
         # the longer VA+XP caption move the entire P2 value column on swap.
         cross_header = ctk.CTkFrame(phase2, width=140, height=24, fg_color="transparent")
@@ -1266,10 +1294,13 @@ class DashboardPanelsMixin:
             narrow = phase2.winfo_width() / phase2._get_widget_scaling() < 440
             if getattr(phase2, "_viking_cross_narrow", None) != narrow:
                 phase2._viking_cross_narrow = narrow
-                phase2.grid_columnconfigure(1, weight=2, minsize=165)
+                phase2.grid_columnconfigure(1, weight=2, minsize=115 if narrow else 165)
                 phase2.grid_columnconfigure(2, weight=2, minsize=140)
-                phase2._viking_title_widget.grid(columnspan=2)
-                phase2._viking_title_widget.configure(text="P2 · BUY/E  ⓘ" if narrow else "P2 · BUY / E  ⓘ")
+                entry_gate_header.configure(width=115 if narrow else 165)
+                entry_gate_header.grid(row=0, column=1, columnspan=1,
+                                       sticky="ew", padx=(0, 4), pady=3)
+                phase2._viking_title_widget.grid(columnspan=1)
+                phase2._viking_title_widget.configure(text="P2  ⓘ" if narrow else "P2 · BUY / E  ⓘ")
                 for value in (self.preview_rule_ema, self.preview_rule_sell_ema, self.preview_rule_rsi):
                     value.grid(padx=(0, 0) if narrow else (0, 8))
                 self.preview_rule_cross_detail.grid(row=3, column=2, columnspan=1, sticky="ew", padx=(4, 6))
@@ -1280,6 +1311,8 @@ class DashboardPanelsMixin:
             shown = compact if narrow else full
             if self.preview_rule_cross.cget("text") != shown:
                 self.preview_rule_cross.configure(text=shown)
+            gate = getattr(self.preview_ema_entry_gate, "_viking_full_gate_text", self.preview_ema_entry_gate.cget("text"))
+            self.preview_ema_entry_gate.configure(text=gate.removeprefix("EMA ") if narrow else gate)
             for name in ("buy_ema", "sell_ema", "rsi"):
                 key_widget = getattr(self, f"preview_rule_{name}_key")
                 key_widget.grid_configure(padx=(6, 4) if narrow else (8, 6))
@@ -1405,9 +1438,58 @@ class DashboardPanelsMixin:
     def _select_preview_tab(self, name: str) -> None:
         if name not in self.preview_pages:
             return
-        self.preview_pages[name].tkraise()
-        self.preview_tab_selector.set(name)
+        if getattr(self, "_info_collapsed", False):
+            self._set_info_panel_collapsed(False)
         self._preview_active_tab = name
+        self._layout_preview_pages()
+        self.preview_tab_selector.set(name)
+
+    def _layout_preview_pages(self, _event=None) -> None:
+        name = getattr(self, "_preview_active_tab", "LỆNH")
+        pages = self.preview_page_area
+        order, rules = self.preview_pages["LỆNH"], self.preview_pages["HỆ THỐNG"]
+        overview = name == "TỔNG QUAN"
+        compact = overview and pages.winfo_width() / pages._get_widget_scaling() < 940
+        layout = "compact_overview" if compact else "overview" if overview else "single"
+        scale = pages._get_widget_scaling()
+        if (getattr(self, "_preview_page_layout", None) != layout
+                or getattr(self, "_preview_page_scale", None) != scale):
+            self._preview_page_layout = layout
+            self._preview_page_scale = scale
+            pages.grid_columnconfigure(0, weight=3 if overview else 1,
+                                       minsize=int((260 if compact else 480) * scale) if overview else 0)
+            pages.grid_columnconfigure(1, weight=2 if overview else 0,
+                                       minsize=int((360 if compact else 440) * scale) if overview else 0)
+            pages.grid_rowconfigure(0, weight=1, minsize=0)
+            order.grid(row=0, column=0, columnspan=1 if overview else 2,
+                       sticky="nsew", padx=(0, 3) if overview else 0, pady=0)
+            rules.grid(row=0, column=1 if overview else 0, columnspan=1 if overview else 2,
+                       sticky="nsew", padx=(3, 0) if overview else 0, pady=0)
+            self.preview_metrics.configure(height=96 if compact else 62)
+            for column in range(6):
+                self.preview_metrics.grid_columnconfigure(
+                    column, weight=(1 if column < 2 else 0) if compact else (2 if column == 3 else 1),
+                    uniform="compact_metrics" if compact and column < 2 else "" if compact else "preview_metrics")
+            for index, (card, key, value, full_key) in enumerate(self._preview_metric_cards):
+                card.grid(row=index // 2 if compact else 0, column=index % 2 if compact else index,
+                          sticky="nsew", padx=3, pady=2 if compact else 3)
+                card.grid_columnconfigure(0, weight=0 if compact else 1)
+                card.grid_columnconfigure(1, weight=1 if compact else 0)
+                key.configure(text=("TT", "VÀO", "KL", "VỐN", "FEE", "LỆNH")[index] if compact else
+                              getattr(key, "_viking_full_metric_key", full_key), width=45 if compact else 1)
+                key.grid(row=0, column=0, sticky="ew", padx=4 if compact else 2,
+                         pady=2 if compact else (4, 0))
+                value.grid(row=0 if compact else 1, column=1 if compact else 0, sticky="ew",
+                           padx=4 if compact else 2, pady=2 if compact else (1, 4))
+            for fields in self._preview_level_cards:
+                for label in fields:
+                    label.grid_configure(padx=4 if compact else 9)
+            for callback in ("_fit_order_preview_header", "_fit_phase2_row", "_fit_protect_preview"):
+                fit = getattr(self, callback, None)
+                if callable(fit):
+                    fit()
+        if not overview:
+            self.preview_pages[name].tkraise()
 
     def _fit_preview_health_title(self, _event=None) -> None:
         label = self.preview_health_title
@@ -1872,6 +1954,7 @@ class DashboardPanelsMixin:
                         and params.get("buy_signal_require_ema_cross", True))
         self._preview_ema_details = details
         evidence = dict(details.get("ema_cross") or {})
+        gate_evidence = evidence
         raw = dict(details.get("ema_memory_preview_source") or evidence)
         rule_mode = params.get("buy_ema_cross_mode", "VA")
         view_mode = ("SESSIONS" if rule_mode == "VA" else "VA") if getattr(self, "_preview_ema_alternate", False) else rule_mode
@@ -1886,6 +1969,7 @@ class DashboardPanelsMixin:
                                       va_lookback_enabled=bool(params.get("buy_ema_va_lookback_enabled", False)))
             if (view_mode == "SESSIONS" or (view_mode == "VA" and params.get("buy_ema_va_lookback_enabled"))) and raw.get("lookback_ready") is not True and raw.get("cross_source") != "LIVE":
                 evidence.update(ready=False, valid=False, state="UNKNOWN")
+            gate_evidence = dict(evidence)
             if details.get("ema_cross_preview_closed"):
                 evidence["valid"] = False
                 if evidence["state"] in {"SESSION_ACTIVE", "WAIT_UP", "WAIT_DOWN"}:
@@ -1895,8 +1979,25 @@ class DashboardPanelsMixin:
             evidence.update(state="EXPIRED")
         if not required and not tracking:
             evidence.update(required=False, state="OFF")
+        if not tracking:
+            gate_evidence = evidence
         caption, role = ema_cross_caption(evidence, None if details.get("ema_cross_preview_expired")
                                          else details.get("buy_window"))
+        # Report the EMA prerequisite independently of the market being closed
+        # and of the remaining RSI, money, bot and order-execution checks.
+        gate_state = gate_evidence.get("state", "UNKNOWN")
+        if not required:
+            gate_text, gate_color = "EMA CẮT: OFF", COL_MUTED
+        elif gate_state == "UNKNOWN":
+            gate_text, gate_color = "EMA CẮT: CHỜ", COL_MUTED
+        else:
+            allowed = (bool(gate_evidence.get("ready") and gate_evidence.get("valid")
+                            and not gate_evidence.get("used") and gate_state == "SESSION_ACTIVE")
+                       if tracking else role == "ok")
+            gate_text, gate_color = ("EMA CẮT: ĐẠT", COL_GREEN) if allowed else ("EMA CẮT: CHƯA ĐẠT", COL_WARN)
+        self.preview_ema_entry_gate._viking_full_gate_text = gate_text
+        self.preview_ema_entry_gate.configure(text=gate_text, text_color=gate_color)
+        self._preview_ema_gate_evidence = gate_evidence
         self._preview_ema_cross_evidence = (caption, evidence)
         widget._viking_full_cross_text = caption.removeprefix("CẮT EMA · ")
         if tracking:
@@ -1909,7 +2010,7 @@ class DashboardPanelsMixin:
                 "SESSION_ACTIVE": "ĐÃ CẮT LÊN", "SESSION_USED": "ĐÃ DÙNG", "EXPIRED": "HẾT HẠN",
                 "WAIT_UP": "CHỜ EMA3 > EMA6", "WAIT_DOWN": "CHỜ XUỐNG→LÊN",
                 "UNKNOWN": "CHỜ DỮ LIỆU", "MARKET_CLOSED": "ĐÃ ĐÓNG",
-            }.get(evidence.get("state"), "CHỜ")
+            }.get(gate_state, "CHỜ")
             total_crosses = counts["up"] + counts["down"] if counts["up"] is not None else "—"
             self.preview_rule_cross_counts.configure(
                 text=f"{total_crosses} CẮT - {prior_sessions}P",
@@ -1918,7 +2019,9 @@ class DashboardPanelsMixin:
             self.preview_rule_cross_counts.grid()
             widget.grid(row=2, column=2, rowspan=1)
             widget._viking_full_cross_text = state_label
-            widget._viking_compact_cross_text = widget._viking_full_cross_text
+            widget._viking_compact_cross_text = {
+                "WAIT_UP": "CHỜ CẮT LÊN", "WAIT_DOWN": "CHỜ XUỐNG/LÊN",
+            }.get(gate_state, state_label)
         else:
             self.preview_rule_cross_counts.grid_remove()
             widget.grid(row=1, column=2, rowspan=2)
@@ -1953,6 +2056,22 @@ class DashboardPanelsMixin:
     def _swap_ema_preview(self) -> None:
         self._preview_ema_alternate = not getattr(self, "_preview_ema_alternate", False)
         self._render_ema_cross_preview(getattr(self, "_preview_ema_details", {}))
+
+    def _ema_entry_gate_hint(self) -> str:
+        evidence = getattr(self, "_preview_ema_gate_evidence", {})
+        baseline = evidence.get("baseline") or {}
+        fast, slow = finite(baseline.get("buy_ema_fast")), finite(baseline.get("buy_ema_slow"))
+        params = self.settings.rule_parameters
+        pair = f"EMA{params.get('buy_ema_fast', 3)}", f"EMA{params.get('buy_ema_slow', 6)}"
+        if fast is None or slow is None:
+            initial = "Chưa có mẫu đầu đã lưu."
+        elif fast < slow:
+            initial = f"Mẫu đầu: {pair[0]} < {pair[1]}. Chỉ cần một lần cắt lên."
+        elif fast > slow:
+            initial = f"Mẫu đầu: {pair[0]} > {pair[1]}. Chưa có lần cắt: chờ xuống rồi lên."
+        else:
+            initial = "Mẫu đầu bằng nhau: chưa tính là giao cắt."
+        return initial + "\nĐẠT chỉ là điều kiện EMA; BUY còn RSI, giờ mua và vốn."
 
     def _ema_memory_preview_hint(self) -> str:
         from ..rules.ema_memory import memory_window_counts
@@ -2382,8 +2501,9 @@ class DashboardPanelsMixin:
             text_color=COL_WARN if entry_price > 0 and frozen and order_type != "LO" else COL_TEXT,
         )
         quantity_source = "AUTO" if forced_minimum else "VỐN" if auto_quantity else "TAY"
+        self.preview_qty_title._viking_full_metric_key = f"KL · {quantity_source}"
         self.preview_qty_title.configure(
-            text=f"KL · {quantity_source}",
+            text="KL" if getattr(self, "_preview_page_layout", "") == "compact_overview" else f"KL · {quantity_source}",
             text_color=COL_WARN if auto_quantity else COL_PREVIEW_TEXT,
         )
         self.preview_qty_value.configure(
@@ -2590,7 +2710,7 @@ class DashboardPanelsMixin:
             slow_period = int(indicators.get(f"{key_prefix}_ema_slow_period", indicators.get("ema_slow_period", 6)) or 6)
             fast_value = indicators.get(f"{key_prefix}_ema_fast", indicators.get("ema_fast"))
             slow_value = indicators.get(f"{key_prefix}_ema_slow", indicators.get("ema_slow"))
-            key = f"EMA {prefix} {fast_period}/{slow_period}:"
+            key = f"{'E EXIT' if prefix == 'E' else 'EMA BUY'} {fast_period}/{slow_period}:"
             try:
                 fast_number = float(fast_value)
                 slow_number = float(slow_value)
@@ -2872,6 +2992,11 @@ class DashboardPanelsMixin:
             self._refresh_full_order_preview()
         if hasattr(self, "info_tab_selector"):
             self.info_tab_selector.set(active)
+        if hasattr(self, "preview_tab_selector") and self.preview_tab_selector.master is getattr(self, "info_header", None):
+            if active == "PREVIEW":
+                self.preview_tab_selector.grid()
+            else:
+                self.preview_tab_selector.grid_remove()
 
     def _set_log_unread(self, target: str, unread: bool) -> None:
         if target not in getattr(self, "log_tab_keys", {}):

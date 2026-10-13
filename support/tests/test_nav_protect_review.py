@@ -241,7 +241,9 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
             "up_count": 0, "down_count": 0,
         }})
         ui_root.update_idletasks()
-        assert subject.preview_rule_cross.cget("text") == "CHỜ EMA3 > EMA6"
+        assert subject.preview_rule_cross.cget("text") == (
+            "CHỜ CẮT LÊN" if subject.preview_rule_cross.master._viking_cross_narrow else "CHỜ EMA3 > EMA6"
+        )
         assert subject.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
         assert subject.preview_rule_cross_detail.cget("text") == (
             "CHƯA GHI NHẬN" if subject.preview_rule_cross.master._viking_cross_narrow else "TRƯỚC: —"
@@ -376,6 +378,49 @@ def test_preview_counts_today_without_losing_yesterdays_unused_cross(ui_root, mo
         assert subject._preview_ema_cross_evidence[1]["valid"]
         assert subject._preview_ema_cross_evidence[1]["cross_id"] == source["cross_id"]
         assert source == before
+    finally:
+        top.destroy()
+
+
+def test_ema_prerequisite_shows_initial_wait_cross_and_consumption_even_after_close(ui_root, monkeypatch):
+    from copy import deepcopy
+    from datetime import datetime, timedelta
+    import customtkinter as ctk
+    from viking_v2.rules.ema_memory import advance_memory
+    from viking_v2.trading.market import VN_TZ
+    now = datetime(2026, 10, 13, 13, tzinfo=VN_TZ)
+    monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: now)
+    top = ctk.CTkToplevel(ui_root)
+    view = DashboardPanelsMixin()
+    view.settings = AppSettings()
+    view._build_order_preview_tab(top)
+    try:
+        args = dict(now=now, pair="3/6", mode="VA", sessions=3, exchange="HOSE")
+        below = advance_memory({}, {"buy_ema_fast": 99, "buy_ema_slow": 100}, **args)
+        view._render_ema_cross_preview({"ema_cross": below})
+        assert view.preview_ema_entry_gate.cget("text") == "EMA CẮT: CHƯA ĐẠT"
+        assert view.preview_rule_cross.cget("text") == "CHỜ EMA3 > EMA6"
+        assert "Mẫu đầu: EMA3 < EMA6. Chỉ cần một lần cắt lên." in view._ema_entry_gate_hint()
+        above = advance_memory(below, {"buy_ema_fast": 101, "buy_ema_slow": 100},
+                               **{**args, "now": now + timedelta(seconds=1)})
+        original = deepcopy(above)
+        for closed in (False, True):
+            view._render_ema_cross_preview({"ema_cross": above, "ema_cross_preview_closed": closed})
+            assert view.preview_ema_entry_gate.cget("text") == "EMA CẮT: ĐẠT"
+            assert view.preview_rule_cross.cget("text") == "ĐÃ CẮT LÊN"
+            if closed:
+                assert not view._preview_ema_cross_evidence[1]["valid"]
+        assert above == original
+        view._render_ema_cross_preview({"ema_cross": {**above, "used": True}})
+        assert view.preview_ema_entry_gate.cget("text") == "EMA CẮT: CHƯA ĐẠT"
+        assert view.preview_rule_cross.cget("text") == "ĐÃ DÙNG"
+        first_above = advance_memory({}, {"buy_ema_fast": 101, "buy_ema_slow": 100}, **args)
+        view._render_ema_cross_preview({"ema_cross": first_above})
+        assert view.preview_ema_entry_gate.cget("text") == "EMA CẮT: CHƯA ĐẠT"
+        assert "Mẫu đầu: EMA3 > EMA6. Chưa có lần cắt: chờ xuống rồi lên." in view._ema_entry_gate_hint()
+        view.settings.rule_parameters["buy_signal_require_ema_cross"] = False
+        view._render_ema_cross_preview({"ema_cross": above})
+        assert view.preview_ema_entry_gate.cget("text") == "EMA CẮT: OFF"
     finally:
         top.destroy()
 

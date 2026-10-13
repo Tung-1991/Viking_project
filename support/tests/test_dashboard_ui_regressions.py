@@ -58,9 +58,10 @@ def test_dynamic_atr_preview_uses_the_selected_symbols_completed_daily_atr() -> 
 @pytest.mark.parametrize("scaling", [1.0, 1.5])
 def test_preview_pages_share_full_width_and_keep_health_outside(ui_root, scaling) -> None:
     import customtkinter as ctk
-    top = ctk.CTkToplevel(ui_root)
-    top.geometry("1000x400+0+0")
     ctk.set_widget_scaling(scaling)
+    top = ctk.CTkToplevel(ui_root)
+    # Widget scaling grows content independently of CTk's window scaling.
+    top.geometry(f"{int(1000 * scaling)}x{int(400 * scaling)}+0+0")
     view = DashboardPanelsMixin()
     try:
         view._build_order_preview_tab(top)
@@ -81,6 +82,24 @@ def test_preview_pages_share_full_width_and_keep_health_outside(ui_root, scaling
             assert health.winfo_y() >= view.preview_focus_panel.winfo_y() + view.preview_focus_panel.winfo_height()
             assert not hasattr(view, "preview_scroll")
             assert page.master.winfo_children()[-1] is page
+        before_health = health.winfo_rooty(), health.winfo_height()
+        view._select_preview_tab("TỔNG QUAN")
+        top.update()
+        order, rules = view.preview_pages["LỆNH"], view.preview_pages["HỆ THỐNG"]
+        assert view._preview_page_layout in {"overview", "compact_overview"}
+        assert order.winfo_x() + order.winfo_width() <= rules.winfo_x()
+        assert order.winfo_y() == rules.winfo_y()
+        assert before_health == (health.winfo_rooty(), health.winfo_height())
+        for label in (view.preview_exit_detail, view.preview_rule_reason, view.preview_ema_entry_gate):
+            assert label.winfo_rooty() + label.winfo_height() <= health.winfo_rooty(), (
+                label.cget("text"), label.cget("font"),
+                [(widget.winfo_width(), widget.winfo_height(), widget.winfo_rooty())
+                 for widget in (top, view.preview_focus_panel, order, label.master, view.preview_metrics)],
+            )
+        view._select_preview_tab("LỆNH")
+        top.update()
+        assert (order.winfo_x(), order.winfo_y(), order.winfo_width(), order.winfo_height(),
+                health.winfo_y(), health.winfo_height()) == geometry
     finally:
         top.destroy()
         ctk.set_widget_scaling(1.0)
