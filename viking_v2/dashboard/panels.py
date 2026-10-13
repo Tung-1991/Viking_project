@@ -1184,17 +1184,23 @@ class DashboardPanelsMixin:
         )
         self.preview_ema_swap.grid(row=0, column=1, padx=(3, 0))
         _HoverHint(self.preview_ema_swap, self._ema_memory_preview_hint, placement="inside")
+        self.preview_rule_cross_counts = StatusLabel(
+            phase2, text="↑— ↓—", width=1, height=22,
+            font=("Segoe UI", 14, "bold"), text_color=COL_MUTED, anchor="w",
+        )
+        self.preview_rule_cross_counts.grid(row=1, column=2, sticky="ew", padx=8)
         self.preview_rule_cross = StatusLabel(
-            phase2, text="CHƯA ĐỦ DỮ LIỆU", width=1, height=28,
+            phase2, text="CHƯA ĐỦ DỮ LIỆU", width=1, height=17,
             font=("Segoe UI", 11, "bold"), text_color=COL_MUTED, anchor="w",
         )
-        self.preview_rule_cross.grid(row=1, column=2, rowspan=2, sticky="ew", padx=8)
+        self.preview_rule_cross.grid(row=2, column=2, sticky="ew", padx=8)
         self.preview_rule_cross_detail = StatusLabel(
             phase2, text="TRƯỚC: —", width=1, height=14,
             font=("Segoe UI", 10), text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_cross_detail.grid(row=3, column=2, sticky="ew", padx=8, pady=(0, 3))
         for widget, font in ((self.preview_rule_cross_title, ("Segoe UI", 10, "bold")),
+                             (self.preview_rule_cross_counts, ("Segoe UI", 14, "bold")),
                              (self.preview_rule_cross, ("Segoe UI", 11, "bold")),
                              (self.preview_rule_cross_detail, ("Segoe UI", 10))):
             _HoverHint(widget, self._ema_memory_preview_hint, placement="inside")
@@ -1250,7 +1256,8 @@ class DashboardPanelsMixin:
                 for value in (self.preview_rule_ema, self.preview_rule_sell_ema, self.preview_rule_rsi):
                     value.grid(padx=(0, 0) if narrow else (0, 8))
                 self.preview_rule_cross_detail.grid(row=3, column=2, columnspan=1, sticky="ew", padx=(4, 6))
-                self.preview_rule_cross.grid(row=1, column=2, columnspan=1, rowspan=2, padx=(4, 6), pady=0)
+                self.preview_rule_cross_counts.grid_configure(padx=(4, 6))
+                self.preview_rule_cross.grid_configure(padx=(4, 6))
             full = getattr(self.preview_rule_cross, "_viking_full_cross_text", "CHƯA ĐỦ DỮ LIỆU")
             compact = getattr(self.preview_rule_cross, "_viking_compact_cross_text", full)
             shown = compact if narrow else full
@@ -1861,14 +1868,20 @@ class DashboardPanelsMixin:
             fields = memory_fields(evidence)
             state_label = {
                 "SESSION_ACTIVE": "ĐÃ CẮT LÊN", "SESSION_USED": "ĐÃ DÙNG", "EXPIRED": "HẾT HẠN",
-                "WAIT_UP": "CHỜ CẮT LÊN", "WAIT_DOWN": "CHỜ XUỐNG→LÊN",
+                "WAIT_UP": "CHỜ EMA3 > EMA6", "WAIT_DOWN": "CHỜ XUỐNG→LÊN",
                 "UNKNOWN": "CHỜ DỮ LIỆU", "MARKET_CLOSED": "ĐÃ ĐÓNG",
             }.get(evidence.get("state"), "CHỜ")
-            widget._viking_full_cross_text = (
-                f"↑{fields['ema_memory_up_count']} ↓{fields['ema_memory_down_count']}\n{state_label}"
+            self.preview_rule_cross_counts.configure(
+                text=f"↑{fields['ema_memory_up_count']} ↓{fields['ema_memory_down_count']}",
+                text_color={"ok": COL_GREEN, "wait": COL_WARN}.get(role, COL_MUTED),
             )
+            self.preview_rule_cross_counts.grid()
+            widget.grid(row=2, column=2, rowspan=1)
+            widget._viking_full_cross_text = state_label
             widget._viking_compact_cross_text = widget._viking_full_cross_text
         else:
+            self.preview_rule_cross_counts.grid_remove()
+            widget.grid(row=1, column=2, rowspan=2)
             widget._viking_compact_cross_text = ("CHỜ DL" if widget._viking_full_cross_text == "CHƯA ĐỦ DỮ LIỆU"
                                                 else widget._viking_full_cross_text)
         title = (f"∞ VA+{int(params.get('buy_ema_cross_sessions', 3))}P" if params.get("buy_ema_va_lookback_enabled") else "∞ VA") if view_mode == "VA" else f"⏳ {int(params.get('buy_ema_cross_sessions', 3))}P"

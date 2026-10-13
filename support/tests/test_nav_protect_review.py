@@ -144,12 +144,15 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
         subject._render_ema_cross_preview({"ema_cross": evidence})
         ui_root.update_idletasks()
         assert subject.preview_rule_cross.master._viking_cross_narrow
-        for widget in (subject.preview_rule_cross, subject.preview_rule_cross_title, subject.preview_rule_cross_detail):
+        for widget in (subject.preview_rule_cross_counts, subject.preview_rule_cross,
+                       subject.preview_rule_cross_title, subject.preview_rule_cross_detail):
             assert widget.winfo_manager() == "grid"
             assert widget.winfo_x() >= 0
             assert widget.winfo_x() + widget.winfo_width() <= widget.master.winfo_width()
             assert widget.winfo_y() + widget.winfo_height() <= widget.master.winfo_height()
-        assert "↑2" in subject.preview_rule_cross.cget("text") and "↓1" in subject.preview_rule_cross.cget("text")
+        assert "↑2" in subject.preview_rule_cross_counts.cget("text")
+        assert "↓1" in subject.preview_rule_cross_counts.cget("text")
+        assert subject.preview_rule_cross_counts.cget("font")[1] == 14
         assert subject.preview_rule_cross.cget("font")[1] == 11
         assert subject.preview_rule_ema.cget("font")[1] == 12
         subject._render_ema_cross_preview({"ema_cross": {
@@ -158,7 +161,8 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
             "up_count": 0, "down_count": 0,
         }})
         ui_root.update_idletasks()
-        assert "CHỜ CẮT LÊN" in subject.preview_rule_cross.cget("text")
+        assert subject.preview_rule_cross.cget("text") == "CHỜ EMA3 > EMA6"
+        assert subject.preview_rule_cross_counts.cget("text") == "↑0 ↓0"
         assert subject.preview_rule_cross_detail.cget("text") == "CHƯA GHI NHẬN"
         assert "⏸" not in subject.preview_rule_cross.cget("text")
     finally:
@@ -218,7 +222,8 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
             ui_root.update_idletasks()
             widgets = (subject.preview_rule_cross.master, subject.preview_rule_cross_title.master,
                        subject.preview_rule_cross_title, subject.preview_ema_swap,
-                       subject.preview_rule_cross, subject.preview_rule_cross_detail,
+                       subject.preview_rule_cross_counts, subject.preview_rule_cross,
+                       subject.preview_rule_cross_detail,
                        subject.preview_rule_ema, subject.preview_rule_rsi)
             current_positions = tuple((w.winfo_rootx(), w.winfo_rooty(), w.winfo_width(), w.winfo_height())
                                       for w in widgets)
@@ -230,7 +235,7 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
             viewing_history = (mode == "SESSIONS") != alternate
             assert evidence["mode"] == ("SESSIONS" if viewing_history else "VA")
             assert evidence["valid"] == viewing_history
-            assert f"↑{int(viewing_history)} ↓0" in subject.preview_rule_cross.cget("text")
+            assert f"↑{int(viewing_history)} ↓0" == subject.preview_rule_cross_counts.cget("text")
             assert subject.preview_rule_cross_title.cget("text") == ("⏳ 3P" if viewing_history else "∞ VA")
             assert int(subject.preview_rule_cross.grid_info()["column"]) == 2
             assert int(subject.preview_rule_cross_detail.grid_info()["column"]) == 2
