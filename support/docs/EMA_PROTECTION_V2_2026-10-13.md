@@ -1,5 +1,9 @@
 # EMA theo dõi mã và bán bảo vệ độc lập — 13/10/2026
 
+**Bổ sung sau bản 43b8aeb:** X PHIÊN có quét lịch sử các phiên trước theo yêu cầu mới;
+xem [ghi chú quét lại EMA và nhóm UI](EMA_LOOKBACK_2026-10-13.md).
+Phần mô tả và số kiểm thử bên dưới là của bản 43b8aeb trước bổ sung này.
+
 ## Hành vi đã triển khai
 
 - `BUY CẦN EMA CẮT LÊN` vẫn là công tắc chính. OFF xét mức EMA hiện tại; ON cần giao cắt sau baseline của mã.

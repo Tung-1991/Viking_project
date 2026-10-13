@@ -105,19 +105,23 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Làm mới bảng giữ trạng thái bung/gọn và lệnh đang chọn.
 - Mặc định BUY xét EMA nhanh > EMA chậm và RSI hiện tại > RSI phiên trước theo các công tắc RULE.
   RSI hiện tại là nến 1D tạm tính từ giá mới; mốc so sánh là nến 1D phiên trước, không phải tick trước.
-  **BUY CẦN EMA CẮT LÊN** ON: chỉ nhận giao cắt sau khi bắt đầu theo dõi mã.
-  Thêm mã khi EMA nhanh đã ở trên: chờ xuống rồi lên; ở dưới/bằng: chờ lên.
+  **BUY CẦN EMA CẮT LÊN** ON: cần lần cắt lên hợp lệ theo mode bên dưới.
+  Chưa có lần cắt hợp lệ, EMA nhanh đã trên: chờ xuống rồi lên; dưới/bằng: chờ lên.
   OFF chỉ đòi EMA nhanh hiện tại > chậm. RSI, giờ mua, vốn/slot, WHIPSAW và token vẫn kiểm tra.
-  **∞ VA** giữ lần cắt lên qua các phiên đến khi dùng; **⏳ X PHIÊN** giữ X phiên tính cả phiên cắt,
-  bỏ ngày nghỉ. Ví dụ cắt thứ Ba, X=3: hiệu lực đến đóng phiên thứ Năm.
+  **∞ VA** chỉ ghi nhận từ khi thêm mã, giữ qua các phiên đến khi dùng.
+  **⏳ X PHIÊN** quét thêm X phiên giao dịch trước và phần phiên hiện tại khi bắt đầu;
+  giữ X phiên tính cả phiên cắt, bỏ ngày nghỉ. Ví dụ cắt thứ Ba, X=3: hết hạn khi đóng phiên thứ Năm;
+  mở app thứ Sáu không làm mới tuổi của lần cắt đó.
   EMA xuống/bằng không xóa ghi nhận, nhưng không được BUY; cắt lên mới tính lại hạn.
   ATC ngày 1 cắt lên, chiều ngày 2 vẫn trên và RSI đạt thì có thể BUY; chiều ngày 2 xuống thì chờ.
   Một lần cắt chỉ tạo một ý định mua. Restart/tắt bật BOT không xóa ghi nhận hoặc dùng lại lần đã tiêu thụ.
   Xóa rồi thêm lại mã, đổi cặp EMA hoặc chế độ quan sát tạo baseline mới.
-  Mã đã có từ bản cũ bắt đầu baseline mới khi nhận mẫu hợp lệ sau cập nhật; không nhập giao cắt cũ không có mốc thêm mã.
-  REALTIME vẫn dùng nến ngày tạm tính; dữ liệu phút chỉ khôi phục phần thiếu sau mốc đã quan sát.
+  Mã đã có từ bản cũ bắt đầu baseline mới khi nhận mẫu hợp lệ sau cập nhật; X PHIÊN có thể dùng lịch sử xác minh được.
+  REALTIME vẫn dùng EMA trên nến ngày tạm tính; dữ liệu phút khôi phục phần thiếu và lịch sử X phiên.
   CLOSED chỉ ghi nhận từ nến ngày đã đóng; không tái tạo giao cắt trong phiên.
-  Cache dùng chung REAL/PAPER, chỉ tải khoảng chưa có; mất dữ liệu thì hiện ? và chặn điều kiện EMA.
+  Cache dùng chung REAL/PAPER, chỉ tải khoảng chưa có. Thiếu lịch sử không cho dùng giao cắt cũ chưa xác minh;
+  lần cắt mới đã quan sát hợp lệ vẫn dùng được. Backtest REPLAY cần dữ liệu 1 phút FULL để quét các phiên trước,
+  không suy ra giao cắt phút từ nến ngày hoặc 2 phút. Popup gom mode và ô X vào nhóm EMA; ∞ VA ẩn ô X.
   Preview: **∞ · ↑3 ↓2 · ✓** hoặc **⏳2/3P · ↑3 ↓2 · ⏸**.
   ↑↓ là số lần giao cắt đã quan sát từ khi thêm mã; ✓/⏸ theo EMA hiện tại, không suy từ bộ đếm.
   ☑ đã dùng, ⌛ hết hạn, ? thiếu dữ liệu. Rê chuột xem mốc bắt đầu và cắt lên gần nhất.

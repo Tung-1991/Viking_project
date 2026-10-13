@@ -1,4 +1,4 @@
-"""Recover EMA crossings after watchlist admission from completed minute prices."""
+"""Recover admitted EMA observations and optional prior-session crossings."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -118,8 +118,81 @@ class SessionCrossService:
         raw = cache.store.read()
         self.recovered = raw.get("cross_recovery", {}) if isinstance(raw, dict) else {}
 
+    def _lookback(self, row, symbol, bars, params, now, args, observation_mode, recover=True, current=None):
+        from ..rules.business import indicator_snapshot
+        from ..rules.ema_memory import lookback_start, seed_lookback
+        from ..trading.market import exchange_close_minute, is_working_day
+        if params.buy_ema_cross_mode != "SESSIONS":
+            return row
+        if row.get("tracking_version") != 2:
+            row = {"tracking_version": 2, "watch_id": f"{args['pair']}:{now.timestamp()}",
+                   "started_at": now.isoformat(), "started_at_epoch": now.timestamp(),
+                   "initialized": False, "up_count": 0, "down_count": 0}
+        key = f"{args['pair']}:{params.buy_ema_cross_sessions}:{observation_mode}"
+        if row.get("lookback_key") == key and row.get("lookback_ready"):
+            return row
+        row = dict(row)
+        if row.get("lookback_key") != key:
+            row.update(lookback_key=key, lookback_requested_at=now.isoformat(), lookback_ready=False)
+        requested = datetime.fromisoformat(row["lookback_requested_at"])
+        start = lookback_start(requested, params.buy_ema_cross_sessions,
+                               args.get("working_dates"), args.get("holidays"))
+        if start is None:
+            return {**row, "lookback_ready": False}
+        # Live observations already cover time after admission. Seed only the
+        # preceding segment, preserving live counts, timestamps and used IDs.
+        baseline = row.get("baseline") or {}
+        baseline_at = datetime.fromisoformat(baseline['at']) if baseline.get('at') else None
+        cutoff = min(baseline_at.timestamp() if baseline_at else float(row.get("started_at_epoch", requested.timestamp())),
+                     requested.timestamp())
+        if cutoff <= start.timestamp():
+            return {**row, "lookback_ready": True, "lookback_started_at": row.get("started_at"),
+                    "lookback_up_count": 0, "lookback_down_count": 0, "lookback_cross": {}}
+        prior = [bar for bar in bars if bool(bar.get("closed", True))
+                 and datetime.fromtimestamp(float(bar["time"]), VN_TZ).date() < start.date()]
+        if len(prior) < params.buy_ema_slow:
+            return {**row, 'lookback_ready': False}
+        marks = indicator_snapshot(prior, params.buy_ema_fast, params.buy_ema_slow, params.rsi_period)
+        observations = [(start - timedelta(microseconds=1), marks)]
+        end = datetime.fromtimestamp(cutoff, VN_TZ)
+        if observation_mode == "CLOSED":
+            for index, bar in enumerate(bars):
+                day = datetime.fromtimestamp(float(bar["time"]), VN_TZ).date()
+                at = datetime.combine(day, datetime.min.time(), VN_TZ) + timedelta(minutes=exchange_close_minute(args['exchange']))
+                if (bool(bar.get("closed", True)) and is_working_day(day,args.get('working_dates'),args.get('holidays'))
+                        and start.timestamp() <= at.timestamp() < cutoff):
+                    observations.append((at, indicator_snapshot(bars[:index+1], params.buy_ema_fast,
+                                                                 params.buy_ema_slow, params.rsi_period)))
+        else:
+            points, ready = self._samples(symbol, start.timestamp(), end, args['exchange'],
+                                          args.get('working_dates'), args.get('holidays'), checked_at=now) if recover else ([], False)
+            if not ready:
+                return {**row, "lookback_ready": False}
+            for stamp, price in points:
+                if stamp >= cutoff:
+                    continue  # The fresh observation owns the current boundary.
+                at = datetime.fromtimestamp(stamp, VN_TZ)
+                marks, _ = self._marks(bars, price, at.date(), params)
+                observations.append((at, marks or {}))
+        if baseline_at and start.timestamp() <= baseline_at.timestamp() <= cutoff:
+            observations.append((baseline_at, baseline))
+        if not row.get('initialized') and current is not None:
+            observations.append((now,current))
+        seeded = seed_lookback(row, observations, start=start, now=now, **args)
+        if seeded.get("lookback_ready") and not row.get("initialized"):
+            # Compare the first fresh quote with the last verified historical
+            # sign, so an opening/current-minute cross is not missed.
+            at, marks = observations[-1]
+            fast, slow = marks['buy_ema_fast'], marks['buy_ema_slow']
+            seeded.update(initialized=True, current_ready=True, current_fast=fast, current_slow=slow,
+                          last_relation=1 if fast > slow else -1 if fast < slow else 0,
+                          observed_at_epoch=at.timestamp(), observed_at=at.isoformat(), profile=args['pair'])
+            if current is not None:
+                seeded['baseline'] = {'at':now.isoformat(),'buy_ema_fast':fast,'buy_ema_slow':slow}
+        return seeded
+
     def observe_closed(self, symbol, stream, bars, params, now, exchange, *, working_dates=None, holidays=None):
-        """CLOSED counts only completed daily observations after admission."""
+        """CLOSED counts completed daily observations, with bounded optional lookback."""
         from ..rules.business import indicator_snapshot
         from ..rules.ema_memory import advance_memory, refresh_memory
         from ..trading.market import exchange_close_minute
@@ -132,7 +205,10 @@ class SessionCrossService:
         completed = [bar for bar in bars if bool(bar.get("closed", True))]
         def marks(values):
             return indicator_snapshot(values, params.buy_ema_fast, params.buy_ema_slow, params.rsi_period)
-        if not row.get("initialized") or row.get("profile") not in {None, "", args["pair"]}:
+        if row.get("profile") not in {None, "", args["pair"]}:
+            row = advance_memory(row, marks(completed), now=now, **args)
+        row = self._lookback(row, symbol, completed, params, now, args, "CLOSED")
+        if not row.get("initialized"):
             row = advance_memory(row, marks(completed), now=now, **args)
         else:
             for index, bar in enumerate(completed):
@@ -145,9 +221,10 @@ class SessionCrossService:
         row["observation_mode"] = "CLOSED"
         return self.rule_state.save_session_cross(symbol, stream, row)
 
-    def _samples(self, symbol, start, now, exchange, working_dates, holidays):
+    def _samples(self, symbol, start, now, exchange, working_dates, holidays, *, checked_at=None):
         from ..trading.market import is_working_day
         row = self.recovered.setdefault(symbol, {"ranges": [], "prices": {}, "retry_at": 0})
+        checked_at = checked_at or now
         targets = []
         day = datetime.fromtimestamp(start, VN_TZ).date()
         while day <= now.date():
@@ -160,7 +237,7 @@ class SessionCrossService:
                         targets.append([lo, hi])
             day += timedelta(days=1)
         gaps = missing_ranges(targets, row["ranges"])
-        if gaps and now.timestamp() < row.get("retry_at", 0):
+        if gaps and checked_at.timestamp() < row.get("retry_at", 0):
             return [], False
         for left, right in gaps:
             try:
@@ -168,7 +245,9 @@ class SessionCrossService:
                 if not isinstance(data, dict) or data.get("s", "ok") not in {"ok", "no_data"}:
                     raise ValueError("MINUTE_HISTORY_UNAVAILABLE")
                 keys = ("t", "o", "h", "l", "c", "v")
-                if any(not isinstance(data.get(key, []), list) for key in keys):
+                if data.get('s') == 'no_data':
+                    data = {**data, **{key:data.get(key,[]) for key in keys}}
+                if any(not isinstance(data.get(key), list) for key in keys):
                     raise ValueError("MINUTE_HISTORY_UNAVAILABLE")
                 if any(len(data.get(key, [])) != len(data.get("t", [])) for key in keys):
                     raise ValueError("MINUTE_HISTORY_INCOMPLETE")
@@ -181,7 +260,7 @@ class SessionCrossService:
                 row["ranges"] = merge_ranges([*row["ranges"], [left, right]])
                 row["retry_at"] = 0
             except Exception:
-                row["retry_at"] = now.timestamp() + 60
+                row["retry_at"] = checked_at.timestamp() + 60
                 raw = self.cache.store.read()
                 self.cache.store.write({**raw, "cross_recovery": self.recovered})
                 return [], False
@@ -229,6 +308,7 @@ class SessionCrossService:
         if row.get("profile") not in {None, "", args["pair"]}:
             # A changed pair starts a new baseline now, not in recovered history.
             row = advance_memory(row, indicators, now=now, **args)
+        row = self._lookback(row, symbol, bars, params, now, args, "REALTIME", recover, current=indicators)
         last = float(row.get("observed_at_epoch", 0))
         if row.get("initialized") and now.timestamp() - last > MAX_DECISION_AGE:
             points, ready = self._samples(symbol, last, now, exchange, working_dates, holidays) if recover else ([], False)

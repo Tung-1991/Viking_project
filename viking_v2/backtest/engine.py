@@ -18,7 +18,7 @@ from ..rules.business import (
     crossover_signal_from_snapshots,
 )
 from ..rules.entry_filters import apply_buy_filters
-from ..rules.ema_memory import advance_memory
+from ..rules.ema_memory import advance_memory, lookback_start, seed_lookback
 from ..rules.protection import sale_options, sale_quantity, repeat_ready
 from ..trading.portfolio import (
     bot_slot_state,
@@ -35,10 +35,72 @@ from ..trading.market import (
     exchange_open_minute,
     exchange_close_minute,
     in_buy_window,
+    is_working_day,
 )
 from .data import HistoricalDataStore, VN_TZ, bar_date
 from .models import BacktestConfig, BacktestEvent, BacktestResult, BacktestScenario, BacktestTrade
 from .replay import ReplayDataStore
+
+
+def _historical_ema_memory(row, history, params, at, exchange, holidays, *, replay=None, symbol=""):
+    """Seed X-session evidence using past data only, on the live EMA price basis."""
+    if params.buy_ema_cross_mode != "SESSIONS":
+        return row
+    row = dict(row or {})
+    if row.get("tracking_version") != 2:
+        row = {"tracking_version": 2, "watch_id": f"{symbol}:{at.timestamp()}",
+               "started_at": at.isoformat(), "started_at_epoch": at.timestamp(),
+               "initialized": False, "up_count": 0, "down_count": 0}
+    key = f"{params.buy_ema_fast}/{params.buy_ema_slow}:{params.buy_ema_cross_sessions}:{'REALTIME' if replay else 'CLOSED'}"
+    if row.get("lookback_key") == key:
+        return row
+    row.update(lookback_key=key, lookback_ready=False)
+    start = lookback_start(at, params.buy_ema_cross_sessions, holidays=holidays)
+    if start is None:
+        return row
+    first = row.get('baseline') or {}
+    first_at = datetime.fromisoformat(first['at']) if first.get('at') else None
+    cutoff = min(at.timestamp(),first_at.timestamp() if first_at else float(row['started_at_epoch']))
+    if cutoff <= start.timestamp():
+        return {**row, 'lookback_ready':True}
+    prior = [bar for bar in history if bar_date(bar) < start.date()]
+    if len(prior) < params.buy_ema_slow:
+        return row
+    baseline = indicator_snapshot(prior,
+                                  params.buy_ema_fast,params.buy_ema_slow,params.rsi_period)
+    observations = [(start-timedelta(microseconds=1),baseline)]
+    if replay:
+        from ..services.session_cross import SessionCrossService
+        day = start.date()
+        while day <= datetime.fromtimestamp(cutoff,VN_TZ).date():
+            if is_working_day(day, holidays=holidays) and day < at.date():
+                minutes, resolution, _ = replay.load_day(symbol,day,resolution='1',complete_only=True)
+                if not minutes or resolution != '1':
+                    return row  # Cannot manufacture minute crossings from daily/2m bars.
+                for bar in minutes:
+                    when = datetime.fromtimestamp(float(bar['time'])+60,VN_TZ)
+                    if start.timestamp() <= when.timestamp() < cutoff:
+                        marks, _ = SessionCrossService._marks(history,float(bar['close']),when.date(),params)
+                        observations.append((when,marks or {}))
+            day += timedelta(days=1)
+    else:
+        for index,bar in enumerate(history):
+            when = datetime.combine(bar_date(bar),datetime.min.time(),VN_TZ)+timedelta(minutes=exchange_close_minute(exchange))
+            if is_working_day(when.date(),holidays=holidays) and start.timestamp() <= when.timestamp() < cutoff:
+                observations.append((when,indicator_snapshot(history[:index+1],params.buy_ema_fast,
+                                                             params.buy_ema_slow,params.rsi_period)))
+    if first_at and start.timestamp() <= first_at.timestamp() <= cutoff:
+        observations.append((first_at,first))
+    seeded = seed_lookback(row,observations,start=start,now=at,
+        pair=f'{params.buy_ema_fast}/{params.buy_ema_slow}',mode='SESSIONS',sessions=params.buy_ema_cross_sessions,
+        exchange=exchange,holidays=holidays)
+    if seeded.get('lookback_ready') and not row.get('initialized'):
+        when,marks = observations[-1]
+        fast,slow = marks['buy_ema_fast'],marks['buy_ema_slow']
+        seeded.update(initialized=True,current_ready=True,current_fast=fast,current_slow=slow,
+                      last_relation=1 if fast > slow else -1 if fast < slow else 0,
+                      observed_at_epoch=when.timestamp(),profile=f'{params.buy_ema_fast}/{params.buy_ema_slow}')
+    return seeded
 
 
 def _priority_budget(settings, symbol, positions, budget, minimum_room, cash, *, envelope=0.0):
@@ -946,6 +1008,10 @@ class BacktestEngine:
             history[symbol] = [row for row in rows if bar_date(row).isoformat() < settings.start_date]
 
         daily_memory = dict(carried.get("daily_memory") or {})
+        for symbol in settings.symbols:
+            daily_memory[symbol] = _historical_ema_memory(daily_memory.get(symbol),history[symbol],params,
+                datetime.fromisoformat(settings.start_date).replace(tzinfo=VN_TZ),
+                settings.symbol_exchanges.get(symbol,'HOSE'),getattr(settings,'trading_holidays',None),symbol=symbol)
         positions: dict[str, _Position] = carried_positions
         cash = float(carried["cash"]) if "cash" in carried else float(settings.initial_capital)
         pending: dict[str, _Pending] = carried_pending
@@ -2507,12 +2573,14 @@ class BacktestEngine:
                     # never jump back over a processed minute.
                     indicator_streams[symbol] = current_indicators
                     now = datetime.fromtimestamp(stamp, VN_TZ)
-                    if symbol not in session_crosses:
+                    session_crosses[symbol] = _historical_ema_memory(session_crosses.get(symbol),history[symbol],params,
+                        now,symbol_exchanges[symbol],getattr(settings,'trading_holidays',None),replay=self.replay,symbol=symbol)
+                    if not (session_crosses.get(symbol) or {}).get('initialized'):
                         first_open = {**partial, "close": float(bar.get("open", 0) or bar["close"])}
                         opening_marks = indicator_snapshot([*history[symbol], first_open],
                                                           params.buy_ema_fast, params.buy_ema_slow, params.rsi_period)
                         session_crosses[symbol] = advance_memory(
-                            None, opening_marks, now=now - timedelta(microseconds=1),
+                            session_crosses.get(symbol), opening_marks, now=now - timedelta(microseconds=1),
                             pair=f"{params.buy_ema_fast}/{params.buy_ema_slow}", mode=params.buy_ema_cross_mode,
                             sessions=params.buy_ema_cross_sessions, exchange=symbol_exchanges[symbol],
                         )

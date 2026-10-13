@@ -30,6 +30,34 @@ def replay_book(tmp_path, days, prices, *, daily_price=8):
     return BacktestEngine(store, replay)
 
 
+@pytest.mark.parametrize("mode,expected", [("VA",0),("SESSIONS",1)])
+def test_starting_replay_after_a_prior_session_cross_uses_lookback_only_in_sessions(tmp_path,mode,expected):
+    day = datetime(2026,10,5,tzinfo=VN_TZ)
+    earlier = [day-timedelta(days=i) for i in range(60,0,-1) if (day-timedelta(days=i)).weekday()<5]
+    days = [at.date().isoformat() for at in earlier]+['2026-10-05']
+    points = []
+    for date in days:
+        if date < '2026-10-02':
+            points.append([('09:15',8,8),('14:45',8,8)])
+        elif date == '2026-10-02':
+            points.append([('09:15',8,8),('14:09',8,9),('14:45',9,9)])
+        else:
+            points.append([('09:15',9,9),('14:00',9,9),('14:01',9,9),('14:45',9,9)])
+    engine = replay_book(tmp_path,days,points)
+    carry = {}
+    result = engine.run(BacktestConfig(['FPT'],'2026-10-05','2026-10-05',initial_capital=100e6,
+        fixed_market_phase='UPTREND',fixed_exposure_pct=100,simulation_mode='REPLAY',fill_session='CONTINUOUS',
+        rule_parameters={'buy_ema_cross_mode':mode,'buy_ema_cross_sessions':3,'buy_signal_use_rsi':False,
+                         'buy_window_enabled':True,'buy_window_start':'14:00','whipsaw_enabled':False}),save=False,carry=carry)
+    buys = [event for event in result.events if event.side == 'BUY']
+    assert len(buys) == expected
+    if expected:
+        memory = carry['session_crosses']['FPT']
+        assert memory['cross_at'] == '2026-10-02T14:10:00+07:00'
+        assert memory['used'] and memory['lookback_up_count'] == 1
+        assert datetime.fromisoformat(buys[0].fill_time).strftime('%H:%M') == '14:01'
+
+
 @pytest.mark.parametrize("mode,sessions,down,expected", [("VA",3,False,1), ("SESSIONS",3,False,1),
                                                        ("SESSIONS",1,False,0), ("VA",3,True,0)])
 def test_atc_cross_survives_carry_to_next_buy_window_without_day2_cross(tmp_path, monkeypatch, mode, sessions, down, expected):

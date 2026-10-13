@@ -556,27 +556,42 @@ class RuleSettingsPopup:
                 text_color=self.TEXT,
             ).pack(side="left", padx=(0, 12))
 
-        self.buy_signal_require_ema_cross = self._switch(
-            buy_group, "BUY CẦN EMA CẮT LÊN", self.params.buy_signal_require_ema_cross,
-            "Đang trên: chờ xuống rồi cắt lên lại. Đang dưới/bằng: chờ cắt lên.\n"
-            "Chỉ tính từ khi thêm mã; restart giữ ghi nhận. OFF: EMA nhanh > EMA chậm là đạt. RSI và các điều kiện BUY vẫn kiểm tra.",
-        )
-
         self.buy_rsi_period = self._field(
             buy_group, "RSI BUY / E", self.params.rsi_period,
             "Backend hiện dùng một chu kỳ RSI cho cả BUY và E. Ô này đồng bộ với ô RSI trong E/M.",
             variable=self.shared_rsi_period,
         )
+        self.buy_ema_memory_group = ctk.CTkFrame(buy_group, fg_color="#222831", corner_radius=7)
+        self.buy_ema_memory_group.pack(fill="x", padx=8, pady=(6, 8))
+        memory_hint = (
+            "∞ VA: chỉ nhớ từ khi thêm mã, giữ tới khi dùng.\n"
+            "⏳ X PHIÊN: quét thêm X phiên trước và phần phiên hiện tại; giữ X phiên từ lần cắt, tính cả phiên cắt, bỏ ngày nghỉ.\n"
+            "Lần cắt hết hạn/đã dùng không mua lại. BUY vẫn cần EMA nhanh > chậm, RSI và các điều kiện khác đạt."
+        )
+        self.buy_signal_require_ema_cross = self._switch(
+            self.buy_ema_memory_group, "BUY CẦN EMA CẮT LÊN", self.params.buy_signal_require_ema_cross,
+            memory_hint + "\nChưa có lần cắt hợp lệ: đang trên thì chờ xuống rồi lên; đang dưới/bằng thì chờ lên. OFF chỉ cần EMA nhanh > chậm.",
+        )
         self.buy_signal_session_cross_enabled = tk.BooleanVar(value=True)
         self.buy_ema_cross_mode = tk.StringVar(value="∞ VA" if self.params.buy_ema_cross_mode == "VA" else "⏳ X PHIÊN")
-        ctk.CTkSegmentedButton(buy_group, values=["∞ VA", "⏳ X PHIÊN"], variable=self.buy_ema_cross_mode,
-                              selected_color=self.BLUE, font=("Segoe UI", 12, "bold")).pack(fill="x", padx=12, pady=6)
-        self.buy_ema_cross_sessions = self._field(
-            buy_group, "⏳ Phiên", self.params.buy_ema_cross_sessions,
-            "∞: nhớ tới khi dùng. ⏳: nhớ X phiên, tính cả phiên cắt; bỏ ngày nghỉ.\n"
-            "EMA xuống vẫn giữ ghi nhận; chỉ mua khi EMA/RSI hiện tại đạt. Cắt lên mới tính lại hạn. Một lần cắt dùng một lần.")
+        memory_row = ctk.CTkFrame(self.buy_ema_memory_group, fg_color="transparent")
+        memory_row.pack(fill="x", padx=12, pady=(0, 8))
+        memory_row.grid_columnconfigure(0, weight=1)
+        ctk.CTkSegmentedButton(memory_row, values=["∞ VA", "⏳ X PHIÊN"], variable=self.buy_ema_cross_mode,
+                              selected_color=self.BLUE, font=("Segoe UI", 12, "bold")).grid(row=0, column=0, sticky="ew")
+        self.buy_ema_cross_sessions = ctk.CTkEntry(
+            memory_row, width=55, height=32, justify="right", font=FONT_VALUE,
+            fg_color="#181B20", border_color="#444B55", text_color=self.TEXT)
+        self.buy_ema_cross_sessions.insert(0, str(self.params.buy_ema_cross_sessions))
+        self.buy_ema_cross_sessions.grid(row=0, column=1, padx=(6, 0))
+        self._hint_icon(memory_row, memory_hint).grid(row=0, column=2, padx=(6, 0))
         def refresh_memory_field(*_args):
-            self.buy_ema_cross_sessions.configure(state="normal" if self.buy_ema_cross_mode.get() == "⏳ X PHIÊN" else "disabled")
+            if self.buy_ema_cross_mode.get() == "⏳ X PHIÊN":
+                self.buy_ema_cross_sessions.configure(state="normal")
+                self.buy_ema_cross_sessions.grid()
+            else:
+                self.buy_ema_cross_sessions.configure(state="disabled")
+                self.buy_ema_cross_sessions.grid_remove()
         self.buy_ema_cross_mode.trace_add("write", refresh_memory_field)
         refresh_memory_field()
 

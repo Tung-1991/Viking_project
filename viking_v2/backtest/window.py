@@ -1398,8 +1398,9 @@ class BacktestPopup:
         ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
         self._hint(
             signal_toggle_row,
-            "ON: phải cắt lên sau khi thêm mã. Đang trên lúc thêm: chờ xuống rồi lên; đang dưới: chờ lên.\n"
-            "∞ VA giữ tới khi dùng; X phiên tính cả phiên cắt. EMA xuống vẫn giữ ghi nhận, BUY vẫn cần EMA hiện tại ở trên.\n"
+            "∞ VA: chỉ ghi nhận từ khi thêm mã, giữ tới khi dùng.\n"
+            "X phiên: quét X phiên trước và phiên hiện tại; giữ X phiên tính cả phiên cắt, bỏ ngày nghỉ. Lần cắt cũ giữ đúng tuổi.\n"
+            "EMA xuống vẫn giữ ghi nhận; BUY vẫn cần EMA hiện tại ở trên.\n"
             "REPLAY quan sát nến trong phiên; DAILY chỉ xác minh tại các nến ngày, không tái tạo giao cắt trong phiên.",
         ).grid(row=1, column=3, padx=10, pady=(8, 0))
         self.buy_ema_cross_mode = ctk.StringVar(value="∞ VA" if params.buy_ema_cross_mode == "VA" else "⏳ X PHIÊN")

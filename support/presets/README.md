@@ -18,6 +18,10 @@ Cập nhật ngày 13/10/2026. Preset: `VA_4_MA_50M.json`.
 
 Ghi cả khi không có BUY hoặc BOT OFF. Thiếu giá/quyết định thì ghi tình trạng thiếu dữ liệu; không giả số EMA/RSI. TRACE không gửi Telegram hoặc tạo lệnh.
 
+Nếu đổi sang X PHIÊN, bot quét thêm X phiên trước và phần phiên hiện tại, bỏ ngày nghỉ.
+Lần cắt giữ đúng tuổi: X=3 tính cả phiên cắt, không bắt đầu lại ba phiên từ lúc mở app.
+∞ VA vẫn chỉ ghi nhận sau khi thêm mã. Preset giữ mặc định ∞ VA.
+
 App cần chạy suốt khung giờ. Ngày nghỉ không ghi; mở muộn hoặc app tắt không bù những mốc đã bỏ lỡ. Mẫu đã ghi không bị ghi trùng khi restart.
 
 Xem: **LỊCH SỬ → TÍN HIỆU → LÀM MỚI → Ngày → Mã → ĐỊNH KỲ**. Bốn mã được nhóm riêng dưới ngày ghi; cửa sổ đang mở cần bấm LÀM MỚI để đọc mẫu mới. XUẤT EXCEL lấy cả nhóm chưa xổ.

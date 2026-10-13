@@ -7,6 +7,30 @@ from viking_v2.rules.window import RuleSettingsPopup
 from viking_v2.rules.business import StaticRuleParameters
 
 
+@pytest.mark.parametrize('scale',[1.0,1.5,2.0])
+def test_compact_ema_group_keeps_controls_inside_on_remote_scaling(ui_root,scale):
+    import customtkinter as ctk
+    ctk.set_widget_scaling(scale)
+    popup = RuleSettingsPopup(ui_root,AppSettings(), 'EMA_LAYOUT',lambda:None)
+    try:
+        popup.top.geometry('1080x720+0+0')
+        popup.phase_tabs.set('PHASE 2 · ENTRY BUY')
+        popup.buy_ema_cross_mode.set('⏳ X PHIÊN')
+        ui_root.update_idletasks()
+        entry = popup.buy_ema_cross_sessions
+        row = entry.master
+        assert entry.winfo_x()+entry.winfo_width() <= row.winfo_width()
+        assert entry.winfo_x() >= 0 and entry.winfo_width() > 0
+        popup.buy_ema_cross_mode.set('∞ VA')
+        ui_root.update_idletasks()
+        assert not entry.winfo_manager()
+        popup.buy_ema_cross_mode.set('⏳ X PHIÊN')
+        assert entry.get() == '3' and entry.winfo_manager() == 'grid'
+    finally:
+        popup._close()
+        ctk.set_widget_scaling(1.0)
+
+
 @pytest.mark.parametrize("memory_mode", ["∞ VA", "⏳ X PHIÊN"])
 def test_rule_save_keeps_modes_bases_and_repeats_independent(ui_root,tmp_path,monkeypatch,memory_mode):
     monkeypatch.setattr(config,"ACCOUNTS_ROOT",tmp_path / "accounts")
@@ -14,6 +38,11 @@ def test_rule_save_keeps_modes_bases_and_repeats_independent(ui_root,tmp_path,mo
     popup = RuleSettingsPopup(ui_root,settings,"NEW_RULE",lambda:None)
     try:
         popup.buy_ema_cross_mode.set(memory_mode)
+        ui_root.update_idletasks()
+        assert popup.buy_signal_require_ema_cross._viking_row.master is popup.buy_ema_memory_group
+        assert popup.buy_ema_cross_sessions.master.master is popup.buy_ema_memory_group
+        assert popup.buy_rsi_period.master.master is not popup.buy_ema_memory_group
+        assert bool(popup.buy_ema_cross_sessions.winfo_manager()) == (memory_mode == "⏳ X PHIÊN")
         if memory_mode == "⏳ X PHIÊN":
             popup.buy_ema_cross_sessions.delete(0,"end")
             popup.buy_ema_cross_sessions.insert(0,"5")

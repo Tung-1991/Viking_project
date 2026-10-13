@@ -1763,7 +1763,11 @@ class DashboardPanelsMixin:
         if (str(self.settings.signal_mode).upper() == "REALTIME"
                 and params.get("buy_signal_session_cross_enabled", True)
                 and params.get("buy_signal_use_ema", True) and params.get("buy_signal_require_ema_cross", True)):
-            buy_ema_rule = "BUY cần lần cắt lên sau khi thêm mã; giữ theo ∞ VA hoặc X phiên, kể cả restart. Mỗi lần cắt chỉ dùng một lần."
+            buy_ema_rule = (
+                "BUY cần lần cắt lên; X phiên quét thêm X phiên trước và phần phiên hiện tại, giữ đúng tuổi lần cắt."
+                if params.get("buy_ema_cross_mode", "VA") == "SESSIONS"
+                else "BUY cần lần cắt lên sau khi thêm mã; ∞ VA giữ tới khi dùng, kể cả restart."
+            ) + " Mỗi lần cắt chỉ dùng một lần."
         text = (
             f"EMA: nhanh so với chậm. {buy_ema_rule} Vẫn kiểm tra các điều kiện vào lệnh khác.\n"
             f"{rsi_basis}\n"
