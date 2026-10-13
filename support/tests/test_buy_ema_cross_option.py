@@ -121,7 +121,7 @@ def test_rule_ui_option_is_explicit_and_saves_without_touching_other_settings(ui
         popup._close()
 
 
-@pytest.mark.parametrize("enabled,text", [(False, "không bắt vừa vượt lên"), (True, "vừa vượt từ ≤ lên >")])
+@pytest.mark.parametrize("enabled,text", [(False, "không bắt vừa vượt lên"), (True, "vừa vượt từ < lên >")])
 def test_preview_hint_explains_the_saved_buy_option(enabled, text):
     from viking_v2.dashboard.panels import DashboardPanelsMixin
     view = DashboardPanelsMixin()

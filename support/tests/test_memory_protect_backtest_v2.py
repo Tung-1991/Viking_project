@@ -10,11 +10,12 @@ from viking_v2.backtest.replay import ReplayDataStore
 from viking_v2.trading.market import VN_TZ
 
 
-def replay_book(tmp_path, days, prices, *, daily_price=8):
+def replay_book(tmp_path, days, prices, *, daily_price=8, below_cross=False):
     first = datetime.fromisoformat(days[0]).replace(tzinfo=VN_TZ)
     history = [first - timedelta(days=260-i) for i in range(260)]
     history += [datetime.fromisoformat(day).replace(tzinfo=VN_TZ) for day in days]
-    values = [daily_price] * len(history)
+    values = ([daily_price + (len(history) - index - 1) * .001 for index in range(len(history))]
+              if below_cross else [daily_price] * len(history))
     data = {"t": [int(at.timestamp()) for at in history],
             **{key: list(values) for key in ("o", "h", "l", "c")}, "v": [10000]*len(history)}
     store = HistoricalDataStore(root=tmp_path / "data", fetcher=lambda _s, res, *_: data if res == "1D" else None)
@@ -36,11 +37,12 @@ def test_starting_replay_after_a_prior_session_cross_uses_configured_lookback(tm
     earlier = [day-timedelta(days=i) for i in range(60,0,-1) if (day-timedelta(days=i)).weekday()<5]
     days = [at.date().isoformat() for at in earlier]+['2026-10-05']
     points = []
-    for date in days:
+    for index, date in enumerate(days):
         if date < '2026-10-02':
-            points.append([('09:15',8,8),('14:45',8,8)])
+            price = 8 - index * .02
+            points.append([('09:15',price,price),('14:45',price,price)])
         elif date == '2026-10-02':
-            points.append([('09:15',8,8),('14:09',8,9),('14:45',9,9)])
+            points.append([('09:15',7,7),('14:09',7,9),('14:45',9,9)])
         else:
             points.append([('09:15',9,9),('14:00',9,9),('14:01',9,9),('14:45',9,9)])
     engine = replay_book(tmp_path,days,points)
@@ -49,7 +51,7 @@ def test_starting_replay_after_a_prior_session_cross_uses_configured_lookback(tm
         fixed_market_phase='UPTREND',fixed_exposure_pct=100,simulation_mode='REPLAY',fill_session='CONTINUOUS',
          rule_parameters={'buy_ema_cross_mode':mode,'buy_ema_cross_sessions':3,
                           'buy_ema_va_lookback_enabled':va_lookback,'buy_signal_use_rsi':False,
-                         'buy_window_enabled':True,'buy_window_start':'14:00','whipsaw_enabled':False}),save=False,carry=carry)
+                          'buy_window_enabled':True,'buy_window_start':'14:00','whipsaw_enabled':False}),save=False,carry=carry)
     buys = [event for event in result.events if event.side == 'BUY']
     assert len(buys) == expected
     if expected:
@@ -69,7 +71,7 @@ def test_atc_cross_survives_carry_to_next_buy_window_without_day2_cross(tmp_path
         [("09:15",8,8),("14:29",8,8),("14:30",8,9),("14:45",9,9)],
         [("09:15",next_price,next_price),("14:00",next_price,next_price),
          ("14:01",next_price,next_price),("14:45",next_price,next_price)],
-    ])
+    ], below_cross=True)
     actual = module.indicator_snapshot
     def indicators(rows, *args, **kwargs):
         row = actual(rows, *args, **kwargs)

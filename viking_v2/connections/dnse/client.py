@@ -292,7 +292,9 @@ class DNSEClient:
                     )
                     if 200 <= response.status_code < 300:
                         return True, data, response.status_code, ""
-                    if response.status_code == 401 and "token" in message.lower():
+                    # Read endpoints do not send the OTP trading token.  A 401
+                    # from positions/balances must not erase a valid order token.
+                    if require_token and response.status_code == 401 and "token" in message.lower():
                         self.trading_token = ""
                         self.trading_token_expires_at = 0.0
                     if response.status_code == 429 and attempt < retries:

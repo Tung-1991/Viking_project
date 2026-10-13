@@ -1789,7 +1789,7 @@ class DashboardPanelsMixin:
         source = preview.get("source", "MISSING")
         params = self.settings.rule_parameters
         buy_ema_rule = (
-            "BUY cần EMA nhanh vừa vượt từ ≤ lên > EMA chậm."
+            "BUY cần EMA nhanh vừa vượt từ < lên > EMA chậm."
             if params.get("buy_signal_require_ema_cross", True)
             else "BUY chỉ cần EMA nhanh hiện tại > EMA chậm, không bắt vừa vượt lên."
         ) if params.get("buy_signal_use_ema", True) else "BUY không dùng điều kiện EMA."
@@ -1814,8 +1814,8 @@ class DashboardPanelsMixin:
             f"Lọc RSI: BUY {'BẬT' if params.get('buy_signal_use_rsi', True) else 'TẮT'} / "
             f"E {'BẬT' if params.get('sell_signal_use_rsi', True) else 'TẮT'}. BUY cần tăng, E cần giảm; bằng không đạt. Không phải công tắc tự mua/bán.\n"
             "Bot OFF vẫn tính chỉ số. Preview không tạo tín hiệu hoặc đặt lệnh."
-            "\nCẮT EMA: CHỜ XUỐNG = đang ở trên từ trước; CHỜ LÊN = đang ≤. "
-            "ĐÃ LÊN = backend ghi nhận lần vượt lên. RSI phải đạt cùng lúc; còn các khóa/vốn. "
+            "\nCẮT EMA: CHỜ XUỐNG = đang ở trên từ trước; CHỜ LÊN = đang dưới. Bằng nhau chưa tính cắt. "
+            "ĐÃ LÊN = backend ghi nhận lần vượt lên. RSI có thể đạt sau khi lần cắt còn hiệu lực; vẫn cần các khóa/vốn. "
             "Tín hiệu chờ giờ còn hiệu lực không cần cắt lại đúng 14h."
             "\nTRƯỚC: EMA trước lần cắt. CUỐI + giờ: mẫu gần nhất đã lưu trước đóng phiên. "
             "ĐÓNG + ngày: EMA từ nến ngày đã đóng khi chưa có mẫu trong phiên. "

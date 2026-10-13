@@ -8,13 +8,23 @@ import requests
 
 from viking_v2 import config
 from viking_v2.connections.dnse.client import BrokerSnapshotError, DNSEClient
-from viking_v2.connections.dnse.snapshot_health import account_poll_interval, safe_detail
+from viking_v2.connections.dnse.snapshot_health import account_poll_interval, safe_detail, snapshot_failure_summary
 from viking_v2.connections.telegram import SignalTelegramService
 from viking_v2.dashboard.actions import DashboardActionsMixin
 from viking_v2.dashboard.panels import DashboardPanelsMixin
 from viking_v2.rules.state import RuleStateStore
 
 END_OF_DAY = "Hệ thống đã chuyển trạng thái ngừng giao dịch để xử lý các công việc cuối ngày!"
+
+
+def test_positions_401_alert_distinguishes_account_read_from_order_otp():
+    summary = snapshot_failure_summary({
+        "error": "BrokerSnapshotError: DNSE positions unavailable · GET /accounts/*/positions · HTTP 401 · token invalid",
+        "last_success_at": 0,
+    }, 5)
+    assert "HTTP 401" in summary
+    assert "không dùng OTP trading token" in summary
+    assert "không dùng bản cũ để gửi lệnh" in summary
 
 
 @pytest.fixture

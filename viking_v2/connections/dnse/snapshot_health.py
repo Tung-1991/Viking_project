@@ -85,8 +85,13 @@ def snapshot_failure_summary(failure: dict, poll_seconds: float, *, secrets: Ite
     idle = poll_seconds == IDLE_POLL_SECONDS
     retry = "5 phút" if idle else "5 giây"
     detail = safe_detail(failure.get("error") or "chưa có chi tiết", secrets=secrets)
+    auth_note = (
+        "GET tài khoản không dùng OTP trading token; kiểm tra xác thực API nếu lỗi lặp lại.\n"
+        if "GET /accounts/*/" in detail and "HTTP 401" in detail else ""
+    )
     return (
         f"{'NGOÀI PHIÊN · ' if idle else ''}Lỗi đồng bộ tài khoản REAL: {detail}\n"
         f"Đồng bộ tốt gần nhất: {good_text} · Thử lại sau {retry}.\n"
+        f"{auth_note}"
         "Giữ bản cũ; không dùng bản cũ để gửi lệnh khi đọc tài khoản lỗi."
     )

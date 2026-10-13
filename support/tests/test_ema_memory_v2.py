@@ -48,6 +48,24 @@ def test_first_below_only_needs_one_up_and_va_survives_two_weeks():
     assert row["expires_at"] == 0
 
 
+def test_equal_baseline_does_not_count_as_a_downward_cross():
+    row = observe({}, 100, 100, START)
+    row = observe(row, 101, 100, START + timedelta(seconds=1))
+    assert row["state"] == "WAIT_DOWN" and row["up_count"] == 0 and not row.get("cross_id")
+    row = observe(row, 99, 100, START + timedelta(seconds=2))
+    row = observe(row, 100, 100, START + timedelta(seconds=3))
+    row = observe(row, 101, 100, START + timedelta(seconds=4))
+    assert row["state"] == "SESSION_ACTIVE" and row["up_count"] == row["down_count"] == 1
+
+
+def test_equal_to_below_is_neutral_until_strict_up_cross():
+    row = observe({}, 100, 100, START)
+    row = observe(row, 99, 100, START + timedelta(seconds=1))
+    assert row["down_count"] == 0 and row["up_count"] == 0
+    row = observe(row, 101, 100, START + timedelta(seconds=2))
+    assert row["valid"] and row["up_count"] == 1 and row["down_count"] == 0
+
+
 def test_atc_up_can_be_used_next_afternoon_but_down_cannot_buy():
     row = observe({}, 99, 100, START.replace(hour=14, minute=29))
     row = observe(row, 101, 100, START.replace(hour=14, minute=44))

@@ -10,7 +10,7 @@ from urllib.parse import quote
 import pytest
 import requests
 
-from viking_v2.connections.dnse.client import DNSEClient
+from viking_v2.connections.dnse.client import BrokerSnapshotError, DNSEClient
 from viking_v2.connections.dnse.signing import generate_signature_header
 from viking_v2.models import OrderIntent
 from viking_v2.trading.market import VN_TZ
@@ -50,6 +50,29 @@ def client(session):
     value.trading_token_expires_at = value._now() + 1000
     value.cash_package = lambda _symbol: {"id": 1, "initialRate": 1, "brokerFirmBuyingFeeRate": 0.0015}
     return value
+
+
+def test_read_401_token_invalid_preserves_trading_token_and_recovers():
+    session = Session([
+        Response(status=401, data={"message": "token invalid"}),
+        Response(data={"positions": []}),
+    ])
+    value = client(session)
+    with pytest.raises(BrokerSnapshotError, match="HTTP 401"):
+        value.get_positions(force=True)
+    assert value.has_trading_token()
+    assert "trading-token" not in session.calls[0][2]["headers"]
+    assert value.get_positions(force=True) == []
+    assert value.has_trading_token()
+
+
+def test_write_401_token_invalid_clears_rejected_trading_token():
+    session = Session([Response(status=401, data={"message": "token invalid"})])
+    value = client(session)
+    ok, _body, status, _message = value._request("POST", "/accounts/123/orders", require_token=True)
+    assert not ok and status == 401
+    assert session.calls[0][2]["headers"]["trading-token"] == "token"
+    assert not value.has_trading_token()
 
 
 def test_signature_matches_hmac_contract():

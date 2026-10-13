@@ -572,7 +572,7 @@ class RuleSettingsPopup:
         )
         self.buy_signal_require_ema_cross = self._switch(
             self.buy_ema_memory_group, "BUY CẦN EMA CẮT LÊN", self.params.buy_signal_require_ema_cross,
-            memory_hint + "\nChưa có lần cắt hợp lệ: đang trên thì chờ xuống rồi lên; đang dưới/bằng thì chờ lên. OFF chỉ cần EMA nhanh > chậm.",
+            memory_hint + "\nChưa có lần cắt hợp lệ: đang trên thì chờ xuống rồi lên; đang dưới thì chờ lên. Bằng nhau chưa tính cắt. OFF chỉ cần EMA nhanh > chậm.",
         )
         self.buy_signal_session_cross_enabled = tk.BooleanVar(value=True)
         self.buy_ema_cross_mode = tk.StringVar(value="∞ VA" if self.params.buy_ema_cross_mode == "VA" else "⏳ X PHIÊN")

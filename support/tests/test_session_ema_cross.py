@@ -484,7 +484,9 @@ def test_real_replay_accepts_later_rsi_only_if_session_option_is_enabled(tmp_pat
     monkeypatch.setattr(engine_module, "indicator_snapshot", indicator)
     start = NOW.replace(hour=0, minute=0) - timedelta(days=220)
     stamps = [(start + timedelta(days=i)).timestamp() for i in range(221)]
-    payload = {"t": stamps, "o": [8]*221, "h": [8]*221, "l": [8]*221, "c": [8]*221, "v": [100]*221}
+    # A strict up-cross needs a prior EMA-fast-below-slow observation.
+    closes = [8 + (220 - index) * .001 for index in range(221)]
+    payload = {"t": stamps, "o": closes, "h": closes, "l": closes, "c": closes, "v": [100]*221}
     store = HistoricalDataStore(root=tmp_path / "data", fetcher=lambda _s, r, *_: payload if r == "1D" else None)
     replay = ReplayDataStore(store.root / "replay")
     source = tmp_path / "HOSE_DLY_FPT, 1.csv"

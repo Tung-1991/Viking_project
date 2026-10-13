@@ -118,13 +118,13 @@ def advance_memory(row, current, *, now, pair, mode, sessions, exchange,
         # generate multiple crosses by bouncing on the same boundary.
         previous_relation = int(row.get("last_relation", 0))
         relation = 1 if fast > slow else -1 if fast < slow else 0
-        if relation == 1 and previous_relation <= 0:
+        if relation == 1 and previous_relation == -1:
             row["up_count"] = int(row.get("up_count", 0)) + 1
             row.update(cross_at=now.isoformat(), cross_timestamp=now.timestamp(), used=False,
                        cross_id=f"EMA:{row['watch_id']}:{row['up_count']}:{now.timestamp()}",
                        previous_fast=previous_fast, previous_slow=previous_slow)
             row["cross_source"] = "LIVE"
-        elif relation == -1 and previous_relation >= 0:
+        elif relation == -1 and previous_relation == 1:
             row["down_count"] = int(row.get("down_count", 0)) + 1
             row["last_down_at"] = now.isoformat()
         if relation:
@@ -157,7 +157,8 @@ def memory_hint(row):
                if row.get("va_lookback_enabled") else "∞: chỉ ghi nhận từ khi thêm mã, nhớ tới khi dùng.\n")
     start = row.get("lookback_started_at") if row.get("mode") == "SESSIONS" or row.get("va_lookback_enabled") else None
     return (history + "↑↓: số lần cắt trong dữ liệu theo dõi; ⏳: phiên còn/tổng.\n"
-            "EMA nhanh ≤ EMA chậm: chỉ chờ cắt LÊN, không cần xuống thêm lần nữa. "
+            "EMA nhanh < EMA chậm: chỉ chờ cắt LÊN, không cần xuống thêm lần nữa. "
+            "EMA bằng nhau là trung tính, chưa ghi nhận cắt lên. "
             "Nếu bắt đầu theo dõi khi EMA nhanh đã ở trên mà chưa có lần cắt hợp lệ: chờ xuống rồi lên.\n"
             f"Theo dõi: {start or row.get('started_at', '—')}. Cắt lên gần nhất: {row.get('cross_at', '—')}.\n"
             "Sau khi ghi nhận cắt lên, VA giữ lần cắt tới khi dùng; RSI có thể đạt sau, không cần cắt lên lần nữa. "
