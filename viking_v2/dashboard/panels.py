@@ -1825,7 +1825,8 @@ class DashboardPanelsMixin:
                       "BUY cần lần cắt lên sau khi thêm mã; ∞ VA giữ tới khi dùng, kể cả restart.")
             ) + " Mỗi lần cắt chỉ dùng một lần."
         text = (
-            f"EMA: nhanh so với chậm. {buy_ema_rule} Vẫn kiểm tra các điều kiện vào lệnh khác.\n"
+            f"EMA 3/6 của nến ngày 1D: trong REALTIME, giá hiện tại thay giá đóng tạm của nến hôm nay theo tick/mẫu phút; không phải EMA tính trên chuỗi tick. "
+            f"{buy_ema_rule} Vẫn kiểm tra các điều kiện vào lệnh khác.\n"
             f"{rsi_basis}\n"
             f"Lọc RSI: BUY {'BẬT' if params.get('buy_signal_use_rsi', True) else 'TẮT'} / "
             f"E {'BẬT' if params.get('sell_signal_use_rsi', True) else 'TẮT'}. BUY cần tăng, E cần giảm; bằng không đạt. Không phải công tắc tự mua/bán.\n"
@@ -1880,15 +1881,18 @@ class DashboardPanelsMixin:
         self._preview_ema_cross_evidence = (caption, evidence)
         widget._viking_full_cross_text = caption.removeprefix("CẮT EMA · ")
         if tracking:
-            from ..rules.ema_memory import memory_fields
+            from ..rules.ema_memory import memory_fields, memory_count_scope
             fields = memory_fields(evidence)
+            scope = memory_count_scope(evidence, holidays=self.settings.trading_holidays)
             state_label = {
                 "SESSION_ACTIVE": "ĐÃ CẮT LÊN", "SESSION_USED": "ĐÃ DÙNG", "EXPIRED": "HẾT HẠN",
                 "WAIT_UP": "CHỜ EMA3 > EMA6", "WAIT_DOWN": "CHỜ XUỐNG→LÊN",
                 "UNKNOWN": "CHỜ DỮ LIỆU", "MARKET_CLOSED": "ĐÃ ĐÓNG",
             }.get(evidence.get("state"), "CHỜ")
+            total_crosses = int(fields['ema_memory_up_count']) + int(fields['ema_memory_down_count'])
+            session_span = f"{scope['sessions']}P" if scope else "?P"
             self.preview_rule_cross_counts.configure(
-                text=f"↑{fields['ema_memory_up_count']} ↓{fields['ema_memory_down_count']}",
+                text=f"{total_crosses} CẮT · {session_span}",
                 text_color={"ok": COL_GREEN, "wait": COL_WARN}.get(role, COL_MUTED),
             )
             self.preview_rule_cross_counts.grid()
@@ -1943,7 +1947,7 @@ class DashboardPanelsMixin:
         return (f"RULE: {active}{va_scan} · {'BẬT' if enabled else 'OFF'}. Đang xem: {evidence.get('mode', active)}.\n"
                 "⇄ đổi góc xem VA/X PHIÊN, không đổi rule hoặc tạo lệnh. Dùng dữ liệu đã lưu, kể cả khi rule OFF.\n"
                 "CHƯA GHI NHẬN: mode đang xem chưa lưu được lần cắt lên; lần cắt có thể xảy ra trước khi theo dõi.\n"
-                + remaining + memory_hint(evidence))
+                + remaining + memory_hint(evidence, holidays=self.settings.trading_holidays))
 
     def _atr_preview_hint(self) -> str:
         from datetime import datetime
@@ -2698,7 +2702,7 @@ class DashboardPanelsMixin:
         )
         self._preview_whipsaw_summary = (
             f"WHIPSAW: {crosses if whipsaw_has_count else '--'}/{whipsaw_limit or '--'}"
-            f" · {whipsaw_window or '--'} phiên · {whipsaw_status}"
+            f" · {whipsaw_window or '--'} nến 1D · {whipsaw_status}"
         )
         self.preview_rule_phase3_detail.configure(
             text=(

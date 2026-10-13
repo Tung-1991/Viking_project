@@ -167,11 +167,11 @@ def test_rsi_preview_shows_daily_comparison_not_the_overall_signal_color(current
 
 
 @pytest.mark.parametrize("enabled,crosses,expected", [
-    (True, 2, "WHIPSAW: 2/3 · 7 phiên · OK"),
-    (True, 3, "WHIPSAW: 3/3 · 7 phiên · KHÓA BUY"),
-    (True, 4, "WHIPSAW: 4/3 · 7 phiên · KHÓA BUY"),
-    (False, 3, "WHIPSAW: 3/3 · 7 phiên · OFF"),
-    (True, None, "WHIPSAW: --/3 · 7 phiên · CHỜ DỮ LIỆU"),
+    (True, 2, "WHIPSAW: 2/3 · 7 nến 1D · OK"),
+    (True, 3, "WHIPSAW: 3/3 · 7 nến 1D · KHÓA BUY"),
+    (True, 4, "WHIPSAW: 4/3 · 7 nến 1D · KHÓA BUY"),
+    (False, 3, "WHIPSAW: 3/3 · 7 nến 1D · OFF"),
+    (True, None, "WHIPSAW: --/3 · 7 nến 1D · CHỜ DỮ LIỆU"),
 ])
 def test_whipsaw_preview_shows_actual_count_window_and_lock_without_mutating_rule(enabled, crosses, expected):
     from copy import deepcopy

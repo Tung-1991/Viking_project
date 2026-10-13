@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from viking_v2.rules.business import StaticRuleParameters, indicator_snapshot
-from viking_v2.rules.ema_memory import advance_memory, memory_caption
+from viking_v2.rules.ema_memory import advance_memory, memory_caption, memory_count_scope, memory_hint
 from viking_v2.rules.state import RuleStateStore
 from viking_v2.services.session_cross import SessionCrossService, SessionPriceCache
 from viking_v2.trading.market import VN_TZ
@@ -46,6 +46,18 @@ def test_first_below_only_needs_one_up_and_va_survives_two_weeks():
     row = observe(row, 102, 100, START + timedelta(days=14))
     assert row["state"] == "SESSION_ACTIVE" and row["up_count"] == 1 and row["down_count"] == 0
     assert row["expires_at"] == 0
+
+
+def test_memory_count_scope_uses_saved_watch_and_history_starts():
+    row = {"mode": "VA", "started_at": "2026-10-09T14:00:00+07:00",
+           "observed_at": "2026-10-13T14:30:00+07:00", "up_count": 19, "down_count": 18}
+    assert memory_count_scope(row)["sessions"] == 3
+    assert memory_count_scope(row, holidays=["2026-10-12"])["sessions"] == 2
+    assert "37 lần cắt = 19 lên + 18 xuống" in memory_hint(row)
+    assert "2026-10-09 → 2026-10-13 · 3 phiên" in memory_hint(row)
+    row.update(va_lookback_enabled=True, lookback_ready=True,
+               lookback_started_at="2026-10-07T00:00:00+07:00")
+    assert memory_count_scope(row)["sessions"] == 5
 
 
 def test_equal_baseline_does_not_count_as_a_downward_cross():

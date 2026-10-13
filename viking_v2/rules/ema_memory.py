@@ -150,13 +150,46 @@ def memory_caption(row):
     return f"{mode} · ↑{up} ↓{down} · {symbol}"
 
 
-def memory_hint(row):
+def memory_count_scope(row, *, holidays=None, working_dates=None):
+    """Show the trading-session span behind cumulative ↑/↓, including old saved rows."""
+    if not isinstance(row, dict):
+        return None
+    historical = row.get("mode") == "SESSIONS" or bool(row.get("va_lookback_enabled"))
+    start = (row.get("lookback_started_at") if historical and row.get("lookback_ready") is True else None)
+    start = start or row.get("started_at") or (row.get("baseline") or {}).get("at")
+    end = row.get("observed_at")
+    if not start or not end:
+        return None
+    try:
+        first_at = datetime.fromisoformat(str(start))
+        last_at = datetime.fromisoformat(str(end))
+        first = (first_at.replace(tzinfo=VN_TZ) if first_at.tzinfo is None else first_at.astimezone(VN_TZ)).date()
+        last = (last_at.replace(tzinfo=VN_TZ) if last_at.tzinfo is None else last_at.astimezone(VN_TZ)).date()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+    span = (last - first).days
+    if span < 0 or span > 1500:
+        return None
+    sessions = sum(is_working_day(first + timedelta(days=offset), working_dates, holidays)
+                   for offset in range(span + 1))
+    return {"start": first.isoformat(), "end": last.isoformat(), "sessions": sessions}
+
+
+def memory_hint(row, *, holidays=None, working_dates=None):
     history = ("⏳: quét X phiên trước và phiên hiện tại khi bắt đầu; giữ X phiên từ lần cắt (tính cả phiên cắt).\n"
                if row.get("mode") == "SESSIONS" else
                "∞ VA + quét: lấy lần cắt trong X phiên trước khi bật, rồi nhớ tới khi dùng.\n"
                if row.get("va_lookback_enabled") else "∞: chỉ ghi nhận từ khi thêm mã, nhớ tới khi dùng.\n")
     start = row.get("lookback_started_at") if row.get("mode") == "SESSIONS" or row.get("va_lookback_enabled") else None
-    return (history + "↑↓: số lần cắt trong dữ liệu theo dõi; ⏳: phiên còn/tổng.\n"
+    scope = memory_count_scope(row, holidays=holidays, working_dates=working_dates)
+    fields = memory_fields(row)
+    up = int(fields["ema_memory_up_count"])
+    down = int(fields["ema_memory_down_count"])
+    period = (f"{up + down} lần cắt = {up} lên + {down} xuống. "
+              f"Phạm vi đếm: {scope['start']} → {scope['end']} · {scope['sessions']} phiên giao dịch theo lịch. "
+              "Bộ đếm là tích lũy trong phạm vi này, không phải số lần cắt của từng phiên.\n"
+              if scope else f"{up + down} lần cắt = {up} lên + {down} xuống. Phạm vi đếm: chưa có đủ mốc thời gian đã lưu.\n")
+    return (history + period + "↑↓: số lần cắt của EMA 1D tạm tính khi giá trong phiên đổi; ⏳: phiên còn/tổng.\n"
             "EMA nhanh < EMA chậm: chỉ chờ cắt LÊN, không cần xuống thêm lần nữa. "
             "EMA bằng nhau là trung tính, chưa ghi nhận cắt lên. "
             "Nếu bắt đầu theo dõi khi EMA nhanh đã ở trên mà chưa có lần cắt hợp lệ: chờ xuống rồi lên.\n"

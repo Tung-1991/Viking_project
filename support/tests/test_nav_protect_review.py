@@ -225,8 +225,7 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
             assert widget.winfo_x() >= 0
             assert widget.winfo_x() + widget.winfo_width() <= widget.master.winfo_width()
             assert widget.winfo_y() + widget.winfo_height() <= widget.master.winfo_height()
-        assert "↑2" in subject.preview_rule_cross_counts.cget("text")
-        assert "↓1" in subject.preview_rule_cross_counts.cget("text")
+        assert subject.preview_rule_cross_counts.cget("text") == "3 CẮT · ?P"
         assert subject.preview_rule_cross_counts.cget("font")[1] == 14
         assert subject.preview_rule_cross.cget("font")[1] == 11
         assert subject.preview_rule_ema.cget("font")[1] == 12
@@ -237,7 +236,7 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
         }})
         ui_root.update_idletasks()
         assert subject.preview_rule_cross.cget("text") == "CHỜ EMA3 > EMA6"
-        assert subject.preview_rule_cross_counts.cget("text") == "↑0 ↓0"
+        assert subject.preview_rule_cross_counts.cget("text") == "0 CẮT · ?P"
         assert subject.preview_rule_cross_detail.cget("text") == "CHƯA GHI NHẬN"
         assert "⏸" not in subject.preview_rule_cross.cget("text")
     finally:
@@ -279,6 +278,8 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
     subject.settings.rule_parameters.update(buy_signal_require_ema_cross=required, buy_ema_cross_mode=mode)
     subject._build_order_preview_tab(top)
     source = {"tracking_version": 2, "initialized": True, "current_ready": True,
+              "started_at": "2026-10-12T10:00:00+07:00", "observed_at": "2026-10-13T13:00:00+07:00",
+              "lookback_started_at": "2026-10-08T00:00:00+07:00",
               "current_fast": 23, "current_slow": 22, "up_count": 0, "down_count": 0,
               "lookback_ready": True, "lookback_up_count": 1, "lookback_down_count": 0,
               "lookback_cross": {"cross_id": "EMA:HISTORY:TEST", "cross_at": "2026-10-12T14:10:00+07:00",
@@ -310,7 +311,7 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
             viewing_history = (mode == "SESSIONS") != alternate
             assert evidence["mode"] == ("SESSIONS" if viewing_history else "VA")
             assert evidence["valid"] == viewing_history
-            assert f"↑{int(viewing_history)} ↓0" == subject.preview_rule_cross_counts.cget("text")
+            assert subject.preview_rule_cross_counts.cget("text") == ("1 CẮT · 4P" if viewing_history else "0 CẮT · 2P")
             assert subject.preview_rule_cross_title.cget("text") == ("⏳ 3P" if viewing_history else "∞ VA")
             assert int(subject.preview_rule_cross.grid_info()["column"]) == 2
             assert int(subject.preview_rule_cross_detail.grid_info()["column"]) == 2
