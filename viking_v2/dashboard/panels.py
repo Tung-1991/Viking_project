@@ -37,6 +37,7 @@ from .windows import (
     fit_entry_text,
     fit_label_text,
 )
+from .tables import RUNNING_FONT, RUNNING_HEADING_FONT
 from .quote_direction import PRICE_DIRECTION_HINT, quote_background
 
 
@@ -692,13 +693,13 @@ class DashboardPanelsMixin:
         style.theme_use("clam")
         style.configure(
             "Running.Treeview", background=COL_SURFACE_2, foreground=COL_TEXT,
-            fieldbackground=COL_SURFACE_2, rowheight=48, font=("Segoe UI", 14),
+            fieldbackground=COL_SURFACE_2, rowheight=58, font=RUNNING_FONT,
             borderwidth=0, relief="flat", bordercolor=COL_BORDER,
             lightcolor=COL_BORDER, darkcolor=COL_BORDER,
         )
         style.configure(
             "Running.Treeview.Heading", background=COL_SURFACE, foreground=COL_TITLE,
-            font=("Segoe UI", 14, "bold"), relief="flat", padding=(9, 9),
+            font=RUNNING_HEADING_FONT, relief="flat", padding=(12, 10),
         )
         style.map(
             "Running.Treeview.Heading",
@@ -1180,8 +1181,6 @@ class DashboardPanelsMixin:
         for widget, font in ((self.preview_rule_cross_title, ("Segoe UI", 10, "bold")),
                              (self.preview_rule_cross, ("Segoe UI", 11, "bold")),
                              (self.preview_rule_cross_detail, ("Segoe UI", 10))):
-            widget.bind("<Configure>", lambda _event, value=widget, base=font: fit_label_text(
-                value, base_font=base, minimum_size=7), add="+")
             _HoverHint(widget, self._ema_memory_preview_hint, placement="inside")
         for row, name in ((1, "buy_ema"), (2, "sell_ema"), (3, "rsi")):
             key = StatusLabel(
@@ -1216,36 +1215,41 @@ class DashboardPanelsMixin:
             row=3, column=1, sticky="ew", padx=(0, 8), pady=(0, 3)
         )
         for value in (self.preview_rule_ema, self.preview_rule_sell_ema, self.preview_rule_rsi):
-            value.bind("<Configure>", lambda _event, widget=value: fit_label_text(
-                widget, base_font=("Cascadia Mono", 12), minimum_size=7), add="+")
             _HoverHint(value, self._indicator_preview_hint, placement="inside")
 
         def fit_phase2_row(_event=None):
             narrow = phase2.winfo_width() / phase2._get_widget_scaling() < 440
             if getattr(phase2, "_viking_cross_narrow", None) != narrow:
                 phase2._viking_cross_narrow = narrow
+                # Reserve the space occupied by the extra EMA rows; never clip P3/reason.
+                panel._viking_content_min_height = 350 if narrow else 300
+                panel.configure(height=panel._viking_content_min_height)
                 phase2.grid_columnconfigure(1, weight=1 if narrow else 2)
                 phase2.grid_columnconfigure(2, weight=0 if narrow else 1)
-                phase2._viking_title_widget.grid(columnspan=1 if narrow else 2)
+                phase2._viking_title_widget.grid(columnspan=3 if narrow else 2)
                 phase2._viking_title_widget.configure(text="P2 · BUY/E  ⓘ" if narrow else "P2 · BUY / E  ⓘ")
                 for value in (self.preview_rule_ema, self.preview_rule_sell_ema, self.preview_rule_rsi):
                     value.grid(padx=(0, 4) if narrow else (0, 8))
                 if narrow:
-                    self.preview_rule_cross_title.grid_remove()
-                    self.preview_rule_cross_detail.grid_remove()
-                    self.preview_rule_cross.grid(row=0, column=1, rowspan=1, pady=4)
+                    self.preview_rule_cross_title.grid(row=4, column=0, sticky="w", padx=(8, 6), pady=(3, 0))
+                    self.preview_rule_cross.grid(row=4, column=1, columnspan=2, rowspan=1, pady=(3, 0))
+                    self.preview_rule_cross_detail.grid(row=5, column=0, columnspan=3, sticky="ew", padx=8)
                 else:
-                    self.preview_rule_cross_title.grid()
-                    self.preview_rule_cross_detail.grid()
-                    self.preview_rule_cross.grid(row=1, column=2, rowspan=2, pady=0)
+                    self.preview_rule_cross_title.grid(row=0, column=2, sticky="ew", padx=8, pady=4)
+                    self.preview_rule_cross_detail.grid(row=3, column=2, columnspan=1, sticky="ew", padx=8)
+                    self.preview_rule_cross.grid(row=1, column=2, columnspan=1, rowspan=2, pady=0)
             full = getattr(self.preview_rule_cross, "_viking_full_cross_text", "CHƯA ĐỦ DỮ LIỆU")
-            shown = ("CẮT · " + ("—" if full == "CHƯA ĐỦ DỮ LIỆU" else
-                                  "ĐÃ LÊN" if full.startswith("ĐÃ LÊN") else full)) if narrow else full
+            shown = "CHỜ DỮ LIỆU" if narrow and full == "CHƯA ĐỦ DỮ LIỆU" else full
             if self.preview_rule_cross.cget("text") != shown:
                 self.preview_rule_cross.configure(text=shown)
-            for value in (self.preview_rule_ema, self.preview_rule_sell_ema, self.preview_rule_rsi):
-                fit_label_text(value, base_font=("Cascadia Mono", 12), minimum_size=7)
-            fit_label_text(self.preview_rule_cross, base_font=("Segoe UI", 11, "bold"), minimum_size=7)
+            title = getattr(self.preview_rule_cross_title, "_viking_full_cross_title", "CẮT EMA · BẬT")
+            self.preview_rule_cross_title.configure(text=title.replace("CẮT EMA · ", "EMA · ") if narrow else title)
+            for name in ("buy_ema", "sell_ema", "rsi"):
+                key_widget = getattr(self, f"preview_rule_{name}_key")
+                key = getattr(key_widget, "_viking_full_key_text", key_widget.cget("text"))
+                key_widget.configure(text=key.replace("EMA BUY ", "BUY ").replace("EMA E ", "E ") if narrow else key)
+            full_rsi = getattr(self.preview_rule_rsi, "_viking_full_value_text", self.preview_rule_rsi.cget("text"))
+            self.preview_rule_rsi.configure(text=full_rsi.replace(" → ", "→") if narrow else full_rsi)
         self._fit_phase2_row = fit_phase2_row
         phase2.bind("<Configure>", fit_phase2_row, add="+")
 
@@ -1804,7 +1808,8 @@ class DashboardPanelsMixin:
                                          else details.get("buy_window"))
         self._preview_ema_cross_evidence = (caption, evidence)
         widget._viking_full_cross_text = caption.removeprefix("CẮT EMA · ")
-        self.preview_rule_cross_title.configure(text="CẮT EMA · " + ("BẬT" if required else "OFF"))
+        self.preview_rule_cross_title._viking_full_cross_title = "CẮT EMA · " + ("BẬT" if required else "OFF")
+        self.preview_rule_cross_title.configure(text=self.preview_rule_cross_title._viking_full_cross_title)
         widget.configure(text=caption.removeprefix("CẮT EMA · "),
                          text_color={"ok": COL_GREEN, "wait": COL_WARN}.get(role, COL_MUTED))
         from ..services.indicator_comparison import number_comparison
@@ -1818,10 +1823,6 @@ class DashboardPanelsMixin:
         text = number_comparison(left, right) if a is not None and b is not None else "CHƯA CÓ MỐC LƯU" if last else "—"
         self.preview_rule_cross_detail.configure(
             text=f"{label}: {text}", text_color=color)
-        for label, font in ((widget, ("Segoe UI", 11, "bold")),
-                            (self.preview_rule_cross_title, ("Segoe UI", 10, "bold")),
-                            (self.preview_rule_cross_detail, ("Segoe UI", 10))):
-            fit_label_text(label, base_font=font, minimum_size=7)
         fit = getattr(self, "_fit_phase2_row", None)
         if callable(fit) and widget.master.winfo_width() > 1:
             fit()
@@ -2307,7 +2308,7 @@ class DashboardPanelsMixin:
                                         "sell_pct": normal_sell}
         self.preview_normal_value.configure(
             text=(
-                f"ARM: {_display_price(normal_price)} · BÁN: {_display_price(normal_preview_sell)}"
+                f"ARM: {_display_price(normal_price)} · {'MỐC' if normal_policy == 'ALERT' else 'BÁN'}: {_display_price(normal_preview_sell)}"
                 if normal_price > 0 else "CHƯA CÓ GIÁ"
             ),
         )
@@ -2327,6 +2328,8 @@ class DashboardPanelsMixin:
             f"{normal_policy} · ARM {normal_sell:g}% {normal_basis}{' ↻' if normal_repeat and normal_sell < 100 else ''}",
             f"DYN {dynamic_sell:g}% {dynamic_basis}{' ↻' if dynamic_repeat else ''}" if normal_dynamic else "DYN OFF",
         )
+        if normal_policy == "ALERT":
+            self._preview_protect_detail = ("ALERT · CHỈ BÁO · KHÔNG BÁN", "ALERT · CHỈ BÁO")
         em_labels = {
             "normal_protection": "PROTECT",
             "indicator_exit": "E",
@@ -2363,13 +2366,12 @@ class DashboardPanelsMixin:
         for key, widget in em_widgets.items():
             enabled = bool(self._em_states.get(key, False))
             state_label = (
-                indicator_exit_policy
-                if key == "indicator_exit" and enabled else "ON" if enabled else "OFF"
+                (indicator_exit_policy if key == "indicator_exit" else normal_policy) if enabled else "OFF"
             )
             widget.configure(
                 text=f"{em_labels[key]} · {state_label}",
                 text_color=(
-                    COL_WARN if key == "indicator_exit" and enabled and indicator_exit_policy == "ALERT"
+                    COL_WARN if enabled and (indicator_exit_policy if key == "indicator_exit" else normal_policy) == "ALERT"
                     else COL_GREEN if enabled else COL_MUTED
                 ),
             )
@@ -2390,12 +2392,13 @@ class DashboardPanelsMixin:
             effective_trail = decision_details.get("normal_effective_trail_pct")
             self._preview_protect_prices["actual_sell"] = _number(protected)
             state_label = {"WAIT": "CHỜ", "ARM": "ĐÃ ARM", "DYN": "DYNAMIC",
+                           "WAITING_SETTLEMENT": "CHỜ CỔ VỀ",
                            "REARM": "CHỜ LẶP", "DONE": "ĐÃ BÁN",
                            "ARMED": "ĐÃ ARM", "DYNAMIC": "DYNAMIC", "ALERT": "CHẠM MỐC",
                            "TRIGGERED": "CHẠM MỐC"}.get(protect_state, protect_state)
             self.preview_normal_value.configure(
                 text=(
-                    f"{state_label} · BÁN: {_display_price(protected)}"
+                    f"{state_label} · {'MỐC' if normal_policy == 'ALERT' else 'BÁN'}: {_display_price(protected)}"
                     if _number(protected) > 0 else
                     f"{state_label} · PNL {_number(current_profit):+.1f}%"
                 )
@@ -2408,6 +2411,8 @@ class DashboardPanelsMixin:
                     _dynamic_atr_preview_text(decision_details, params),
                     f"{normal_policy} · BÁN {selected_pct:g}% {selected_basis} · LÙI {_number(effective_trail):g}%",
                 )
+                if normal_policy == "ALERT":
+                    self._preview_protect_detail = ("ALERT · CHỈ BÁO · KHÔNG BÁN", "ALERT · CHỈ BÁO")
                 self.preview_normal_detail.configure(
                     text=_dynamic_atr_preview_text(decision_details, params),
                 )
@@ -2485,9 +2490,10 @@ class DashboardPanelsMixin:
         ):
             key_widget = getattr(self, f"preview_rule_{name}_key", None)
             if key_widget is not None:
+                key_widget._viking_full_key_text = key
                 key_widget.configure(text=key)
             widget.configure(text=value if key_widget is not None else f"{key} {value}", text_color=color)
-            fit_label_text(widget, base_font=("Cascadia Mono", 12), minimum_size=7)
+            widget._viking_full_value_text = value if key_widget is not None else f"{key} {value}"
 
         self._render_ema_cross_preview(details)
 
@@ -2996,6 +3002,7 @@ class DashboardPanelsMixin:
                     viewport_height,
                     float(panel._get_widget_scaling()),
                 )
+                target_height = max(target_height, getattr(panel, "_viking_content_min_height", 300))
                 current_height = int(float(panel.cget("height")))
                 if abs(current_height - target_height) > 1:
                     panel.configure(height=target_height)

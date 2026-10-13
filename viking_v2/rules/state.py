@@ -829,8 +829,11 @@ class RuleStateStore:
             if not isinstance(current, dict) or str(current.get("trade_id", "")) != trade_id:
                 return {}
             prefix = "dynamic" if stage == "DYN" else "normal"
+            from .protection import dynamic_floor_previous
+            previous_trigger = (dynamic_floor_previous(current, retention_pct) if stage == "DYN" and retention_pct is not None
+                                else float(current.get(prefix + "_trigger_price", 0.0) or 0.0))
             current[prefix + "_trigger_price"] = max(
-                max(0.0, float(current.get(prefix + "_trigger_price", 0.0) or 0.0)),
+                max(0.0, previous_trigger),
                 trigger,
             )
             current["normal_atr_pct"] = max(0.0, float(atr_pct or 0.0))
@@ -846,6 +849,8 @@ class RuleStateStore:
                 ),
             )
             if retention_pct is not None:
+                if stage == "DYN":
+                    current["dynamic_retention_pct"] = min(100.0, max(0.0, float(retention_pct)))
                 current["normal_retention_pct"] = min(
                     100.0, max(0.0, float(retention_pct or 0.0)),
                 )

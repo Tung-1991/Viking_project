@@ -152,7 +152,7 @@ DEFAULT_RULE_PARAMETERS: dict[str, Any] = {
     "normal_atr_multiplier": 0.8,
     "normal_atr_activation_enabled": True,
     "normal_atr_trail_enabled": True,
-    "normal_retention_pct": 90.0,
+    "normal_retention_pct": 72.0,
     "normal_retention_until_pct": 5.0,
     "normal_retention_enabled": True,
     "normal_retention_until_enabled": True,

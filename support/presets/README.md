@@ -13,6 +13,7 @@ Cập nhật ngày 13/10/2026. Preset: `VA_4_MA_50M.json`.
 | BUY cần EMA cắt lên | ON, chỉ sau khi theo dõi mã |
 | Giữ EMA | ∞ VA; có thể đổi ⏳ X PHIÊN trong RULE (ô X lưu 3) |
 | ARM và DYNAMIC | Mỗi nhóm bán 33% GỐC, REPEAT ON riêng |
+| Lùi lãi đỉnh DYNAMIC | 28% phần lãi → GIỮ LÃI 72%; ATR vẫn lấy mức bảo vệ cao hơn |
 | E AUTO | Bán 100% phần còn lại |
 | Chốt thống kê ngày | 15:00 Việt Nam; giữ PNL/phí đến 09:00 sáng hôm sau |
 
@@ -27,6 +28,11 @@ App cần chạy suốt khung giờ. Ngày nghỉ không ghi; mở muộn hoặc
 Xem: **LỊCH SỬ → TÍN HIỆU → LÀM MỚI → Ngày → Mã → ĐỊNH KỲ**. Bốn mã được nhóm riêng dưới ngày ghi; cửa sổ đang mở cần bấm LÀM MỚI để đọc mẫu mới. XUẤT EXCEL lấy cả nhóm chưa xổ.
 
 Git mang theo preset, không tự ghi đè cấu hình tài khoản trên VM. Nếu cần nạp toàn bộ preset VA: đóng app, dùng BAT **2 → 4 → kiểm tra tài khoản và xác nhận → 3**. Preset còn chứa hạn mức, P1, E và lựa chọn tin Telegram đã chốt; muốn chỉ chỉnh lịch TRACE thì dùng **⚙ GHI TÍN HIỆU**.
+
+Với tài khoản đã lưu GIỮ LÃI 90%, update source vẫn giữ lựa chọn đã lưu. Để chỉ đổi mức này,
+vào **RULE → E/M → DYNAMIC → GIỮ LÃI (%) = 72 → LƯU**. MODE ở đầu khung PROTECT dùng chung
+cho ARM và DYNAMIC; **ALERT** chỉ thông báo và huỷ yêu cầu PROTECT chưa gửi.
+Chi tiết sửa NAV/preview/T+: [ghi chú 13/10/2026](../docs/NAV_PROTECT_REVIEW_2026-10-13.md).
 
 Kiểm chứng offline ngày 12/10/2026 bằng chính preset: REAL/PAPER, BOT ON/OFF, không có BUY vẫn đủ bốn nhóm mã, 16 mốc/mã và 64 mẫu/sổ trong bảng và Excel. 186 kiểm thử liên quan đạt qua `support/tools/run_offline.py`; kết quả tại `.artifacts/va_trace_preset_20261012/verified.xml`.
 

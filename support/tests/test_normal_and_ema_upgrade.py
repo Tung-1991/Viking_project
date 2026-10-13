@@ -90,7 +90,7 @@ def test_protect_defaults_use_the_reviewed_dynamic_configuration() -> None:
     assert params.normal_giveback_pct == pytest.approx(2.5)
     assert params.normal_atr_activation_multiplier == pytest.approx(0.55)
     assert params.normal_atr_multiplier == pytest.approx(0.8)
-    assert params.normal_retention_pct == pytest.approx(90.0)
+    assert params.normal_retention_pct == pytest.approx(72.0)
     assert params.normal_retention_until_pct == pytest.approx(5.0)
     assert params.normal_sell_pct == pytest.approx(33.0)
     assert params.normal_dynamic_enabled is True

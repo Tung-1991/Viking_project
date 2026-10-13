@@ -4,6 +4,14 @@ from __future__ import annotations
 PROTECTION_EVENTS = frozenset({"NORMAL_PROTECTION", "DYNAMIC_PROTECTION"})
 
 
+def dynamic_floor_previous(position, retention_pct):
+    """An operator edit to retention rebases DYNAMIC; unchanged rules keep their floor."""
+    previous = position.get("dynamic_retention_pct", position.get("normal_retention_pct"))
+    if previous is not None and abs(float(previous) - float(retention_pct)) > 1e-9:
+        return 0.0
+    return float(position.get("dynamic_trigger_price", 0.0) or 0.0)
+
+
 def sale_options(params, stage):
     dynamic = stage == "DYN"
     return (params.dynamic_sell_pct if dynamic else params.normal_sell_pct,

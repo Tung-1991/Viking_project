@@ -101,7 +101,7 @@ def test_atc_cross_survives_carry_to_next_buy_window_without_day2_cross(tmp_path
 @pytest.mark.parametrize("basis,expected", [("ORIGINAL",[300,300,300]),("REMAINING",[300,200,100])])
 def test_replay_repeats_on_lower_prices_not_stationary_and_uses_filled_original(tmp_path, stage, basis, expected):
     day = "2026-10-13"
-    prices = [105,104,103] if stage == "ARM" else [103.5,103.4,103.3]
+    prices = [105,104,103] if stage == "ARM" else [102.8,102.7,102.6]
     points = [(f"09:{15+i:02d}",price,price) for i, price in enumerate(
         [prices[0],prices[0],prices[1],prices[1],prices[2],prices[2]])]
     points.append(("14:45",prices[-1],prices[-1]))

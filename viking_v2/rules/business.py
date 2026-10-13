@@ -1288,7 +1288,7 @@ class StaticRule:
         normal_enabled = "NORMAL" in em_modes and not bool(position.get("normal_execution_managed"))
         if normal_enabled:
             policy = self.params.normal_policy
-            from .protection import sale_options, repeat_ready
+            from .protection import sale_options, repeat_ready, dynamic_floor_previous
             # The live daily series marks today's in-progress candle as open.
             # DYNAMIC must only use information known before the current
             # session, so ATR never consumes that partial candle.
@@ -1327,9 +1327,8 @@ class StaticRule:
                 retention_until_pct=self.params.normal_retention_until_pct,
                 retention_enabled=self.params.normal_retention_enabled,
                 retention_until_enabled=self.params.normal_retention_until_enabled,
-                previous_trigger_price=float(
-                    position.get(prefix + "_trigger_price", 0.0) or 0.0
-                ),
+                previous_trigger_price=(dynamic_floor_previous(position, self.params.normal_retention_pct)
+                                        if stage == "DYN" else float(position.get("normal_trigger_price", 0.0) or 0.0)),
             )
             details.update(
                 normal_policy=policy,
@@ -1395,6 +1394,13 @@ class StaticRule:
                     )
 
             if eligible and current > 0 and current <= level.trigger_price + 1e-9:
+                if "trade_quantity" in position and float(position.get("trade_quantity", 0) or 0) < 100:
+                    details.update(normal_state="WAITING_SETTLEMENT",
+                                   protection_waiting_event="NORMAL_PROTECTION" if stage == "ARM" else "DYNAMIC_PROTECTION")
+                    return StrategyDecision(
+                        "WAIT", symbol, "PROTECT_WAITING_SETTLEMENT", signal=signal,
+                        market_state=market_state, details=details, scope="POSITION_MANAGEMENT",
+                    )
                 details["normal_trigger_peak_pct"] = level.mfe_pct
                 details["normal_rearm_after_pct"] = protect_rearm_mfe(
                     level.mfe_pct, self.params.normal_giveback_pct,

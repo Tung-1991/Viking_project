@@ -76,6 +76,7 @@
     "dynamic_sell_pct": 33,
     "dynamic_sell_basis": "ORIGINAL",
     "dynamic_repeat_enabled": true,
+    "normal_retention_pct": 72,
     "protect_config_version": 2
   }
 }

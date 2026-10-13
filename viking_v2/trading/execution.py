@@ -231,6 +231,7 @@ class ExecutionService:
                 continue
             if (
                 intent.filled_quantity > 0
+                or intent.broker_order_id or intent.handed_off_at
                 or intent.status.upper() not in {"PENDING", "WAITING_TOKEN", "WAITING_SETTLEMENT"}
             ):
                 broker_managed.append(intent)
@@ -591,10 +592,13 @@ class ExecutionService:
             raw = raw.to_dict()
         if not isinstance(raw, dict):
             return None
-        if str(raw.get("action", "WAIT") or "WAIT").upper() != "SELL":
-            return False
-        current = {str(raw.get("event", "") or "").upper()}
         details = raw.get("details") if isinstance(raw.get("details"), dict) else {}
+        if str(raw.get("action", "WAIT") or "WAIT").upper() != "SELL":
+            # The price condition is still true, but PROTECT cannot act before settlement.
+            waiting_event = str(details.get("protection_waiting_event", "")).upper()
+            requested = set(str(intent.reason or "").upper().split("+"))
+            return bool(waiting_event and waiting_event in requested)
+        current = {str(raw.get("event", "") or "").upper()}
         current.update(str(value or "").upper() for value in details.get("triggered_events", []) or [])
         requested = {value for value in str(intent.reason or "").upper().split("+") if value}
         return bool(requested & current) if requested else True
@@ -611,6 +615,8 @@ class ExecutionService:
             and item.status in {"PENDING", "WAITING_TOKEN", "WAITING_SETTLEMENT"}
             and (item.settlement_waited or item.status == "WAITING_TOKEN")
             and item.sell_wait_policy == "RECHECK"
+            and (not (item.broker_order_id or item.handed_off_at)
+                 or (item.settlement_waited and item.filled_quantity > 0 and item.working_quantity == 0))
             and self.queue._phase_is_due(
                 item, phase_provider(item.symbol) if phase_provider else phase,
             )
@@ -625,14 +631,19 @@ class ExecutionService:
         except Exception:
             return
         for intent in candidates:
-            if round_lot_down(min(intent.remaining_quantity, available_to_sell(positions, intent.symbol))) <= 0:
-                continue
             raw_decision = self.sell_decision_provider(intent.symbol, intent.execution_mode)
             matches = self._decision_matches_sell(
                 intent,
                 raw_decision,
             )
             if matches is True:
+                matching_positions = [row for row in positions if not intent.loan_package_id
+                                      or str(row.get("loanPackageId", "")) == intent.loan_package_id]
+                if round_lot_down(min(intent.remaining_quantity, available_to_sell(matching_positions, intent.symbol))) <= 0:
+                    continue
+                current_decision = raw_decision.to_dict() if hasattr(raw_decision, "to_dict") else raw_decision
+                if str(current_decision.get("action", "WAIT")).upper() != "SELL":
+                    continue  # Settlement snapshot may arrive before the daemon's updated SELL.
                 self._blocked_rechecks.discard(intent.id)
                 if intent.filled_quantity <= 0:
                     if hasattr(raw_decision, "to_dict"):
@@ -651,7 +662,7 @@ class ExecutionService:
                         position_quantity(
                             row if isinstance(row, dict) else getattr(row, "raw", {}) or {}
                         )
-                        for row in positions
+                        for row in matching_positions
                         if str(
                             (row if isinstance(row, dict) else getattr(row, "raw", {}) or {}).get(
                                 "symbol", getattr(row, "symbol", ""),
@@ -699,7 +710,7 @@ class ExecutionService:
                 continue
             cancelled = self.queue.cancel_waiting_sell(
                 intent.id,
-                "Điều kiện SELL không còn đúng khi cổ phiếu về",
+                "RECHECK: điều kiện SELL không còn đúng; huỷ yêu cầu chưa gửi",
             )
             if not cancelled:
                 continue

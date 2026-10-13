@@ -39,15 +39,29 @@ RUNNING_HEADERS = {
     "X": "✖",
 }
 RUNNING_WIDTHS = {
-    "Ticket": 145,
-    "Time": 165,
-    "Order": 430,
-    "Targets": 310,
-    "CostInfo": 310,
-    "RR": 280,
-    "PnL_MAE_MFE": 390,
-    "Status": 920,
-    "X": 56,
+    "Ticket": 170,
+    "Time": 230,
+    "Order": 560,
+    "Targets": 390,
+    "CostInfo": 390,
+    "RR": 310,
+    "PnL_MAE_MFE": 660,
+    "Status": 1400,
+    "X": 64,
+}
+RUNNING_FONT = ("Segoe UI", 16)
+RUNNING_HEADING_FONT = ("Segoe UI", 15, "bold")
+RUNNING_COLUMN_PADDING = 48
+# Measure representative cells with the same font that operators see. In
+# particular, PNL/MAE/MFE must have room for all three amounts and percentages.
+RUNNING_SAMPLES = {
+    "Ticket": "#b7d6775a40d9",
+    "Time": "13/10/2026 14:09:45",
+    "Order": "REAL · BOT · BUY HDB @ 23,150 · KL 600",
+    "Targets": "SL▼ 21,857 (-3.5%) · TP▲ 24,770 (+7.0%)",
+    "CostInfo": "PHÍ MUA ~16.3K · DỰ KIẾN BÁN 16.7K",
+    "RR": "R 3.50% · E 7.00% · 1:2.00",
+    "PnL_MAE_MFE": "▲300.0K (+2.21%) · ↘-120.0K (-0.88%) · ↗360.0K (+2.65%)",
 }
 RUNNING_ANCHORS = {
     "Ticket": "center",
@@ -66,19 +80,15 @@ VISIBLE_LOG_LINE_LIMIT = 2000
 class DashboardTablesMixin:
     @staticmethod
     def _running_column_width(tree: ttk.Treeview, column: str) -> int:
-        """Return a width that fits both content policy and the rendered header."""
+        """Fit the header and representative content without reducing the font."""
         configured = RUNNING_WIDTHS.get(column, 180)
         try:
-            family, size, *styles = ("Segoe UI", 14, "bold")
-            options: dict[str, Any] = {
-                "root": tree.winfo_toplevel(), "family": family, "size": size,
-            }
-            if "bold" in styles:
-                options["weight"] = "bold"
-            if "italic" in styles:
-                options["slant"] = "italic"
-            measured = tkfont.Font(**options).measure(RUNNING_HEADERS.get(column, column))
-            return max(configured, measured + 32)
+            root = tree.winfo_toplevel()
+            heading = tkfont.Font(root=root, font=RUNNING_HEADING_FONT)
+            body = tkfont.Font(root=root, font=RUNNING_FONT)
+            measured = max(heading.measure(RUNNING_HEADERS.get(column, column)),
+                           body.measure(RUNNING_SAMPLES.get(column, "")))
+            return max(configured, measured + RUNNING_COLUMN_PADDING)
         except (AttributeError, RuntimeError, TypeError, ValueError, tk.TclError):
             return configured
 

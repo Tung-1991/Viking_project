@@ -405,7 +405,7 @@ class RuleSettingsPopup:
             text_color=self.TEXT, anchor="w",
         ).grid(row=0, column=1, sticky="w", padx=(2, 2))
         entry = ctk.CTkEntry(
-            row, width=58, height=32, justify="right", font=("Segoe UI", 12),
+            row, width=58, height=30, justify="right", font=("Segoe UI", 12),
             fg_color="#181B20", border_color="#444B55", text_color=self.TEXT,
         )
         entry.insert(0, str(value))
@@ -851,8 +851,27 @@ class RuleSettingsPopup:
             "Công tắc E/M của từng vị thế quyết định có dùng PROTECT/E hay không.",
             2, 0, span=2,
         )
+        policy_row = ctk.CTkFrame(self.protect_card, fg_color="transparent")
+        policy_row.pack(fill="x", padx=16, pady=(0, 2))
+        self.protect_policy_row = policy_row
+        ctk.CTkLabel(policy_row, text="MODE · ARM + DYNAMIC", font=FONT_KEY,
+                    text_color=self.TITLE).pack(side="left")
+        self.normal_policy = tk.StringVar(value=self.params.normal_policy)
+        self.normal_policy_menu = ctk.CTkOptionMenu(
+            policy_row, values=["AUTO", "ALERT"], variable=self.normal_policy,
+            width=95, height=34, font=FONT_VALUE, fg_color=self.BLUE,
+            button_color="#245C92", button_hover_color="#1D4D7B",
+            command=self._select_normal_policy,
+        )
+        self.normal_policy_menu.pack(side="right")
+        self._hint_icon(policy_row,
+            "Dùng chung cho PROTECT sau ARM và Dynamic trước ARM.\n"
+            "AUTO: tạo SELL khi chạm mức và có cổ bán được. ALERT: tự theo dõi, chỉ cảnh báo, không bán.\n"
+            "Chưa có cổ bán được: chờ cổ về, không phát PROTECT HIT.\n"
+            "Telegram bật riêng tại KẾT NỐI → TELEGRAM. Chuyển ALERT huỷ yêu cầu PROTECT chưa gửi."
+        ).pack(side="right", padx=(0, 6))
         groups = ctk.CTkFrame(self.protect_card, fg_color="transparent")
-        groups.pack(fill="x", padx=4, pady=(0, 6))
+        groups.pack(fill="x", padx=4, pady=(0, 2))
         groups.grid_columnconfigure((0, 1, 2), weight=1, uniform="protect-groups")
         self.exit_left_column = groups
         normal = self._card(
@@ -866,25 +885,6 @@ class RuleSettingsPopup:
             "MFE ≥ ARM mới bật bảo vệ sau ARM. Mua 100, ARM 7% → từng lên ít nhất 107; không bán ngay tại 107.")
         self.normal_giveback = self._field(normal, "Lùi đỉnh (%)", self.params.normal_giveback_pct,
             "TRAIL: giảm X% từ giá đỉnh → chạm PROTECT.\nĐỉnh 110, lùi 2,5% → 107,25; không trừ từ giá mua.")
-        policy_row = ctk.CTkFrame(normal, fg_color="transparent")
-        policy_row.pack(fill="x", padx=12, pady=4)
-        ctk.CTkLabel(
-            policy_row, text="MODE", font=FONT_KEY, text_color=self.TITLE,
-        ).pack(side="left")
-        self.normal_policy = tk.StringVar(value=self.params.normal_policy)
-        ctk.CTkOptionMenu(
-            policy_row, values=["AUTO", "ALERT"],
-            variable=self.normal_policy, width=95, height=34,
-            font=FONT_VALUE, fg_color=self.BLUE,
-            button_color="#245C92", button_hover_color="#1D4D7B",
-            command=self._select_normal_policy,
-        ).pack(side="right")
-        self._hint_icon(
-            policy_row,
-            "Dùng chung cho PROTECT sau ARM và Dynamic trước ARM.\n"
-            "AUTO: chạm mức thì tạo SELL theo KL bán bên dưới. ALERT: chỉ ghi nhận, không bán.\n"
-            "Telegram bật riêng tại KẾT NỐI → TELEGRAM; không bảo đảm khớp đúng giá chạm.",
-        ).pack(side="right", padx=(0, 6))
         self.normal_sell = self._field(
             normal, "KL bán (%)", self.params.normal_sell_pct,
             "GỐC: % KL đã mua khớp. CÒN LẠI: % KL chưa bán. Làm tròn lô 100, giới hạn theo cổ bán được. E/SL/TP bán 100%.",
@@ -959,7 +959,8 @@ class RuleSettingsPopup:
             retention_box, "GIỮ LÃI (%)", self.params.normal_retention_pct,
             self.params.normal_retention_enabled,
             "ON: giữ X% phần lãi tại đỉnh, không phải X% giá cổ phiếu.\n"
-            "Mua 100, đỉnh 104, giữ 90% → mức bảo vệ 103,6. Nếu trail ATR cũng bật, dùng mức cao hơn.",
+            "Mua 100, đỉnh 104, giữ 72% → mức bảo vệ 102,88 (lãi được giảm 28% từ đỉnh).\n"
+            "Giữ 90% chỉ cho lãi giảm 10%. Nếu trail ATR cũng bật, dùng mức cao hơn.",
         )
         self.normal_retention_until_pct, self.normal_retention_until_enabled = self._dynamic_field(
             retention_box, "TỚI MFE (%)", self.params.normal_retention_until_pct,
@@ -988,6 +989,8 @@ class RuleSettingsPopup:
             0, 2,
         )
         self.exit_card = indicator
+        for card in (normal, dynamic_box, indicator):
+            card.grid_configure(padx=4, pady=4)
         indicator_policy_row = ctk.CTkFrame(indicator, fg_color="transparent")
         indicator_policy_row.pack(fill="x", padx=12, pady=4)
         ctk.CTkLabel(
@@ -1171,7 +1174,7 @@ class RuleSettingsPopup:
             settlement,
             text="MẶC ĐỊNH · KIỂM TRA LẠI\n"
                  "Cổ về và điều kiện SELL còn đúng → bán\n"
-                 "Điều kiện đã mất → bỏ phần đang chờ",
+                 "Điều kiện đã mất → tự huỷ phần đang chờ, kể cả trước khi cổ về",
             font=("Segoe UI", 12), text_color=self.TEXT,
             justify="left", anchor="w",
         ).pack(fill="x", padx=14, pady=(2, 12))
@@ -1215,7 +1218,7 @@ class RuleSettingsPopup:
         return {
             "SL": f"SL {get(self.initial_sl)}% / vào lại {get(self.reentry_sl)}% · bán 100%",
             "TP": f"TP +{get(self.take_profit)}% · bán 100%",
-            "NORMAL": (f"PROTECT {self.normal_policy.get()} · ARM {get(self.normal_arm)}% · lùi {get(self.normal_giveback)}%"
+            "NORMAL": (f"PROTECT {self.normal_policy.get()}{' · chỉ báo, không bán' if self.normal_policy.get() == 'ALERT' else ''} · ARM {get(self.normal_arm)}% · lùi {get(self.normal_giveback)}%"
                        f"\nARM {get(self.normal_sell)}% {self.normal_sell_basis.get()} · LẶP {'ON' if self._protect_repeat_enabled() else 'OFF'}"
                        f"\nDYN {'ON' if self.normal_dynamic.get() else 'OFF'} {get(self.dynamic_sell)}% {self.dynamic_sell_basis.get()} · LẶP {'ON' if self._protect_repeat_enabled(dynamic=True) else 'OFF'}{dynamic}"),
             "IND_EXIT": (f"E {self.indicator_exit_policy.get()} · {'bán 100%' if self.indicator_exit_policy.get() == 'AUTO' else 'chỉ báo'}\n"

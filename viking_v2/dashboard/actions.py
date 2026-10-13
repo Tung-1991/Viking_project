@@ -4293,7 +4293,9 @@ class DashboardActionsMixin:
     def _paint_account(self) -> None:
         mode = self.mode.get()
         balance, positions, _orders = displayed_account_snapshot(self, mode)
-        money = account_money(balance, positions)
+        bridge = getattr(self, "bridge", None)
+        quotes = (bridge.read_status().get("ticks") or {}) if bridge else {}
+        money = account_money(balance, positions, quotes)
         fault = getattr(self, "_account_snapshot_faults", {}).get(mode) or {}
         old_money = bool(fault and fault.get("stage") != "ORDERS_SNAPSHOT")
         self.lbl_equity.configure(
@@ -4338,7 +4340,9 @@ class DashboardActionsMixin:
     def _account_money_hint(self) -> str:
         mode = self.mode.get()
         balance, positions, _orders = displayed_account_snapshot(self, mode)
-        text = account_money_hint(account_money(balance, positions))
+        bridge = getattr(self, "bridge", None)
+        quotes = (bridge.read_status().get("ticks") or {}) if bridge else {}
+        text = account_money_hint(account_money(balance, positions, quotes))
         fault = getattr(self, "_account_snapshot_faults", {}).get(mode) or {}
         if fault.get("stage") == "ORDERS_SNAPSHOT":
             text += "\nTiền/cổ đã đọc được; danh sách lệnh chưa đọc được, chưa hoàn tất đối soát."

@@ -755,7 +755,7 @@ def run(account_id: str | None = None) -> int:
                                 protect_state = str(
                                     decision.details.get("normal_state", "") or ""
                                 ).upper()
-                                if trade_id and protect_state in {"DYN", "ARM", "ALERT", "REARM"}:
+                                if trade_id and protect_state in {"DYN", "ARM", "ALERT", "REARM", "WAITING_SETTLEMENT"}:
                                     protect_state_row = rule_state.update_protect_metrics(
                                         symbol,
                                         trade_id,

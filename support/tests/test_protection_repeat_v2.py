@@ -53,6 +53,7 @@ def book(tmp_path, monkeypatch, *, basis="ORIGINAL", dynamic=False, repeat=True)
     execution = ExecutionService(broker, broker, queue, JSONLineJournal(tmp_path / "events.jsonl"),
                                  trade_state=trades, rule_state=rules, quote_provider=lambda _: dict(quote))
     params = StaticRuleParameters(normal_sell_pct=33, normal_sell_basis=basis,
+                                  normal_retention_pct=90,
                                   normal_repeat_enabled=repeat, dynamic_sell_pct=33,
                                   dynamic_sell_basis=basis, dynamic_repeat_enabled=repeat,
                                   normal_atr_activation_enabled=False, normal_atr_trail_enabled=False,
