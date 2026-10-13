@@ -176,11 +176,11 @@ def memory_count_scope(row, *, holidays=None, working_dates=None):
 
 
 def memory_hint(row, *, holidays=None, working_dates=None):
-    history = ("⏳: quét X phiên trước và phiên hiện tại khi bắt đầu; giữ X phiên từ lần cắt (tính cả phiên cắt).\n"
+    history = ("⏳: quét X phiên trước khi bắt đầu theo dõi mã; giữ X phiên từ lần cắt (tính cả phiên cắt).\n"
                if row.get("mode") == "SESSIONS" else
-               "∞ VA + quét: lấy lần cắt trong X phiên trước khi bật, rồi nhớ tới khi dùng.\n"
+               "∞ VA + quét: lấy lần cắt trong X phiên trước khi bắt đầu theo dõi mã, rồi nhớ tới khi dùng.\n"
                if row.get("va_lookback_enabled") else "∞: chỉ ghi nhận từ khi thêm mã, nhớ tới khi dùng.\n")
-    start = row.get("lookback_started_at") if row.get("mode") == "SESSIONS" or row.get("va_lookback_enabled") else None
+    scan_start = row.get("lookback_started_at") if row.get("mode") == "SESSIONS" or row.get("va_lookback_enabled") else None
     scope = memory_count_scope(row, holidays=holidays, working_dates=working_dates)
     fields = memory_fields(row)
     up = int(fields["ema_memory_up_count"])
@@ -193,7 +193,8 @@ def memory_hint(row, *, holidays=None, working_dates=None):
             "EMA nhanh < EMA chậm: chỉ chờ cắt LÊN, không cần xuống thêm lần nữa. "
             "EMA bằng nhau là trung tính, chưa ghi nhận cắt lên. "
             "Nếu bắt đầu theo dõi khi EMA nhanh đã ở trên mà chưa có lần cắt hợp lệ: chờ xuống rồi lên.\n"
-            f"Theo dõi: {start or row.get('started_at', '—')}. Cắt lên gần nhất: {row.get('cross_at', '—')}.\n"
+            f"Bắt đầu theo dõi: {row.get('started_at', '—')}. Quét trước từ: {scan_start or 'OFF'}. "
+            f"Cắt lên gần nhất: {row.get('cross_at', '—')}.\n"
             "Sau khi ghi nhận cắt lên, VA giữ lần cắt tới khi dùng; RSI có thể đạt sau, không cần cắt lên lần nữa. "
             "BUY vẫn kiểm tra EMA/RSI hiện tại và các khóa vào lệnh.")
 

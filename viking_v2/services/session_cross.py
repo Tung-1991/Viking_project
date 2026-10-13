@@ -129,7 +129,9 @@ class SessionCrossService:
             row = {"tracking_version": 2, "watch_id": f"{args['pair']}:{now.timestamp()}",
                    "started_at": now.isoformat(), "started_at_epoch": now.timestamp(),
                    "initialized": False, "up_count": 0, "down_count": 0}
-        key = f"{args['pair']}:{params.buy_ema_cross_sessions}:{observation_mode}:{params.buy_ema_cross_mode}"
+        # Version the cache key so an old scan anchored to the toggle time is
+        # rebuilt from the admission time after this correction.
+        key = f"ADMISSION:{args['pair']}:{params.buy_ema_cross_sessions}:{observation_mode}:{params.buy_ema_cross_mode}"
         activated = (params.buy_ema_cross_mode != "VA" or row.get("va_lookback_active") is True)
         if row.get("lookback_key") == key and row.get("lookback_ready") and activated:
             return row
@@ -144,10 +146,15 @@ class SessionCrossService:
                        lookback_ready=False, lookback_cross={},
                        lookback_up_count=0, lookback_down_count=0)
         requested = datetime.fromisoformat(row["lookback_requested_at"])
-        start = lookback_start(requested, params.buy_ema_cross_sessions,
+        admitted = (datetime.fromisoformat(row["started_at"])
+                    if row.get("started_at") else requested)
+        if admitted.tzinfo is None:
+            admitted = admitted.replace(tzinfo=VN_TZ)
+        start = lookback_start(admitted, params.buy_ema_cross_sessions,
                                args.get("working_dates"), args.get("holidays"))
         if start is None:
             return {**row, "lookback_ready": False}
+        row["lookback_anchor_at"] = admitted.isoformat()
         # Live observations already cover time after admission. Seed only the
         # preceding segment, preserving live counts, timestamps and used IDs.
         baseline = row.get("baseline") or {}

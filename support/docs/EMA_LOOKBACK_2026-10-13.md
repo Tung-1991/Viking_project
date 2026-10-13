@@ -1,10 +1,11 @@
 # Quét EMA X phiên và gom UI — 13/10/2026
 
 - RULE: gom công tắc giao cắt, hai mode và ô X trong một nhóm; RSI ở ngoài nhóm.
-  Mode ∞ VA ẩn ô X, chuyển lại X PHIÊN giữ số đã nhập. Hint trong RULE, preview,
+  Mode ∞ VA làm mờ ô X khi không bật QUÉT TRƯỚC; chuyển lại X PHIÊN giữ số đã nhập. Hint trong RULE, preview,
   lịch sử và backtest giải thích quét các phiên trước.
-- ∞ VA giữ luật chỉ ghi nhận từ khi thêm mã. X PHIÊN khi bắt đầu quét thêm X phiên
-  giao dịch trước và phần phiên hiện tại, loại cuối tuần/ngày nghỉ theo lịch.
+- ∞ VA giữ luật chỉ ghi nhận từ khi thêm mã. Khi bật VA QUÉT TRƯỚC hoặc X PHIÊN,
+  quét thêm X phiên giao dịch trước mốc bắt đầu theo dõi mã, kể cả khi bật tùy chọn
+  sau đó; loại cuối tuần/ngày nghỉ theo lịch. Không lấy X phiên trước ngày bật công tắc.
 - X vừa là số phiên quét lại, vừa là hạn giữ tính từ phiên cắt (phiên cắt là phiên 1).
   Ví dụ thứ Hai 05/10 chọn X=3: quét 30/09, 01/10, 02/10 và phần 05/10 đã diễn ra.
   Lần cắt 02/10 còn hạn đến đóng phiên 06/10; lần cắt 30/09 đã hết hạn từ 02/10.

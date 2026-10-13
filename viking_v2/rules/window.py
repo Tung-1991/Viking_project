@@ -565,8 +565,8 @@ class RuleSettingsPopup:
         self.buy_ema_memory_group.pack(fill="x", padx=8, pady=(6, 8))
         memory_hint = (
             "∞ VA: chỉ nhớ từ khi thêm mã, giữ tới khi dùng.\n"
-            "VA + QUÉT X PHIÊN: lấy lần cắt cũ trong X phiên trước lúc bật, rồi VA giữ tới khi dùng.\n"
-            "⏳ X PHIÊN: quét thêm X phiên trước và phần phiên hiện tại; giữ X phiên từ lần cắt, tính cả phiên cắt, bỏ ngày nghỉ.\n"
+            "VA + QUÉT X PHIÊN: lấy lần cắt cũ trong X phiên trước khi bắt đầu theo dõi mã, rồi VA giữ tới khi dùng.\n"
+            "⏳ X PHIÊN: quét thêm X phiên trước khi bắt đầu theo dõi mã; giữ X phiên từ lần cắt, tính cả phiên cắt, bỏ ngày nghỉ.\n"
             "Ô SỐ PHIÊN luôn hiện; VA không bật QUÉT TRƯỚC thì ô này làm mờ vì không sử dụng.\n"
             "Lần cắt hết hạn/đã dùng không mua lại. BUY vẫn cần EMA nhanh > chậm, RSI và các điều kiện khác đạt."
         )
@@ -591,7 +591,7 @@ class RuleSettingsPopup:
             memory_row, text="VA QUÉT TRƯỚC", variable=self.buy_ema_va_lookback_enabled,
             font=("Segoe UI", 11), width=105, switch_width=34, switch_height=18)
         self.buy_ema_va_lookback_switch.grid(row=1, column=0, columnspan=2, sticky="w", pady=(5, 0))
-        ctk.CTkLabel(memory_row, text="SỐ PHIÊN QUÉT / GIỮ", font=("Segoe UI", 11),
+        ctk.CTkLabel(memory_row, text="X PHIÊN TRƯỚC / GIỮ", font=("Segoe UI", 11),
                      text_color=self.TEXT, anchor="w").grid(row=2, column=0, sticky="w", pady=(6, 0))
         self.buy_ema_cross_sessions = ctk.CTkEntry(
             memory_row, width=55, height=32, justify="right", font=FONT_VALUE,

@@ -100,17 +100,43 @@ def test_va_opt_in_scans_prior_three_sessions_then_retains_cross_across_restart(
     assert later['state'] == 'SESSION_USED' and later['expires_at'] == 0
 
 
-def test_va_lookback_reactivation_scans_from_new_activation_not_old_x_window(tmp_path):
+def test_va_lookback_reactivation_scans_before_original_watch_start(tmp_path):
     _, _, _, params, _, sample = setup(tmp_path)
-    first = sample()
-    assert first['cross_source'] == 'HISTORY'
+    sample()
     params.buy_ema_cross_mode = 'VA'
     params.buy_ema_va_lookback_enabled = False
     assert not sample().get('cross_id')
     params.buy_ema_va_lookback_enabled = True
     later = sample(NOW + timedelta(days=4))
-    assert later['lookback_started_at'] == '2026-10-06T00:00:00+07:00'
-    assert not later.get('cross_id') and not later['valid']
+    assert later['lookback_requested_at'] == (NOW + timedelta(days=4)).isoformat()
+    assert later['lookback_anchor_at'] == NOW.isoformat()
+    assert later['lookback_started_at'] == '2026-09-30T00:00:00+07:00'
+
+
+def test_va_lookback_enabled_days_later_uses_original_watch_start(tmp_path):
+    _, _, _, params, _, sample = setup(tmp_path, mode='VA')
+    before = sample()
+    assert before['started_at'] == NOW.isoformat()
+    params.buy_ema_va_lookback_enabled = True
+    later = sample(NOW + timedelta(days=4))
+    assert later['lookback_requested_at'] == (NOW + timedelta(days=4)).isoformat()
+    assert later['lookback_anchor_at'] == NOW.isoformat()
+    assert later['lookback_started_at'] == '2026-09-30T00:00:00+07:00'
+
+
+def test_old_toggle_anchored_scan_is_rebuilt_without_resetting_live_counts(tmp_path):
+    _, state, _, params, _, sample = setup(tmp_path, mode='VA')
+    before = sample()
+    before.update(up_count=19, down_count=18,
+                  lookback_key='3/6:3:REALTIME:VA', lookback_ready=True,
+                  lookback_started_at='2026-10-06T00:00:00+07:00',
+                  va_lookback_active=True)
+    state.save_session_cross('TEST', 'REAL', before)
+    params.buy_ema_va_lookback_enabled = True
+    later = sample(NOW + timedelta(days=4))
+    assert later['lookback_key'].startswith('ADMISSION:')
+    assert later['lookback_started_at'] == '2026-09-30T00:00:00+07:00'
+    assert later['up_count'] == 19 and later['down_count'] == 18
 
 
 def test_first_fresh_quote_up_against_historical_minute_cannot_leak_into_va(tmp_path):

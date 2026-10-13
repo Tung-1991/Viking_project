@@ -55,6 +55,8 @@ def test_memory_count_scope_uses_saved_watch_and_history_starts():
     assert memory_count_scope(row, holidays=["2026-10-12"])["sessions"] == 2
     assert "37 lần cắt = 19 lên + 18 xuống" in memory_hint(row)
     assert "2026-10-09 → 2026-10-13 · 3 phiên" in memory_hint(row)
+    row["started_at"] = "2026-10-08T09:00:00+07:00"
+    assert memory_count_scope(row)["sessions"] == 4  # Thu, Fri, Mon, Tue.
     row.update(va_lookback_enabled=True, lookback_ready=True,
                lookback_started_at="2026-10-07T00:00:00+07:00")
     assert memory_count_scope(row)["sessions"] == 5

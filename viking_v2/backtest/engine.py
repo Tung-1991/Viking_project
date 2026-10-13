@@ -52,13 +52,17 @@ def _historical_ema_memory(row, history, params, at, exchange, holidays, *, repl
         row = {"tracking_version": 2, "watch_id": f"{symbol}:{at.timestamp()}",
                "started_at": at.isoformat(), "started_at_epoch": at.timestamp(),
                "initialized": False, "up_count": 0, "down_count": 0}
-    key = f"{params.buy_ema_fast}/{params.buy_ema_slow}:{params.buy_ema_cross_sessions}:{'REALTIME' if replay else 'CLOSED'}"
+    key = f"ADMISSION:{params.buy_ema_fast}/{params.buy_ema_slow}:{params.buy_ema_cross_sessions}:{'REALTIME' if replay else 'CLOSED'}"
     if row.get("lookback_key") == key:
         return row
     row.update(lookback_key=key, lookback_ready=False)
-    start = lookback_start(at, params.buy_ema_cross_sessions, holidays=holidays)
+    admitted = datetime.fromisoformat(row['started_at']) if row.get('started_at') else at
+    if admitted.tzinfo is None:
+        admitted = admitted.replace(tzinfo=VN_TZ)
+    start = lookback_start(admitted, params.buy_ema_cross_sessions, holidays=holidays)
     if start is None:
         return row
+    row['lookback_anchor_at'] = admitted.isoformat()
     first = row.get('baseline') or {}
     first_at = datetime.fromisoformat(first['at']) if first.get('at') else None
     cutoff = min(at.timestamp(),first_at.timestamp() if first_at else float(row['started_at_epoch']))

@@ -1818,9 +1818,9 @@ class DashboardPanelsMixin:
                 and params.get("buy_signal_session_cross_enabled", True)
                 and params.get("buy_signal_use_ema", True) and params.get("buy_signal_require_ema_cross", True)):
             buy_ema_rule = (
-                "BUY cần lần cắt lên; X phiên quét thêm X phiên trước và phần phiên hiện tại, giữ đúng tuổi lần cắt."
+                "BUY cần lần cắt lên; quét X phiên trước mốc theo dõi mã, giữ đúng tuổi lần cắt."
                 if params.get("buy_ema_cross_mode", "VA") == "SESSIONS"
-                else (f"BUY dùng lần cắt trong {params.get('buy_ema_cross_sessions', 3)} phiên trước khi bật; ∞ VA giữ tới khi dùng."
+                else (f"BUY quét {params.get('buy_ema_cross_sessions', 3)} phiên trước mốc bắt đầu theo dõi mã; ∞ VA giữ tới khi dùng."
                       if params.get("buy_ema_va_lookback_enabled") else
                       "BUY cần lần cắt lên sau khi thêm mã; ∞ VA giữ tới khi dùng, kể cả restart.")
             ) + " Mỗi lần cắt chỉ dùng một lần."
