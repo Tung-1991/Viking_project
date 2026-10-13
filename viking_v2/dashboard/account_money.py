@@ -48,6 +48,26 @@ def _valuation_quote(quote: Any, symbol: str, now: float) -> float | None:
     return price if price > 0 else None
 
 
+def close_quote_from_ohlc(symbol: str, data: Any, *, now: float | None = None) -> dict[str, Any] | None:
+    """Accept only today's DNSE daily close for display valuation."""
+    if not isinstance(data, dict):
+        return None
+    times, closes = data.get("t"), data.get("c")
+    if not isinstance(times, list) or not isinstance(closes, list) or not times or len(times) != len(closes):
+        return None
+    checked = time.time() if now is None else now
+    observed = timestamp_value(times[-1])
+    if not isfinite(observed) or observed <= 0 or observed > checked + 2:
+        return None
+    if datetime.fromtimestamp(observed, VN_TZ).date() != datetime.fromtimestamp(checked, VN_TZ).date():
+        return None
+    price = board_price(closes[-1])
+    if price <= 0:
+        return None
+    return {"symbol": symbol.upper(), "price": price, "timestamp": observed,
+            "frozen": True, "source": "CLOSE"}
+
+
 def account_money(balance: dict[str, Any], positions: list[dict[str, Any]],
                   quotes: dict[str, Any] | None = None, *, now: float | None = None) -> dict[str, Any]:
     stock = balance.get("stock") if isinstance(balance.get("stock"), dict) else balance
@@ -64,6 +84,7 @@ def account_money(balance: dict[str, Any], positions: list[dict[str, Any]],
         return result
     market_value = 0.0
     quote_symbols: set[str] = set()
+    valuation_rows: list[dict[str, Any]] = []
     checked = time.time() if now is None else now
     for row in positions:
         observed_quantity = _value(row, "openQuantity", "quantity", "volume")
@@ -76,15 +97,20 @@ def account_money(balance: dict[str, Any], positions: list[dict[str, Any]],
         price = _valuation_quote((quotes or {}).get(symbol), symbol, checked)
         if price is not None:
             quote_symbols.add(symbol)
+            source = str((quotes or {}).get(symbol, {}).get("source", "QUOTE")).upper()
         else:
             raw_price = _value(row, "marketPrice", "currentPrice")
             price = account_price(row, raw_price) if raw_price is not None else None
+            source = "POSITION"
         if price is None or price <= 0:
             # Entry price is not a current market valuation.
             return result
         market_value += price * quantity * 1000
+        valuation_rows.append({"symbol": symbol, "quantity": quantity,
+                               "price": price * 1000, "source": source})
     return {**result, "value": total + market_value - debt, "kind": "ESTIMATED_NAV",
-            "stock_value": market_value, "quote_symbols": sorted(quote_symbols)}
+            "stock_value": market_value, "quote_symbols": sorted(quote_symbols),
+            "valuation_rows": valuation_rows}
 
 
 def account_money_hint(summary: dict[str, Any]) -> str:
@@ -103,7 +129,11 @@ def account_money_hint(summary: dict[str, Any]) -> str:
                       "NAV ước tính = tổng tiền + giá trị cổ − tổng nợ.",
                       "API chưa trả NAV trực tiếp; số tính từ snapshot có thể khác NAV trên DNSE."))
         if summary.get("quote_symbols"):
-            lines.append("Giá thị trường từ bảng giá: " + ", ".join(summary["quote_symbols"]) + ".")
+            lines.append("Giá thị trường từ DNSE: " + ", ".join(summary["quote_symbols"]) + ".")
+        for row in summary.get("valuation_rows", []):
+            origin = "giá đóng cửa DNSE" if row["source"] == "CLOSE" else (
+                "giá vị thế DNSE" if row["source"] == "POSITION" else "giá bảng")
+            lines.append(f"{row['symbol']}: {row['price']:,.0f}đ × {row['quantity']} CP ({origin}).")
     else:
         lines.append("Chưa có đủ dữ liệu tính NAV; số lớn hiện tiền khả dụng.")
     lines.append("Không tự coi chênh lệch NAV là phí giao dịch.")

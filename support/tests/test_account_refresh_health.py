@@ -54,6 +54,8 @@ def closed_order_dashboard(dashboard, broker, tmp_path):
     view.snapshots = {"REAL": ({}, [], [])}  # Cold restart, as in the reported screenshot.
     view.orders_error = (400, END_OF_DAY)
     view.balance_error = None
+    view.balance_nav = 49951941
+    view.balance_available = 36391941
     position = {"id": "HDB-deal", "symbol": "HDB", "loanPackageId": "1", "openQuantity": 600,
                 "tradeQuantity": 0, "costPrice": 22650, "marketPrice": 22600}
     def request(method, url, **kwargs):
@@ -62,7 +64,8 @@ def closed_order_dashboard(dashboard, broker, tmp_path):
         endpoint = url.rsplit("/", 1)[-1]
         status, message = 200, ""
         if endpoint == "balances":
-            payload = {"netAssetValue": 49951941, "stock": {"availableCash": 36391941}}
+            payload = {"netAssetValue": view.balance_nav,
+                       "stock": {"availableCash": view.balance_available, "totalCash": 36392140, "totalDebt": 0}}
             if view.balance_error:
                 status, message = view.balance_error
         elif endpoint == "positions":
@@ -72,6 +75,8 @@ def closed_order_dashboard(dashboard, broker, tmp_path):
                         "fillQuantity": 600, "averagePrice": 22650, "orderStatus": "Filled", "loanPackageId": "1"}]
             if view.orders_error:
                 status, message = view.orders_error
+        elif endpoint == "ohlc":
+            payload = {"t": [int(clock["now"])], "c": [23.1]}
         else:
             raise AssertionError(f"Unexpected read endpoint: {endpoint}")
         return SimpleNamespace(status_code=status, headers={}, text=message,
@@ -99,11 +104,47 @@ def test_cold_restart_orders_400_keeps_money_and_holdings_visible_without_reconc
     assert view.snapshots["REAL"] == ({}, [], [])
     assert [cycle.to_dict() for cycle in view.trade_state.list_cycles()] == ledger_before
     assert [order.to_dict() for order in view.queue.list_all()] == queue_before
-    assert len(session.calls) == 3 and all(method == "GET" for method, _url in session.calls)
+    assert len(session.calls) == 4 and all(method == "GET" for method, _url in session.calls)
+    assert view._account_close_quotes["HDB"]["price"] == 23.1
     with pytest.raises(BrokerSnapshotError, match="HTTP 400"):
         view.real.get_orders(force=True)
     with pytest.raises(BrokerSnapshotError, match="HTTP 400"):
         view.execution.account_snapshot("REAL")
+
+
+def test_closed_nav_uses_dnse_close_and_refreshes_display_without_polling_orders(closed_order_dashboard):
+    view, clock, broker_clock, session = closed_order_dashboard
+    view.balance_nav = None
+    view.balance_available = 36390023
+    view.orders_error = None
+    view._refresh_snapshots()
+    view._paint_account()
+    assert view.lbl_equity.options["text"] == "50,252,140 ₫"
+    assert view.lbl_equity_title.options["text"] == "NAV ƯỚC TÍNH · API"
+    assert sum(url.endswith("/orders") for _method, url in session.calls) == 1
+    view.balance_nav = 50300000
+    clock["now"] += 60
+    broker_clock["now"] += 60
+    view._refresh_snapshots()
+    view._paint_account()
+    assert view.lbl_equity.options["text"] == "50,300,000 ₫"
+    assert view.snapshots["REAL"][0]["netAssetValue"] is None
+    assert sum(url.endswith("/balances") for _method, url in session.calls) == 2
+    assert sum(url.endswith("/positions") for _method, url in session.calls) == 2
+    assert sum(url.endswith("/orders") for _method, url in session.calls) == 1
+    assert view.snapshots["REAL"][1] == view._account_display_snapshots["REAL"][1]
+
+
+def test_nav_button_forces_broker_reads_within_cache_interval(closed_order_dashboard):
+    view, _clock, _broker_clock, session = closed_order_dashboard
+    view.orders_error = None
+    view._refresh_snapshots()
+    before = len(view.scheduled)
+    view._refresh_account_now()
+    assert sum(url.endswith("/balances") for _method, url in session.calls) == 2
+    assert sum(url.endswith("/positions") for _method, url in session.calls) == 2
+    assert sum(url.endswith("/orders") for _method, url in session.calls) == 2
+    assert len(view.scheduled) == before  # The button must not start a second polling loop.
 
 
 def test_orders_recovery_replaces_partial_display_and_clears_fault(closed_order_dashboard):

@@ -204,9 +204,20 @@ class DashboardPanelsMixin:
         account.grid_columnconfigure(0, weight=1)
         account.grid_columnconfigure(1, weight=0, minsize=180)
 
-        self.lbl_equity_title = ctk.CTkLabel(account, text="TỔNG TÀI SẢN / NAV",
+        nav_header = ctk.CTkFrame(account, fg_color="transparent")
+        nav_header.grid(row=0, column=0, sticky="ew", padx=11, pady=(4, 0))
+        self.lbl_equity_title = ctk.CTkLabel(nav_header, text="TỔNG TÀI SẢN / NAV",
                                             font=("Segoe UI", 13, "bold"), text_color=COL_MUTED, anchor="w")
-        self.lbl_equity_title.grid(row=0, column=0, sticky="w", padx=11, pady=(4, 0))
+        self.lbl_equity_title.pack(side="left")
+        self.btn_refresh_account = ctk.CTkButton(
+            nav_header, text="↻ NAV", width=64, height=25,
+            font=("Segoe UI", 11, "bold"),
+            fg_color="#282D34", hover_color="#3A414B",
+            text_color=COL_TEXT, corner_radius=6,
+            command=self._refresh_account_now,
+        )
+        self.btn_refresh_account.pack(side="right", padx=(4, 0))
+        _HoverHint(self.btn_refresh_account, "Đọc lại tiền, vị thế và giá đóng cửa từ DNSE ngay.")
         self.lbl_equity = ctk.CTkLabel(
             account, text="----", font=("Segoe UI", 30, "bold"),
             text_color=COL_GREEN, anchor="w",

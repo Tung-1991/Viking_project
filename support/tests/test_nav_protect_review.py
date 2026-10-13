@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from viking_v2.config import AppSettings
-from viking_v2.dashboard.account_money import account_money
+from viking_v2.dashboard.account_money import account_money, account_money_hint, close_quote_from_ohlc
 from viking_v2.dashboard.panels import DashboardPanelsMixin
 from viking_v2.models import OrderIntent, StrategyDecision
 from viking_v2.rules.business import StaticRule, StaticRuleParameters
@@ -19,6 +19,21 @@ from viking_v2.trading.orders import OrderQueue
 
 
 NOW = datetime(2026, 10, 13, 12, 10, tzinfo=VN_TZ).timestamp()
+
+
+def test_dnse_same_day_close_replaces_stale_position_price_in_display_nav():
+    closed_at = datetime(2026, 10, 13, 15, 7, tzinfo=VN_TZ).timestamp()
+    balance = {"stock": {"totalCash": 36392140, "availableCash": 36390023, "totalDebt": 0}}
+    positions = [{"symbol": "HDB", "openQuantity": 600, "tradeQuantity": 0,
+                  "marketPrice": 22600, "price_unit": "VND"}]
+    quote = close_quote_from_ohlc("HDB", {"t": [closed_at - 1800], "c": [23.1]}, now=closed_at)
+    assert quote and quote["source"] == "CLOSE" and quote["frozen"]
+    money = account_money(balance, positions, {"HDB": quote}, now=closed_at)
+    assert money["value"] == 50252140
+    assert "HDB: 23,100đ × 600 CP (giá đóng cửa DNSE)" in account_money_hint(money)
+    assert account_money(balance, positions, now=closed_at)["value"] == 49952140
+    assert close_quote_from_ohlc("HDB", {"t": [closed_at - 86400], "c": [23.1]}, now=closed_at) is None
+    assert close_quote_from_ohlc("HDB", {"t": [closed_at], "c": [0]}, now=closed_at) is None
 
 
 @pytest.mark.parametrize("frozen", [False, True])

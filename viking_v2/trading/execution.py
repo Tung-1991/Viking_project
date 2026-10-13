@@ -883,9 +883,12 @@ class ExecutionService:
                 completed=bool(current_intent and current_intent.status in FINAL_STATUSES),
             )
 
-    def account_snapshot(self, mode: str) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    def account_snapshot(self, mode: str, *, force: bool = False) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
         if str(mode).upper() == "PAPER":
             return self.paper.get_balance(), self.paper.get_positions(), self.paper.get_orders()
+        if force:
+            return (self.real.get_balance(force=True) or {}, self.real.get_positions(force=True),
+                    self.real.get_orders(force=True))
         return self.real.get_balance() or {}, self.real.get_positions(), self.real.get_orders()
 
     def _finished_order_history(self, broker: Any, intent: OrderIntent, ids: set[str]) -> list[dict[str, Any]]:

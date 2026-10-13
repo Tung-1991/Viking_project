@@ -63,7 +63,7 @@ from .view import (
 from .info import InfoPopup
 from .quote_direction import quote_background
 from .trade_history import history_datetime, history_groups
-from .account_money import account_money, account_money_hint, displayed_account_snapshot
+from .account_money import account_money, account_money_hint, close_quote_from_ohlc, displayed_account_snapshot
 from ..services.technical_notifications import notification_session, technical_delivery, TECHNICAL_CATEGORIES
 from .windows import (
     FONT_KEY,
@@ -4117,11 +4117,16 @@ class DashboardActionsMixin:
 
         future.add_done_callback(completed)
 
-    def _refresh_snapshots(self) -> None:
+    def _refresh_account_now(self) -> None:
+        """Read the broker now; this action never resets PNL or trading state."""
+        self._last_real_snapshot_attempt = None
+        self._refresh_snapshots(force=True)
+
+    def _refresh_snapshots(self, *, force: bool = False) -> None:
         if not self.running:
             return
         if self._snapshot_busy:
-            self.after(1000, self._refresh_snapshots)
+            self.after(1000, (lambda: self._refresh_snapshots(force=True)) if force else self._refresh_snapshots)
             return
         self._snapshot_busy = True
         status = self.bridge.read_status() if hasattr(self, "bridge") else {}
@@ -4142,9 +4147,11 @@ class DashboardActionsMixin:
             list[dict[str, Any]],
             dict[str, tuple[Exception, str]],
             dict[str, tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]],
+            dict[str, dict[str, Any]],
         ]:
             values = {}
             display_values = {}
+            close_quotes: dict[str, dict[str, Any]] = {}
             errors: dict[str, tuple[Exception, str]] = {}
             try:
                 values["PAPER"] = self.execution.account_snapshot("PAPER")
@@ -4154,11 +4161,13 @@ class DashboardActionsMixin:
             if self.real.configured():
                 now = time.time()
                 previous_attempt = getattr(self, "_last_real_snapshot_attempt", None)
-                if previous_attempt is None or now - previous_attempt >= poll_seconds:
+                full_due = force or previous_attempt is None or now - previous_attempt >= poll_seconds
+                if full_due:
                     self._last_real_snapshot_attempt = now
+                    self._last_real_display_attempt = now
                     stage = "ACCOUNT_SNAPSHOT"
                     try:
-                        snapshot = self.execution.account_snapshot("REAL")
+                        snapshot = self.execution.account_snapshot("REAL", force=True) if force else self.execution.account_snapshot("REAL")
                         stage = "RECONCILE"
                         external_sells = self.execution.reconcile_external_sells(snapshot[1], snapshot[2])
                         values["REAL"] = snapshot
@@ -4176,21 +4185,49 @@ class DashboardActionsMixin:
                                 errors["REAL"] = (exc, "ORDERS_SNAPSHOT")
                             except Exception as read_error:
                                 errors["REAL"] = (read_error, "ACCOUNT_SNAPSHOT")
+                elif (str(status.get("market_status", "")).upper() == "CLOSED"
+                      and now - getattr(self, "_last_real_display_attempt", 0.0) >= 60):
+                    self._last_real_display_attempt = now
+                    if callable(getattr(self.real, "get_balance", None)) and callable(getattr(self.real, "get_positions", None)):
+                        try:
+                            prior_orders = displayed_account_snapshot(self, "REAL")[2]
+                            display_values["REAL"] = (
+                                self.real.get_balance(force=True) or {},
+                                self.real.get_positions(force=True), prior_orders,
+                            )
+                        except Exception as exc:
+                            if not fault:
+                                errors["REAL"] = (exc, "NAV_DISPLAY")
+                if str(status.get("market_status", "")).upper() == "CLOSED":
+                    shown = values.get("REAL") or display_values.get("REAL")
+                    get_ohlc = getattr(self.real, "get_ohlc", None)
+                    if shown and callable(get_ohlc):
+                        symbols = {str(row.get("symbol", "")).upper() for row in shown[1]
+                                   if isinstance(row, dict) and position_quantity(row) > 0}
+                        for symbol in sorted(symbols - {""}):
+                            try:
+                                data = get_ohlc(symbol, "1D", int(now - 4 * 86400), int(now))
+                                quote = close_quote_from_ohlc(symbol, data, now=now)
+                                if quote:
+                                    close_quotes[symbol] = quote
+                            except Exception as exc:
+                                self.logger.debug("DNSE close price unavailable for %s: %s", symbol, type(exc).__name__)
             # A failed REAL refresh/reconciliation must not throw away PAPER's
             # successful balance (and vice versa). Failed books keep their
             # previous snapshot; we never fabricate a zero balance.
-            return values, external_sells, errors, display_values
+            return values, external_sells, errors, display_values, close_quotes
 
         future = self._io_executor.submit(work)
 
         def completed(result: Any) -> None:
             try:
-                values, external_sells, errors, display_values = result.result()
+                values, external_sells, errors, display_values, close_quotes = result.result()
             except Exception as exc:
                 values = {}
                 external_sells = []
                 errors = {"": (exc, "WORKER")}
                 display_values = {}
+                close_quotes = {}
 
             def apply() -> None:
                 self._snapshot_busy = False
@@ -4208,12 +4245,15 @@ class DashboardActionsMixin:
                         log = getattr(self, "_log", None)
                         if callable(log):
                             log(f"[{book}] Đã đồng bộ lại tiền/vị thế/lệnh.", "bot")
+                for book in display_values:
+                    if (faults.get(book) or {}).get("stage") == "NAV_DISPLAY":
+                        faults.pop(book, None)
                 secrets = tuple(getattr(self.real, key, "") for key in ("api_key", "api_secret", "trading_token"))
                 for failed_book, (error, stage) in errors.items():
                     failed_book = failed_book or str(self.mode.get() or "").upper()
                     detail = error_summary(error, secrets=secrets)
                     previous = faults.get(failed_book) or {}
-                    idle = failed_book == "REAL" and stage in {"ACCOUNT_SNAPSHOT", "ORDERS_SNAPSHOT"} and poll_seconds == IDLE_POLL_SECONDS
+                    idle = failed_book == "REAL" and stage in {"ACCOUNT_SNAPSHOT", "ORDERS_SNAPSHOT", "NAV_DISPLAY"} and poll_seconds == IDLE_POLL_SECONDS
                     faults[failed_book] = {
                         "since": previous.get("since", now), "detail": detail, "stage": stage,
                         "last_success_at": last_good.get(failed_book, 0.0),
@@ -4246,6 +4286,9 @@ class DashboardActionsMixin:
                 self._account_display_snapshots = account_display
                 account_display.update(values)
                 account_display.update(display_values)
+                if close_quotes:
+                    stored_close = getattr(self, "_account_close_quotes", {})
+                    self._account_close_quotes = {**stored_close, **close_quotes}
                 if "PAPER" in values:
                     self.histories["PAPER"] = list(values["PAPER"][2])
                 warning_keys = getattr(self, "_external_reconcile_warning_keys", set())
@@ -4273,7 +4316,8 @@ class DashboardActionsMixin:
             self._post_ui(apply)
 
         future.add_done_callback(completed)
-        self.after(5000, self._refresh_snapshots)
+        if not force:
+            self.after(5000, self._refresh_snapshots)
 
     def _refresh_local(self) -> None:
         if not self.running:
@@ -4288,7 +4332,10 @@ class DashboardActionsMixin:
         mode = self.mode.get()
         balance, positions, _orders = displayed_account_snapshot(self, mode)
         bridge = getattr(self, "bridge", None)
-        quotes = (bridge.read_status().get("ticks") or {}) if bridge else {}
+        status = bridge.read_status() if bridge else {}
+        quotes = dict(status.get("ticks") or {})
+        if str(status.get("market_status", "")).upper() == "CLOSED":
+            quotes.update(getattr(self, "_account_close_quotes", {}))
         money = account_money(balance, positions, quotes)
         fault = getattr(self, "_account_snapshot_faults", {}).get(mode) or {}
         old_money = bool(fault and fault.get("stage") != "ORDERS_SNAPSHOT")
@@ -4335,7 +4382,10 @@ class DashboardActionsMixin:
         mode = self.mode.get()
         balance, positions, _orders = displayed_account_snapshot(self, mode)
         bridge = getattr(self, "bridge", None)
-        quotes = (bridge.read_status().get("ticks") or {}) if bridge else {}
+        status = bridge.read_status() if bridge else {}
+        quotes = dict(status.get("ticks") or {})
+        if str(status.get("market_status", "")).upper() == "CLOSED":
+            quotes.update(getattr(self, "_account_close_quotes", {}))
         text = account_money_hint(account_money(balance, positions, quotes))
         fault = getattr(self, "_account_snapshot_faults", {}).get(mode) or {}
         if fault.get("stage") == "ORDERS_SNAPSHOT":
