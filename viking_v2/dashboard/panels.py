@@ -880,6 +880,7 @@ class DashboardPanelsMixin:
             "end", "Mua tự động khởi động OFF; vị thế đang giữ vẫn được quản lý.\n"
         )
         self._select_info_tab("PREVIEW")
+        self._select_preview_tab("TỔNG QUAN")
         self._refresh_api_health_panel(self.bridge.read_status())
 
     def _build_order_preview_tab(self, parent: ctk.CTkFrame, *, health_parent=None, selector_parent=None) -> None:

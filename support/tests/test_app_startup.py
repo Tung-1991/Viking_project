@@ -65,6 +65,9 @@ with tempfile.TemporaryDirectory(prefix="money-hunter-startup-") as directory:
         assert not app.bridge.read_config().bot_enabled
         assert app.mode.get() == os.environ.get("STARTUP_SMOKE_MODE", "PAPER")
         assert "ⓘ" in app.info_title.cget("text")
+        assert app.log_tabview.get() == "PREVIEW"
+        assert app._preview_active_tab == "TỔNG QUAN"
+        assert app.preview_tab_selector.get() == "TỔNG QUAN"
         app.update_idletasks()
         # Native Tk typing must survive periodic AUTO refreshes. CTkEntry's
         # programmatic insert() hides the placeholder bug, so use the inner Tk

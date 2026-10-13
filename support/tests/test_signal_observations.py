@@ -127,6 +127,37 @@ def test_exit_does_not_rearm_on_none_or_price_only_and_survives_restart(tmp_path
     assert len(reopened.read_all()) == 2
 
 
+def test_dashboard_records_one_exit_while_tick_candle_and_ema_counts_change(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from viking_v2.dashboard.actions import DashboardActionsMixin
+    from viking_v2.models import StrategyDecision
+    path = tmp_path / 'signals.csv'
+    app = SimpleNamespace(settings=AppSettings(watchlist=['IDC']), signal_log=SignalLog(path),
+                          logger=Mock(), _symbol_exchange=lambda _symbol: 'HOSE')
+    allocator = SimpleNamespace(used=0, max_positions=4)
+
+    def record(index, *, exit_active=True):
+        fast = 34.61 if exit_active else 34.70
+        marks = dict(buy_ema_fast=fast, buy_ema_slow=34.64, sell_ema_fast=fast, sell_ema_slow=34.64,
+                     rsi=53.42, rsi_previous=67.52, signal_ready=True)
+        cross = dict(tracking_version=2, up_count=index, down_count=index, cross_id=f'EMA:{index}')
+        decision = StrategyDecision('WAIT', 'IDC', 'NO_NEW_BUY_SIGNAL',
+                                    signal=('SELL' if index % 2 else '') if exit_active else '',
+                                    details={'indicators':marks, 'ema_cross':cross,
+                                             'candle_key':f'minute:{index}', 'signal_cycle':f'cycle:{index}'})
+        DashboardActionsMixin._record_signal_decision(app, decision, {'price':34.1 + .01 * (index % 2), 'source':'WS'}, 'REAL', allocator)
+
+    for index in range(1, 21):
+        record(index)
+        if index == 10:
+            app.signal_log = SignalLog(path)
+    assert [value['signal_event'] for value in app.signal_log.read_all()] == ['EXIT_E']
+    record(21, exit_active=False)
+    record(23)
+    assert [value['signal_event'] for value in app.signal_log.read_all()] == ['EXIT_E', 'EXIT_E']
+
+
 def test_entry_loss_and_real_exit_are_distinct_events_with_correct_ema_pairs(tmp_path):
     log = SignalLog(tmp_path / "signals.csv")
     log.observe(row(), entry_condition=True, exit_condition=False)
