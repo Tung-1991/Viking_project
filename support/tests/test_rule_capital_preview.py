@@ -285,7 +285,7 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
             assert "TỶ TRỌNG CHỌN TAY" in view.preview_rule_market_detail.cget("text")
             assert view._market_confirmation_hint().startswith("TỶ TRỌNG CHỌN TAY:")
         assert "WHIPSAW:" in view.preview_rule_phase3_detail.cget("text")
-        assert "3/3 · 7 phiên · KHÓA BUY" in view.preview_rule_phase3_detail.cget("text")
+        assert "3/3 · 7 nến 1D · KHÓA BUY" in view.preview_rule_phase3_detail.cget("text")
         assert "E BẬT" not in view.preview_rule_rsi.cget("text")
         for name, value in (("buy_ema", view.preview_rule_ema), ("sell_ema", view.preview_rule_sell_ema),
                             ("rsi", view.preview_rule_rsi)):
@@ -293,7 +293,10 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
             assert int(key.grid_info()["column"]) == 0 and int(value.grid_info()["column"]) == 1
             assert key.winfo_x() + key.winfo_width() <= value.winfo_x()
         assert not hasattr(view, "preview_rule_market_money")
-        assert int(view.preview_focus_panel.cget("height")) == 300
+        stacked = width / scaling < 900
+        assert int(view.preview_focus_panel.cget("height")) == (600 if stacked else 300)
+        assert view.preview_focus_panel._viking_stacked_preview == stacked
+        assert int(view.preview_rule_market.master.master.grid_info()["row"]) == (1 if stacked else 0)
         assert int(view.preview_rule_market_detail.grid_info()["row"]) == 1
         assert view.preview_rule_market_detail.winfo_y() + view.preview_rule_market_detail.winfo_height() <= card.winfo_height()
         assert view.preview_rule_reason.winfo_y() + view.preview_rule_reason.winfo_height() <= view.preview_rule_reason.master.winfo_height()
@@ -326,7 +329,7 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
                 assert rendered_font.measure(label.cget("text")) <= label.winfo_width(), (
                     label.cget("text"), label.winfo_width())
             assert view.preview_p1_swap.winfo_x() + view.preview_p1_swap.winfo_width() <= card.winfo_width()
-            assert int(view.preview_focus_panel.cget("height")) == 300
+            assert int(view.preview_focus_panel.cget("height")) == (600 if stacked else 300)
         # OFF must not hide the available threshold of an existing position.
         status["decisions"]["AAA"]["details"].update(
             current_profit_pct=8, normal_trigger_price=7.7, normal_state="ARM",

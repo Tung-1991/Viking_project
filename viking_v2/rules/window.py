@@ -565,8 +565,8 @@ class RuleSettingsPopup:
         self.buy_ema_memory_group.pack(fill="x", padx=8, pady=(6, 8))
         memory_hint = (
             "∞ VA: chỉ nhớ từ khi thêm mã, giữ tới khi dùng.\n"
-            "VA + QUÉT X PHIÊN: lấy lần cắt cũ trong X phiên trước khi bắt đầu theo dõi mã, rồi VA giữ tới khi dùng.\n"
-            "⏳ X PHIÊN: quét thêm X phiên trước khi bắt đầu theo dõi mã; giữ X phiên từ lần cắt, tính cả phiên cắt, bỏ ngày nghỉ.\n"
+            "VA + QUÉT X PHIÊN: dựng lần cắt cũ từ giá đóng mỗi phút trong X phiên trước khi bắt đầu theo dõi mã, rồi VA giữ tới khi dùng.\n"
+            "⏳ X PHIÊN: quét giá đóng mỗi phút của X phiên trước khi bắt đầu theo dõi mã; giữ X phiên từ lần cắt, tính cả phiên cắt, bỏ ngày nghỉ.\n"
             "Ô SỐ PHIÊN luôn hiện; VA không bật QUÉT TRƯỚC thì ô này làm mờ vì không sử dụng.\n"
             "Lần cắt hết hạn/đã dùng không mua lại. BUY vẫn cần EMA nhanh > chậm, RSI và các điều kiện khác đạt."
         )
@@ -817,13 +817,13 @@ class RuleSettingsPopup:
                 "Không có mã: sổ này chưa có khóa tay. Khóa theo giờ tự hết, không hiện ở đây.")
             self._refresh_blocks()
 
-        whip = self._card(body, "WHIPSAW", "Bộ chống nhiễu trước entry. Không thuộc E/M và không can thiệp position đang giữ.", 1, 2)
+        whip = self._card(body, "WHIPSAW", "Đếm số lần EMA nhanh/chậm đổi phía giữa các nến ngày 1D trong X phiên gần nhất. Khác bộ nhớ VA: VA có thể ghi nhiều lần cắt khi giá đổi trong cùng một phiên. Nếu dùng REALTIME, nến hôm nay còn tạm tính tới lúc đóng phiên. Chỉ khóa BUY mới khi đạt N; không bán cổ đang giữ.", 1, 2)
         self.whipsaw_enabled = self._switch(
             whip, "BẬT WHIPSAW", self.params.whipsaw_enabled,
-            "Nếu cặp EMA BUY crossover đạt N lần trong X phiên, khóa BUY/Re-entry mới; position đang giữ vẫn hoạt động.",
+            "Ví dụ 0/3 · 7 nến 1D: chưa có lần EMA đổi phía giữa 7 nến ngày gần nhất; đạt 3 lần thì khóa BUY/Re-entry mới. Không cộng từng tick và không can thiệp vị thế đang giữ.",
         )
-        self.whipsaw_n = self._field(whip, "Số lần (N)", self.params.whipsaw_n, "Mặc định 3 lần crossover trong cửa sổ X sẽ khóa BUY/Re-entry.")
-        self.whipsaw_x = self._field(whip, "Cửa sổ (phiên)", self.params.whipsaw_x, "Mặc định 7 phiên dùng để đếm số crossover.")
+        self.whipsaw_n = self._field(whip, "Số lần (N)", self.params.whipsaw_n, "Ngưỡng số lần EMA 1D đổi phía trong X nến ngày; mặc định 3 lần sẽ khóa BUY/Re-entry.")
+        self.whipsaw_x = self._field(whip, "Cửa sổ (phiên)", self.params.whipsaw_x, "Số nến ngày gần nhất để đếm Whipsaw; trong REALTIME gồm nến hôm nay còn tạm tính. Mặc định 7.")
 
     def _exit_manager_tab(self, frame: ctk.CTkFrame) -> None:
         frame.grid_columnconfigure(0, weight=1)

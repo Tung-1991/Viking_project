@@ -189,7 +189,7 @@ def memory_hint(row, *, holidays=None, working_dates=None):
               f"Phạm vi đếm: {scope['start']} → {scope['end']} · {scope['sessions']} phiên giao dịch theo lịch. "
               "Bộ đếm là tích lũy trong phạm vi này, không phải số lần cắt của từng phiên.\n"
               if scope else f"{up + down} lần cắt = {up} lên + {down} xuống. Phạm vi đếm: chưa có đủ mốc thời gian đã lưu.\n")
-    return (history + period + "↑↓: số lần cắt của EMA 1D tạm tính khi giá trong phiên đổi; ⏳: phiên còn/tổng.\n"
+    return (history + period + "↑↓: số lần EMA 1D tạm tính đổi phía theo mẫu giá app nhận trong phiên; có thể cắt nhiều lần cùng ngày. Quét trước tái dựng từ giá đóng mỗi phút, không phát lại từng tick; ⏳: phiên còn/tổng.\n"
             "EMA nhanh < EMA chậm: chỉ chờ cắt LÊN, không cần xuống thêm lần nữa. "
             "EMA bằng nhau là trung tính, chưa ghi nhận cắt lên. "
             "Nếu bắt đầu theo dõi khi EMA nhanh đã ở trên mà chưa có lần cắt hợp lệ: chờ xuống rồi lên.\n"

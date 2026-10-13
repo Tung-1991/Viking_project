@@ -44,7 +44,10 @@ def setup(tmp_path, *, mode="SESSIONS", crossed="2026-10-02", closed=False, fail
     for i in range(100):
         at = NOW.replace(hour=0, minute=0) - timedelta(days=100-i)
         if at.weekday() < 5:
-            price = 105. if at.date() >= broker.crossed.date() else 100.
+            # Establish a strict EMA-fast-below-slow baseline. A flat 100
+            # history makes the EMAs equal, which is neutral and cannot cross.
+            price = (105. if at.date() >= broker.crossed.date()
+                     else 100. + .1 * (broker.crossed.date() - at.date()).days)
             rows.append({"time": at.timestamp(), "close": price, "closed": True})
     if not closed:
         rows.append({"time": NOW.replace(hour=0, minute=0).timestamp(), "close": 105., "closed": False})

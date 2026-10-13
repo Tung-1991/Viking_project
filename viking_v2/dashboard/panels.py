@@ -1175,7 +1175,7 @@ class DashboardPanelsMixin:
             self._indicator_preview_hint,
         )
         phase2._viking_title_widget.grid(columnspan=2)
-        phase2.grid_columnconfigure(1, weight=2, minsize=145)
+        phase2.grid_columnconfigure(1, weight=2, minsize=165)
         phase2.grid_columnconfigure(2, weight=2, minsize=140)
         # Reserve one stable width for both mode captions.  Otherwise Tk lets
         # the longer VA+XP caption move the entire P2 value column on swap.
@@ -1251,7 +1251,19 @@ class DashboardPanelsMixin:
             _HoverHint(value, self._indicator_preview_hint, placement="inside")
 
         def fit_phase2_row(_event=None):
-            balanced = panel.winfo_width() / panel._get_widget_scaling() < 650
+            logical_width = panel.winfo_width() / panel._get_widget_scaling()
+            stacked = logical_width < 900
+            if getattr(panel, "_viking_stacked_preview", None) != stacked:
+                panel._viking_stacked_preview = stacked
+                panel.configure(height=600 if stacked else 300)
+                panel._viking_content_min_height = 600 if stacked else 300
+                panel.grid_rowconfigure(1, weight=1 if stacked else 0)
+                order_group.grid_configure(row=0, column=0, columnspan=2 if stacked else 1,
+                                           padx=(7, 7) if stacked else (7, 3))
+                rule_group.grid_configure(row=1 if stacked else 0, column=0 if stacked else 1,
+                                          columnspan=2 if stacked else 1,
+                                          padx=(7, 7) if stacked else (3, 7))
+            balanced = logical_width < 650
             if getattr(panel, "_viking_balanced_preview", None) != balanced:
                 panel._viking_balanced_preview = balanced
                 panel.grid_columnconfigure(0, weight=11 if balanced else 3)
@@ -1259,8 +1271,8 @@ class DashboardPanelsMixin:
             narrow = phase2.winfo_width() / phase2._get_widget_scaling() < 440
             if getattr(phase2, "_viking_cross_narrow", None) != narrow:
                 phase2._viking_cross_narrow = narrow
-                panel._viking_content_min_height = 300
-                phase2.grid_columnconfigure(1, weight=2, minsize=145)
+                panel._viking_content_min_height = 600 if stacked else 300
+                phase2.grid_columnconfigure(1, weight=2, minsize=165)
                 phase2.grid_columnconfigure(2, weight=2, minsize=140)
                 phase2._viking_title_widget.grid(columnspan=2)
                 phase2._viking_title_widget.configure(text="P2 · BUY/E  ⓘ" if narrow else "P2 · BUY / E  ⓘ")
@@ -2012,7 +2024,7 @@ class DashboardPanelsMixin:
             f"{summary}.\n"
             "Mã BOT 0/4 = đang giữ hoặc chờ mua 0 mã, tối đa 4 mã; không phải số lệnh.\n"
             "Vốn mua là gợi ý cho mã đang chọn, chưa phí. Ví dụ 50 triệu × 90% / 5 mã = 9 triệu/mã; Priority dùng hạn mức riêng.\n"
-            f"{whipsaw}. Đếm EMA BUY cắt lên/xuống trên nến ngày, không cộng từng tick; nến hôm nay còn thay đổi. LỖ = chuỗi lỗ / ngưỡng khóa. Không chặn SELL.\n"
+            f"{whipsaw}. Ví dụ 0/3 · 7 nến 1D: 0 lần EMA nhanh/chậm đổi phía giữa 7 nến ngày gần nhất; đủ 3 lần thì khóa BUY mới. Trong REALTIME, nến hôm nay còn tạm tính. Khác VA: VA nhớ các lần cắt khi giá đổi trong phiên; Whipsaw không cộng từng tick. LỖ = chuỗi lỗ / ngưỡng khóa. Không chặn SELL.\n"
             "MANUAL nhập KL tự chọn, vẫn kiểm tra tiền/phí và điều kiện lệnh; không dùng giới hạn số lần BUY BOT."
         )
 
@@ -3110,7 +3122,7 @@ class DashboardPanelsMixin:
             return
 
     def _sync_preview_scrollbar(self) -> None:
-        """Fit PREVIEW to its viewport and scroll only when 300px cannot fit."""
+        """Fit PREVIEW to its viewport, retaining room for a stacked narrow layout."""
         preview = getattr(self, "preview_scroll", None)
         if not self.running or preview is None or not preview.winfo_exists():
             return

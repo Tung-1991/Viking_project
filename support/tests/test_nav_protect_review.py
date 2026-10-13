@@ -218,7 +218,10 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
                     "previous_fast": 22.6, "previous_slow": 22.3}
         subject._render_ema_cross_preview({"ema_cross": evidence})
         ui_root.update_idletasks()
-        assert subject.preview_rule_cross.master._viking_cross_narrow
+        assert subject.preview_rule_cross.master._viking_cross_narrow == (
+            subject.preview_rule_cross.master.winfo_width()
+            / subject.preview_rule_cross.master._get_widget_scaling() < 440
+        )
         for widget in (subject.preview_rule_cross_counts, subject.preview_rule_cross,
                        subject.preview_rule_cross_title, subject.preview_rule_cross_detail):
             assert widget.winfo_manager() == "grid"
@@ -237,7 +240,9 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
         ui_root.update_idletasks()
         assert subject.preview_rule_cross.cget("text") == "CHỜ EMA3 > EMA6"
         assert subject.preview_rule_cross_counts.cget("text") == "0 CẮT · ?P"
-        assert subject.preview_rule_cross_detail.cget("text") == "CHƯA GHI NHẬN"
+        assert subject.preview_rule_cross_detail.cget("text") == (
+            "CHƯA GHI NHẬN" if subject.preview_rule_cross.master._viking_cross_narrow else "TRƯỚC: —"
+        )
         assert "⏸" not in subject.preview_rule_cross.cget("text")
     finally:
         top.destroy()
@@ -291,6 +296,7 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
         top.deiconify()
         top.update()
         subject._render_ema_cross_preview(details)
+        from tkinter import font as tkfont
         positions = None
         for alternate in (False, True, False):
             if getattr(subject, "_preview_ema_alternate", False) != alternate:
@@ -307,6 +313,10 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
                 positions = current_positions
             else:
                 assert current_positions == positions
+            for label in (subject.preview_rule_cross_title, subject.preview_rule_cross_counts,
+                          subject.preview_rule_cross, subject.preview_rule_cross_detail):
+                rendered = tkfont.Font(root=ui_root, font=label._label.cget("font"))
+                assert rendered.measure(label.cget("text")) <= label.winfo_width()
             evidence = subject._preview_ema_cross_evidence[1]
             viewing_history = (mode == "SESSIONS") != alternate
             assert evidence["mode"] == ("SESSIONS" if viewing_history else "VA")
@@ -317,7 +327,9 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
             assert int(subject.preview_rule_cross_detail.grid_info()["column"]) == 2
             if subject.preview_rule_cross.master._viking_cross_narrow and viewing_history:
                 assert subject.preview_rule_cross_detail.cget("text") == ("CẮT 12/10" if required else "OFF · 12/10")
-            assert int(subject.preview_focus_panel.cget("height")) == 300
+            assert int(subject.preview_focus_panel.cget("height")) == (
+                600 if subject.preview_focus_panel._viking_stacked_preview else 300
+            )
             assert (subject.settings.to_dict(), details) == before
     finally:
         top.destroy()
