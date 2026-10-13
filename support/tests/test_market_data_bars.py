@@ -6,6 +6,7 @@ import pytest
 
 from viking_v2.trading.market import MarketDataService, VN_TZ, merge_tick_into_daily_bars
 from viking_v2.services.daemon import merge_live_tick
+from viking_v2.connections.dnse.websocket import DNSEMarketWS
 from viking_v2.trading.validation import quote_is_fresh
 
 
@@ -223,3 +224,18 @@ def test_rest_tick_failure_is_backed_off_when_websocket_is_offline(monkeypatch):
     assert market.get_tick("FPT") is None
     assert market.get_tick("FPT") is None
     assert (client.trade_calls, client.quote_calls) == (1, 1)
+def test_websocket_top_of_book_does_not_refresh_old_matched_price(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr("viking_v2.connections.dnse.websocket.time.time", lambda: clock[0])
+    monkeypatch.setattr("viking_v2.connections.dnse.websocket.market_phase", lambda: ("OPEN",))
+    ws = DNSEMarketWS(api_key="test", api_secret="test")
+    ws._ingest({"symbol": "HDB", "matchPrice": 23.1})
+    first = ws.latest_tick("HDB")
+    clock[0] += 30
+    ws._ingest({"symbol": "HDB", "bid": [{"price": 23.2}]})
+    after = ws.latest_tick("HDB")
+    assert after["price"] == 23.1 and after["bid"] == 23.2
+    assert after["timestamp"] == first["timestamp"]
+    assert after["received_at"] == first["received_at"]
+    ws._ingest({"symbol": "HDB", "matchPrice": 23.15})
+    assert ws.latest_tick("HDB")["timestamp"] == clock[0]

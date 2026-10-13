@@ -24,7 +24,7 @@ from ..trading.portfolio import PortfolioContextBuilder, sell_quantity_for_fract
 from .runtime import RuntimeBridge
 from ..storage import AtomicJSONStore
 from ..rules.state import RuleStateStore
-from ..trading.validation import MAX_DECISION_AGE, quote_diagnostics
+from ..trading.validation import MAX_DECISION_AGE, quote_diagnostics, quote_is_fresh, timestamp_value
 from ..rules.business import (
     StaticRule,
     StaticRuleParameters,
@@ -83,6 +83,37 @@ def merge_live_tick(
     merged["frozen"] = bool(live.get("frozen", not bool(live)))
     merged["price_frozen"] = not live_has_price
     return merged
+
+
+def remember_last_valid_tick(cache: dict[str, dict], symbol: str, tick: dict | None,
+                             *, now: float | None = None) -> None:
+    """Keep the last valid session price for display, independent of trading ticks."""
+    checked = time.time() if now is None else now
+    if not quote_is_fresh(tick, symbol, now=checked) or tick.get("price_frozen"):
+        return
+    source = str(tick.get("source", "")).upper()
+    try:
+        price = float(tick.get("price") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return
+    if source not in {"WS", "REST"} or not math.isfinite(price) or price <= 0:
+        return
+    observed = timestamp_value(tick.get("received_at", tick.get("timestamp")))
+    if datetime.fromtimestamp(observed, VN_TZ).date() != datetime.fromtimestamp(checked, VN_TZ).date():
+        return
+    prior = cache.get(symbol) or {}
+    prior_time = timestamp_value(prior.get("received_at", prior.get("timestamp")))
+    same_day = bool(prior_time > 0 and math.isfinite(prior_time) and prior_time <= checked + 2 and
+                    datetime.fromtimestamp(prior_time, VN_TZ).date() ==
+                    datetime.fromtimestamp(checked, VN_TZ).date())
+    # Prefer WS for simultaneous observations; a later valid REST fallback is
+    # more current than an old WS price after a feed interruption.
+    if (source == "REST" and same_day and observed == prior_time and
+            str(prior.get("source", "")).upper() == "WS"):
+        return
+    if same_day and observed < prior_time:
+        return
+    cache[symbol] = dict(tick)
 
 
 class QuoteHealthMonitor:
@@ -278,6 +309,10 @@ def run(account_id: str | None = None) -> int:
     last_symbols: list[str] = []
     previous_runtime_status = bridge.read_status()
     ticks: dict[str, dict] = {symbol: {**tick, "stale": True} for symbol, tick in (previous_runtime_status.get("ticks") or {}).items() if isinstance(tick, dict)}
+    last_valid_ticks: dict[str, dict] = {
+        symbol: dict(tick) for symbol, tick in (previous_runtime_status.get("last_valid_ticks") or {}).items()
+        if isinstance(tick, dict)
+    }
     quote_health = QuoteHealthMonitor(logger)
     decisions: dict[str, dict] = {}
     last_account_error_logs: dict[str, tuple] = {}
@@ -291,6 +326,7 @@ def run(account_id: str | None = None) -> int:
             bot_enabled=False,
             active_symbols=symbols,
             ticks=ticks,
+            last_valid_ticks=last_valid_ticks,
             decisions=decisions,
             api_health=market.health(),
             working_dates=[],
@@ -426,7 +462,8 @@ def run(account_id: str | None = None) -> int:
                     RuntimeStatus(
                         heartbeat_at=time.time(), daemon_status="RUNNING",
                         market_status=phase, bot_enabled=bool(runtime.bot_enabled),
-                        active_symbols=symbols, ticks=ticks, api_health=market.health(),
+                        active_symbols=symbols, ticks=ticks, last_valid_ticks=last_valid_ticks,
+                        api_health=market.health(),
                         working_dates=working_dates,
                         symbol_exchanges={symbol: resolved_exchanges.get(symbol, "") for symbol in symbols},
                         symbol_phases=symbol_phases,
@@ -596,6 +633,7 @@ def run(account_id: str | None = None) -> int:
                                     tick = tick_with_price_bound(tick, client.get_secdef(symbol))
                                 ticks[symbol] = tick
                                 if symbol_live:
+                                    remember_last_valid_tick(last_valid_ticks, symbol, tick)
                                     bars_by_symbol[symbol] = merge_tick_into_daily_bars(
                                         bars_by_symbol.get(symbol, []),
                                         tick,
@@ -884,6 +922,7 @@ def run(account_id: str | None = None) -> int:
                     bot_enabled=bool(runtime.bot_enabled),
                     active_symbols=symbols,
                     ticks=ticks,
+                    last_valid_ticks=last_valid_ticks,
                     decisions=decisions,
                     decisions_by_mode=decisions_by_mode,
                     api_health=market.health(),
@@ -913,6 +952,7 @@ def run(account_id: str | None = None) -> int:
                 bot_enabled=False,
                 active_symbols=symbols,
                 ticks=ticks,
+                last_valid_ticks=last_valid_ticks,
                 decisions=decisions,
                 error=error,
                 working_dates=[],

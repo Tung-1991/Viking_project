@@ -68,6 +68,39 @@ def close_quote_from_ohlc(symbol: str, data: Any, *, now: float | None = None) -
             "frozen": True, "source": "CLOSE"}
 
 
+def account_valuation_quotes(status: dict[str, Any], close_quotes: dict[str, Any] | None = None,
+                             *, now: float | None = None) -> dict[str, Any]:
+    """Use live ticks during trading and the last valid session tick afterward."""
+    checked = time.time() if now is None else now
+    quotes = dict(status.get("ticks") or {})
+    saved = status.get("last_valid_ticks") or {}
+    phases = status.get("symbol_phases") or {}
+    market_phase = str(status.get("market_status", "")).upper()
+    for symbol in set(saved) | set(close_quotes or {}):
+        phase = str(phases.get(symbol, market_phase)).upper()
+        closed = phase in {"CLOSED", "BREAK", "LUNCH"}
+        live = phase in {"ATO", "OPEN", "ATC"}
+        if not (closed or live):
+            continue
+        if live and _valuation_quote(quotes.get(symbol), symbol, checked) is not None:
+            continue
+        tick = saved.get(symbol)
+        if isinstance(tick, dict):
+            observed = timestamp_value(tick.get("received_at", tick.get("timestamp")))
+            same_day = bool(observed and isfinite(observed) and
+                            datetime.fromtimestamp(observed, VN_TZ).date() ==
+                            datetime.fromtimestamp(checked, VN_TZ).date())
+            source = str(tick.get("source", "")).upper()
+            frozen = {**tick, "frozen": True, "source": f"{source}_{'LAST' if closed else 'HELD'}"}
+            if same_day and source in {"WS", "REST"} and _valuation_quote(frozen, symbol, checked) is not None:
+                quotes[symbol] = frozen
+                continue
+        if (_valuation_quote(quotes.get(symbol), symbol, checked) is None and phase == "CLOSED"
+                and _valuation_quote((close_quotes or {}).get(symbol), symbol, checked) is not None):
+            quotes[symbol] = (close_quotes or {})[symbol]
+    return quotes
+
+
 def account_money(balance: dict[str, Any], positions: list[dict[str, Any]],
                   quotes: dict[str, Any] | None = None, *, now: float | None = None) -> dict[str, Any]:
     stock = balance.get("stock") if isinstance(balance.get("stock"), dict) else balance
@@ -131,8 +164,11 @@ def account_money_hint(summary: dict[str, Any]) -> str:
         if summary.get("quote_symbols"):
             lines.append("Giá thị trường từ DNSE: " + ", ".join(summary["quote_symbols"]) + ".")
         for row in summary.get("valuation_rows", []):
-            origin = "giá đóng cửa DNSE" if row["source"] == "CLOSE" else (
-                "giá vị thế DNSE" if row["source"] == "POSITION" else "giá bảng")
+            origin = {
+                "WS_LAST": "giá WebSocket cuối phiên", "REST_LAST": "giá REST cuối phiên",
+                "WS_HELD": "giá WebSocket gần nhất", "REST_HELD": "giá REST gần nhất",
+                "CLOSE": "giá đóng cửa DNSE", "POSITION": "giá vị thế DNSE",
+            }.get(row["source"], "giá bảng")
             lines.append(f"{row['symbol']}: {row['price']:,.0f}đ × {row['quantity']} CP ({origin}).")
     else:
         lines.append("Chưa có đủ dữ liệu tính NAV; số lớn hiện tiền khả dụng.")

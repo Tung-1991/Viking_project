@@ -135,6 +135,19 @@ def test_closed_nav_uses_dnse_close_and_refreshes_display_without_polling_orders
     assert view.snapshots["REAL"][1] == view._account_display_snapshots["REAL"][1]
 
 
+def test_closed_nav_uses_saved_session_ws_without_requesting_ohlc(closed_order_dashboard):
+    view, clock, _broker_clock, session = closed_order_dashboard
+    view.balance_nav = None
+    view.status["last_valid_ticks"] = {"HDB": {
+        "symbol": "HDB", "price": 23.15, "timestamp": clock["now"], "source": "WS",
+    }}
+    view._refresh_snapshots()
+    view._paint_account()
+    assert view.lbl_equity.options["text"] == "50,282,140 ₫"
+    assert not any(url.endswith("/ohlc") for _method, url in session.calls)
+    assert "giá WebSocket cuối phiên" in view._account_money_hint()
+
+
 def test_nav_button_forces_broker_reads_within_cache_interval(closed_order_dashboard):
     view, _clock, _broker_clock, session = closed_order_dashboard
     view.orders_error = None

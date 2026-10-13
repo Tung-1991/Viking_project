@@ -215,10 +215,12 @@ class DNSEMarketWS:
             last = _float(data.get("matchPrice"), None)
             expected = _float(data.get("expectedPrice"), None)
             auction = market_phase()[0] in {"ATO", "ATC"}
+            price_observed = False
             if last is not None and last > 0:
                 tick["price"] = last
                 tick["price_source"] = "MATCH"
                 tick.pop("stale", None)
+                price_observed = True
                 tick["high"] = _float(data.get("highestPrice"), tick.get("high", 0.0))
                 tick["low"] = _float(data.get("lowestPrice"), tick.get("low", 0.0))
                 tick["open"] = _float(data.get("openPrice"), tick.get("open", 0.0))
@@ -232,6 +234,7 @@ class DNSEMarketWS:
                     tick["price"] = expected
                     tick["price_source"] = "EXPECTED"
                     tick.pop("stale", None)
+                    price_observed = True
             if not auction and tick.get("price_source") == "EXPECTED":
                 tick.pop("price", None)
                 tick["stale"] = True
@@ -244,7 +247,11 @@ class DNSEMarketWS:
             if "price" in tick:
                 tick.setdefault("bid", tick["price"])
                 tick.setdefault("ask", tick["price"])
-            tick["timestamp"] = now
+            # A top-of-book update is not a new matched/auction price. Keep
+            # the price's real observation time so a dead last price ages out.
+            if price_observed:
+                tick["timestamp"] = now
+                tick["received_at"] = now
             tick["source"] = "WS"
 
     def _heartbeat(self, generation: int) -> None:

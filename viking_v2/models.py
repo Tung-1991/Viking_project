@@ -407,6 +407,7 @@ class RuntimeStatus:
     bot_enabled: bool
     active_symbols: list[str]
     ticks: dict[str, dict[str, Any]] = field(default_factory=dict)
+    last_valid_ticks: dict[str, dict[str, Any]] = field(default_factory=dict)
     decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
     decisions_by_mode: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     api_health: dict[str, Any] = field(default_factory=dict)

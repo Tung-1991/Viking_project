@@ -63,7 +63,7 @@ from .view import (
 from .info import InfoPopup
 from .quote_direction import quote_background
 from .trade_history import history_datetime, history_groups
-from .account_money import account_money, account_money_hint, close_quote_from_ohlc, displayed_account_snapshot
+from .account_money import account_money, account_money_hint, account_valuation_quotes, close_quote_from_ohlc, displayed_account_snapshot
 from ..services.technical_notifications import notification_session, technical_delivery, TECHNICAL_CATEGORIES
 from .windows import (
     FONT_KEY,
@@ -2964,6 +2964,19 @@ class DashboardActionsMixin:
             text_color=COL_GREEN if healthy_daemon else COL_WARN if daemon == "SYNC" else COL_RED,
         )
         self._paint_bot(bool(status.get("bot_enabled", False)))
+        # Account snapshots change on their own poll; prices arrive every daemon loop.
+        # Repaint only when the selected holding's valuation quote changes.
+        if hasattr(self, "lbl_equity"):
+            _balance, held, _orders = displayed_account_snapshot(self, str(self.mode.get()))
+            valuation = account_valuation_quotes(status, getattr(self, "_account_close_quotes", {}), now=now)
+            signature = tuple(sorted((str(row.get("symbol", "")).upper(),
+                                      str((valuation.get(str(row.get("symbol", "")).upper()) or {}).get("price", "")),
+                                      str((valuation.get(str(row.get("symbol", "")).upper()) or {}).get("source", "")),
+                                      str((valuation.get(str(row.get("symbol", "")).upper()) or {}).get("stale", "")))
+                                     for row in held if isinstance(row, dict) and position_quantity(row) > 0))
+            if signature != getattr(self, "_last_nav_quote_signature", None):
+                self._last_nav_quote_signature = signature
+                self._paint_account(status=status)
         tick = (status.get("ticks") or {}).get(symbol) or {}
         raw_price = (
             tick.get("price")
@@ -4202,9 +4215,12 @@ class DashboardActionsMixin:
                     shown = values.get("REAL") or display_values.get("REAL")
                     get_ohlc = getattr(self.real, "get_ohlc", None)
                     if shown and callable(get_ohlc):
+                        session_quotes = account_valuation_quotes(status, now=now)
                         symbols = {str(row.get("symbol", "")).upper() for row in shown[1]
                                    if isinstance(row, dict) and position_quantity(row) > 0}
                         for symbol in sorted(symbols - {""}):
+                            if str((session_quotes.get(symbol) or {}).get("source", "")).upper() in {"WS_LAST", "REST_LAST"}:
+                                continue
                             try:
                                 data = get_ohlc(symbol, "1D", int(now - 4 * 86400), int(now))
                                 quote = close_quote_from_ohlc(symbol, data, now=now)
@@ -4328,14 +4344,12 @@ class DashboardActionsMixin:
         if popup and popup.top.winfo_exists() and popup.top.winfo_viewable() and popup.tabs.get() == "MÃ CK":
             popup._refresh_priority_summary()
 
-    def _paint_account(self) -> None:
+    def _paint_account(self, *, status: dict[str, Any] | None = None) -> None:
         mode = self.mode.get()
         balance, positions, _orders = displayed_account_snapshot(self, mode)
         bridge = getattr(self, "bridge", None)
-        status = bridge.read_status() if bridge else {}
-        quotes = dict(status.get("ticks") or {})
-        if str(status.get("market_status", "")).upper() == "CLOSED":
-            quotes.update(getattr(self, "_account_close_quotes", {}))
+        status = status if status is not None else bridge.read_status() if bridge else {}
+        quotes = account_valuation_quotes(status, getattr(self, "_account_close_quotes", {}))
         money = account_money(balance, positions, quotes)
         fault = getattr(self, "_account_snapshot_faults", {}).get(mode) or {}
         old_money = bool(fault and fault.get("stage") != "ORDERS_SNAPSHOT")
@@ -4383,9 +4397,7 @@ class DashboardActionsMixin:
         balance, positions, _orders = displayed_account_snapshot(self, mode)
         bridge = getattr(self, "bridge", None)
         status = bridge.read_status() if bridge else {}
-        quotes = dict(status.get("ticks") or {})
-        if str(status.get("market_status", "")).upper() == "CLOSED":
-            quotes.update(getattr(self, "_account_close_quotes", {}))
+        quotes = account_valuation_quotes(status, getattr(self, "_account_close_quotes", {}))
         text = account_money_hint(account_money(balance, positions, quotes))
         fault = getattr(self, "_account_snapshot_faults", {}).get(mode) or {}
         if fault.get("stage") == "ORDERS_SNAPSHOT":

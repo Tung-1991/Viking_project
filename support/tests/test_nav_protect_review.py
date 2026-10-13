@@ -6,12 +6,13 @@ from types import SimpleNamespace
 import pytest
 
 from viking_v2.config import AppSettings
-from viking_v2.dashboard.account_money import account_money, account_money_hint, close_quote_from_ohlc
+from viking_v2.dashboard.account_money import account_money, account_money_hint, account_valuation_quotes, close_quote_from_ohlc
 from viking_v2.dashboard.panels import DashboardPanelsMixin
 from viking_v2.models import OrderIntent, StrategyDecision
 from viking_v2.rules.business import StaticRule, StaticRuleParameters
 from viking_v2.rules.state import RuleStateStore
 from viking_v2.rules.window import RuleSettingsPopup
+from viking_v2.services.daemon import remember_last_valid_tick
 from viking_v2.storage import JSONLineJournal
 from viking_v2.trading.execution import ExecutionService
 from viking_v2.trading.market import VN_TZ
@@ -34,6 +35,65 @@ def test_dnse_same_day_close_replaces_stale_position_price_in_display_nav():
     assert account_money(balance, positions, now=closed_at)["value"] == 49952140
     assert close_quote_from_ohlc("HDB", {"t": [closed_at - 86400], "c": [23.1]}, now=closed_at) is None
     assert close_quote_from_ohlc("HDB", {"t": [closed_at], "c": [0]}, now=closed_at) is None
+
+
+def test_nav_holds_final_valid_websocket_price_after_close_and_restart():
+    closed_at = datetime(2026, 10, 13, 15, 7, tzinfo=VN_TZ).timestamp()
+    price_at = closed_at - 1200
+    last = {"symbol": "HDB", "price": 23.15, "timestamp": price_at, "source": "WS"}
+    status = {"market_status": "CLOSED", "ticks": {"HDB": {**last, "stale": True}},
+              "last_valid_ticks": {"HDB": last}}
+    close = {"HDB": close_quote_from_ohlc("HDB", {"t": [closed_at - 900], "c": [23.1]}, now=closed_at)}
+    selected = account_valuation_quotes(status, close, now=closed_at)
+    assert selected["HDB"]["price"] == 23.15
+    assert selected["HDB"]["source"] == "WS_LAST" and selected["HDB"]["frozen"]
+    assert not selected["HDB"].get("stale")
+    balance = {"stock": {"totalCash": 36392140, "totalDebt": 0}}
+    positions = [{"symbol": "HDB", "openQuantity": 600, "marketPrice": 22600}]
+    money = account_money(balance, positions, selected, now=closed_at)
+    assert money["value"] == 50282140
+    assert "giá WebSocket cuối phiên" in account_money_hint(money)
+    assert status["ticks"]["HDB"]["stale"]  # Display valuation does not repair trading state.
+
+
+def test_nav_live_websocket_updates_and_falls_back_only_without_valid_session_tick():
+    closed_at = datetime(2026, 10, 13, 15, 7, tzinfo=VN_TZ).timestamp()
+    last = {"symbol": "HDB", "price": 23.05, "timestamp": closed_at - 600, "source": "WS"}
+    fresh = {"symbol": "HDB", "price": 23.15, "timestamp": closed_at - 1, "source": "WS"}
+    close = {"HDB": close_quote_from_ohlc("HDB", {"t": [closed_at - 900], "c": [23.1]}, now=closed_at)}
+    status = {"market_status": "OPEN", "ticks": {"HDB": fresh}, "last_valid_ticks": {"HDB": last}}
+    assert account_valuation_quotes(status, close, now=closed_at)["HDB"]["price"] == 23.15
+    status["ticks"]["HDB"] = {**fresh, "stale": True}
+    held = account_valuation_quotes(status, close, now=closed_at)["HDB"]
+    assert held["price"] == 23.05 and held["source"] == "WS_HELD"
+    status["ticks"]["HDB"] = fresh
+    status["market_status"] = "CLOSED"
+    assert account_valuation_quotes(status, close, now=closed_at)["HDB"]["price"] == 23.05
+    status["last_valid_ticks"]["HDB"] = {**last, "stale": True}
+    assert account_valuation_quotes(status, close, now=closed_at)["HDB"]["price"] == 23.15
+    status["ticks"]["HDB"] = {**fresh, "stale": True}
+    assert account_valuation_quotes(status, close, now=closed_at)["HDB"]["source"] == "CLOSE"
+    status["last_valid_ticks"]["HDB"] = {**last, "timestamp": closed_at - 86400}
+    assert account_valuation_quotes(status, close, now=closed_at)["HDB"]["source"] == "CLOSE"
+
+
+def test_last_valid_session_tick_prefers_ws_and_ignores_bad_observations():
+    checked = datetime(2026, 10, 13, 14, 29, tzinfo=VN_TZ).timestamp()
+    cache = {}
+    ws = {"symbol": "HDB", "price": 23.1, "timestamp": checked - 5, "source": "WS"}
+    remember_last_valid_tick(cache, "HDB", ws, now=checked)
+    remember_last_valid_tick(cache, "HDB", {**ws, "price": 23.2, "source": "REST", "timestamp": checked - 5}, now=checked)
+    remember_last_valid_tick(cache, "HDB", {**ws, "price": 23.3, "timestamp": checked, "stale": True}, now=checked)
+    remember_last_valid_tick(cache, "HDB", {**ws, "price": 23.4, "timestamp": checked,
+                                            "price_frozen": True}, now=checked)
+    assert cache["HDB"]["price"] == 23.1
+    remember_last_valid_tick(cache, "HDB", {**ws, "price": 23.15, "timestamp": checked}, now=checked)
+    assert cache["HDB"]["price"] == 23.15
+    remember_last_valid_tick(cache, "HDB", {**ws, "price": 23.2, "source": "REST", "timestamp": checked + 1},
+                             now=checked + 1)
+    assert cache["HDB"]["price"] == 23.2
+    remember_last_valid_tick(cache, "HDB", {**ws, "timestamp": checked - 86400}, now=checked)
+    assert cache["HDB"]["price"] == 23.2
 
 
 @pytest.mark.parametrize("frozen", [False, True])
