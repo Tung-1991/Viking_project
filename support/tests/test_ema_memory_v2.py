@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from viking_v2.rules.business import StaticRuleParameters, indicator_snapshot
-from viking_v2.rules.ema_memory import advance_memory, memory_caption, memory_count_scope, memory_day_counts, memory_hint
+from viking_v2.rules.ema_memory import advance_memory, memory_caption, memory_count_scope, memory_day_counts, memory_hint, memory_window_counts
 from viking_v2.rules.state import RuleStateStore
 from viking_v2.services.session_cross import SessionCrossService, SessionPriceCache
 from viking_v2.trading.market import VN_TZ
@@ -81,6 +81,7 @@ def test_legacy_counts_are_today_only_when_start_and_observation_prove_it():
     for key in tuple(row):
         if key.startswith("daily_"):
             row.pop(key)
+    row.pop("count_days", None)
     row.update(up_count=19, down_count=18)
     assert memory_day_counts(row, now=START)["up"] == 19
     assert memory_day_counts(row, now=START)["down"] == 18
@@ -92,6 +93,45 @@ def test_legacy_counts_are_today_only_when_start_and_observation_prove_it():
     assert result["daily_count_partial"]
     assert result["up_count"] == 19 and result["down_count"] == 18
     assert result["cross_id"] == identity and result["valid"]
+
+
+def test_window_counts_today_plus_prior_sessions_without_resetting_va(tmp_path):
+    from copy import deepcopy
+    thursday = START.replace(day=8)
+    friday = thursday + timedelta(days=1)
+    monday = friday + timedelta(days=3)
+    tuesday = monday + timedelta(days=1)
+    row = observe({}, 99, 100, thursday)
+    row = observe(row, 101, 100, friday)
+    for day in (monday, tuesday):
+        row = observe(row, 99, 100, day)
+        row = observe(row, 101, 100, day + timedelta(seconds=1))
+    row["used"] = True
+    state = RuleStateStore(tmp_path / "rules.json")
+    state.save_session_cross("IDC", "REAL", row)
+    row = RuleStateStore(tmp_path / "rules.json").session_cross("IDC", "REAL")
+    before = deepcopy(row)
+    for prior, total, first in [(0, 2, "2026-10-13"), (1, 4, "2026-10-12"),
+                                 (2, 5, "2026-10-09"), (3, 5, "2026-10-08")]:
+        counts = memory_window_counts(row, now=tuesday, prior_sessions=prior)
+        assert counts["up"] + counts["down"] == total
+        assert counts["start"] == first and counts["end"] == "2026-10-13"
+    counts = memory_window_counts(row, now=tuesday, prior_sessions=1, holidays=["2026-10-12"])
+    assert counts["up"] + counts["down"] == 3
+    assert row == before and row["used"] and row["cross_id"] == before["cross_id"]
+
+
+def test_window_cannot_relabel_legacy_all_time_totals_as_recent_sessions():
+    row = {"initialized": True, "started_at": "2026-10-08T09:00:00+07:00",
+           "observed_at": "2026-10-13T14:00:00+07:00", "up_count": 19, "down_count": 18}
+    now = START.replace(day=13)
+    assert memory_window_counts(row, now=now, prior_sessions=1)["up"] is None
+    entire_span = memory_window_counts(row, now=now, prior_sessions=3)
+    assert entire_span["up"] + entire_span["down"] == 37
+    row.update(daily_count_day="2026-10-13", daily_up_count=1, daily_down_count=1,
+               daily_count_partial=True)
+    assert memory_window_counts(row, now=now)["up"] == 1
+    assert memory_window_counts(row, now=now, prior_sessions=1)["up"] is None
 
 
 def test_memory_count_scope_uses_saved_watch_and_history_starts():

@@ -6,7 +6,7 @@ import pytest
 
 from viking_v2.models import BrokerOrderResult
 from viking_v2.rules.business import StaticRule, StaticRuleParameters, indicator_snapshot
-from viking_v2.rules.ema_memory import lookback_start, memory_caption, memory_fields, memory_hint
+from viking_v2.rules.ema_memory import lookback_start, memory_caption, memory_fields, memory_hint, memory_window_counts
 from viking_v2.rules.planner import StrategyOrderPlanner
 from viking_v2.rules.state import RuleStateStore
 from viking_v2.services.session_cross import SessionCrossService, SessionPriceCache
@@ -101,6 +101,21 @@ def test_va_opt_in_scans_prior_three_sessions_then_retains_cross_across_restart(
                               params, NOW+timedelta(days=1), 'HOSE')
     assert later['cross_id'] == result['cross_id'] and later['used']
     assert later['state'] == 'SESSION_USED' and later['expires_at'] == 0
+
+
+def test_historical_counts_have_days_and_only_selected_sessions_are_summed(tmp_path):
+    broker, _, _, params, _, sample = setup(tmp_path, mode='VA')
+    params.buy_ema_va_lookback_enabled = True
+    result = sample()
+    assert result['lookback_count_days']['2026-10-02']['up'] == 1
+    calls = len(broker.calls)
+    today = memory_window_counts(result, now=NOW)
+    previous = memory_window_counts(result, now=NOW, prior_sessions=1)
+    later = memory_window_counts(result, now=NOW + timedelta(days=4), prior_sessions=1)
+    assert today['up'] + today['down'] == 0
+    assert previous['up'] + previous['down'] == 1
+    assert later['up'] + later['down'] == 0
+    assert len(broker.calls) == calls and result['valid']
 
 
 def test_va_lookback_reactivation_scans_before_original_watch_start(tmp_path):

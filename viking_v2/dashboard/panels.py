@@ -1900,16 +1900,17 @@ class DashboardPanelsMixin:
         self._preview_ema_cross_evidence = (caption, evidence)
         widget._viking_full_cross_text = caption.removeprefix("CẮT EMA · ")
         if tracking:
-            from ..rules.ema_memory import memory_day_counts
-            daily = memory_day_counts(evidence, now=market_now())
+            from ..rules.ema_memory import memory_window_counts
+            prior_sessions = (int(params.get("buy_ema_cross_sessions", 3))
+                              if view_mode == "SESSIONS" or params.get("buy_ema_va_lookback_enabled") else 0)
+            counts = memory_window_counts(evidence, now=market_now(), prior_sessions=prior_sessions,
+                                          holidays=self.settings.trading_holidays)
             state_label = {
                 "SESSION_ACTIVE": "ĐÃ CẮT LÊN", "SESSION_USED": "ĐÃ DÙNG", "EXPIRED": "HẾT HẠN",
                 "WAIT_UP": "CHỜ EMA3 > EMA6", "WAIT_DOWN": "CHỜ XUỐNG→LÊN",
                 "UNKNOWN": "CHỜ DỮ LIỆU", "MARKET_CLOSED": "ĐÃ ĐÓNG",
             }.get(evidence.get("state"), "CHỜ")
-            total_crosses = daily["up"] + daily["down"] if daily["up"] is not None else "—"
-            prior_sessions = (int(params.get("buy_ema_cross_sessions", 3))
-                              if view_mode == "SESSIONS" or params.get("buy_ema_va_lookback_enabled") else 0)
+            total_crosses = counts["up"] + counts["down"] if counts["up"] is not None else "—"
             self.preview_rule_cross_counts.configure(
                 text=f"{total_crosses} CẮT - {prior_sessions}P",
                 text_color={"ok": COL_GREEN, "wait": COL_WARN}.get(role, COL_MUTED),
@@ -1954,20 +1955,23 @@ class DashboardPanelsMixin:
         self._render_ema_cross_preview(getattr(self, "_preview_ema_details", {}))
 
     def _ema_memory_preview_hint(self) -> str:
-        from ..rules.ema_memory import memory_day_counts
+        from ..rules.ema_memory import memory_window_counts
         _caption, evidence = getattr(self, "_preview_ema_cross_evidence", ("", {}))
         active = self.settings.rule_parameters.get("buy_ema_cross_mode", "VA")
-        daily = memory_day_counts(evidence, now=market_now())
         mode = evidence.get("mode", active)
         sessions = int(self.settings.rule_parameters.get("buy_ema_cross_sessions", 3))
         scan = sessions if mode == "SESSIONS" or self.settings.rule_parameters.get("buy_ema_va_lookback_enabled") else 0
-        counted = (f"Hôm nay: {daily['up']} lên + {daily['down']} xuống."
-                   if daily["up"] is not None else "Chưa tách được số cắt hôm nay từ dữ liệu cũ.")
-        if daily["partial"]:
-            counted += f" Đếm từ {str(daily['from'])[11:16]}."
+        counts = memory_window_counts(evidence, now=market_now(), prior_sessions=scan,
+                                      holidays=self.settings.trading_holidays)
+        period = ((f"{counts['start']} → {counts['end']}" if counts['start'] else "Chưa đủ lịch phiên")
+                  if scan else "Hôm nay")
+        counted = (f"{period}: {counts['up']} lên + {counts['down']} xuống."
+                   if counts["up"] is not None else f"{period}: chưa tách được số cắt từ dữ liệu cũ.")
+        if counts["partial"]:
+            counted += f" Đếm từ {str(counts['from'])[11:16]}."
         policy = (f"X phiên: còn {evidence.get('remaining_sessions', 0)}/{evidence.get('sessions', 3)} phiên."
                   if mode == "SESSIONS" else "VA: giữ lần cắt tới khi dùng.")
-        history = f"{scan}P: quét {scan} phiên trước lúc thêm mã (giá phút)." if scan else "0P: không quét các phiên trước."
+        history = f"{scan}P: hôm nay + {scan} phiên trước; bỏ ngày nghỉ." if scan else "0P: chỉ đếm phiên hôm nay."
         return f"{counted}\n{history}\n{policy} ⇄ chỉ đổi góc xem."
 
     def _atr_preview_hint(self) -> str:

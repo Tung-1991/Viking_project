@@ -31,3 +31,9 @@ thêm lại mã sẽ lập mốc mới. Tooltip hiện cả `started_at` và m�
 dõi mã**, kể cả bật công tắc sau nhiều ngày. Khóa cache quét có phiên bản mới,
 buộc quét lại state cũ từng lấy trước ngày bật, giữ nguyên bộ đếm quan sát trực
 tiếp và ID giao cắt đã dùng.
+
+Preview hiện đếm theo phạm vi: `0P` chỉ phiên hôm nay; `XP` gồm hôm nay và X phiên
+giao dịch trước đó, bỏ ngày nghỉ. Ví dụ `37 CẮT - 3P` là 37 lần trong bốn phiên,
+không phải 37 lần mỗi phiên. Hint ghi ngày đầu và ngày cuối. Bộ đếm ngày lưu qua
+restart; dữ liệu cũ chỉ có tổng tích lũy không được suy thành số cắt của một phạm vi
+hẹp hơn. Phạm vi đếm không thay đổi thời hạn và việc sử dụng tín hiệu VA.

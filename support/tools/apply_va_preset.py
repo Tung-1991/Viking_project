@@ -146,7 +146,7 @@ def main() -> int:
         print("[PROTECT] Bat tin cham muc; khong thay doi cong tac bao ve hay AUTO/ALERT.")
         print("[ENTRY] VA: QUET QUA KHU OFF (0P); cat len sau khi theo doi, giu toi khi dung.")
         print("[ENTRY] Ban dau EMA nhanh < cham: mot lan cat len la du; RSI/gio mua/von van phai dat.")
-        print("[PREVIEW] So CAT chi dem hom nay; sang ngay moi ve 0. X=3 chi dung khi doi mode/ON quet truoc.")
+        print("[PREVIEW] 0P: chi hom nay; XP: hom nay + X phien truoc. X=3 chi dung khi doi mode/ON quet truoc.")
         print(f"[KL] AUTO tinh so CP theo ngan sach; preset nay cap IDC {caps['IDC']:g} trieu.")
         print("[PROTECT] ARM va DYNAMIC: BAN 33% GOC + LAP ON rieng; E AUTO ban 100%. Khong tu bat PROTECT tren trade.")
         print("[DYNAMIC] Giu 72% lai dinh = cho lai giam 28% tu dinh; ATR van dung muc bao ve cao hon.")

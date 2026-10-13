@@ -65,6 +65,61 @@ def memory_day_counts(row, *, now):
     return result  # A legacy multi-day total cannot invent today's count.
 
 
+def memory_window_counts(row, *, now, prior_sessions=0, working_dates=None, holidays=None):
+    """Count observed flips inside today plus the selected prior trading sessions."""
+    today = now.astimezone(VN_TZ).date().isoformat()
+    start = lookback_start(now, prior_sessions, working_dates, holidays) if prior_sessions else now
+    result = {**memory_day_counts(row, now=now), "start": _local_day(start), "end": today}
+    if not prior_sessions:
+        return result
+    if start is None:
+        return {**result, "up": None, "down": None}
+    start_day = result["start"]
+
+    def count(ledger, up, down, first, last):
+        ledger = dict(ledger or {})
+        if not first or not last:
+            return (0, 0) if not up and not down else (None, None)
+        if last < start_day or first > today:
+            return 0, 0
+        try:
+            totals = tuple(sum(int(value[key]) for value in ledger.values()) for key in ("up", "down"))
+            if totals != (int(up), int(down)):
+                if start_day <= first <= last <= today:
+                    return int(up), int(down)  # The complete legacy span is inside the window.
+                earliest = min(ledger) if ledger else last
+                unknown_end = (earliest if ledger.get(earliest, {}).get("partial") else
+                               (datetime.fromisoformat(earliest) - timedelta(days=1)).date().isoformat())
+                if start_day <= unknown_end and first <= today:
+                    return None, None
+            selected = [value for day, value in ledger.items() if start_day <= day <= today
+                        and (day == today or is_working_day(datetime.fromisoformat(day).date(), working_dates, holidays))]
+            return tuple(sum(int(value[key]) for value in selected) for key in ("up", "down"))
+        except (TypeError, ValueError, KeyError, OverflowError):
+            return None, None
+
+    live = dict(row.get("count_days") or {})
+    recorded_day = _local_day(row.get("daily_count_day"))
+    if recorded_day:
+        live[recorded_day] = {"up": row.get("daily_up_count"), "down": row.get("daily_down_count"),
+                              "partial": bool(row.get("daily_count_partial"))}
+    up, down = count(live, row.get("up_count", 0), row.get("down_count", 0),
+                     _local_day(row.get("started_at") or (row.get("baseline") or {}).get("at")),
+                     _local_day(row.get("observed_at")))
+    if row.get("mode") == "SESSIONS" or row.get("va_lookback_enabled"):
+        if row.get("lookback_ready") is False:
+            up = down = None
+        else:
+            historical = count(row.get("lookback_count_days"), row.get("lookback_up_count", 0),
+                               row.get("lookback_down_count", 0), _local_day(row.get("lookback_started_at")),
+                               _local_day(row.get("lookback_anchor_at") or row.get("started_at")))
+            if up is None or historical[0] is None:
+                up = down = None
+            else:
+                up, down = up + historical[0], down + historical[1]
+    return {**result, "up": up, "down": down, "partial": False}
+
+
 def seed_lookback(row, observations, *, start, now, **args):
     """Keep pre-admission evidence separate so VA and consumed live IDs survive toggles."""
     row = dict(row or {})
@@ -79,7 +134,8 @@ def seed_lookback(row, observations, *, start, now, **args):
         cross["cross_id"] = f"EMA:HISTORY:{history['watch_id']}:{args['pair']}:{cross['cross_timestamp']}"
     return {**row, "lookback_ready": True, "lookback_started_at": start.isoformat(),
             "lookback_up_count": history.get("up_count", 0),
-            "lookback_down_count": history.get("down_count", 0), "lookback_cross": cross}
+            "lookback_down_count": history.get("down_count", 0),
+            "lookback_count_days": history.get("count_days", {}), "lookback_cross": cross}
 
 
 def memory_deadline(cross_at, count, exchange, working_dates=None, holidays=None):
@@ -153,6 +209,11 @@ def advance_memory(row, current, *, now, pair, mode, sessions, exchange,
         return refresh_memory(row, now=now, mode=mode, sessions=sessions, exchange=exchange,
                               working_dates=working_dates, holidays=holidays,
                               va_lookback_enabled=va_lookback_enabled)
+    count_days = dict(row.get("count_days") or {})
+    old_day = _local_day(row.get("daily_count_day"))
+    if old_day:
+        count_days[old_day] = {"up": row.get("daily_up_count", 0), "down": row.get("daily_down_count", 0),
+                               "partial": bool(row.get("daily_count_partial"))}
     daily = memory_day_counts(row, now=now)
     row.update(daily_count_day=daily["day"], daily_up_count=daily["up"] or 0,
                daily_down_count=daily["down"] or 0,
@@ -183,6 +244,12 @@ def advance_memory(row, current, *, now, pair, mode, sessions, exchange,
         row["baseline"] = {"at": now.isoformat(), "buy_ema_fast": fast, "buy_ema_slow": slow}
     row.update(initialized=True, current_ready=True, current_fast=float(fast), current_slow=float(slow),
                observed_at_epoch=now.timestamp(), observed_at=now.isoformat())
+    count_days[daily["day"]] = {"up": row["daily_up_count"], "down": row["daily_down_count"],
+                                "partial": row["daily_count_partial"]}
+    # Only the display ledger is bounded; retained VA evidence and used IDs are unchanged.
+    eligible_days = [day for day in sorted(count_days) if _local_day(day) == day and
+                     (day == daily["day"] or is_working_day(datetime.fromisoformat(day).date(), working_dates, holidays))]
+    row["count_days"] = {day: count_days[day] for day in eligible_days[-251:]}
     return refresh_memory(row, now=now, mode=mode, sessions=sessions, exchange=exchange,
                           working_dates=working_dates, holidays=holidays,
                           va_lookback_enabled=va_lookback_enabled)

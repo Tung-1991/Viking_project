@@ -603,7 +603,8 @@ class RuleSettingsPopup:
         self.buy_ema_cross_sessions.grid(row=2, column=1, padx=(6, 0), pady=(6, 0))
         _HoverHint(self.buy_ema_cross_sessions,
                    "VA + QUÉT: số phiên nhìn lại.\n"
-                   "X PHIÊN: số phiên nhìn lại và thời hạn lần cắt.")
+                   "X PHIÊN: số phiên nhìn lại và thời hạn lần cắt.\n"
+                   "Số CẮT: 0P chỉ hôm nay; XP cộng X phiên trước.")
         def refresh_memory_field(*_args):
             va = self.buy_ema_cross_mode.get() == "∞ VA"
             self.buy_ema_va_lookback_switch.configure(state="normal" if va else "disabled")

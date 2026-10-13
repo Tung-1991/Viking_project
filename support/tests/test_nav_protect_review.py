@@ -325,7 +325,7 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
             viewing_history = (mode == "SESSIONS") != alternate
             assert evidence["mode"] == ("SESSIONS" if viewing_history else "VA")
             assert evidence["valid"] == viewing_history
-            assert subject.preview_rule_cross_counts.cget("text") == ("0 CẮT - 3P" if viewing_history else "0 CẮT - 0P")
+            assert subject.preview_rule_cross_counts.cget("text") == ("1 CẮT - 3P" if viewing_history else "0 CẮT - 0P")
             assert subject.preview_rule_cross_title.cget("text") == ("⏳ 3P" if viewing_history else "∞ VA")
             assert int(subject.preview_rule_cross.grid_info()["column"]) == 2
             assert int(subject.preview_rule_cross_detail.grid_info()["column"]) == 2
@@ -349,16 +349,27 @@ def test_preview_counts_today_without_losing_yesterdays_unused_cross(ui_root, mo
     subject.settings = AppSettings()
     subject._build_order_preview_tab(top)
     source = {"tracking_version": 2, "initialized": True, "current_ready": True,
-              "started_at": "2026-10-08T09:00:00+07:00", "observed_at": now.isoformat(),
+              "started_at": "2026-10-07T09:00:00+07:00", "observed_at": now.isoformat(),
               "current_fast": 23, "current_slow": 22, "up_count": 99, "down_count": 98,
               "daily_count_day": "2026-10-13", "daily_up_count": 19, "daily_down_count": 18,
+              "count_days": {"2026-10-07": {"up": 79, "down": 79},
+                             "2026-10-12": {"up": 1, "down": 1},
+                             "2026-10-13": {"up": 19, "down": 18}},
               "cross_id": "EMA:UNUSED", "cross_at": "2026-10-12T14:10:00+07:00"}
     before = deepcopy(source)
     try:
         subject._render_ema_cross_preview({"ema_cross": source})
         assert subject.preview_rule_cross_counts.cget("text") == "37 CẮT - 0P"
         assert "Hôm nay: 19 lên + 18 xuống" in subject._ema_memory_preview_hint()
-        assert "0P: không quét các phiên trước" in subject._ema_memory_preview_hint()
+        assert "0P: chỉ đếm phiên hôm nay" in subject._ema_memory_preview_hint()
+        subject.settings.rule_parameters['buy_ema_va_lookback_enabled'] = True
+        subject._render_ema_cross_preview({"ema_cross": source})
+        assert subject.preview_rule_cross_counts.cget("text") == "39 CẮT - 3P"
+        hint = subject._ema_memory_preview_hint()
+        assert '2026-10-08 → 2026-10-13' in hint
+        assert '3P: hôm nay + 3 phiên trước' in hint
+        assert subject._preview_ema_cross_evidence[1]['cross_id'] == source['cross_id']
+        subject.settings.rule_parameters['buy_ema_va_lookback_enabled'] = False
         monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: now + timedelta(days=1))
         subject._render_ema_cross_preview({"ema_cross": source})
         assert subject.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
