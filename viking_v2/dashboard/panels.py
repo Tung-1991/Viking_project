@@ -2085,7 +2085,7 @@ class DashboardPanelsMixin:
         period = ((f"{counts['start']} → {counts['end']}" if counts['start'] else "Chưa đủ lịch phiên")
                   if scan else "Hôm nay")
         counted = (f"{period}: {counts['up']} lên + {counts['down']} xuống."
-                   if counts["up"] is not None else f"{period}: chưa tách được số cắt từ dữ liệu cũ.")
+                   if counts["up"] is not None else f"{period}: chưa đủ dữ liệu để đếm.")
         if counts["partial"]:
             counted += f" Đếm từ {str(counts['from'])[11:16]}."
         policy = (f"X phiên: còn {evidence.get('remaining_sessions', 0)}/{evidence.get('sessions', 3)} phiên."

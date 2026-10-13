@@ -37,3 +37,13 @@ giao dịch trước đó, bỏ ngày nghỉ. Ví dụ `37 CẮT - 3P` là 37 l�
 không phải 37 lần mỗi phiên. Hint ghi ngày đầu và ngày cuối. Bộ đếm ngày lưu qua
 restart; dữ liệu cũ chỉ có tổng tích lũy không được suy thành số cắt của một phạm vi
 hẹp hơn. Phạm vi đếm không thay đổi thời hạn và việc sử dụng tín hiệu VA.
+
+Gọi lại API sau phiên: 08/10 có 220 nến phút, 09/10 có 225, 12/10 có 222;
+low mỗi phiên đều cao hơn ngưỡng EMA3=EMA6 tương ứng nên ba phiên trước không có
+giao cắt. Ngày 13/10 có 222 nến phút và 4 lên + 4 xuống theo close phút; đây không
+phải chuỗi tick VM, nên không dùng 8 lần này để thay bộ đếm 37 của VM.
+Hai phạm vi cùng 37 là hợp lý khi phần ba phiên trước đã xác minh bằng 0.
+Nếu mã chỉ bắt đầu theo dõi hôm nay và chưa quét trước, preview XP phải báo thiếu
+dữ liệu, không lấy số hôm nay làm tổng của XP. Nút ⇄ chỉ đổi góc xem; mode thực
+thi vẫn lấy từ RULE. VA giữ lần cắt tới khi dùng; X=3 hết hạn cuối phiên thứ ba,
+tính cả phiên cắt (cắt 13/10 thì hết hạn lúc đóng phiên 15/10).

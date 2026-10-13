@@ -439,6 +439,7 @@ def test_alternate_history_preview_marks_absent_cache_as_unknown(ui_root, monkey
         subject._render_ema_cross_preview({"ema_cross": {"tracking_version": 2, "initialized": True,
             "current_ready": True, "current_fast": 23, "current_slow": 22, "up_count": 0, "down_count": 0}})
         subject.preview_ema_swap.invoke()
+        assert subject.preview_rule_cross_counts.cget("text") == "— CẮT - 3P"
         assert subject._preview_ema_cross_evidence[1]["state"] == "UNKNOWN"
         assert not subject._preview_ema_cross_evidence[1]["valid"]
         assert "CHỜ DỮ LIỆU" in subject.preview_rule_cross.cget("text")

@@ -107,7 +107,10 @@ def memory_window_counts(row, *, now, prior_sessions=0, working_dates=None, holi
                      _local_day(row.get("started_at") or (row.get("baseline") or {}).get("at")),
                      _local_day(row.get("observed_at")))
     if row.get("mode") == "SESSIONS" or row.get("va_lookback_enabled"):
-        if row.get("lookback_ready") is False:
+        admitted_day = _local_day(row.get("started_at") or (row.get("baseline") or {}).get("at"))
+        unscanned = (row.get("lookback_ready") is not True
+                     and (not admitted_day or start_day < admitted_day))
+        if row.get("lookback_ready") is False or unscanned:
             up = down = None
         else:
             historical = count(row.get("lookback_count_days"), row.get("lookback_up_count", 0),

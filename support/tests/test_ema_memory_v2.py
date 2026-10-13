@@ -134,6 +134,26 @@ def test_window_cannot_relabel_legacy_all_time_totals_as_recent_sessions():
     assert memory_window_counts(row, now=now, prior_sessions=1)["up"] is None
 
 
+def test_alternate_history_cannot_treat_unscanned_pre_watch_sessions_as_zero():
+    from copy import deepcopy
+    now = START.replace(day=13)
+    row = {"mode": "VA", "initialized": True, "started_at": now.isoformat(),
+           "observed_at": now.isoformat(), "up_count": 19, "down_count": 18,
+           "daily_count_day": "2026-10-13", "daily_up_count": 19, "daily_down_count": 18}
+    before = deepcopy(row)
+    assert sum(memory_window_counts(row, now=now)[key] for key in ('up', 'down')) == 37
+    alternative = {**row, "mode": "SESSIONS"}
+    assert memory_window_counts(alternative, now=now, prior_sessions=3)['up'] is None
+    alternative.update(lookback_ready=True, lookback_started_at="2026-10-08T00:00:00+07:00",
+                       lookback_anchor_at=now.isoformat(), lookback_up_count=0, lookback_down_count=0)
+    verified = memory_window_counts(alternative, now=now, prior_sessions=3)
+    assert verified['up'] + verified['down'] == 37  # Verified zero in the prior sessions.
+    alternative['lookback_up_count'] = 1
+    verified = memory_window_counts(alternative, now=now, prior_sessions=3)
+    assert verified['up'] + verified['down'] == 38
+    assert row == before
+
+
 def test_memory_count_scope_uses_saved_watch_and_history_starts():
     row = {"mode": "VA", "started_at": "2026-10-09T14:00:00+07:00",
            "observed_at": "2026-10-13T14:30:00+07:00", "up_count": 19, "down_count": 18}
