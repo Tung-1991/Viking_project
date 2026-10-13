@@ -5,6 +5,7 @@ Cập nhật ngày 13/10/2026. Preset: `VA_4_MA_50M.json`.
 | Thiết lập | Giá trị |
 | --- | --- |
 | Mã theo dõi/Priority | MSN, CTS, HDB, IDC |
+| Ngân sách / tổng | MSN 16 · CTS 12 · HDB 15 · IDC 7 triệu / 50 triệu |
 | LƯU TRACE | ON |
 | Từ giờ / đến giờ | 14:00 / 14:30, giờ Việt Nam |
 | Nhịp ghi | 2 phút |
@@ -12,6 +13,8 @@ Cập nhật ngày 13/10/2026. Preset: `VA_4_MA_50M.json`.
 | Đủ khung giờ | 16 mẫu/mã/sổ; 64 mẫu cho bốn mã mỗi sổ |
 | BUY cần EMA cắt lên | ON, chỉ sau khi theo dõi mã |
 | Giữ EMA | ∞ VA; có thể đổi ⏳ X PHIÊN trong RULE (ô X lưu 3) |
+| VA quét trước | OFF (0 phiên); ghi nhận từ lúc theo dõi mã |
+| Dòng số cắt | `37 CẮT - 0P`: 37 lần ghi nhận hôm nay, không quét phiên trước |
 | ARM và DYNAMIC | Mỗi nhóm bán 33% GỐC, REPEAT ON riêng |
 | Lùi lãi đỉnh DYNAMIC | 28% phần lãi → GIỮ LÃI 72%; ATR vẫn lấy mức bảo vệ cao hơn |
 | E AUTO | Bán 100% phần còn lại |
@@ -22,6 +25,11 @@ Ghi cả khi không có BUY hoặc BOT OFF. Thiếu giá/quyết định thì gh
 Nếu đổi sang X PHIÊN, bot quét thêm X phiên trước và phần phiên hiện tại, bỏ ngày nghỉ.
 Lần cắt giữ đúng tuổi: X=3 tính cả phiên cắt, không bắt đầu lại ba phiên từ lúc mở app.
 ∞ VA vẫn chỉ ghi nhận sau khi thêm mã. Preset giữ mặc định ∞ VA.
+
+Ban đầu EMA nhanh < chậm: chỉ cần một lần cắt lên; RSI, vốn và giờ mua vẫn phải đạt.
+Số cắt hôm nay giữ qua restart và về 0 ở ngày mới; bộ nhớ tín hiệu VA chưa dùng vẫn được giữ.
+Ô X=3 không dùng khi VA quét trước OFF. Preset tắt rõ tùy chọn quét trước kể cả máy đang lưu ON.
+AUTO chỉ tính số cổ theo ngân sách. Muốn đổi ngân sách dùng RULE → Priority hoặc nạp preset này.
 
 App cần chạy suốt khung giờ. Ngày nghỉ không ghi; mở muộn hoặc app tắt không bù những mốc đã bỏ lỡ. Mẫu đã ghi không bị ghi trùng khi restart.
 

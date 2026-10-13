@@ -26,8 +26,19 @@ PRESET_FIELDS = {
     "signal_trace_enabled", "signal_trace_interval_minutes", "signal_trace_start", "signal_trace_end",
     "daily_stats_mode", "daily_stats_reset_time", "daily_stats_schedule_version",
 }
-PRESET_RULE_FIELDS = {'normal_sell_pct', 'dynamic_sell_basis', 'normal_repeat_enabled', 'dynamic_repeat_enabled', 'normal_sell_basis', 'buy_ema_cross_mode', 'dynamic_sell_pct', 'protect_config_version', 'max_positions', 'buy_signal_require_ema_cross', 'buy_ema_cross_sessions', 'indicator_exit_policy', 'normal_retention_pct'}
-PRESET_MEMORY_PROTECTION = {'buy_ema_cross_mode': 'VA', 'buy_ema_cross_sessions': 3, 'normal_sell_pct': 33, 'normal_sell_basis': 'ORIGINAL', 'normal_repeat_enabled': True, 'dynamic_sell_pct': 33, 'dynamic_sell_basis': 'ORIGINAL', 'dynamic_repeat_enabled': True, 'protect_config_version': 2, 'normal_retention_pct': 72}
+PRESET_RULE_FIELDS = {
+    "normal_sell_pct", "dynamic_sell_basis", "normal_repeat_enabled", "dynamic_repeat_enabled",
+    "normal_sell_basis", "buy_ema_cross_mode", "dynamic_sell_pct", "protect_config_version",
+    "max_positions", "buy_signal_require_ema_cross", "buy_signal_session_cross_enabled",
+    "buy_ema_cross_sessions", "buy_ema_va_lookback_enabled", "indicator_exit_policy", "normal_retention_pct",
+}
+PRESET_MEMORY_PROTECTION = {
+    "buy_ema_cross_mode": "VA", "buy_ema_cross_sessions": 3,
+    "buy_signal_session_cross_enabled": True, "buy_ema_va_lookback_enabled": False,
+    "normal_sell_pct": 33, "normal_sell_basis": "ORIGINAL", "normal_repeat_enabled": True,
+    "dynamic_sell_pct": 33, "dynamic_sell_basis": "ORIGINAL", "dynamic_repeat_enabled": True,
+    "protect_config_version": 2, "normal_retention_pct": 72,
+}
 
 
 def prepared_settings(account_id: str) -> config.AppSettings:
@@ -51,6 +62,8 @@ def prepared_settings(account_id: str) -> config.AppSettings:
             or preset["bot_em_modes"] != ["IND_EXIT"]
             or preset["rule_parameters"]["indicator_exit_policy"] != "AUTO"
             or preset["rule_parameters"]["buy_signal_require_ema_cross"] is not True
+            or preset["rule_parameters"]["buy_signal_session_cross_enabled"] is not True
+            or preset["rule_parameters"]["buy_ema_va_lookback_enabled"] is not False
             or any(preset["rule_parameters"].get(key) != value for key, value in PRESET_MEMORY_PROTECTION.items())
             or preset["signal_trace_enabled"] is not True
             or preset["daily_stats_mode"] != "DAILY" or preset["daily_stats_reset_time"] != "15:00"
@@ -131,7 +144,10 @@ def main() -> int:
               f"gian {settings.telegram_cooldown_minutes['buy_lost']} phut.")
         print(f"[HE THONG] Gian canh bao {settings.telegram_cooldown_minutes['system']} phut.")
         print("[PROTECT] Bat tin cham muc; khong thay doi cong tac bao ve hay AUTO/ALERT.")
-        print("[ENTRY] EMA cat len SAU KHI THEM MA; giu VA qua phien toi khi dung. RSI/gio mua/von van kiem tra.")
+        print("[ENTRY] VA: QUET QUA KHU OFF (0P); cat len sau khi theo doi, giu toi khi dung.")
+        print("[ENTRY] Ban dau EMA nhanh < cham: mot lan cat len la du; RSI/gio mua/von van phai dat.")
+        print("[PREVIEW] So CAT chi dem hom nay; sang ngay moi ve 0. X=3 chi dung khi doi mode/ON quet truoc.")
+        print(f"[KL] AUTO tinh so CP theo ngan sach; preset nay cap IDC {caps['IDC']:g} trieu.")
         print("[PROTECT] ARM va DYNAMIC: BAN 33% GOC + LAP ON rieng; E AUTO ban 100%. Khong tu bat PROTECT tren trade.")
         print("[DYNAMIC] Giu 72% lai dinh = cho lai giam 28% tu dinh; ATR van dung muc bao ve cao hon.")
         trace_start = datetime.strptime(settings.signal_trace_start, "%H:%M")

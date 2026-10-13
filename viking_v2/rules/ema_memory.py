@@ -23,6 +23,48 @@ def lookback_start(now, count, working_dates=None, holidays=None):
 _CROSS_KEYS = ("cross_id", "cross_at", "cross_timestamp", "previous_fast", "previous_slow", "used")
 
 
+def _local_day(value):
+    try:
+        at = datetime.fromisoformat(str(value))
+        return (at.replace(tzinfo=VN_TZ) if at.tzinfo is None else at.astimezone(VN_TZ)).date().isoformat()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def memory_day_counts(row, *, now):
+    """Today's observed flips, independently of the retained BUY evidence."""
+    today = now.astimezone(VN_TZ).date().isoformat()
+    result = {"day": today, "up": None, "down": None, "from": "", "partial": False}
+    day = _local_day(row.get("daily_count_day"))
+    if day == today:
+        try:
+            return {**result, "up": max(0, int(row["daily_up_count"])),
+                    "down": max(0, int(row["daily_down_count"])),
+                    "from": row.get("daily_count_from", ""),
+                    "partial": bool(row.get("daily_count_partial"))}
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return result
+    if day and day < today:
+        return {**result, "up": 0, "down": 0}
+    if day:
+        return result
+    started = _local_day(row.get("started_at") or (row.get("baseline") or {}).get("at"))
+    observed = _local_day(row.get("observed_at"))
+    if started == observed == today:
+        # A legacy total is safe only when all admitted samples are from today.
+        try:
+            return {**result, "up": max(0, int(row.get("up_count", 0))),
+                    "down": max(0, int(row.get("down_count", 0))),
+                    "from": row.get("started_at") or (row.get("baseline") or {}).get("at", "")}
+        except (TypeError, ValueError, OverflowError):
+            return result
+    if not row.get("initialized") or (observed and observed < today):
+        return {**result, "up": 0, "down": 0}
+    if row.get("up_count", 0) == row.get("down_count", 0) == 0:
+        return {**result, "up": 0, "down": 0}
+    return result  # A legacy multi-day total cannot invent today's count.
+
+
 def seed_lookback(row, observations, *, start, now, **args):
     """Keep pre-admission evidence separate so VA and consumed live IDs survive toggles."""
     row = dict(row or {})
@@ -111,6 +153,11 @@ def advance_memory(row, current, *, now, pair, mode, sessions, exchange,
         return refresh_memory(row, now=now, mode=mode, sessions=sessions, exchange=exchange,
                               working_dates=working_dates, holidays=holidays,
                               va_lookback_enabled=va_lookback_enabled)
+    daily = memory_day_counts(row, now=now)
+    row.update(daily_count_day=daily["day"], daily_up_count=daily["up"] or 0,
+               daily_down_count=daily["down"] or 0,
+               daily_count_from=daily["from"] or now.isoformat(),
+               daily_count_partial=daily["partial"] or daily["up"] is None)
     row["profile"] = pair
     previous_fast, previous_slow = row.get("current_fast"), row.get("current_slow")
     if row.get("initialized") and now.timestamp() > float(row.get("observed_at_epoch", 0)):
@@ -120,12 +167,14 @@ def advance_memory(row, current, *, now, pair, mode, sessions, exchange,
         relation = 1 if fast > slow else -1 if fast < slow else 0
         if relation == 1 and previous_relation == -1:
             row["up_count"] = int(row.get("up_count", 0)) + 1
+            row["daily_up_count"] += 1
             row.update(cross_at=now.isoformat(), cross_timestamp=now.timestamp(), used=False,
                        cross_id=f"EMA:{row['watch_id']}:{row['up_count']}:{now.timestamp()}",
                        previous_fast=previous_fast, previous_slow=previous_slow)
             row["cross_source"] = "LIVE"
         elif relation == -1 and previous_relation == 1:
             row["down_count"] = int(row.get("down_count", 0)) + 1
+            row["daily_down_count"] += 1
             row["last_down_at"] = now.isoformat()
         if relation:
             row["last_relation"] = relation

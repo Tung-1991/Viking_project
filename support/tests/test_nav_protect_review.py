@@ -200,6 +200,7 @@ def test_arriving_stock_waits_for_sell_decision_instead_of_using_wait_fraction(t
 @pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
 def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_root, scale):
     import customtkinter as ctk
+    from viking_v2.trading.market import market_now
     ctk.set_widget_scaling(scale)
     top = ctk.CTkToplevel(ui_root)
     top.geometry("1000x720+0+0")
@@ -215,6 +216,8 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
         subject._fit_phase2_row()
         evidence = {"tracking_version": 2, "mode": "VA", "state": "SESSION_ACTIVE", "required": True,
                     "up_count": 2, "down_count": 1, "ready": True, "valid": True, "above": True,
+                    "daily_count_day": market_now().date().isoformat(),
+                    "daily_up_count": 2, "daily_down_count": 1,
                     "previous_fast": 22.6, "previous_slow": 22.3}
         subject._render_ema_cross_preview({"ema_cross": evidence})
         ui_root.update_idletasks()
@@ -228,7 +231,7 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
             assert widget.winfo_x() >= 0
             assert widget.winfo_x() + widget.winfo_width() <= widget.master.winfo_width()
             assert widget.winfo_y() + widget.winfo_height() <= widget.master.winfo_height()
-        assert subject.preview_rule_cross_counts.cget("text") == "3 CẮT · ?P"
+        assert subject.preview_rule_cross_counts.cget("text") == "3 CẮT - 0P"
         assert subject.preview_rule_cross_counts.cget("font")[1] == 14
         assert subject.preview_rule_cross.cget("font")[1] == 11
         assert subject.preview_rule_ema.cget("font")[1] == 12
@@ -239,7 +242,7 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
         }})
         ui_root.update_idletasks()
         assert subject.preview_rule_cross.cget("text") == "CHỜ EMA3 > EMA6"
-        assert subject.preview_rule_cross_counts.cget("text") == "0 CẮT · ?P"
+        assert subject.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
         assert subject.preview_rule_cross_detail.cget("text") == (
             "CHƯA GHI NHẬN" if subject.preview_rule_cross.master._viking_cross_narrow else "TRƯỚC: —"
         )
@@ -322,7 +325,7 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
             viewing_history = (mode == "SESSIONS") != alternate
             assert evidence["mode"] == ("SESSIONS" if viewing_history else "VA")
             assert evidence["valid"] == viewing_history
-            assert subject.preview_rule_cross_counts.cget("text") == ("1 CẮT · 4P" if viewing_history else "0 CẮT · 2P")
+            assert subject.preview_rule_cross_counts.cget("text") == ("0 CẮT - 3P" if viewing_history else "0 CẮT - 0P")
             assert subject.preview_rule_cross_title.cget("text") == ("⏳ 3P" if viewing_history else "∞ VA")
             assert int(subject.preview_rule_cross.grid_info()["column"]) == 2
             assert int(subject.preview_rule_cross_detail.grid_info()["column"]) == 2
@@ -332,6 +335,38 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
     finally:
         top.destroy()
         ctk.set_widget_scaling(1.0)
+
+
+def test_preview_counts_today_without_losing_yesterdays_unused_cross(ui_root, monkeypatch):
+    from copy import deepcopy
+    from datetime import datetime, timedelta
+    import customtkinter as ctk
+    from viking_v2.trading.market import VN_TZ
+    now = datetime(2026, 10, 13, 14, tzinfo=VN_TZ)
+    monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: now)
+    top = ctk.CTkToplevel(ui_root)
+    subject = DashboardPanelsMixin()
+    subject.settings = AppSettings()
+    subject._build_order_preview_tab(top)
+    source = {"tracking_version": 2, "initialized": True, "current_ready": True,
+              "started_at": "2026-10-08T09:00:00+07:00", "observed_at": now.isoformat(),
+              "current_fast": 23, "current_slow": 22, "up_count": 99, "down_count": 98,
+              "daily_count_day": "2026-10-13", "daily_up_count": 19, "daily_down_count": 18,
+              "cross_id": "EMA:UNUSED", "cross_at": "2026-10-12T14:10:00+07:00"}
+    before = deepcopy(source)
+    try:
+        subject._render_ema_cross_preview({"ema_cross": source})
+        assert subject.preview_rule_cross_counts.cget("text") == "37 CẮT - 0P"
+        assert "Hôm nay: 19 lên + 18 xuống" in subject._ema_memory_preview_hint()
+        assert "0P: không quét các phiên trước" in subject._ema_memory_preview_hint()
+        monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: now + timedelta(days=1))
+        subject._render_ema_cross_preview({"ema_cross": source})
+        assert subject.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
+        assert subject._preview_ema_cross_evidence[1]["valid"]
+        assert subject._preview_ema_cross_evidence[1]["cross_id"] == source["cross_id"]
+        assert source == before
+    finally:
+        top.destroy()
 
 
 def test_alternate_history_preview_marks_absent_cache_as_unknown(ui_root, monkeypatch):

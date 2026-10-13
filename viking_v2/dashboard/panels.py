@@ -1688,7 +1688,8 @@ class DashboardPanelsMixin:
         feedback = (getattr(self, "_preview_manual_feedback", {}) if self.quantity.get().strip()
                     else getattr(self, "_preview_auto_feedback", {}))
         current = str(feedback.get("hint") or "").splitlines()
-        return ("KL AUTO: để trống, app tính theo vốn.\nKL TAY: nhập số CP. Xóa hết để trở lại AUTO."
+        return ("KL AUTO: tính số CP theo ngân sách của mã.\nKL TAY: nhập số CP; xóa hết để về AUTO."
+                " Đổi ngân sách tại RULE → Priority."
                 + (f"\n{current[0]}" if current else ""))
 
     def _book_preview_status(self, status: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1899,18 +1900,18 @@ class DashboardPanelsMixin:
         self._preview_ema_cross_evidence = (caption, evidence)
         widget._viking_full_cross_text = caption.removeprefix("CẮT EMA · ")
         if tracking:
-            from ..rules.ema_memory import memory_fields, memory_count_scope
-            fields = memory_fields(evidence)
-            scope = memory_count_scope(evidence, holidays=self.settings.trading_holidays)
+            from ..rules.ema_memory import memory_day_counts
+            daily = memory_day_counts(evidence, now=market_now())
             state_label = {
                 "SESSION_ACTIVE": "ĐÃ CẮT LÊN", "SESSION_USED": "ĐÃ DÙNG", "EXPIRED": "HẾT HẠN",
                 "WAIT_UP": "CHỜ EMA3 > EMA6", "WAIT_DOWN": "CHỜ XUỐNG→LÊN",
                 "UNKNOWN": "CHỜ DỮ LIỆU", "MARKET_CLOSED": "ĐÃ ĐÓNG",
             }.get(evidence.get("state"), "CHỜ")
-            total_crosses = int(fields['ema_memory_up_count']) + int(fields['ema_memory_down_count'])
-            session_span = f"{scope['sessions']}P" if scope else "?P"
+            total_crosses = daily["up"] + daily["down"] if daily["up"] is not None else "—"
+            prior_sessions = (int(params.get("buy_ema_cross_sessions", 3))
+                              if view_mode == "SESSIONS" or params.get("buy_ema_va_lookback_enabled") else 0)
             self.preview_rule_cross_counts.configure(
-                text=f"{total_crosses} CẮT · {session_span}",
+                text=f"{total_crosses} CẮT - {prior_sessions}P",
                 text_color={"ok": COL_GREEN, "wait": COL_WARN}.get(role, COL_MUTED),
             )
             self.preview_rule_cross_counts.grid()
@@ -1953,20 +1954,21 @@ class DashboardPanelsMixin:
         self._render_ema_cross_preview(getattr(self, "_preview_ema_details", {}))
 
     def _ema_memory_preview_hint(self) -> str:
-        from ..rules.ema_memory import memory_count_scope, memory_fields
+        from ..rules.ema_memory import memory_day_counts
         _caption, evidence = getattr(self, "_preview_ema_cross_evidence", ("", {}))
         active = self.settings.rule_parameters.get("buy_ema_cross_mode", "VA")
-        enabled = bool(self.settings.rule_parameters.get("buy_signal_use_ema", True)
-                       and self.settings.rule_parameters.get("buy_signal_require_ema_cross", True))
-        fields = memory_fields(evidence)
-        scope = memory_count_scope(evidence, holidays=self.settings.trading_holidays)
-        span = f"{scope['start']} → {scope['end']} ({scope['sessions']} phiên)" if scope else "chưa có mốc đếm"
+        daily = memory_day_counts(evidence, now=market_now())
         mode = evidence.get("mode", active)
+        sessions = int(self.settings.rule_parameters.get("buy_ema_cross_sessions", 3))
+        scan = sessions if mode == "SESSIONS" or self.settings.rule_parameters.get("buy_ema_va_lookback_enabled") else 0
+        counted = (f"Hôm nay: {daily['up']} lên + {daily['down']} xuống."
+                   if daily["up"] is not None else "Chưa tách được số cắt hôm nay từ dữ liệu cũ.")
+        if daily["partial"]:
+            counted += f" Đếm từ {str(daily['from'])[11:16]}."
         policy = (f"X phiên: còn {evidence.get('remaining_sessions', 0)}/{evidence.get('sessions', 3)} phiên."
                   if mode == "SESSIONS" else "VA: giữ lần cắt tới khi dùng.")
-        return (f"RULE {active} · {'BẬT' if enabled else 'OFF'}. ⇄ chỉ đổi góc xem.\n"
-                f"{int(fields['ema_memory_up_count'] or 0)} lên + {int(fields['ema_memory_down_count'] or 0)} xuống · {span}.\n"
-                f"{policy} Quét trước dùng giá đóng từng phút.")
+        history = f"{scan}P: quét {scan} phiên trước lúc thêm mã (giá phút)." if scan else "0P: không quét các phiên trước."
+        return f"{counted}\n{history}\n{policy} ⇄ chỉ đổi góc xem."
 
     def _atr_preview_hint(self) -> str:
         from datetime import datetime
@@ -2027,7 +2029,7 @@ class DashboardPanelsMixin:
         return (
             f"{summary}.\n"
             "Mã = số mã đang giữ hoặc chờ mua / tối đa.\n"
-            "Vốn mua: ngân sách mã đang chọn, chưa phí; MANUAL dùng KL nhập tay."
+            "AUTO tính số CP theo ngân sách mã đang chọn. Đổi tiền mua tại RULE → Priority; MANUAL dùng KL nhập tay."
         )
 
     def _whipsaw_preview_hint(self) -> str:

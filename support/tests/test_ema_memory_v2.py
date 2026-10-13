@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from viking_v2.rules.business import StaticRuleParameters, indicator_snapshot
-from viking_v2.rules.ema_memory import advance_memory, memory_caption, memory_count_scope, memory_hint
+from viking_v2.rules.ema_memory import advance_memory, memory_caption, memory_count_scope, memory_day_counts, memory_hint
 from viking_v2.rules.state import RuleStateStore
 from viking_v2.services.session_cross import SessionCrossService, SessionPriceCache
 from viking_v2.trading.market import VN_TZ
@@ -46,6 +46,52 @@ def test_first_below_only_needs_one_up_and_va_survives_two_weeks():
     row = observe(row, 102, 100, START + timedelta(days=14))
     assert row["state"] == "SESSION_ACTIVE" and row["up_count"] == 1 and row["down_count"] == 0
     assert row["expires_at"] == 0
+
+
+def test_daily_count_resets_without_expiring_or_reusing_va_cross(tmp_path):
+    import json
+    row = observe({}, 99, 100, START)
+    row = observe(row, 101, 100, START + timedelta(seconds=1))
+    identity = row["cross_id"]
+    assert memory_day_counts(row, now=START)["up"] == 1
+    row["used"] = True
+    store = tmp_path / "memory.json"
+    store.write_text(json.dumps(row), encoding="utf-8")
+    restarted = json.loads(store.read_text(encoding="utf-8"))
+    assert memory_day_counts(restarted, now=START)["up"] == 1
+    tomorrow = START + timedelta(days=1)
+    assert memory_day_counts(restarted, now=tomorrow)["up"] == 0
+    kept = observe(restarted, 101, 100, tomorrow)
+    assert kept["daily_up_count"] == kept["daily_down_count"] == 0
+    assert kept["up_count"] == 1 and kept["cross_id"] == identity
+    assert kept["used"] and kept["state"] == "SESSION_USED"
+    down = observe(kept, 99, 100, tomorrow + timedelta(seconds=1))
+    up = observe(down, 101, 100, tomorrow + timedelta(seconds=2))
+    assert up["daily_up_count"] == up["daily_down_count"] == 1
+    assert up["up_count"] == 2 and up["cross_id"] != identity
+    assert up["valid"] and not up["used"]
+    repeated = observe(up, 99, 100, tomorrow + timedelta(seconds=1))
+    assert repeated["daily_up_count"] == repeated["daily_down_count"] == 1
+    assert repeated["cross_id"] == up["cross_id"]
+
+
+def test_legacy_counts_are_today_only_when_start_and_observation_prove_it():
+    row = observe({}, 99, 100, START)
+    row = observe(row, 101, 100, START + timedelta(seconds=1))
+    for key in tuple(row):
+        if key.startswith("daily_"):
+            row.pop(key)
+    row.update(up_count=19, down_count=18)
+    assert memory_day_counts(row, now=START)["up"] == 19
+    assert memory_day_counts(row, now=START)["down"] == 18
+    row["started_at"] = (START - timedelta(days=1)).isoformat()
+    assert memory_day_counts(row, now=START)["up"] is None
+    identity = row["cross_id"]
+    result = observe(row, 101, 100, START + timedelta(seconds=2))
+    assert result["daily_up_count"] == result["daily_down_count"] == 0
+    assert result["daily_count_partial"]
+    assert result["up_count"] == 19 and result["down_count"] == 18
+    assert result["cross_id"] == identity and result["valid"]
 
 
 def test_memory_count_scope_uses_saved_watch_and_history_starts():

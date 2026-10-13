@@ -52,6 +52,8 @@ def test_preset_changes_only_agreed_allocation_e_and_signal_fields_and_backup_is
     assert current["rule_parameters"]["max_positions"] == 4
     assert current["rule_parameters"]["indicator_exit_policy"] == "AUTO"
     assert current["rule_parameters"]["buy_signal_require_ema_cross"] is True
+    assert current["rule_parameters"]["buy_signal_session_cross_enabled"] is True
+    assert current["rule_parameters"]["buy_ema_va_lookback_enabled"] is False
     assert current["signal_trace_enabled"] is True and current["signal_trace_interval_minutes"] == 2
     assert current["signal_trace_start"] == "14:00" and current["signal_trace_end"] == "14:30"
     assert "IND_EXIT" in current["bot_em_modes"]
@@ -74,6 +76,26 @@ def test_preset_changes_only_agreed_allocation_e_and_signal_fields_and_backup_is
     tool.apply_preset("PARTNER")
     assert config.load_settings("PARTNER").to_dict() == current
     assert backup.read_bytes() == original
+
+
+def test_va_preset_disables_saved_lookback_without_resetting_memory(workspace):
+    root, _old, _env = workspace
+    settings = config.load_settings("PARTNER")
+    settings.rule_parameters.update(buy_ema_cross_mode="SESSIONS", buy_ema_cross_sessions=7,
+                                    buy_ema_va_lookback_enabled=True, buy_signal_session_cross_enabled=False)
+    config.save_settings(settings, "PARTNER")
+    state = RuleStateStore(root / "rule_state.json")
+    from datetime import datetime
+    from viking_v2.trading.market import VN_TZ
+    state.sync_ema_watchlist(["IDC"], "REAL", now=datetime(2026, 10, 13, 14, tzinfo=VN_TZ))
+    before = state.store.read()
+    tool.apply_preset("PARTNER")
+    saved = config.load_settings("PARTNER").rule_parameters
+    assert saved["buy_ema_cross_mode"] == "VA"
+    assert saved["buy_signal_session_cross_enabled"] is True
+    assert saved["buy_ema_va_lookback_enabled"] is False
+    assert saved["buy_ema_cross_sessions"] == 3
+    assert state.store.read() == before
 
 
 @pytest.mark.parametrize("name", ["execution.lock", "market-worker.lock"])
