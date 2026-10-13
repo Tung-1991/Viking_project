@@ -442,7 +442,7 @@ class DashboardTablesMixin:
                     pending_event = str(pending_close.reason or "").upper()
                     if (
                         pending_close.status.upper() == "WAITING_SETTLEMENT"
-                        and pending_event in {"NORMAL_PROTECTION", "PRICE_PROTECTION"}
+                        and pending_event in {"NORMAL_PROTECTION", "DYNAMIC_PROTECTION", "PRICE_PROTECTION"}
                     ):
                         normal_state = "T+2"
                 settle_short = f"{settle[8:10]}/{settle[5:7]}" if len(settle) == 10 else settle

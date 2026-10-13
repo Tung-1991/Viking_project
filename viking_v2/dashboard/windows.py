@@ -20,6 +20,7 @@ from ..services.signal_history import (
     SignalHistoryTrash, history_sort_key, observation_id, periodic_history_row, recording_options,
 )
 from ..rules.observations import ema_cross_caption
+from ..rules.ema_memory import memory_from_fields, memory_hint
 from ..trading.market import VN_TZ
 from .ui_compat import install_dpi_resize_guard
 
@@ -290,7 +291,8 @@ def signal_rows_by_day(rows: list[dict[str, Any]], *, compact: bool = False) -> 
             "_legacy_record": legacy,
             "rsi_previous_date": raw.get("rsi_previous_date") or ("Bản cũ chưa lưu" if legacy else "—"),
             "display_price": _signal_price(raw.get("price")),
-            "ema_cross_display": (ema_cross_caption({
+            "ema_cross_display": (ema_cross_caption(memory_from_fields(raw))[0].removeprefix("CẮT EMA · ")
+                if str(raw.get("ema_memory_tracking_version", "")) == "2" else ema_cross_caption({
                 "state": ("CROSSED_UP" if raw.get("ema_cross_at")
                           and str(raw.get("ema_cross_required", "")).lower() == "true"
                           and raw.get("buy_window_state") in {"WAITING", "ALLOWED"}
@@ -1446,6 +1448,8 @@ class HistoryPopup:
             f"RSI {row.get('rsi_comparison')} · Phiên trước {row.get('rsi_previous_date') or '—'}",
             f"Cắt EMA: {row.get('ema_cross_display')}",
             f"Lý do: {row.get('_reason_detail')}"])
+        if str(row.get("ema_memory_tracking_version", "")) == "2":
+            text += "\n" + memory_hint(memory_from_fields(row))
         previous_ema = number_comparison(row.get("ema_previous_fast"), row.get("ema_previous_slow"), 4)
         text += "\nEMA lần quan sát trước: " + ("Bản cũ chưa lưu" if row.get("_legacy_record") and previous_ema == "—" else previous_ema)
         if row.get("_legacy_record") and (row.get("_rsi_issue") or not row.get("ema_cross_state")):

@@ -80,15 +80,42 @@ class RuleStateStore:
         with self._lock:
             return dict(self._read()["session_crosses"].get(f"{stream.upper()}|{symbol.upper()}") or {})
 
+    def sync_ema_watchlist(self, symbols, stream, *, now):
+        """Admission/removal is durable; re-adding starts a new observation epoch."""
+        wanted = {str(symbol).upper() for symbol in symbols}
+        prefix = stream.upper() + "|"
+        with self._lock:
+            raw = self._read()
+            changed = False
+            for key, row in raw["session_crosses"].items():
+                if key.startswith(prefix) and key[len(prefix):] not in wanted and row.get("watch_active", True):
+                    row["watch_active"] = False
+                    row["valid"] = False
+                    changed = True
+            for symbol in wanted:
+                key = prefix + symbol
+                row = raw["session_crosses"].get(key) or {}
+                if row.get("tracking_version") != 2 or not row.get("watch_active", True):
+                    raw["session_crosses"][key] = {
+                        "tracking_version": 2, "watch_active": True, "watch_id": uuid.uuid4().hex,
+                        "started_at": now.isoformat(), "started_at_epoch": now.timestamp(),
+                        "initialized": False, "up_count": 0, "down_count": 0,
+                    }
+                    raw["session_cross_used"].pop(key, None)
+                    changed = True
+            if changed:
+                self.store.write(raw)
+
     def save_session_cross(self, symbol: str, stream: str, evidence: dict) -> dict:
         key = f"{stream.upper()}|{symbol.upper()}"
         with self._lock:
             raw = self._read()
             row = dict(evidence)
             used = raw["session_cross_used"].get(key) or {}
-            if used.get("day") == row.get("day") and row.get("cross_id") in used.get("ids", []):
+            if row.get("cross_id") in used.get("ids", []):
                 if row.get("valid"):
                     row["state"] = "SESSION_USED"
+                row["used"] = True
             raw["session_crosses"][key] = row
             self.store.write(raw)
             return dict(row)
@@ -102,8 +129,9 @@ class RuleStateStore:
             row = raw["session_crosses"].get(key) or {}
             used = raw["session_cross_used"].get(key) or {}
             return bool(cross_id and row.get("cross_id") == cross_id and row.get("valid")
-                        and row.get("ready") and checked < float(row.get("expires_at", 0))
-                        and row.get("day") == datetime.fromtimestamp(checked, VN_TZ).date().isoformat()
+                         and row.get("ready") and row.get("watch_active", True)
+                         and (not row.get("expires_at") or checked < float(row["expires_at"]))
+                         and (row.get("tracking_version") == 2 or row.get("day") == datetime.fromtimestamp(checked, VN_TZ).date().isoformat())
                         and (allow_used or cross_id not in used.get("ids", [])))
 
     def claim_session_cross(self, symbol: str, stream: str, cross_id: str, *, now: float | None = None) -> bool:
@@ -114,9 +142,10 @@ class RuleStateStore:
             raw = self._read()
             row = raw["session_crosses"][key]
             used = raw["session_cross_used"].get(key) or {}
-            ids = list(used.get("ids", [])) if used.get("day") == row["day"] else []
-            raw["session_cross_used"][key] = {"day": row["day"], "ids": [*ids, cross_id]}
+            ids = list(used.get("ids", [])) if used.get("watch_id") == row.get("watch_id") else []
+            raw["session_cross_used"][key] = {"day": row["day"], "watch_id": row.get("watch_id"), "ids": [*ids, cross_id]}
             row["state"] = "SESSION_USED"
+            row["used"] = True
             self.store.write(raw)
             return True
 
@@ -554,6 +583,32 @@ class RuleStateStore:
                 legacy = raw["symbols"].get(symbol)
                 current = legacy if isinstance(legacy, dict) and str(legacy.get("trade_id", "")) == trade_id else None
             current = current if isinstance(current, dict) and str(current.get("trade_id", "")) == trade_id else {"trade_id": trade_id}
+            if current.get("protection_state_version") != 2:
+                # Old versions shared ARM/DYNAMIC counters. A recorded
+                # pre-ARM peak identifies a DYNAMIC occurrence unambiguously.
+                for alert in (False, True):
+                    peak_key = "normal_last_alert_peak_pct" if alert else "normal_last_trigger_peak_pct"
+                    old_peak = float(current.get(peak_key, 0) or 0)
+                    if 0 < old_peak < normal_arm_pct:
+                        suffixes = (("alert_count", "alert_occurrence", "last_alert_peak_pct",
+                                     "alert_rearm_mfe_pct", "last_alert_at") if alert else
+                                    ("protection_count", "protection_done", "processed_order_ids",
+                                     "last_trigger_peak_pct", "rearm_mfe_pct", "last_fill_at"))
+                        for suffix in suffixes:
+                            old_key = "normal_" + suffix
+                            if old_key in current:
+                                current["dynamic_" + suffix] = current.pop(old_key)
+                if not current.get("normal_armed") and float(current.get("peak_profit_pct", 0) or 0) < normal_arm_pct:
+                    current["dynamic_trigger_price"] = float(current.pop("normal_trigger_price", 0) or 0)
+                current["protection_state_version"] = 2
+            for protection_prefix in ("normal", "dynamic"):
+                count = int(current.get(protection_prefix + "_protection_count", 0) or 0)
+                last_key = protection_prefix + "_last_trigger_price"
+                if count and not current.get(last_key):
+                    current[last_key] = float(current.get("market_price", market_price) or market_price)
+                floor = float(current.get(protection_prefix + "_trigger_price", 0) or 0)
+                if floor > 0 and float(market_price or 0) > floor + 1e-9:
+                    current[protection_prefix + "_repeat_rearmed"] = True
             if entry_avg_price > 0:
                 old_basis = float(current.get("entry_avg_price", 0.0) or 0.0)
                 if old_basis <= 0 and float(current.get("market_price", 0.0) or 0.0) > 0:
@@ -584,6 +639,7 @@ class RuleStateStore:
                     ):
                         current["normal_t2_reset_applied"] = True
                         current["normal_trigger_price"] = 0.0
+                        current["dynamic_trigger_price"] = 0.0
                         current["normal_sellable_peak_profit_pct"] = max(0.0, float(profit_pct))
                 elif bool(current.get("normal_t2_reset_applied")):
                     current["normal_sellable_peak_profit_pct"] = max(
@@ -619,6 +675,10 @@ class RuleStateStore:
         trigger_peak_pct: float = 0.0,
         rearm_mfe_pct: float = 0.0,
         execution_id: str = "",
+        stage: str = "ARM",
+        trigger_price: float = 0.0,
+        trigger_level: float = 0.0,
+        completed: bool = False,
     ) -> None:
         symbol = str(symbol or "").upper()
         with self._lock:
@@ -630,33 +690,44 @@ class RuleStateStore:
             if not isinstance(current, dict) or str(current.get("trade_id", "")) != str(trade_id):
                 return
             normalized = {str(event or "").upper() for event in events}
-            if "NORMAL_PROTECTION" in normalized:
+            if normalized & {"NORMAL_PROTECTION", "DYNAMIC_PROTECTION"}:
+                current["protection_state_version"] = 2
+                prefix = "dynamic" if stage == "DYN" or "DYNAMIC_PROTECTION" in normalized else "normal"
                 execution_id = str(execution_id or "")
                 processed = [
-                    str(value) for value in current.get("normal_processed_order_ids", [])
+                    str(value) for value in current.get(prefix + "_processed_order_ids", [])
                     if str(value)
                 ]
+                completed_ids = list(current.get(prefix + "_completed_order_ids", []))
                 if execution_id and execution_id in processed:
+                    if completed and trigger_price > 0 and execution_id not in completed_ids:
+                        current[prefix + "_last_trigger_price"] = trigger_price
+                        current[prefix + "_repeat_rearmed"] = False
+                        current[prefix + "_completed_order_ids"] = [*completed_ids, execution_id]
+                        self.store.write(raw)
                     return
-                current["normal_protection_done"] = True
-                current["normal_protection_count"] = max(
-                    0, int(current.get("normal_protection_count", 0) or 0),
+                current[prefix + "_protection_done"] = True
+                current[prefix + "_protection_count"] = max(
+                    0, int(current.get(prefix + "_protection_count", 0) or 0),
                 ) + 1
-                # REPEAT is anchored to the peak that created this request,
-                # not a later peak observed while the request was waiting for
-                # settlement/fill.  The current MFE is only a compatibility
-                # fallback for old intents that did not persist trigger data.
+                # Preserve the original peak for audit. Repeat eligibility
+                # uses observed price/re-touch and its completion anchor.
                 requested_peak = max(0.0, float(trigger_peak_pct or 0.0))
                 peak = requested_peak if requested_peak > 0 else max(
                     0.0, float(current.get("peak_profit_pct", 0.0) or 0.0),
                 )
-                current["normal_last_trigger_peak_pct"] = peak
+                current[prefix + "_last_trigger_peak_pct"] = peak
+                current[prefix + "_last_trigger_price"] = float(trigger_price or current.get("market_price", 0) or 0)
+                current[prefix + "_last_trigger_level"] = float(trigger_level or current.get(prefix + "_trigger_price", 0) or 0)
+                current[prefix + "_repeat_rearmed"] = False
                 if float(rearm_mfe_pct or 0.0) > 0:
-                    current["normal_rearm_mfe_pct"] = float(rearm_mfe_pct)
-                current["normal_last_fill_at"] = time.time()
+                    current[prefix + "_rearm_mfe_pct"] = float(rearm_mfe_pct)
+                current[prefix + "_last_fill_at"] = time.time()
                 current["updated_at"] = time.time()
                 if execution_id:
-                    current["normal_processed_order_ids"] = (processed + [execution_id])[-20:]
+                    current[prefix + "_processed_order_ids"] = (processed + [execution_id])[-20:]
+                    if completed and execution_id not in completed_ids:
+                        current[prefix + "_completed_order_ids"] = [*completed_ids, execution_id]
             self.store.write(raw)
 
     def mark_protection_alert(
@@ -667,6 +738,9 @@ class RuleStateStore:
         occurrence: str,
         trigger_peak_pct: float,
         rearm_mfe_pct: float,
+        stage: str = "ARM",
+        trigger_price: float = 0.0,
+        trigger_level: float = 0.0,
     ) -> dict[str, Any]:
         """Persist one dry-run PROTECT occurrence across UI/daemon restarts."""
         symbol = str(symbol or "").upper()
@@ -680,18 +754,23 @@ class RuleStateStore:
             current = raw["symbols"].get(key)
             if not isinstance(current, dict):
                 return {}
-            if str(current.get("normal_alert_occurrence", "")) != occurrence:
-                current["normal_alert_occurrence"] = occurrence
-                current["normal_alert_count"] = max(
-                    0, int(current.get("normal_alert_count", 0) or 0),
+            prefix = "dynamic" if stage == "DYN" else "normal"
+            current["protection_state_version"] = 2
+            if str(current.get(prefix + "_alert_occurrence", "")) != occurrence:
+                current[prefix + "_alert_occurrence"] = occurrence
+                current[prefix + "_alert_count"] = max(
+                    0, int(current.get(prefix + "_alert_count", 0) or 0),
                 ) + 1
-                current["normal_last_alert_peak_pct"] = max(
+                current[prefix + "_last_alert_peak_pct"] = max(
                     0.0, float(trigger_peak_pct or 0.0),
                 )
-                current["normal_alert_rearm_mfe_pct"] = max(
+                current[prefix + "_alert_rearm_mfe_pct"] = max(
                     0.0, float(rearm_mfe_pct or 0.0),
                 )
-                current["normal_last_alert_at"] = time.time()
+                current[prefix + "_last_alert_price"] = float(trigger_price or current.get("market_price", 0) or 0)
+                current[prefix + "_last_trigger_level"] = float(trigger_level or current.get(prefix + "_trigger_price", 0) or 0)
+                current[prefix + "_repeat_rearmed"] = False
+                current[prefix + "_last_alert_at"] = time.time()
                 current["updated_at"] = time.time()
                 raw["symbols"][key] = current
                 self.store.write(raw)
@@ -727,6 +806,7 @@ class RuleStateStore:
         atr_activation_multiplier: float | None = None,
         retention_pct: float | None = None,
         retention_until_pct: float | None = None,
+        stage: str = "ARM",
     ) -> dict[str, Any]:
         """Persist the active PROTECT floor so it cannot fall after restart."""
         symbol = str(symbol or "").upper()
@@ -748,8 +828,9 @@ class RuleStateStore:
                 )
             if not isinstance(current, dict) or str(current.get("trade_id", "")) != trade_id:
                 return {}
-            current["normal_trigger_price"] = max(
-                max(0.0, float(current.get("normal_trigger_price", 0.0) or 0.0)),
+            prefix = "dynamic" if stage == "DYN" else "normal"
+            current[prefix + "_trigger_price"] = max(
+                max(0.0, float(current.get(prefix + "_trigger_price", 0.0) or 0.0)),
                 trigger,
             )
             current["normal_atr_pct"] = max(0.0, float(atr_pct or 0.0))

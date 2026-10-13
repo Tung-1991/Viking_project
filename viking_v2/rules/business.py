@@ -322,6 +322,8 @@ class StaticRuleParameters:
     buy_signal_use_rsi: bool = bool(DEFAULT_RULE_PARAMETERS["buy_signal_use_rsi"])
     buy_signal_require_ema_cross: bool = bool(DEFAULT_RULE_PARAMETERS["buy_signal_require_ema_cross"])
     buy_signal_session_cross_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["buy_signal_session_cross_enabled"])
+    buy_ema_cross_mode: str = "VA"
+    buy_ema_cross_sessions: int = 3
     buy_volume_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["buy_volume_enabled"])
     buy_volume_average_sessions: int = int(DEFAULT_RULE_PARAMETERS["buy_volume_average_sessions"])
     buy_volume_min_ratio: float = float(DEFAULT_RULE_PARAMETERS["buy_volume_min_ratio"])
@@ -329,7 +331,7 @@ class StaticRuleParameters:
     sell_signal_use_rsi: bool = bool(DEFAULT_RULE_PARAMETERS["sell_signal_use_rsi"])
     # OFF is controlled per trade by the IND_EXIT E/M switch. When E is ON,
     # ALERT reports the original VA EMA/RSI exit without placing an order;
-    # AUTO preserves the historical 100% exit behaviour.
+    # E AUTO exits the remainder; ARM/DYNAMIC have independent sale settings.
     indicator_exit_policy: str = str(DEFAULT_RULE_PARAMETERS["indicator_exit_policy"])
     max_positions: int = int(DEFAULT_RULE_PARAMETERS["max_positions"])
     initial_sl_pct: float = float(DEFAULT_RULE_PARAMETERS["initial_sl_pct"])
@@ -342,6 +344,11 @@ class StaticRuleParameters:
     take_profit_pct: float = float(DEFAULT_RULE_PARAMETERS["take_profit_pct"])
     normal_arm_pct: float = float(DEFAULT_RULE_PARAMETERS["normal_arm_pct"])
     normal_sell_pct: float = float(DEFAULT_RULE_PARAMETERS["normal_sell_pct"])
+    normal_sell_basis: str = "ORIGINAL"
+    dynamic_sell_pct: float = 33.0
+    dynamic_sell_basis: str = "ORIGINAL"
+    dynamic_repeat_enabled: bool = True
+    protect_config_version: int = 2
     normal_giveback_pct: float = float(DEFAULT_RULE_PARAMETERS["normal_giveback_pct"])
     # DYNAMIC uses Wilder ATR(14) from completed daily candles.  START and
     # TRAIL intentionally have separate multipliers: delaying activation must
@@ -390,6 +397,20 @@ class StaticRuleParameters:
         self.buy_signal_use_rsi = bool(self.buy_signal_use_rsi)
         self.buy_signal_require_ema_cross = bool(self.buy_signal_require_ema_cross)
         self.buy_signal_session_cross_enabled = bool(self.buy_signal_session_cross_enabled)
+        self.buy_ema_cross_mode = str(self.buy_ema_cross_mode).upper()
+        if self.buy_ema_cross_mode not in {"VA", "SESSIONS"}:
+            raise ValueError("Giữ EMA phải là VA hoặc SESSIONS")
+        self.buy_ema_cross_sessions = int(self.buy_ema_cross_sessions)
+        if not 1 <= self.buy_ema_cross_sessions <= 250:
+            raise ValueError("Giữ EMA phải từ 1 đến 250 phiên")
+        for key in ("normal_sell_basis", "dynamic_sell_basis"):
+            value = str(getattr(self, key)).upper()
+            if value not in {"ORIGINAL", "REMAINING"}:
+                raise ValueError("Cơ sở bán phải là ORIGINAL hoặc REMAINING")
+            setattr(self, key, value)
+        if not 0 < float(self.dynamic_sell_pct) <= 100:
+            raise ValueError("KL bán Dynamic phải từ trên 0 đến 100%")
+        self.dynamic_repeat_enabled = bool(self.dynamic_repeat_enabled)
         self.buy_volume_enabled = bool(self.buy_volume_enabled)
         self.sell_signal_use_ema = bool(self.sell_signal_use_ema)
         self.sell_signal_use_rsi = bool(self.sell_signal_use_rsi)
@@ -991,7 +1012,9 @@ class StaticRule:
             use_ema=self.params.buy_signal_use_ema,
             observed_at=str(context.get("observation_time", "") or ""),
         )
-        session_mode = bool(signal_mode.upper() == "REALTIME" and self.params.buy_signal_use_ema
+        session_mode = bool((signal_mode.upper() == "REALTIME" or
+                             (context.get("session_ema_cross") or {}).get("tracking_version") == 2)
+                            and self.params.buy_signal_use_ema
                             and self.params.buy_signal_require_ema_cross
                             and self.params.buy_signal_session_cross_enabled)
         if session_mode:
@@ -1182,6 +1205,7 @@ class StaticRule:
         peak_profit = max(current_profit, float(position.get("peak_profit_pct", current_profit) or current_profit))
         details.update({
             "current_price": current,
+            "entry_quantity": int(position.get("entry_quantity", position.get("quantity", 0)) or 0),
             "current_profit_pct": current_profit,
             "peak_profit_pct": peak_profit,
         })
@@ -1264,6 +1288,7 @@ class StaticRule:
         normal_enabled = "NORMAL" in em_modes and not bool(position.get("normal_execution_managed"))
         if normal_enabled:
             policy = self.params.normal_policy
+            from .protection import sale_options, repeat_ready
             # The live daily series marks today's in-progress candle as open.
             # DYNAMIC must only use information known before the current
             # session, so ATR never consumes that partial candle.
@@ -1272,10 +1297,6 @@ class StaticRule:
                 if isinstance(row, dict) and bool(row.get("closed", True))
             ]
             atr_pct = average_true_range_pct(completed_bars)
-            repeat = bool(
-                self.params.normal_repeat_enabled
-                and self.params.normal_sell_pct < 100.0
-            )
             protection_peak = protect_peak_for_sellable_phase(
                 peak_profit,
                 float(position.get("normal_sellable_peak_profit_pct", 0.0) or 0.0),
@@ -1286,6 +1307,10 @@ class StaticRule:
                     and position.get("normal_t2_reset_applied")
                 ),
             )
+            stage = "ARM" if protection_peak + 1e-9 >= self.params.normal_arm_pct else "DYN"
+            prefix = "normal" if stage == "ARM" else "dynamic"
+            share, basis, repeat = sale_options(self.params, stage)
+            repeat = bool(repeat and share < 100)
             level = protect_level(
                 entry,
                 protection_peak,
@@ -1303,14 +1328,14 @@ class StaticRule:
                 retention_enabled=self.params.normal_retention_enabled,
                 retention_until_enabled=self.params.normal_retention_until_enabled,
                 previous_trigger_price=float(
-                    position.get("normal_trigger_price", 0.0) or 0.0
+                    position.get(prefix + "_trigger_price", 0.0) or 0.0
                 ),
             )
             details.update(
                 normal_policy=policy,
                 normal_arm_pct=self.params.normal_arm_pct,
                 normal_giveback_pct=self.params.normal_giveback_pct,
-                sell_share_pct=self.params.normal_sell_pct,
+                sell_share_pct=share, sell_basis=basis, protection_stage=stage,
                 normal_dynamic_enabled=self.params.normal_dynamic_enabled,
                 normal_atr_pct=atr_pct,
                 normal_activation_mfe_pct=level.activation_mfe_pct,
@@ -1329,10 +1354,10 @@ class StaticRule:
                 normal_trigger_price=level.trigger_price,
                 normal_protected_profit_pct=level.trigger_profit_pct,
             )
-            count_key = "normal_alert_count" if policy == "ALERT" else "normal_protection_count"
-            last_key = "normal_last_alert_peak_pct" if policy == "ALERT" else "normal_last_trigger_peak_pct"
+            count_key = prefix + ("_alert_count" if policy == "ALERT" else "_protection_count")
+            last_key = prefix + ("_last_alert_peak_pct" if policy == "ALERT" else "_last_trigger_peak_pct")
             count = max(0, int(position.get(count_key, 0) or 0))
-            if policy == "AUTO" and bool(position.get("normal_protection_done")):
+            if policy == "AUTO" and bool(position.get(prefix + "_protection_done")):
                 count = max(1, count)
             last_trigger_peak = max(0.0, float(position.get(last_key, 0.0) or 0.0))
             rearm_mfe = (
@@ -1349,7 +1374,8 @@ class StaticRule:
             if count > 0 and not repeat:
                 eligible = False
                 state = "ALERT" if policy == "ALERT" else "DONE"
-            elif count > 0 and peak_profit + 1e-9 < rearm_mfe:
+            elif count > 0 and not repeat_ready(position, stage=stage, policy=policy, repeat=repeat,
+                                               price=current, level=level.trigger_price):
                 eligible = False
                 state = "REARM"
             details["normal_state"] = state
@@ -1375,16 +1401,15 @@ class StaticRule:
                 )
                 if policy == "ALERT":
                     details["normal_state"] = "ALERT"
-                    details["protect_occurrence"] = f"{symbol}|{position.get('trade_id', '')}|{count + 1}"
+                    details["protect_occurrence"] = f"{symbol}|{position.get('trade_id', '')}|{stage}|{count + 1}"
                     return StrategyDecision(
                         "WAIT", symbol, "PROTECT_ALERT", event="PROTECT_ALERT",
                         signal=signal, market_state=market_state, details=details,
                         scope="POSITION_MANAGEMENT",
                     )
-                triggered.append("NORMAL_PROTECTION")
+                triggered.append("NORMAL_PROTECTION" if stage == "ARM" else "DYNAMIC_PROTECTION")
         if triggered:
             details["triggered_events"] = triggered
-            share = self.params.normal_sell_pct
             fraction = min(1.0, max(0.0, share / 100.0))
             details["sell_share_pct"] = share
             return StrategyDecision(

@@ -219,6 +219,7 @@ class InfoPopup:
         ) or "OFF"
         phase2_items = [
             ("BUY", buy_conditions, PALETTE["GREEN"]),
+            ("NHỚ EMA", "∞ VA" if p.buy_ema_cross_mode == "VA" else f"⏳ {p.buy_ema_cross_sessions} PHIÊN", PALETTE["TEXT"]),
             ("TÍN HIỆU", signal_mode, PALETTE["TEXT"]),
             (
                 "XÁC NHẬN BUY",
@@ -268,7 +269,9 @@ class InfoPopup:
             (
                 "PROTECT",
                 f"{p.normal_policy} · ARM {p.normal_arm_pct:g}% · TRAIL {p.normal_giveback_pct:g}%"
-                f" · SELL {p.normal_sell_pct:g}% · {dynamic_summary}"
+                f" · ARM BÁN {p.normal_sell_pct:g}% {p.normal_sell_basis} · {dynamic_summary}"
+                f" · DYN BÁN {p.dynamic_sell_pct:g}% {p.dynamic_sell_basis}"
+                f" LẶP {self._on_off(p.dynamic_repeat_enabled and p.dynamic_sell_pct < 100)}"
                 f" · REPEAT {self._on_off(p.normal_repeat_enabled and p.normal_sell_pct < 100)}",
                 PALETTE["TEXT"],
             ),

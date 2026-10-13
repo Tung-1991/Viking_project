@@ -348,6 +348,8 @@ def run(account_id: str | None = None) -> int:
             execution_mode = "PAPER" if runtime.paper_mode else "REAL"
             priority_symbol_set = set(settings.priority_symbols)
             entry_symbols = set(runtime.watchlist) | priority_symbol_set
+            for tracking_book in ("REAL", "PAPER"):
+                rule_state.sync_ema_watchlist(entry_symbols, tracking_book, now=datetime.now(VN_TZ))
             symbols = list(dict.fromkeys(symbol for book in (execution_mode, "REAL" if execution_mode == "PAPER" else "PAPER")
                 for symbol in active_runtime_symbols(runtime.watchlist, settings.priority_symbols, trades.list_cycles(), queue.list_all(), book)))
             active_symbol_set = set(symbols)
@@ -668,16 +670,20 @@ def run(account_id: str | None = None) -> int:
                                         candle_key = f"{candle_key}|{interval}|{accepted_bucket or 'INIT'}"
                                     context["indicator_snapshot"] = current_indicators
                                     if symbol_live:
-                                        if (rule.params.buy_signal_session_cross_enabled
-                                                and rule.params.buy_signal_use_ema
-                                                and rule.params.buy_signal_require_ema_cross):
+                                        if symbol in entry_symbols:
                                             context["session_ema_cross"] = session_crosses.observe(
                                                 symbol, stream, bars, current_indicators, rule.params,
                                                 cycle_decision_time, symbol_exchange,
+                                                working_dates=working_dates, holidays=settings.trading_holidays,
                                             )
                                         else:
                                             session_prices.observe(symbol, float(bars[-1]["close"]),
                                                                    cycle_decision_time, symbol_exchange)
+                                if settings.signal_mode == "CLOSED" and symbol in entry_symbols:
+                                    context["session_ema_cross"] = session_crosses.observe_closed(
+                                        symbol, decision_mode, bars, rule.params, cycle_decision_time, symbol_exchange,
+                                        working_dates=working_dates, holidays=settings.trading_holidays,
+                                    )
                                 exposure = effective_exposure
                                 if (settings.signal_mode == "REALTIME" and not symbol_live
                                         and rule.params.buy_signal_session_cross_enabled
@@ -687,7 +693,7 @@ def run(account_id: str | None = None) -> int:
                                               >= exchange_close_minute(symbol_exchange))
                                     context["session_ema_cross"] = {
                                         **rule_state.session_cross(symbol, decision_mode), "required": True,
-                                        "session": True, "state": "EXPIRED" if closed else "UNKNOWN",
+                                        "session": True, "state": "MARKET_CLOSED" if closed else "UNKNOWN",
                                         "valid": False, "ready": False,
                                     }
                                 cycle_stage = "PORTFOLIO"
@@ -753,6 +759,7 @@ def run(account_id: str | None = None) -> int:
                                     protect_state_row = rule_state.update_protect_metrics(
                                         symbol,
                                         trade_id,
+                                        stage=str(decision.details.get("protection_stage", "ARM")),
                                         trigger_price=float(
                                             decision.details.get("normal_trigger_price", 0.0) or 0.0
                                         ),
@@ -778,7 +785,7 @@ def run(account_id: str | None = None) -> int:
                                     )
                                     if protect_state_row:
                                         decision.details["normal_trigger_price"] = float(
-                                            protect_state_row.get("normal_trigger_price", 0.0) or 0.0
+                                            protect_state_row.get("dynamic_trigger_price" if decision.details.get("protection_stage") == "DYN" else "normal_trigger_price", 0.0) or 0.0
                                         )
                                 if trade_id and (
                                     decision.reason == "NORMAL_ARMED"
@@ -789,6 +796,9 @@ def run(account_id: str | None = None) -> int:
                                     alert_state = rule_state.mark_protection_alert(
                                         symbol,
                                         trade_id,
+                                        stage=str(decision.details.get("protection_stage", "ARM")),
+                                        trigger_price=float(decision.details.get("current_price", 0) or 0),
+                                        trigger_level=float(decision.details.get("normal_trigger_price", 0) or 0),
                                         occurrence=str(decision.details.get("protect_occurrence", "") or ""),
                                         trigger_peak_pct=float(
                                             decision.details.get("normal_trigger_peak_pct", 0.0) or 0.0
@@ -798,7 +808,7 @@ def run(account_id: str | None = None) -> int:
                                         ),
                                     )
                                     decision.details["normal_event_count"] = int(
-                                        alert_state.get("normal_alert_count", 0) or 0
+                                        alert_state.get("dynamic_alert_count" if decision.details.get("protection_stage") == "DYN" else "normal_alert_count", 0) or 0
                                     )
                                     logger.info(
                                         "PROTECT ALERT symbol=%s trade=%s price=%.4f mfe=%.4f peak=%.4f "

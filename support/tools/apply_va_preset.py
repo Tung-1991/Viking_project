@@ -26,7 +26,8 @@ PRESET_FIELDS = {
     "signal_trace_enabled", "signal_trace_interval_minutes", "signal_trace_start", "signal_trace_end",
     "daily_stats_mode", "daily_stats_reset_time", "daily_stats_schedule_version",
 }
-PRESET_RULE_FIELDS = {"max_positions", "indicator_exit_policy", "buy_signal_require_ema_cross"}
+PRESET_RULE_FIELDS = {'normal_sell_pct', 'dynamic_sell_basis', 'normal_repeat_enabled', 'dynamic_repeat_enabled', 'normal_sell_basis', 'buy_ema_cross_mode', 'dynamic_sell_pct', 'protect_config_version', 'max_positions', 'buy_signal_require_ema_cross', 'buy_ema_cross_sessions', 'indicator_exit_policy'}
+PRESET_MEMORY_PROTECTION = {'buy_ema_cross_mode': 'VA', 'buy_ema_cross_sessions': 3, 'normal_sell_pct': 33, 'normal_sell_basis': 'ORIGINAL', 'normal_repeat_enabled': True, 'dynamic_sell_pct': 33, 'dynamic_sell_basis': 'ORIGINAL', 'dynamic_repeat_enabled': True, 'protect_config_version': 2}
 
 
 def prepared_settings(account_id: str) -> config.AppSettings:
@@ -50,6 +51,7 @@ def prepared_settings(account_id: str) -> config.AppSettings:
             or preset["bot_em_modes"] != ["IND_EXIT"]
             or preset["rule_parameters"]["indicator_exit_policy"] != "AUTO"
             or preset["rule_parameters"]["buy_signal_require_ema_cross"] is not True
+            or any(preset["rule_parameters"].get(key) != value for key, value in PRESET_MEMORY_PROTECTION.items())
             or preset["signal_trace_enabled"] is not True
             or preset["daily_stats_mode"] != "DAILY" or preset["daily_stats_reset_time"] != "15:00"
             or preset["daily_stats_schedule_version"] != 2
@@ -129,7 +131,8 @@ def main() -> int:
               f"gian {settings.telegram_cooldown_minutes['buy_lost']} phut.")
         print(f"[HE THONG] Gian canh bao {settings.telegram_cooldown_minutes['system']} phut.")
         print("[PROTECT] Bat tin cham muc; khong thay doi cong tac bao ve hay AUTO/ALERT.")
-        print("[ENTRY] Bat EMA vua cat len + RSI phien truoc; khong ep mua khi EMA da o tren.")
+        print("[ENTRY] EMA cat len SAU KHI THEM MA; giu VA qua phien toi khi dung. RSI/gio mua/von van kiem tra.")
+        print("[PROTECT] ARM va DYNAMIC: BAN 33% GOC + LAP ON rieng; E AUTO ban 100%. Khong tu bat PROTECT tren trade.")
         trace_start = datetime.strptime(settings.signal_trace_start, "%H:%M")
         trace_end = datetime.strptime(settings.signal_trace_end, "%H:%M")
         samples_per_symbol = int((trace_end - trace_start).total_seconds() //
@@ -140,7 +143,7 @@ def main() -> int:
               f"{samples_per_symbol * len(settings.watchlist)} mau/{len(settings.watchlist)} ma/so; ke ca KHONG BUY.")
         print("[TRACE] App chay suot khung gio; LICH SU > TIN HIEU > LAM MOI > Ngay > Ma > DINH KY. "
               "Khong bu moc bo lo, khong gui Telegram.")
-        print("[GIU] API, token, chat ID, cong tac Telegram tong, cac gian tin khac, chu ky EMA/RSI, SL/PROTECT/TP, gio mua va giao dich.")
+        print("[GIU] API, token, chat ID, cong tac Telegram tong, gian tin khac, chu ky EMA/RSI, cac moc SL/PROTECT/TP, gio mua va giao dich.")
         print(f"[GIO MUA] {'Tu ' + str(settings.rule_parameters['buy_window_start']) if settings.rule_parameters['buy_window_enabled'] else 'Trong phien, theo tin hieu'}")
         if not args.yes and input("Nap vao dung tai khoan nay? [y/N]: ").strip().lower() != "y":
             print("[HUY] Khong doi setting.")

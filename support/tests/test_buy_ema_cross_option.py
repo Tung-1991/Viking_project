@@ -108,7 +108,7 @@ def test_rule_ui_option_is_explicit_and_saves_without_touching_other_settings(ui
         variable = popup.buy_signal_require_ema_cross
         assert variable.get() is enabled
         switches = [child for child in variable._viking_row.winfo_children() if isinstance(child, ctk.CTkSwitch)]
-        assert switches[0].cget("text") == "BUY CẦN EMA VỪA VƯỢT LÊN"
+        assert switches[0].cget("text") == "BUY CẦN EMA CẮT LÊN"
         variable.set(not enabled)
         popup.save()
         assert "ĐÃ LƯU" in popup.status.cget("text")

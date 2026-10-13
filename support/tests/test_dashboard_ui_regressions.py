@@ -47,7 +47,7 @@ def test_dynamic_atr_preview_uses_the_selected_symbols_completed_daily_atr() -> 
         "normal_atr_trail_enabled": True,
         "normal_atr_activation_multiplier": 0.6,
         "normal_atr_multiplier": 0.8,
-        "normal_sell_pct": 100,
+        "normal_sell_pct": 100, "dynamic_sell_pct": 100, "protect_config_version": 2,
     }
     text = _dynamic_atr_preview_text({"normal_atr_pct": 4.118}, params)
     assert text == "DYN · ATR 4.12% · BÁN 100%"
@@ -218,17 +218,19 @@ def test_compact_rules_priority_draft_and_read_only_previews(ui_root, monkeypatc
         assert all(card.master.master is rule.protect_card for card in protection_groups)
         assert max(card.winfo_height() for card in protection_groups) - min(card.winfo_height() for card in protection_groups) <= 2
         assert max(card.winfo_width() for card in protection_groups) - min(card.winfo_width() for card in protection_groups) <= 2
+        rule.normal_sell.delete(0, "end")
+        rule.normal_sell.insert(0, "100")
         rule.normal_repeat.set(True)
         assert rule.repeat_switch.cget("state") == "disabled"
-        assert "REPEAT OFF" in rule.execution_preview["NORMAL"].cget("text")
+        assert "ARM 100% GỐC · LẶP OFF" in rule.execution_preview["NORMAL"].cget("text")
         rule.normal_sell.delete(0, "end")
         rule.normal_sell.insert(0, "50")
         rule._refresh_execution_preview()
         assert "CHƯA LƯU" in rule.execution_preview["NORMAL"].cget("text")
-        assert "bán 50%" in rule.execution_preview["NORMAL"].cget("text")
+        assert "ARM 50% GỐC" in rule.execution_preview["NORMAL"].cget("text")
         assert rule.repeat_switch.cget("state") == "normal"
-        assert "REPEAT ON" in rule.execution_preview["NORMAL"].cget("text")
-        assert settings.rule_parameters["normal_sell_pct"] == 100
+        assert "ARM 50% GỐC · LẶP ON" in rule.execution_preview["NORMAL"].cget("text")
+        assert settings.rule_parameters["normal_sell_pct"] == 33
         rule.normal_dynamic.set(True)
         assert "ATR ×" in rule.execution_preview["NORMAL"].cget("text")
         rule.tabs.set("THỰC THI")

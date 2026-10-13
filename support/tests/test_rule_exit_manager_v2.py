@@ -118,7 +118,7 @@ def test_protect_evaluation_sells_configured_fraction_and_marks_one_event():
         },
     )
     assert decision.details["triggered_events"] == ["NORMAL_PROTECTION"]
-    assert math.isclose(decision.quantity_fraction, 1.0)
+    assert math.isclose(decision.quantity_fraction, 0.33)
 
 
 def test_global_exit_parameters_apply_immediately_without_trade_snapshot():

@@ -13,6 +13,7 @@ from typing import Any, Iterable
 from ..config import AppSettings
 from ..connections.dnse.snapshot_health import safe_detail
 from ..rules.business import StaticRuleParameters
+from ..rules.ema_memory import memory_fields
 from ..trading.market import VN_TZ
 from ..trading.validation import decision_is_fresh, quote_diagnostics, timestamp_value
 from .indicator_comparison import number_comparison
@@ -68,6 +69,9 @@ def trace_workbook(rows: list[dict]):
         ("rsi_previous_date", "Phiên RSI trước"), ("rsi_comparison", "So RSI"),
         ("entry", "ENTRY EMA/RSI"), ("ema_cross_required", "Cần vừa cắt EMA"),
         ("ema_cross_state", "Trạng thái cắt EMA"), ("ema_cross_at", "Giờ cắt lên"),
+        ("ema_memory_mode", "Giữ EMA"), ("ema_memory_started_at", "Theo dõi từ"),
+        ("ema_memory_up_count", "Cắt lên từ khi thêm mã"), ("ema_memory_down_count", "Cắt xuống từ khi thêm mã"),
+        ("ema_memory_remaining_sessions", "Phiên còn"), ("ema_memory_sessions", "Thời hạn phiên"),
         ("ema_previous_fast", "EMA nhanh lần trước"), ("ema_previous_slow", "EMA chậm lần trước"),
         ("fresh_cross_entry", "ENTRY nếu cần vừa cắt"), ("baseline_source", "Nguồn nền 1D"),
         ("exit_e", "EXIT E"), ("rule_action", "Xử lý APP"), ("reason", "Mã lý do"),
@@ -220,6 +224,7 @@ class SignalTraceStore:
                                      else (details.get("ema_cross") or {}).get("cross_at", "")),
                     "ema_previous_fast": (details.get("ema_cross") or {}).get("previous_fast"),
                     "ema_previous_slow": (details.get("ema_cross") or {}).get("previous_slow"),
+                    **memory_fields(details.get("ema_cross") or {}),
                     "exit_e": raw.get("signal") == "SELL" if fresh and quote["valid"] else None,
                     "rule_action": raw.get("action", "WAIT") if fresh else "WAIT",
                     "reason": raw.get("reason", "") if fresh else "NO_FRESH_DECISION",

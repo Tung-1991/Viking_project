@@ -9,7 +9,8 @@ from typing import Any
 
 from ..models import OrderIntent, StrategyDecision
 from ..trading.orders import OrderQueue
-from ..trading.portfolio import sell_quantity_for_fraction, size_buy_order
+from ..trading.portfolio import size_buy_order, sell_quantity_for_fraction
+from .protection import sale_quantity
 from ..trading.state import TradeStateStore
 from ..trading.market import VN_TZ, in_buy_window, parse_clock_minute
 from .state import RuleStateStore
@@ -133,8 +134,10 @@ class StrategyOrderPlanner:
         else:
             trade_id = str(portfolio.get("trade_id", "") or "")
             remaining = max(0, int(portfolio.get("position_quantity", 0) or 0))
-            quantity = sell_quantity_for_fraction(
-                remaining, float(decision.quantity_fraction or 1.0)
+            position = portfolio.get("position") or {}
+            quantity = sale_quantity(
+                remaining, int(position.get("entry_quantity", remaining) or remaining),
+                float(decision.quantity_fraction or 1.0), decision.details.get("sell_basis", "REMAINING"),
             )
             if quantity <= 0:
                 return PlanResult(None, "ODD_LOT_REMAINDER")
@@ -146,6 +149,7 @@ class StrategyOrderPlanner:
             if active_sell:
                 priority = {
                     "NORMAL_PROTECTION": 1,
+                    "DYNAMIC_PROTECTION": 1,
                     "PRICE_PROTECTION": 1,
                     "INDICATOR_EXIT": 2,
                     "TAKE_PROFIT": 3,
@@ -236,6 +240,7 @@ class StrategyOrderPlanner:
                         "normal_mfe_pct", "normal_peak_price", "normal_effective_trail_pct",
                         "normal_trigger_price", "normal_protected_profit_pct",
                         "normal_trigger_peak_pct", "normal_rearm_after_pct",
+                        "protection_stage", "sell_basis", "current_price",
                         "indicator_exit_policy",
                     )
                     if key in decision.details

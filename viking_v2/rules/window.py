@@ -557,10 +557,9 @@ class RuleSettingsPopup:
             ).pack(side="left", padx=(0, 12))
 
         self.buy_signal_require_ema_cross = self._switch(
-            buy_group, "BUY CẦN EMA VỪA VƯỢT LÊN", self.params.buy_signal_require_ema_cross,
-            "BẬT (mặc định): trước ≤, lần này > mới tạo BUY mới (REALTIME: hai lần quan sát; CLOSED: hai nến ngày).\n"
-            "TẮT: EMA nhanh đang > EMA chậm là đạt phần EMA, kể cả lúc bật BOT.\n"
-            "RSI vẫn so với phiên trước; giờ mua, vốn và WHIPSAW vẫn kiểm tra. Không áp dụng khi DÙNG EMA tắt; không đổi E/SELL.",
+            buy_group, "BUY CẦN EMA CẮT LÊN", self.params.buy_signal_require_ema_cross,
+            "Đang trên: chờ xuống rồi cắt lên lại. Đang dưới/bằng: chờ cắt lên.\n"
+            "Chỉ tính từ khi thêm mã; restart giữ ghi nhận. OFF: EMA nhanh > EMA chậm là đạt. RSI và các điều kiện BUY vẫn kiểm tra.",
         )
 
         self.buy_rsi_period = self._field(
@@ -568,13 +567,18 @@ class RuleSettingsPopup:
             "Backend hiện dùng một chu kỳ RSI cho cả BUY và E. Ô này đồng bộ với ô RSI trong E/M.",
             variable=self.shared_rsi_period,
         )
-        self.buy_signal_session_cross_enabled = self._switch(
-            buy_group, "GIỮ LẦN CẮT TRONG PHIÊN", self.params.buy_signal_session_cross_enabled,
-            "BẬT: nhận lần cắt lên còn hiệu lực trong ngày, kể cả sau restart.\n"
-            "Khôi phục bằng giá phút đã đóng; EMA vẫn tính trên nến ngày. Hủy khi EMA xuống hoặc hết phiên.\n"
-            "Một lần cắt chỉ tạo một lệnh. RSI, giờ mua và vốn vẫn kiểm tra.\n"
-            "Chỉ dùng với REALTIME + DÙNG EMA + BUY CẦN EMA VỪA VƯỢT LÊN. TẮT: giữ cách bắt cắt mới.",
-        )
+        self.buy_signal_session_cross_enabled = tk.BooleanVar(value=True)
+        self.buy_ema_cross_mode = tk.StringVar(value="∞ VA" if self.params.buy_ema_cross_mode == "VA" else "⏳ X PHIÊN")
+        ctk.CTkSegmentedButton(buy_group, values=["∞ VA", "⏳ X PHIÊN"], variable=self.buy_ema_cross_mode,
+                              selected_color=self.BLUE, font=("Segoe UI", 12, "bold")).pack(fill="x", padx=12, pady=6)
+        self.buy_ema_cross_sessions = self._field(
+            buy_group, "⏳ Phiên", self.params.buy_ema_cross_sessions,
+            "∞: nhớ tới khi dùng. ⏳: nhớ X phiên, tính cả phiên cắt; bỏ ngày nghỉ.\n"
+            "EMA xuống vẫn giữ ghi nhận; chỉ mua khi EMA/RSI hiện tại đạt. Cắt lên mới tính lại hạn. Một lần cắt dùng một lần.")
+        def refresh_memory_field(*_args):
+            self.buy_ema_cross_sessions.configure(state="normal" if self.buy_ema_cross_mode.get() == "⏳ X PHIÊN" else "disabled")
+        self.buy_ema_cross_mode.trace_add("write", refresh_memory_field)
+        refresh_memory_field()
 
         mode = self._card(
             body, "NẾN & GIỜ MUA",
@@ -828,7 +832,7 @@ class RuleSettingsPopup:
         self.protect_card = self._card(
             body, "PROTECT · BẢO VỆ & THOÁT",
             "Ba cách bảo vệ nằm cùng khung: sau ARM, Dynamic trước ARM, và tín hiệu E.\n"
-            "PROTECT/Dynamic dùng chung MODE và KL bán. E có MODE riêng, AUTO bán 100% và không đợi ARM.\n"
+            "PROTECT/Dynamic dùng chung MODE, có KL bán và LẶP riêng. E AUTO bán 100% và không đợi ARM.\n"
             "Công tắc E/M của từng vị thế quyết định có dùng PROTECT/E hay không.",
             2, 0, span=2,
         )
@@ -868,26 +872,26 @@ class RuleSettingsPopup:
         ).pack(side="right", padx=(0, 6))
         self.normal_sell = self._field(
             normal, "KL bán (%)", self.params.normal_sell_pct,
-            "Phần trăm số cổ còn được bot quản lý, không phải % lãi hoặc % giá. Áp dụng PROTECT và Dynamic ở MODE AUTO.\n"
-            "1.000 CP: 100% → bán hết 1.000; 50% → bán 500. Làm tròn lô, tối thiểu 100 CP.\n"
-            "Chưa đủ cổ được phép bán thì xử lý theo SELL CHỜ T+; E/SL/TP vẫn bán 100%, không dùng tỷ lệ này.",
+            "GỐC: % KL đã mua khớp. CÒN LẠI: % KL chưa bán. Làm tròn lô 100, giới hạn theo cổ bán được. E/SL/TP bán 100%.",
         )
+        self.normal_sell_basis = tk.StringVar(value="GỐC" if self.params.normal_sell_basis == "ORIGINAL" else "CÒN LẠI")
+        ctk.CTkSegmentedButton(normal, values=["GỐC", "CÒN LẠI"], variable=self.normal_sell_basis,
+                              selected_color=self.BLUE).pack(fill="x", padx=12, pady=4)
         self.normal_repeat = self._switch(
             normal, "LẶP BÁN", self.params.normal_repeat_enabled,
-            "REPEAT chỉ có tác dụng khi KL bán dưới 100%. OFF: PROTECT/Dynamic tác động một lần trong chu kỳ.\n"
-            "ON: phần còn lại được bảo vệ tiếp khi có đỉnh mới đủ cao theo TRAIL.\n"
-            "KL bán 100% đã bán hết → không còn cổ để lặp. E/SL/TP không dùng REPEAT.",
+            "ON: chạm lại mức hoặc giảm tiếp đạt điều kiện → bán thêm theo %.\n"
+            "Giá đứng im không bán lặp; chờ lệnh trước kết thúc. OFF: bán một lần. Không áp dụng E/SL/TP.",
         )
         self.repeat_switch = next(child for child in self.normal_repeat._viking_row.winfo_children()
                                   if isinstance(child, ctk.CTkSwitch))
-        ctk.CTkLabel(normal, text="Đạt ARM → theo đỉnh → chạm mức.\nMODE / KL bán dùng cả Dynamic.",
+        ctk.CTkLabel(normal, text="Đạt ARM → theo đỉnh → chạm mức.\nKL / LẶP riêng cho sau ARM.",
                     font=("Segoe UI", 11), text_color=self.MUTED, justify="left", anchor="w",
                     wraplength=230).pack(fill="x", padx=12, pady=(0, 4))
 
         dynamic_box = self._card(
             groups, "DYNAMIC",
             "TRƯỚC ARM: ON bảo vệ bằng ATR và/hoặc phần lãi giữ lại; OFF chỉ đợi ARM.\n"
-            "Chạm mức → dùng CHẠM MỨC và KL bán ở nhóm SAU ARM. Không thay SL, E hoặc trail sau ARM.",
+            "Chạm mức → dùng KL và LẶP của DYNAMIC. MODE AUTO/ALERT dùng chung với PROTECT.",
             0, 1,
         )
         self.dynamic_settings_card = dynamic_box
@@ -948,6 +952,19 @@ class RuleSettingsPopup:
             "ON: chỉ nâng mức GIỮ LÃI khi MFE dưới ngưỡng này; mức đã lưu không hạ.\n"
             "MFE 5% = mua 100, từng lên 105. OFF: nâng GIỮ LÃI tới trước ARM. Không tác dụng khi GIỮ LÃI tắt.",
         )
+        sale = ctk.CTkFrame(dynamic_groups, fg_color="#20252C", corner_radius=7)
+        sale.grid(row=2, column=0, sticky="ew", pady=(5, 0))
+        ctk.CTkLabel(sale, text="BÁN", font=("Segoe UI", 12, "bold"), text_color=self.TITLE).pack(anchor="w", padx=12)
+        self.dynamic_sell = self._field(sale, "KL (%)", self.params.dynamic_sell_pct,
+            "GỐC: % KL mua đã khớp. CÒN LẠI: % KL chưa bán. KL và LẶP độc lập phần sau ARM.")
+        self.dynamic_sell_basis = tk.StringVar(value="GỐC" if self.params.dynamic_sell_basis == "ORIGINAL" else "CÒN LẠI")
+        ctk.CTkSegmentedButton(sale, values=["GỐC", "CÒN LẠI"], variable=self.dynamic_sell_basis,
+                              selected_color=self.BLUE).pack(fill="x", padx=12, pady=4)
+        self.dynamic_repeat = self._switch(sale, "LẶP BÁN", self.params.dynamic_repeat_enabled,
+            "ON: chạm lại mức hoặc giảm tiếp đạt điều kiện → bán thêm theo %.\n"
+            "Giá đứng im không bán lặp; chờ lệnh trước kết thúc. OFF: bán một lần.")
+        self.dynamic_repeat_switch = next(child for child in self.dynamic_repeat._viking_row.winfo_children()
+                                          if isinstance(child, ctk.CTkSwitch))
         indicator = self._card(
             groups, "E · BÁN 100%",
             "OFF nằm ở công tắc E/M của từng trade. Khi E được bật: ALERT chỉ ghi nhận; AUTO bán toàn bộ phần còn lại. "
@@ -1184,15 +1201,18 @@ class RuleSettingsPopup:
             "SL": f"SL {get(self.initial_sl)}% / vào lại {get(self.reentry_sl)}% · bán 100%",
             "TP": f"TP +{get(self.take_profit)}% · bán 100%",
             "NORMAL": (f"PROTECT {self.normal_policy.get()} · ARM {get(self.normal_arm)}% · lùi {get(self.normal_giveback)}%"
-                       f"\nDYN {'ON' if self.normal_dynamic.get() else 'OFF'} · bán {get(self.normal_sell)}% · REPEAT {'ON' if self._protect_repeat_enabled() else 'OFF'}{dynamic}"),
+                       f"\nARM {get(self.normal_sell)}% {self.normal_sell_basis.get()} · LẶP {'ON' if self._protect_repeat_enabled() else 'OFF'}"
+                       f"\nDYN {'ON' if self.normal_dynamic.get() else 'OFF'} {get(self.dynamic_sell)}% {self.dynamic_sell_basis.get()} · LẶP {'ON' if self._protect_repeat_enabled(dynamic=True) else 'OFF'}{dynamic}"),
             "IND_EXIT": (f"E {self.indicator_exit_policy.get()} · {'bán 100%' if self.indicator_exit_policy.get() == 'AUTO' else 'chỉ báo'}\n"
                          f"{f'EMA {get(self.sell_ema_fast)}/{get(self.sell_ema_slow)}' if self.sell_signal_ema.get() else 'EMA OFF'} · "
                          f"{f'RSI{get(self.rsi_period)}' if self.sell_signal_rsi.get() else 'RSI OFF'}"),
         }
 
-    def _protect_repeat_enabled(self) -> bool:
+    def _protect_repeat_enabled(self, *, dynamic: bool = False) -> bool:
         try:
-            return self.normal_repeat.get() and 0 < float(self.normal_sell.get()) < 100.0
+            repeat = self.dynamic_repeat if dynamic else self.normal_repeat
+            sell = self.dynamic_sell if dynamic else self.normal_sell
+            return repeat.get() and 0 < float(sell.get()) < 100.0
         except ValueError:
             return False
 
@@ -1202,6 +1222,11 @@ class RuleSettingsPopup:
         except ValueError:
             partial = False
         self.repeat_switch.configure(state="normal" if partial else "disabled")
+        try:
+            dynamic_partial = 0 < float(self.dynamic_sell.get()) < 100
+        except ValueError:
+            dynamic_partial = False
+        self.dynamic_repeat_switch.configure(state="normal" if dynamic_partial else "disabled")
         values = self._execution_preview_values()
         flags = {"SL": self.bot_sl_enabled.get(), **{key: value.get() for key, value in self.bot_em_vars.items()}}
         for key, label in self.execution_preview.items():
@@ -1214,6 +1239,7 @@ class RuleSettingsPopup:
         self._saved_execution_flags = {"SL": self.bot_sl_enabled.get(), **{key: value.get() for key, value in self.bot_em_vars.items()}}
         self._preview_traces = []
         variables = [self.normal_policy, self.indicator_exit_policy, self.normal_dynamic, self.normal_repeat,
+                     self.normal_sell_basis, self.dynamic_sell_basis, self.dynamic_repeat,
                      self.shared_rsi_period, self.bot_sl_enabled, *self.bot_em_vars.values(),
                      self.normal_atr_activation_enabled, self.normal_atr_trail_enabled,
                      self.normal_retention_enabled, self.normal_retention_until_enabled,
@@ -1221,7 +1247,7 @@ class RuleSettingsPopup:
         for variable in variables:
             self._preview_traces.append((variable, variable.trace_add("write", self._refresh_execution_preview)))
         for entry in (self.initial_sl, self.reentry_sl, self.take_profit, self.normal_arm, self.normal_giveback,
-                      self.normal_sell, self.sell_ema_fast, self.sell_ema_slow,
+                      self.normal_sell, self.dynamic_sell, self.sell_ema_fast, self.sell_ema_slow,
                       self.normal_atr_activation_multiplier, self.normal_atr_multiplier,
                       self.normal_retention_pct, self.normal_retention_until_pct):
             entry.bind("<KeyRelease>", self._refresh_execution_preview, add="+")
@@ -1436,6 +1462,10 @@ class RuleSettingsPopup:
                 self.normal_retention_until_pct, "Ngưỡng giữ MFE PROTECT",
             )
             normal_sell = self._nonnegative(self.normal_sell, "Protect bán bao nhiêu")
+            dynamic_sell = self._nonnegative(self.dynamic_sell, "Dynamic bán bao nhiêu")
+            cross_sessions = int(self.buy_ema_cross_sessions.get())
+            if not 0 < dynamic_sell <= 100 or not 1 <= cross_sessions <= 250:
+                raise ValueError("Dynamic bán 1–100%; giữ EMA 1–250 phiên")
             if min(
                 ma_period, pivot_left, pivot_right, confirm_sessions,
                 volume_average, buy_volume_average, buy_ema_fast, sell_ema_fast, rsi_period,
@@ -1511,7 +1541,9 @@ class RuleSettingsPopup:
             self.params.buy_signal_use_ema = bool(self.buy_signal_ema.get())
             self.params.buy_signal_use_rsi = bool(self.buy_signal_rsi.get())
             self.params.buy_signal_require_ema_cross = bool(self.buy_signal_require_ema_cross.get())
-            self.params.buy_signal_session_cross_enabled = bool(self.buy_signal_session_cross_enabled.get())
+            self.params.buy_signal_session_cross_enabled = True
+            self.params.buy_ema_cross_mode = "VA" if self.buy_ema_cross_mode.get() == "∞ VA" else "SESSIONS"
+            self.params.buy_ema_cross_sessions = cross_sessions
             self.params.buy_volume_enabled = bool(self.buy_volume_enabled.get())
             self.params.buy_volume_average_sessions = buy_volume_average
             self.params.buy_volume_min_ratio = buy_volume_minimum / 100.0
@@ -1551,6 +1583,10 @@ class RuleSettingsPopup:
             self.params.normal_retention_enabled = bool(self.normal_retention_enabled.get())
             self.params.normal_retention_until_enabled = bool(self.normal_retention_until_enabled.get())
             self.params.normal_sell_pct = normal_sell
+            self.params.normal_sell_basis = "ORIGINAL" if self.normal_sell_basis.get() == "GỐC" else "REMAINING"
+            self.params.dynamic_sell_pct = dynamic_sell
+            self.params.dynamic_sell_basis = "ORIGINAL" if self.dynamic_sell_basis.get() == "GỐC" else "REMAINING"
+            self.params.dynamic_repeat_enabled = bool(self.dynamic_repeat.get())
             self.params.normal_dynamic_enabled = bool(self.normal_dynamic.get())
             self.params.normal_repeat_enabled = bool(self.normal_repeat.get())
             self.params.validate()

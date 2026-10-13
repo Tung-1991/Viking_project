@@ -138,7 +138,12 @@ def _dynamic_atr_preview_text(
     details: dict[str, Any], params: dict[str, Any],
 ) -> str:
     """Render a compact state; full ATR explanation lives in the hover hint."""
-    sell = _number(details.get("sell_share_pct", params.get("normal_sell_pct", 100.0)))
+    if details.get("protection_stage") == "ARM":
+        sell = _number(details.get("sell_share_pct", params.get("normal_sell_pct", 33)))
+        basis = "GỐC" if details.get("sell_basis", params.get("normal_sell_basis", "ORIGINAL")) == "ORIGINAL" else "CÒN"
+        return f"ARM · BÁN {sell:g}% {basis}"
+    sell = _number(details.get("sell_share_pct") if details.get("protection_stage") == "DYN"
+                   else params.get("dynamic_sell_pct", 33.0))
     dynamic = bool(details.get(
         "normal_dynamic_enabled", params.get("normal_dynamic_enabled", False),
     ))
@@ -1177,7 +1182,7 @@ class DashboardPanelsMixin:
                              (self.preview_rule_cross_detail, ("Segoe UI", 10))):
             widget.bind("<Configure>", lambda _event, value=widget, base=font: fit_label_text(
                 value, base_font=base, minimum_size=7), add="+")
-            _HoverHint(widget, self._indicator_preview_hint, placement="inside")
+            _HoverHint(widget, self._ema_memory_preview_hint, placement="inside")
         for row, name in ((1, "buy_ema"), (2, "sell_ema"), (3, "rsi")):
             key = StatusLabel(
                 phase2, text="--:", width=1, height=14,
@@ -1679,6 +1684,20 @@ class DashboardPanelsMixin:
         if source != "DECISION":
             details.pop("ema_cross", None)  # A price-only fallback cannot prove an observed crossing.
         phase = str((status.get("symbol_phases") or {}).get(symbol) or status.get("market_status") or "").upper()
+        memory = dict(saved_cross)
+        if (memory.get("tracking_version") != 2 and phase in {"CLOSED", "WEEKEND", "HOLIDAY"}
+                and callable(getattr(getattr(self, "rule_state", None), "session_cross", None))):
+            memory = self.rule_state.session_cross(symbol, mode)
+        if memory.get("tracking_version") == 2:
+            from ..rules.ema_memory import refresh_memory
+            memory = refresh_memory(memory, now=datetime.now(VN_TZ), mode=params.buy_ema_cross_mode,
+                                    sessions=params.buy_ema_cross_sessions, exchange=self._symbol_exchange(symbol),
+                                    holidays=self.settings.trading_holidays)
+            if phase in {"CLOSED", "WEEKEND", "HOLIDAY"}:
+                memory.update(state="MARKET_CLOSED", valid=False)
+            elif source != "DECISION":
+                memory.update(state="UNKNOWN", valid=False)
+            details["ema_cross"] = memory
         if phase in {"CLOSED", "WEEKEND", "HOLIDAY"}:
             # Display history separately from the evidence that can approve BUY.
             now = market_now()
@@ -1707,8 +1726,10 @@ class DashboardPanelsMixin:
         for row in sorted(candidates, key=lambda value: finite(value.get("observed_at_epoch")) or 0, reverse=True):
             stamp, expires = finite(row.get("observed_at_epoch")), finite(row.get("expires_at"))
             fast, slow = finite(row.get("current_fast")), finite(row.get("current_slow"))
+            closed_observation = (stamp is not None and 0 < stamp <= now.timestamp()
+                and (row.get("tracking_version") == 2 or (expires is not None and stamp < expires <= now.timestamp())))
             if (row.get("profile") != profile or not row.get("current_ready") or fast is None or slow is None
-                    or stamp is None or expires is None or not 0 < stamp < expires <= now.timestamp()):
+                    or not closed_observation):
                 continue
             try:
                 at = datetime.fromtimestamp(stamp, VN_TZ)
@@ -1742,7 +1763,7 @@ class DashboardPanelsMixin:
         if (str(self.settings.signal_mode).upper() == "REALTIME"
                 and params.get("buy_signal_session_cross_enabled", True)
                 and params.get("buy_signal_use_ema", True) and params.get("buy_signal_require_ema_cross", True)):
-            buy_ema_rule = "BUY nhận lần cắt lên trong phiên còn hiệu lực, kể cả sau restart; mỗi lần cắt chỉ dùng một lần."
+            buy_ema_rule = "BUY cần lần cắt lên sau khi thêm mã; giữ theo ∞ VA hoặc X phiên, kể cả restart. Mỗi lần cắt chỉ dùng một lần."
         text = (
             f"EMA: nhanh so với chậm. {buy_ema_rule} Vẫn kiểm tra các điều kiện vào lệnh khác.\n"
             f"{rsi_basis}\n"
@@ -1770,7 +1791,8 @@ class DashboardPanelsMixin:
         required = bool(params.get("buy_signal_use_ema", True)
                         and params.get("buy_signal_require_ema_cross", True))
         evidence = dict(details.get("ema_cross") or {})
-        if details.get("ema_cross_preview_expired") and required and self.settings.signal_mode == "REALTIME":
+        if (details.get("ema_cross_preview_expired") and not evidence.get("tracking_version") == 2
+                and required and self.settings.signal_mode == "REALTIME"):
             evidence.update(state="EXPIRED")
         if not required:
             evidence.update(required=False, state="OFF")
@@ -1799,6 +1821,11 @@ class DashboardPanelsMixin:
         fit = getattr(self, "_fit_phase2_row", None)
         if callable(fit) and widget.master.winfo_width() > 1:
             fit()
+
+    def _ema_memory_preview_hint(self) -> str:
+        from ..rules.ema_memory import memory_hint
+        _caption, evidence = getattr(self, "_preview_ema_cross_evidence", ("", {}))
+        return memory_hint(evidence)
 
     def _atr_preview_hint(self) -> str:
         from datetime import datetime
@@ -2260,8 +2287,12 @@ class DashboardPanelsMixin:
         normal_giveback = float(params.get("normal_giveback_pct", 2.0) or 2.0)
         normal_policy = str(params.get("normal_policy", "AUTO") or "AUTO").upper()
         normal_dynamic = bool(params.get("normal_dynamic_enabled", False))
-        normal_repeat = bool(params.get("normal_repeat_enabled", False))
-        normal_sell = float(params.get("normal_sell_pct", 100.0) or 100.0)
+        normal_repeat = bool(params.get("normal_repeat_enabled", True))
+        normal_sell = float(params.get("normal_sell_pct", 33.0) or 33.0)
+        normal_basis = "GỐC" if params.get("normal_sell_basis", "ORIGINAL") == "ORIGINAL" else "CÒN"
+        dynamic_sell = float(params.get("dynamic_sell_pct", 33.0) or 33.0)
+        dynamic_basis = "GỐC" if params.get("dynamic_sell_basis", "ORIGINAL") == "ORIGINAL" else "CÒN"
+        dynamic_repeat = bool(params.get("dynamic_repeat_enabled", True) and dynamic_sell < 100)
         normal_price = entry_price * (1.0 + normal_arm / 100.0) if entry_price > 0 else 0.0
         normal_preview_sell = protect_level(
             entry_price, normal_arm, normal_arm, normal_giveback,
@@ -2287,6 +2318,10 @@ class DashboardPanelsMixin:
             f"{' · LẶP' if normal_repeat and normal_sell < 100 else ''}",
             f"{normal_policy} · BÁN {normal_sell:g}% · LÙI {normal_giveback:g}%"
             f"{' · LẶP' if normal_repeat and normal_sell < 100 else ''}",
+        )
+        self._preview_protect_detail = (
+            f"{normal_policy} · ARM {normal_sell:g}% {normal_basis}{' ↻' if normal_repeat and normal_sell < 100 else ''}",
+            f"DYN {dynamic_sell:g}% {dynamic_basis}{' ↻' if dynamic_repeat else ''}" if normal_dynamic else "DYN OFF",
         )
         em_labels = {
             "normal_protection": "PROTECT",
@@ -2351,6 +2386,7 @@ class DashboardPanelsMixin:
             effective_trail = decision_details.get("normal_effective_trail_pct")
             self._preview_protect_prices["actual_sell"] = _number(protected)
             state_label = {"WAIT": "CHỜ", "ARM": "ĐÃ ARM", "DYN": "DYNAMIC",
+                           "REARM": "CHỜ LẶP", "DONE": "ĐÃ BÁN",
                            "ARMED": "ĐÃ ARM", "DYNAMIC": "DYNAMIC", "ALERT": "CHẠM MỐC",
                            "TRIGGERED": "CHẠM MỐC"}.get(protect_state, protect_state)
             self.preview_normal_value.configure(
@@ -2361,9 +2397,12 @@ class DashboardPanelsMixin:
                 )
             )
             if effective_trail is not None:
+                selected_pct = _number(decision_details.get("sell_share_pct", normal_sell))
+                selected_basis = "GỐC" if decision_details.get("sell_basis", "ORIGINAL") == "ORIGINAL" else "CÒN"
+                self._preview_protect_prices["sell_pct"] = selected_pct
                 self._preview_protect_detail = (
                     _dynamic_atr_preview_text(decision_details, params),
-                    f"{normal_policy} · BÁN {normal_sell:g}% · LÙI {_number(effective_trail):g}%",
+                    f"{normal_policy} · BÁN {selected_pct:g}% {selected_basis} · LÙI {_number(effective_trail):g}%",
                 )
                 self.preview_normal_detail.configure(
                     text=_dynamic_atr_preview_text(decision_details, params),
@@ -2581,7 +2620,7 @@ class DashboardPanelsMixin:
             "INDICATOR_EXIT": "KÍCH HOẠT EXIT SELL",
             "INDICATOR_EXIT_ALERT": "E ALERT · KHÔNG ĐẶT LỆNH",
             "PRICE_PROTECTION": "KÍCH HOẠT BẢO VỆ GIÁ",
-            "NORMAL_PROTECTION": "PROTECT",
+            "NORMAL_PROTECTION": "PROTECT", "DYNAMIC_PROTECTION": "PROTECT DYNAMIC",
             "NORMAL_ARMED": "PROTECT AUTO ĐÃ KÍCH HOẠT",
             "BUY_CONFIRMATION_WAIT": "CHỜ XÁC NHẬN BUY",
             "BUY_WINDOW_WAIT": "CHỜ KHUNG GIỜ MUA",

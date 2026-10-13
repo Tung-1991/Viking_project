@@ -39,7 +39,9 @@ Thiết lập khi đây đúng là vốn dành cho bộ thử: watchlist/Priorit
 **Nạp nhanh:** đóng app → BAT **4** → kiểm tra tài khoản trên máy đó → **y** → **3**.
 VPS chọn **2 → 4 → y → 3** để cập nhật rồi nạp bộ setting này.
 Preset đi cùng Git; không tự đồng bộ mọi chỉnh sửa UI trên máy khác. Giữ API/token/
-Telegram tổng/token/chat, EMA/RSI, giờ mua, SL/TP/PROTECT của máy đó; bật E mặc định cho BOT và đặt **E AUTO**.
+Telegram tổng/token/chat, chu kỳ EMA/RSI, giờ mua, các mốc SL/TP/PROTECT của máy đó.
+Preset bật yêu cầu cắt lên, chọn ∞ VA; đặt ARM và DYNAMIC **33% GỐC, REPEAT ON** riêng;
+bật E mặc định cho BOT và đặt **E AUTO**. Không tự bật PROTECT trên giao dịch đang giữ.
 Preset bật cả 9 loại tin Telegram, BUY gửi ngay, BUY kỹ thuật/MẤT BUY giãn 60 phút, hệ thống 30 phút.
 Không tự bật công tắc Telegram tổng nếu máy đang OFF; các khoảng giãn khác giữ lựa chọn tại máy.
 Backup setting cũ nằm cạnh `settings.json` (`settings.before-va-*.bak`), không lên Git.
@@ -80,7 +82,13 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   MANUAL vẫn chạy. Muốn dừng app thì đóng app.
 - BOT ON cho phép BUY tự động ở sổ đang chọn khi đủ tín hiệu, vốn và điều kiện an toàn.
   OFF vẫn tính chỉ báo/lưu lịch sử; tin BUY không thực hiện chỉ gửi nếu bật TÍN HIỆU.
-- SL/TP/E AUTO bán 100%; PROTECT/Dynamic bán theo % đã đặt. ALERT chỉ ghi nhận.
+- SL → TP → E AUTO → PROTECT là thứ tự ưu tiên; E AUTO bán 100% cổ còn lại.
+  ARM và DYNAMIC có % bán, GỐC/CÒN LẠI, REPEAT riêng; AUTO/ALERT dùng chung chính sách.
+  GỐC = % tổng cổ mua đã khớp của giao dịch; CÒN LẠI = % cổ chưa bán. Làm tròn lô, giới hạn theo cổ bán được.
+  1.000 CP và 33%: GỐC bán 300 → 300 → 300; CÒN LẠI bán 300 → 200 → 100.
+  REPEAT ON: hồi trên mốc rồi chạm lại, hoặc giảm tiếp đạt bảo vệ thì bán thêm. Không cần đỉnh mới;
+  giá đứng yên không lặp, lệnh đang chờ/UNKNOWN không tạo lượt bán tiếp. Một ý định khớp nhiều phần chỉ tính một lượt.
+  100% không lặp; ALERT chỉ ghi nhận, không gửi lệnh.
   Chờ giờ mua hoặc xác nhận BUY thêm không trì hoãn SELL, ARM hay ALERT của vị thế đang giữ.
   E không chờ ARM. E/M mặc định chỉ áp dụng trade BOT mới; vị thế đang giữ chỉnh riêng.
   Nạp preset không gắn E vào vị thế cũ đang OFF; vị thế đã bật E dùng chính sách AUTO mới.
@@ -97,31 +105,24 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Làm mới bảng giữ trạng thái bung/gọn và lệnh đang chọn.
 - Mặc định BUY xét EMA nhanh > EMA chậm và RSI hiện tại > RSI phiên trước theo các công tắc RULE.
   RSI hiện tại là nến 1D tạm tính từ giá mới; mốc so sánh là nến 1D phiên trước, không phải tick trước.
-  Tùy chọn **PHẢI VỪA CẮT EMA** mặc định ON theo VA: lần quan sát trước nhanh ≤ chậm, lần này nhanh > chậm.
-  OFF chỉ đòi EMA nhanh đang > chậm. RSI vẫn phải đạt; không đổi cách tính hai đường EMA.
-  Đủ chỉ báo chưa phải đã gửi lệnh: còn giờ mua, bộ lọc/WHIPSAW/khóa lỗ, vốn/slot, BOT và token REAL.
-  Bật lại BOT/hết khóa bán tay không phục hồi lệnh cũ. Khi chỉ bật yêu cầu vừa cắt,
-  EMA đã nằm trên không tự sinh ENTRY mới; tắt yêu cầu này thì xét mức EMA hiện tại.
-  Cập nhật giữ OFF đã lưu; nạp preset VA bật ON.
-  **GIỮ LẦN CẮT TRONG PHIÊN** là lựa chọn trong RULE → Phase 2 → BUY, mặc định ON.
-  Cấu hình cũ chưa có lựa chọn này nhận ON; giá trị OFF đã lưu được giữ nguyên.
-  Chỉ áp dụng với REALTIME + DÙNG EMA + yêu cầu vừa cắt. ON nhận lần cắt lên còn hiệu lực
-  trong ngày: cắt lúc 14:10, restart 14:20 vẫn xét BUY nếu khôi phục được dữ liệu và điều kiện hiện tại đạt.
-  EMA vẫn tính trên nến ngày; giá phút đã đóng chỉ dùng dựng lại diễn biến nến ngày trong phiên.
-  Cache trên đĩa lưu theo mã/ngày, dùng chung REAL/PAPER; chỉ tải phút thiếu sau restart/mất kết nối,
-  không tải lại phần đã có khi tắt/bật lựa chọn, bật BUY hay mở preview. Tải lỗi thì chờ dữ liệu, không đoán BUY.
-  Một lần cắt chỉ tạo một lệnh mỗi sổ; dấu đã dùng lưu cùng giao dịch queue nên restart không mua trùng.
-  BUY OFF/thiếu vốn chưa tạo lệnh thì chưa dùng tín hiệu. Lệnh đã xếp nhưng bị hủy/hết hạn vẫn tính đã dùng.
-  EMA xuống/bằng làm mất hiệu lực; lần cắt lên ở phút mới có ID mới. Dao động trong cùng phút không tạo nhiều lệnh.
-  Hết phiên hoặc sang ngày khác không dùng lại. Khi đang chạy, app vẫn nhận cắt mới ngay theo nhịp chỉ báo đã chọn.
-  RSI, giờ mua, xác nhận, WHIPSAW, khóa lỗ, vốn và slot vẫn kiểm tra. Xác nhận X phút bắt đầu khi app quan sát,
-  không cộng ngược thời gian trước restart. Nhịp 1M/2M/5M vẫn cần mẫu hiện tại hoàn tất sau gián đoạn.
-  P2 có vùng **CẮT EMA** bên phải: CHỜ XUỐNG / CHỜ LÊN / ĐÃ LÊN + giờ,
-  hoặc **CÒN HIỆU LỰC / ĐÃ DÙNG + giờ / HẾT PHIÊN** khi dùng lựa chọn giữ cắt;
-  kèm phép so sánh EMA lần quan sát trước. Số lấy từ backend; preview nến đơn lẻ không tự đoán giao cắt.
-  Ngoài phiên, **CUỐI + giờ** là mẫu EMA gần nhất đã lưu trước đóng phiên của sổ đang chọn.
-  Nếu chưa có mẫu trong phiên, **ĐÓNG + ngày** dùng EMA từ nến ngày đã đóng trong cache.
-  Xanh `>`, đỏ `<`, vàng `=`; số xem lại không tạo tín hiệu BUY. Thiếu cả hai nguồn thì ghi chưa có mốc lưu.
+  **BUY CẦN EMA CẮT LÊN** ON: chỉ nhận giao cắt sau khi bắt đầu theo dõi mã.
+  Thêm mã khi EMA nhanh đã ở trên: chờ xuống rồi lên; ở dưới/bằng: chờ lên.
+  OFF chỉ đòi EMA nhanh hiện tại > chậm. RSI, giờ mua, vốn/slot, WHIPSAW và token vẫn kiểm tra.
+  **∞ VA** giữ lần cắt lên qua các phiên đến khi dùng; **⏳ X PHIÊN** giữ X phiên tính cả phiên cắt,
+  bỏ ngày nghỉ. Ví dụ cắt thứ Ba, X=3: hiệu lực đến đóng phiên thứ Năm.
+  EMA xuống/bằng không xóa ghi nhận, nhưng không được BUY; cắt lên mới tính lại hạn.
+  ATC ngày 1 cắt lên, chiều ngày 2 vẫn trên và RSI đạt thì có thể BUY; chiều ngày 2 xuống thì chờ.
+  Một lần cắt chỉ tạo một ý định mua. Restart/tắt bật BOT không xóa ghi nhận hoặc dùng lại lần đã tiêu thụ.
+  Xóa rồi thêm lại mã, đổi cặp EMA hoặc chế độ quan sát tạo baseline mới.
+  Mã đã có từ bản cũ bắt đầu baseline mới khi nhận mẫu hợp lệ sau cập nhật; không nhập giao cắt cũ không có mốc thêm mã.
+  REALTIME vẫn dùng nến ngày tạm tính; dữ liệu phút chỉ khôi phục phần thiếu sau mốc đã quan sát.
+  CLOSED chỉ ghi nhận từ nến ngày đã đóng; không tái tạo giao cắt trong phiên.
+  Cache dùng chung REAL/PAPER, chỉ tải khoảng chưa có; mất dữ liệu thì hiện ? và chặn điều kiện EMA.
+  Preview: **∞ · ↑3 ↓2 · ✓** hoặc **⏳2/3P · ↑3 ↓2 · ⏸**.
+  ↑↓ là số lần giao cắt đã quan sát từ khi thêm mã; ✓/⏸ theo EMA hiện tại, không suy từ bộ đếm.
+  ☑ đã dùng, ⌛ hết hạn, ? thiếu dữ liệu. Rê chuột xem mốc bắt đầu và cắt lên gần nhất.
+  WHIPSAW vẫn đếm giao cắt từ chuỗi nến ngày trong X phiên; bộ đếm ↑↓ mới không thay đổi bộ lọc đó.
+  Ngoài phiên chỉ hiển thị mốc EMA đã lưu trước đóng cửa hoặc nến ngày đóng; không tạo BUY/MẤT BUY Telegram.
   **CHƯA CÓ CỔ** ở ô E nghĩa là sổ đang chọn chưa có cổ của mã đó; REAL là cổ thật, PAPER là cổ mô phỏng.
   Số cổ của hai sổ độc lập; khối lượng ở phiếu BUY là số dự kiến mua.
   Nhịp 1M/2M/5M chờ mẫu đầu tiên hoàn tất sau khởi động hoặc gián đoạn nguồn giá.

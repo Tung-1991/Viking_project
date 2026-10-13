@@ -61,6 +61,15 @@ def run_daemon(monkeypatch, tmp_path, variant, mode, require_cross):
                                                    "buy_window_enabled": True,
                                                    "buy_window_start": "14:00"}).normalize()
     monkeypatch.setattr(daemon, "load_settings", lambda *_args: settings)
+    from viking_v2.rules.state import RuleStateStore
+    from viking_v2.rules.ema_memory import advance_memory
+    store = RuleStateStore(bridge.rule_state_path)
+    initial_time = DAY.replace(hour=14, minute=27, second=59)
+    for stream in ("REAL", "PAPER"):
+        store.sync_ema_watchlist(["IDC"], stream, now=initial_time)
+        row = advance_memory(store.session_cross("IDC", stream), {"buy_ema_fast": 32, "buy_ema_slow": 33},
+                             now=initial_time, pair="3/6", mode="VA", sessions=3, exchange="HOSE")
+        store.save_session_cross("IDC", stream, row)
     prior = history()
     today_row = {"time": int(DAY.replace(hour=9).timestamp()), "open": 34.8,
                  "high": 34.8, "low": 34.8, "close": 34.8, "volume": 20000}

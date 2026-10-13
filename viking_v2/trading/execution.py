@@ -22,12 +22,12 @@ from .portfolio import (
     account_price,
     position_quantity,
     round_lot_down,
-    sell_quantity_for_fraction,
     validate_quantity,
 )
 from ..storage import CSVOrderJournal, JSONLineJournal
 from .state import TradeStateStore
 from .orders import FINAL_STATUSES
+from ..rules.protection import PROTECTION_EVENTS, sale_quantity
 from .validation import quote_is_fresh
 from .portfolio import cash_from_balance
 from ..rules.state import RuleStateStore
@@ -223,9 +223,9 @@ class ExecutionService:
             if (
                 intent.execution_mode != mode
                 or intent.side != "SELL"
-                or "NORMAL_PROTECTION" not in {
+                or not PROTECTION_EVENTS.intersection({
                     value for value in str(intent.reason or "").upper().split("+") if value
-                }
+                })
                 or intent.status.upper() in {"FILLED", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"}
             ):
                 continue
@@ -542,11 +542,14 @@ class ExecutionService:
             session_cross = intent.details.get("session_ema_cross") or {}
             if intent.side == "BUY" and intent.source == "BOT" and session_cross.get("session"):
                 cross_price = board_price((handoff_quote or {}).get("price", 0))
-                if (cross_price <= float(session_cross.get("threshold_price", float("inf")))
+                latest_cross = self.rule_state.session_cross(intent.symbol, mode) if self.rule_state else {}
+                crossed_below = (latest_cross.get("observation_mode") != "CLOSED" and
+                    cross_price <= float(latest_cross.get("threshold_price", session_cross.get("threshold_price", float("inf")))))
+                if (crossed_below
                         or not self.rule_state or not self.rule_state.session_cross_available(
                     intent.symbol, mode, session_cross.get("cross_id", ""), allow_used=True,
                 )):
-                    self.queue.cancel_claimed_local(intent.id, "BUY bỏ qua: lần cắt EMA trong phiên không còn hiệu lực")
+                    self.queue.cancel_claimed_local(intent.id, "BUY bỏ qua: lần cắt EMA không còn hiệu lực")
                     continue
             # Durable hand-off identity BEFORE the network call. A timeout never
             # authorizes another POST. Persist the package on the original, too.
@@ -555,6 +558,8 @@ class ExecutionService:
                 if active_cycle:
                     intent.trade_id = send_intent.trade_id = active_cycle.id
             intent.request_tag = intent.request_tag or f"V2:{intent.id.upper()}:{intent.attempt}"
+            if intent.side == "SELL" and intent.details.get("protection_stage"):
+                intent.details["protection_handoff_price"] = board_price((handoff_quote or {}).get("price", 0))
             intent.handed_off_at = time.time()
             send_intent.request_tag = intent.request_tag
             send_intent.handed_off_at = intent.handed_off_at
@@ -656,7 +661,8 @@ class ExecutionService:
                     cycle = self.trade_state.get(intent.trade_id) if self.trade_state and intent.trade_id else None
                     if cycle:
                         holding = min(holding, cycle.open_quantity)
-                    desired = sell_quantity_for_fraction(holding, fraction)
+                    desired = sale_quantity(holding, cycle.entry_quantity if cycle else holding,
+                                            fraction, decision_details.get("sell_basis", "REMAINING"))
                     refreshed_details = {
                         key: decision_details.get(key)
                         for key in (
@@ -670,14 +676,15 @@ class ExecutionService:
                             "normal_mfe_pct", "normal_peak_price", "normal_effective_trail_pct",
                             "normal_trigger_price", "normal_protected_profit_pct",
                             "normal_trigger_peak_pct", "normal_rearm_after_pct",
+                            "protection_stage", "sell_basis", "current_price",
                         )
                         if key in decision_details
                     }
-                    is_protect = "NORMAL_PROTECTION" in {
+                    is_protect = bool(PROTECTION_EVENTS.intersection({
                         value
                         for value in str(intent.reason or "").upper().split("+")
                         if value
-                    }
+                    }))
                     if desired > 0 and (
                         desired != intent.quantity
                         or (is_protect and refreshed_details != intent.details)
@@ -842,6 +849,16 @@ class ExecutionService:
                 self.trade_state.mark_exit_once(intent.trade_id, event)
         if self.rule_state and events:
             details = intent.details if isinstance(intent.details, dict) else {}
+            trigger_price = float(details.get("protection_handoff_price", details.get("current_price", 0)) or 0)
+            if self.quote_provider:
+                try:
+                    current_quote = self.quote_provider(intent.symbol)
+                    if quote_is_fresh(current_quote, intent.symbol):
+                        trigger_price = board_price((current_quote or {}).get("price", trigger_price))
+                except Exception:
+                    # A quote outage cannot roll back a confirmed broker fill.
+                    pass
+            current_intent = self.queue.get(intent.id)
             self.rule_state.mark_protection_done(
                 intent.symbol,
                 intent.trade_id,
@@ -849,6 +866,10 @@ class ExecutionService:
                 trigger_peak_pct=float(details.get("normal_trigger_peak_pct", 0.0) or 0.0),
                 rearm_mfe_pct=float(details.get("normal_rearm_after_pct", 0.0) or 0.0),
                 execution_id=intent.id,
+                stage=str(details.get("protection_stage", "ARM")),
+                trigger_price=trigger_price,
+                trigger_level=float(details.get("normal_trigger_price", 0) or 0),
+                completed=bool(current_intent and current_intent.status in FINAL_STATUSES),
             )
 
     def account_snapshot(self, mode: str) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1062,6 +1083,11 @@ class ExecutionService:
                     if cycle and cycle.status == "OPEN" and cycle.open_quantity == 0 and not any(item.trade_id == cycle.id and item.side == "BUY" and item.status not in FINAL_STATUSES for item in self.queue.list_all()):
                         cycle.status, cycle.closed_at = "CLOSED", time.time()
                         self.trade_state.save(cycle)
+                if (not delta and intent.side == "SELL" and reconciled
+                        and reconciled.status in FINAL_STATUSES and reconciled.filled_quantity > 0):
+                    # A cancellation can finish a partial SELL with no new fill.
+                    # Its completion anchor is durable and counted only once.
+                    self._mark_exit_events(reconciled)
                 if event:
                     self.database.add_event(event)
                 self.database.mark_applied(key)

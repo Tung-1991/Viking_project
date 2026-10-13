@@ -313,6 +313,8 @@ class SignalLog:
         "rsi_period", "price_source", "indicator_source", "record_kind",
         "signal_event", "ema_cross_required", "ema_cross_state", "ema_cross_at",
         "ema_previous_fast", "ema_previous_slow",
+        "ema_memory_tracking_version", "ema_memory_mode", "ema_memory_sessions",
+        "ema_memory_remaining_sessions", "ema_memory_up_count", "ema_memory_down_count", "ema_memory_started_at",
         "signal_ready", "indicator_observed_at", "indicator_price",
         "record_id",
     )

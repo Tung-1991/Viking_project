@@ -97,7 +97,7 @@ class SignalTelegramService:
             "TP": "TP",
             "TAKE_PROFIT": "TP",
             "NORMAL": "PROTECT",
-            "NORMAL_PROTECTION": "PROTECT",
+            "NORMAL_PROTECTION": "PROTECT", "DYNAMIC_PROTECTION": "PROTECT DYNAMIC",
             "IND_EXIT": "E",
             "INDICATOR_EXIT": "E",
         }.get(str(value or "").strip().upper(), "")

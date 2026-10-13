@@ -35,6 +35,10 @@ def ema_cross_evidence(current: dict, previous: dict, *, required: bool,
 def ema_cross_caption(evidence: dict | None, window: dict | None = None) -> tuple[str, str]:
     """Return compact text and a colour role from recorded backend evidence."""
     evidence, window = evidence or {}, window or {}
+    if evidence.get("tracking_version") == 2:
+        from .ema_memory import memory_caption
+        state = evidence.get("state")
+        return "CẮT EMA · " + memory_caption(evidence), "ok" if state == "SESSION_ACTIVE" else "wait" if state in {"WAIT_UP", "WAIT_DOWN"} else "muted"
     state = str(evidence.get("state", "UNKNOWN"))
     when = str(evidence.get("cross_at", "") or "")
     accepted = window.get("ema_cross") or {}

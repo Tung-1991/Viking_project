@@ -46,6 +46,8 @@ from ..services.signal_coordinator import (
 from ..services.indicator_comparison import DNSEIndicatorNormalizer
 from ..services.signal_trace import SignalTraceStore, compare_entry
 from ..rules.observations import exit_conditions
+from ..rules.ema_memory import memory_fields
+from ..rules.protection import sale_quantity, PROTECTION_EVENTS
 from ..storage import CSVOrderJournal
 from ..trading.market import VN_TZ, market_phase, market_session_clock, normalize_exchange
 from ..trading.portfolio import (
@@ -124,7 +126,7 @@ class DashboardActionsMixin:
         if intent.source == "EM":
             tactic = {
                 "STOP_LOSS": "SL", "TAKE_PROFIT": "TP", "INDICATOR_EXIT": "E AUTO",
-                "NORMAL_PROTECTION": "PROTECT", "NORMAL_DYNAMIC": "PROTECT DYNAMIC",
+                "NORMAL_PROTECTION": "PROTECT", "DYNAMIC_PROTECTION": "PROTECT DYNAMIC", "NORMAL_DYNAMIC": "PROTECT DYNAMIC",
             }.get(intent.reason, str(intent.reason or "THOÁT TỰ ĐỘNG").replace("_", " "))
             message += f" · {tactic}"
         if intent.broker_order_id:
@@ -1062,6 +1064,12 @@ class DashboardActionsMixin:
 
     def _settings_saved(self) -> None:
         save_settings(self.settings, self.account_id)
+        sync = getattr(getattr(self, "rule_state", None), "sync_ema_watchlist", None)
+        if callable(sync):
+            admitted = datetime.now(VN_TZ)
+            symbols = set(self.settings.watchlist) | set(self.settings.priority_symbols)
+            for stream in ("REAL", "PAPER"):
+                sync(symbols, stream, now=admitted)
         current = self.bridge.read_config()
         self.bridge.write_config(
             RuntimeConfig(
@@ -1268,8 +1276,8 @@ class DashboardActionsMixin:
         protect_hit = event == "PROTECT_ALERT" or (
             decision.action == "SELL"
             and (
-                "NORMAL_PROTECTION" in triggered_events
-                or "NORMAL_PROTECTION" in str(decision.reason or "").upper().split("+")
+                bool(PROTECTION_EVENTS.intersection(triggered_events))
+                or bool(PROTECTION_EVENTS.intersection(str(decision.reason or "").upper().split("+")))
             )
         )
         if protect_hit:
@@ -3366,6 +3374,7 @@ class DashboardActionsMixin:
             "record_kind": "SIGNAL_EVENT",
             "ema_cross_required": cross.get("required", ""),
             "ema_cross_state": cross.get("state", ""),
+            **memory_fields(cross),
             "ema_cross_at": ((window.get("ema_cross") or {}).get("cross_at") or window.get("signal_time", "")
                              if window.get("state") in {"WAITING", "ALLOWED"} and cross.get("required")
                              and (window.get("ema_cross") or {}).get("crossed_up") is True
@@ -3414,9 +3423,11 @@ class DashboardActionsMixin:
             "protect_price": details.get("normal_trigger_price", ""),
             "sell_pct": details.get("sell_share_pct", ""),
             "hypothetical_quantity": (
-                sell_quantity_for_fraction(
+                sale_quantity(
                     int(details.get("position_quantity", 0) or 0),
+                    int(details.get("entry_quantity", details.get("position_quantity", 0)) or 0),
                     float(details.get("sell_share_pct", 0.0) or 0.0) / 100.0,
+                    details.get("sell_basis", "REMAINING"),
                 ) if protect_alert else ""
             ),
         }

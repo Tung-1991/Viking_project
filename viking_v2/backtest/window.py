@@ -156,7 +156,8 @@ PHASE_GROUPS = (
                 "OFF: GIỮ LÃI tiếp tục tới ARM 7%. Trong mẫu 7 mã hiện tại, mốc 5% cho PnL 599,53 triệu, "
                 "còn giữ tới ARM chỉ đạt 466,33 triệu; chưa xác nhận ngoài mẫu.",
             ),
-            ("PROTECT · SELL %", "normal_sell_pct", "Mỗi lần AUTO bán X% lượng còn lại; SELL 100% làm REPEAT vô hiệu."),
+            ("ARM · BÁN %", "normal_sell_pct", "Bán theo GỐC hoặc CÒN LẠI; 100% không lặp."),
+            ("DYNAMIC · BÁN %", "dynamic_sell_pct", "Lượng bán trước ARM; độc lập ARM."),
             ("WHIPSAW · SỐ LẦN CẮT", "whipsaw_n", "EMA cắt qua lại bao nhiêu lần thì khóa mua mã đó."),
             ("WHIPSAW · SỐ PHIÊN ĐẾM", "whipsaw_x", "Đếm số lần cắt trong bấy nhiêu phiên gần nhất."),
             ("LOSS · SỐ LỆNH KHÓA", "loss_lock_count", "Số lệnh lỗ liên tiếp làm khóa BUY mới."),
@@ -178,7 +179,8 @@ BACKTEST_RULE_KEYS = PHASE_PARAMETER_KEYS | {
     "buy_volume_enabled", "buy_volume_average_sessions", "buy_volume_min_ratio",
     "buy_signal_use_ema", "buy_signal_use_rsi",
     "buy_signal_require_ema_cross",
-    "buy_signal_session_cross_enabled",
+    "buy_signal_session_cross_enabled", "buy_ema_cross_mode", "buy_ema_cross_sessions",
+    "normal_sell_basis", "dynamic_sell_basis", "dynamic_repeat_enabled", "protect_config_version",
     "sell_signal_use_ema", "sell_signal_use_rsi",
     "buy_confirmation_enabled", "buy_confirmation_minutes",
     "buy_confirmation_require_ema", "buy_confirmation_require_rsi",
@@ -1391,22 +1393,24 @@ class BacktestPopup:
             ).grid(row=0, column=column, sticky="w", padx=(0, 12))
 
         ctk.CTkSwitch(
-            signal_toggle_row, text="BUY CẦN EMA VỪA VƯỢT LÊN", variable=self.buy_signal_require_ema_cross,
+            signal_toggle_row, text="BUY CẦN EMA CẮT LÊN", variable=self.buy_signal_require_ema_cross,
             font=(FONT, 12), progress_color=COL_GREEN, text_color=COL_TEXT,
         ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
         self._hint(
             signal_toggle_row,
-            "BẬT (mặc định): lần trước ≤, lần này > mới tạo BUY mới. TẮT: chỉ cần EMA nhanh hiện tại > EMA chậm.\n"
-            "REALTIME so hai lần quan sát intraday; CLOSED so hai nến ngày đã đóng. RSI vẫn so phiên trước. Không đổi E/SELL hoặc các khóa vào lệnh.",
+            "ON: phải cắt lên sau khi thêm mã. Đang trên lúc thêm: chờ xuống rồi lên; đang dưới: chờ lên.\n"
+            "∞ VA giữ tới khi dùng; X phiên tính cả phiên cắt. EMA xuống vẫn giữ ghi nhận, BUY vẫn cần EMA hiện tại ở trên.\n"
+            "REPLAY quan sát nến trong phiên; DAILY chỉ xác minh tại các nến ngày, không tái tạo giao cắt trong phiên.",
         ).grid(row=1, column=3, padx=10, pady=(8, 0))
-
+        self.buy_ema_cross_mode = ctk.StringVar(value="∞ VA" if params.buy_ema_cross_mode == "VA" else "⏳ X PHIÊN")
+        ctk.CTkSegmentedButton(signal_toggle_row, values=["∞ VA", "⏳ X PHIÊN"], variable=self.buy_ema_cross_mode,
+                               font=(FONT, 12)).grid(row=2, column=0, columnspan=2, sticky="w", pady=8)
+        self.buy_ema_cross_sessions = self._entry(signal_toggle_row, str(params.buy_ema_cross_sessions), 80)
+        self.buy_ema_cross_sessions.grid(row=2, column=2, sticky="w")
+        self.buy_ema_cross_mode.trace_add("write", lambda *_: self.buy_ema_cross_sessions.configure(
+            state="normal" if self.buy_ema_cross_mode.get() == "⏳ X PHIÊN" else "disabled"))
+        self.buy_ema_cross_sessions.configure(state="normal" if params.buy_ema_cross_mode == "SESSIONS" else "disabled")
         rule_toggle_row = ctk.CTkFrame(card, fg_color="transparent")
-        ctk.CTkSwitch(
-            signal_toggle_row, text="GIỮ LẦN CẮT TRONG PHIÊN", variable=self.buy_signal_session_cross_enabled,
-            font=(FONT, 12), progress_color=COL_GREEN, text_color=COL_TEXT,
-        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
-        self._hint(signal_toggle_row, "Giữ lần cắt lên còn hiệu lực đến khi EMA xuống hoặc hết phiên; mỗi lần chỉ dùng một lần.\n"
-                   "Replay theo dữ liệu intraday đã chọn. RSI, giờ mua và vốn vẫn kiểm tra.").grid(row=2, column=3, padx=10)
         rule_toggle_row.grid(row=4, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
         self.volume_confirmation = ctk.BooleanVar(value=params.volume_confirmation)
         self.buy_volume_enabled = ctk.BooleanVar(value=params.buy_volume_enabled)
@@ -1514,14 +1518,25 @@ class BacktestPopup:
             font=(FONT, 12, "bold"), progress_color=COL_GREEN, text_color=COL_TEXT,
         ).grid(row=0, column=0, sticky="w", padx=(0, 18))
         ctk.CTkSwitch(
-            protect_option_row, text="REPEAT", variable=self.normal_repeat,
+            protect_option_row, text="ARM · REPEAT", variable=self.normal_repeat,
             font=(FONT, 12, "bold"), progress_color=COL_GREEN, text_color=COL_TEXT,
         ).grid(row=0, column=1, sticky="w", padx=(0, 18))
         self._hint(
             protect_option_row,
             "DYNAMIC dùng ATR14 phiên T−1 để bảo vệ dưới ARM khi mức PROTECT cao hơn SL. "
-            "REPEAT chỉ có tác dụng khi SELL < 100% và cần peak mới cao hơn peak lần trước ít nhất TRAIL%.",
+            "REPEAT: hồi rồi chạm lại, hoặc giảm tiếp. Giá đứng yên không bán thêm; lệnh đang chờ phải kết thúc.",
         ).grid(row=0, column=2, padx=10)
+
+        self.normal_sell_basis = ctk.StringVar(value="GỐC" if params.normal_sell_basis == "ORIGINAL" else "CÒN LẠI")
+        self.dynamic_sell_basis = ctk.StringVar(value="GỐC" if params.dynamic_sell_basis == "ORIGINAL" else "CÒN LẠI")
+        self.dynamic_repeat = ctk.BooleanVar(value=params.dynamic_repeat_enabled)
+        for row, label, variable in ((1, "ARM · KL", self.normal_sell_basis), (2, "DYN · KL", self.dynamic_sell_basis)):
+            self._label(protect_option_row, label, 12, bold=True).grid(row=row, column=0, sticky="w", pady=6)
+            ctk.CTkSegmentedButton(protect_option_row, values=["GỐC", "CÒN LẠI"], variable=variable,
+                                   font=(FONT, 12)).grid(row=row, column=1, sticky="w")
+        ctk.CTkSwitch(protect_option_row, text="DYN · REPEAT", variable=self.dynamic_repeat,
+                       progress_color=COL_GREEN, font=(FONT, 12)).grid(row=2, column=2, padx=10)
+        self._hint(protect_option_row, "GỐC: % tổng cổ đã mua của giao dịch; CÒN LẠI: % cổ còn giữ. Làm tròn lô; không vượt cổ bán được.").grid(row=1, column=2)
 
         fill_row = ctk.CTkFrame(card, fg_color="transparent")
         fill_row.grid(row=9, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
@@ -1588,6 +1603,11 @@ class BacktestPopup:
         self.buy_signal_rsi.set(bool(params.get("buy_signal_use_rsi", True)))
         self.buy_signal_require_ema_cross.set(bool(params.get("buy_signal_require_ema_cross", True)))
         self.buy_signal_session_cross_enabled.set(bool(params.get("buy_signal_session_cross_enabled", True)))
+        self.buy_ema_cross_mode.set("∞ VA" if params.get("buy_ema_cross_mode", "VA") == "VA" else "⏳ X PHIÊN")
+        self.buy_ema_cross_sessions.configure(state="normal")
+        self.buy_ema_cross_sessions.delete(0, "end")
+        self.buy_ema_cross_sessions.insert(0, str(params.get("buy_ema_cross_sessions", 3)))
+        self.buy_ema_cross_sessions.configure(state="normal" if self.buy_ema_cross_mode.get() == "⏳ X PHIÊN" else "disabled")
         self.sell_signal_ema.set(bool(params.get("sell_signal_use_ema", True)))
         self.sell_signal_rsi.set(bool(params.get("sell_signal_use_rsi", True)))
         indicator_exit_policy = str(
@@ -1608,6 +1628,9 @@ class BacktestPopup:
         self.normal_policy.set(normal_policy if normal_policy in {"AUTO", "ALERT"} else "AUTO")
         self.normal_dynamic.set(bool(params.get("normal_dynamic_enabled", False)))
         self.normal_repeat.set(bool(params.get("normal_repeat_enabled", False)))
+        self.dynamic_repeat.set(bool(params.get("dynamic_repeat_enabled", True)))
+        self.normal_sell_basis.set("GỐC" if params.get("normal_sell_basis", "ORIGINAL") == "ORIGINAL" else "CÒN LẠI")
+        self.dynamic_sell_basis.set("GỐC" if params.get("dynamic_sell_basis", "ORIGINAL") == "ORIGINAL" else "CÒN LẠI")
         for key, variable in self.dynamic_subrules.items():
             variable.set(bool(params.get(key, True)))
         for key, default in (("start", "14:00"),):
@@ -1750,7 +1773,9 @@ class BacktestPopup:
         params["buy_signal_use_ema"] = bool(self.buy_signal_ema.get())
         params["buy_signal_use_rsi"] = bool(self.buy_signal_rsi.get())
         params["buy_signal_require_ema_cross"] = bool(self.buy_signal_require_ema_cross.get())
-        params["buy_signal_session_cross_enabled"] = bool(self.buy_signal_session_cross_enabled.get())
+        params["buy_signal_session_cross_enabled"] = True
+        params["buy_ema_cross_mode"] = "VA" if self.buy_ema_cross_mode.get() == "∞ VA" else "SESSIONS"
+        params["buy_ema_cross_sessions"] = int(self.buy_ema_cross_sessions.get())
         params["sell_signal_use_ema"] = bool(self.sell_signal_ema.get())
         params["sell_signal_use_rsi"] = bool(self.sell_signal_rsi.get())
         params["indicator_exit_policy"] = self.indicator_exit_policy.get()
@@ -1775,6 +1800,10 @@ class BacktestPopup:
         params["normal_policy"] = self.normal_policy.get()
         params["normal_dynamic_enabled"] = bool(self.normal_dynamic.get())
         params["normal_repeat_enabled"] = bool(self.normal_repeat.get())
+        params["normal_sell_basis"] = "ORIGINAL" if self.normal_sell_basis.get() == "GỐC" else "REMAINING"
+        params["dynamic_sell_basis"] = "ORIGINAL" if self.dynamic_sell_basis.get() == "GỐC" else "REMAINING"
+        params["dynamic_repeat_enabled"] = bool(self.dynamic_repeat.get())
+        params["protect_config_version"] = 2
         for key, variable in self.dynamic_subrules.items():
             params[key] = bool(variable.get())
         params.pop("buy_window_end", None)

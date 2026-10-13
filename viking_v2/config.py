@@ -127,6 +127,8 @@ DEFAULT_RULE_PARAMETERS: dict[str, Any] = {
     "buy_signal_use_rsi": True,
     "buy_signal_require_ema_cross": True,
     "buy_signal_session_cross_enabled": True,
+    "buy_ema_cross_mode": "VA",
+    "buy_ema_cross_sessions": 3,
     "buy_volume_enabled": False,
     "buy_volume_average_sessions": 20,
     "buy_volume_min_ratio": 1.0,
@@ -143,7 +145,8 @@ DEFAULT_RULE_PARAMETERS: dict[str, Any] = {
     "force_min_lot_enabled": True,
     "take_profit_pct": 7.0,
     "normal_arm_pct": 7.0,
-    "normal_sell_pct": 100.0,
+    "normal_sell_pct": 33.0,
+    "normal_sell_basis": "ORIGINAL",
     "normal_giveback_pct": 2.5,
     "normal_atr_activation_multiplier": 0.55,
     "normal_atr_multiplier": 0.8,
@@ -156,7 +159,11 @@ DEFAULT_RULE_PARAMETERS: dict[str, Any] = {
     "normal_policy": "AUTO",
     "normal_dynamic_enabled": True,
     "normal_t2_reset_enabled": False,
-    "normal_repeat_enabled": False,
+    "normal_repeat_enabled": True,
+    "dynamic_sell_pct": 33.0,
+    "dynamic_sell_basis": "ORIGINAL",
+    "dynamic_repeat_enabled": True,
+    "protect_config_version": 2,
     "whipsaw_enabled": True,
     "whipsaw_n": 3,
     "whipsaw_x": 7,
@@ -185,6 +192,16 @@ def merge_rule_parameters(values: dict[str, Any] | None) -> dict[str, Any]:
     """Overlay saved values on operating defaults while preserving migrations."""
 
     configured = dict(values) if isinstance(values, dict) else {}
+    # The former session-only switch is superseded by the two memory modes.
+    configured["buy_signal_session_cross_enabled"] = True
+    if "protect_config_version" not in configured:
+        previous_share = float(configured.get("normal_sell_pct", 100) or 100)
+        if previous_share == 100:
+            configured["normal_sell_pct"] = 33.0
+            configured["normal_repeat_enabled"] = True
+        configured.setdefault("dynamic_sell_pct", configured.get("normal_sell_pct", 33.0))
+        configured.setdefault("dynamic_repeat_enabled", configured.get("normal_repeat_enabled", True))
+        configured["protect_config_version"] = 2
     legacy_fast = configured.get("ema_fast")
     legacy_slow = configured.get("ema_slow")
     if legacy_fast is not None:

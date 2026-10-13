@@ -155,7 +155,7 @@ def test_initialising_ema_does_not_disable_existing_position_exits(position, eve
     )
     assert decision.action == "SELL"
     assert decision.event == event
-    assert decision.quantity_fraction == 1.0
+    assert decision.quantity_fraction == (0.33 if event == "PRICE_PROTECTION" else 1.0)
 
 
 def _run_two_daemon_cycles(monkeypatch, tmp_path, *, mode="REAL", phase="OPEN", interval="TICK", fault="", cached_tick=None, source="WS"):

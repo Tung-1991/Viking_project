@@ -666,6 +666,7 @@ class PortfolioContextBuilder:
         ) if trade_id else {}
         context["position"] = {
             "quantity": quantity,
+            "entry_quantity": active_trade.entry_quantity if active_trade else broker_quantity,
             "avg_price": avg_price,
             "current_price": current_price,
             "trade_quantity": sum(

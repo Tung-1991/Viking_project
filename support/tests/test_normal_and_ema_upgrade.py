@@ -92,9 +92,9 @@ def test_protect_defaults_use_the_reviewed_dynamic_configuration() -> None:
     assert params.normal_atr_multiplier == pytest.approx(0.8)
     assert params.normal_retention_pct == pytest.approx(90.0)
     assert params.normal_retention_until_pct == pytest.approx(5.0)
-    assert params.normal_sell_pct == pytest.approx(100.0)
+    assert params.normal_sell_pct == pytest.approx(33.0)
     assert params.normal_dynamic_enabled is True
-    assert params.normal_repeat_enabled is False
+    assert params.normal_repeat_enabled is True
 
 
 def test_normal_auto_arms_first_then_sells_configured_fraction() -> None:
@@ -299,7 +299,7 @@ def test_live_rule_can_use_retention_without_start_or_trail_atr() -> None:
     }
     position = {"position": _position(current_price=102, peak_profit_pct=4)}
     sold = StaticRule(params).evaluate(context, position)
-    assert sold.reason == "NORMAL_PROTECTION"
+    assert sold.reason == "DYNAMIC_PROTECTION"
     assert sold.details["normal_trigger_price"] == pytest.approx(103)
     assert sold.details["normal_atr_trail_enabled"] is False
 
@@ -371,15 +371,15 @@ def test_alert_uses_auto_condition_but_never_sells() -> None:
         {"symbol": "FPT", "bars": _atr_bars(101.4), "confirmed_market_state": "UPTREND"},
         {"position": _position(
             current_price=101.4, peak_profit_pct=4, trade_id="T1",
-            normal_alert_count=1, normal_last_alert_peak_pct=4,
+            dynamic_alert_count=1, dynamic_last_alert_price=101.4, dynamic_last_alert_peak_pct=4,
         )},
     )
     assert deduped.action == "WAIT"
     assert deduped.event == ""
-    assert deduped.details["normal_state"] == "ALERT"
+    assert deduped.details["normal_state"] == "REARM"
 
 
-def test_repeat_requires_a_new_peak_and_sell_100_disables_it() -> None:
+def test_repeat_requires_new_price_or_retouch_and_sell_100_disables_it() -> None:
     params = StaticRuleParameters(
         normal_sell_pct=50, normal_repeat_enabled=True, normal_giveback_pct=2,
     )
@@ -387,12 +387,12 @@ def test_repeat_requires_a_new_peak_and_sell_100_disables_it() -> None:
     context = {"symbol": "FPT", "bars": _bars(107), "confirmed_market_state": "UPTREND"}
     base = _position(
         current_price=107, normal_armed=True, normal_protection_count=1,
-        normal_last_trigger_peak_pct=7,
+        normal_last_trigger_peak_pct=10, normal_last_trigger_price=107,
     )
     waiting = rule.evaluate(context, {"position": {**base, "peak_profit_pct": 9}})
     assert waiting.details["normal_state"] == "REARM"
-    assert waiting.details["normal_rearm_mfe_pct"] == pytest.approx(protect_rearm_mfe(7, 2))
-    repeated = rule.evaluate(context, {"position": {**base, "peak_profit_pct": 10}})
+    assert waiting.details["normal_rearm_mfe_pct"] == pytest.approx(protect_rearm_mfe(10, 2))
+    repeated = rule.evaluate(context, {"position": {**base, "peak_profit_pct": 10, "current_price": 106}})
     assert repeated.action == "SELL"
     assert repeated.quantity_fraction == pytest.approx(0.5)
 
@@ -657,7 +657,7 @@ def test_live_rule_uses_sellable_peak_below_arm_after_t2_reset() -> None:
         normal_trigger_price=0.0, normal_t2_reset_applied=True,
         normal_sellable_peak_profit_pct=2.0,
     )})
-    assert before.reason == "NORMAL_PROTECTION"
+    assert before.reason == "DYNAMIC_PROTECTION"
     assert after.action == "WAIT"
     assert after.details["normal_mfe_pct"] == pytest.approx(2.0)
 

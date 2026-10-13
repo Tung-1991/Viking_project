@@ -1,6 +1,16 @@
 {
-  "watchlist": ["MSN", "CTS", "HDB", "IDC"],
-  "priority_symbols": ["MSN", "CTS", "HDB", "IDC"],
+  "watchlist": [
+    "MSN",
+    "CTS",
+    "HDB",
+    "IDC"
+  ],
+  "priority_symbols": [
+    "MSN",
+    "CTS",
+    "HDB",
+    "IDC"
+  ],
   "signal_trace_enabled": true,
   "signal_trace_interval_minutes": 2,
   "signal_trace_start": "14:00",
@@ -11,20 +21,61 @@
   "priority_capital_enabled": true,
   "priority_total_capital": 50000000,
   "priority_allocations": {
-    "MSN": {"limit_vnd": 16000000, "use_pct": 100, "max_orders": 1},
-    "CTS": {"limit_vnd": 12000000, "use_pct": 100, "max_orders": 1},
-    "HDB": {"limit_vnd": 15000000, "use_pct": 100, "max_orders": 1},
-    "IDC": {"limit_vnd": 7000000, "use_pct": 100, "max_orders": 1}
+    "MSN": {
+      "limit_vnd": 16000000,
+      "use_pct": 100,
+      "max_orders": 1
+    },
+    "CTS": {
+      "limit_vnd": 12000000,
+      "use_pct": 100,
+      "max_orders": 1
+    },
+    "HDB": {
+      "limit_vnd": 15000000,
+      "use_pct": 100,
+      "max_orders": 1
+    },
+    "IDC": {
+      "limit_vnd": 7000000,
+      "use_pct": 100,
+      "max_orders": 1
+    }
   },
   "market_phase_override_enabled": true,
   "market_phase_override_exposure_pct": 100,
-  "bot_em_modes": ["IND_EXIT"],
+  "bot_em_modes": [
+    "IND_EXIT"
+  ],
   "telegram_notifications": {
-    "buy_queued": true, "closed": true, "protect": true,
-    "indicator_exit": true, "blocked_buy": true, "buy_lost": true,
-    "corporate_action": true, "external_sell": true, "system": true
+    "buy_queued": true,
+    "closed": true,
+    "protect": true,
+    "indicator_exit": true,
+    "blocked_buy": true,
+    "buy_lost": true,
+    "corporate_action": true,
+    "external_sell": true,
+    "system": true
   },
   "telegram_buy_delivery_mode": "IMMEDIATE",
-  "telegram_cooldown_minutes": {"blocked_buy": 60, "buy_lost": 60, "system": 30},
-  "rule_parameters": {"max_positions": 4, "indicator_exit_policy": "AUTO", "buy_signal_require_ema_cross": true}
+  "telegram_cooldown_minutes": {
+    "blocked_buy": 60,
+    "buy_lost": 60,
+    "system": 30
+  },
+  "rule_parameters": {
+    "max_positions": 4,
+    "indicator_exit_policy": "AUTO",
+    "buy_signal_require_ema_cross": true,
+    "buy_ema_cross_mode": "VA",
+    "buy_ema_cross_sessions": 3,
+    "normal_sell_pct": 33,
+    "normal_sell_basis": "ORIGINAL",
+    "normal_repeat_enabled": true,
+    "dynamic_sell_pct": 33,
+    "dynamic_sell_basis": "ORIGINAL",
+    "dynamic_repeat_enabled": true,
+    "protect_config_version": 2
+  }
 }

@@ -53,6 +53,11 @@ def observed(tmp_path, *, now=NOW, broker=None, price=104, stream="REAL", params
     state = RuleStateStore(tmp_path / "rules.json")
     cache = SessionPriceCache(tmp_path / "minutes.json", broker)
     service = SessionCrossService(cache, state)
+    # Admission was observed below at 14:00; restart may recover only after that baseline.
+    admitted = now.replace(hour=14, minute=0, second=0)
+    state.sync_ema_watchlist(["TEST"], stream, now=admitted)
+    initial = daily_bars(admitted, 95)
+    service.observe("TEST", stream, initial, indicator_snapshot(initial, 3, 6, 14), params, admitted, "HOSE")
     bars = daily_bars(now, price)
     marks = indicator_snapshot(bars, 3, 6, 14)
     cross = service.observe("TEST", stream, bars, marks, params, now, "HOSE")
@@ -83,11 +88,11 @@ def test_restart_1420_recovers_1410_cross_and_can_buy_without_new_cross(tmp_path
     assert StaticRule(parameters(buy_signal_require_ema_cross=False)).params.buy_signal_require_ema_cross is False
     old = StaticRule(StaticRuleParameters(buy_signal_session_cross_enabled=False, whipsaw_enabled=False))
     assert old.evaluate(rule_context(bars, marks, cross), portfolio()).action == "WAIT"
-    assert len(broker.calls) == 2  # Morning and afternoon, excluding lunch.
+    assert len(broker.calls) == 1  # Only after admission; no morning history.
     restarted = SessionCrossService(SessionPriceCache(tmp_path / "minutes.json", broker),
                                     RuleStateStore(tmp_path / "rules.json"))
     assert restarted.observe("TEST", "REAL", bars, marks, parameters(), NOW, "HOSE")["cross_id"] == cross["cross_id"]
-    assert len(broker.calls) == 2
+    assert len(broker.calls) == 1
 
 
 def test_reconstructed_ema_uses_daily_history_and_one_provisional_daily_close(tmp_path):
@@ -104,10 +109,13 @@ def test_live_cache_toggles_and_continuous_quotes_do_not_refetch(tmp_path):
     service, state, broker, bars, marks, cross = observed(tmp_path)
     for seconds in (10, 20, 30, 40, 50, 60, 70):
         at = NOW + timedelta(seconds=seconds)
-        service.cache.observe("TEST", 104, at, "HOSE", recover=seconds >= 60)
-    assert len(broker.calls) == 2
+        assert service.observe("TEST", "REAL", bars, marks, parameters(), at, "HOSE")["valid"]
+    assert len(broker.calls) == 1
+    at = NOW.replace(minute=0)
+    initial = daily_bars(at, 95)
+    service.observe("TEST", "PAPER", initial, indicator_snapshot(initial, 3, 6, 14), parameters(), at, "HOSE")
     assert service.observe("TEST", "PAPER", bars, marks, parameters(), NOW + timedelta(seconds=70), "HOSE")["valid"]
-    assert len(broker.calls) == 2
+    assert len(broker.calls) == 2  # Only the uncovered last minute, shared by both books.
 
 
 def test_restart_gap_only_fetches_missing_minutes(tmp_path):
@@ -115,8 +123,8 @@ def test_restart_gap_only_fetches_missing_minutes(tmp_path):
     restarted = SessionCrossService(SessionPriceCache(tmp_path / "minutes.json", broker), state)
     later = NOW + timedelta(minutes=10)
     assert restarted.observe("TEST", "REAL", bars, marks, parameters(), later, "HOSE")["valid"]
-    assert broker.calls[2][2:] == (int(NOW.timestamp()), int(later.timestamp()) - 1)
-    assert len(broker.calls) == 3
+    assert broker.calls[1][2:] == (int(NOW.timestamp()), int(later.timestamp()) - 1)
+    assert len(broker.calls) == 2
 
 
 def test_missing_history_blocks_buy_with_retry_backoff_then_recovers(tmp_path):
@@ -239,7 +247,7 @@ def test_queue_write_failure_rolls_back_cross_claim(tmp_path, monkeypatch, clock
     assert queue.list_all() == []
 
 
-@pytest.mark.parametrize("scenario", ["valid", "down", "last_quote_down", "expired", "unknown"])
+@pytest.mark.parametrize("scenario", ["valid", "closed", "down", "last_quote_down", "latest_threshold", "expired", "unknown"])
 def test_actual_fake_broker_submission_and_last_moment_checks(tmp_path, clock, scenario):
     params = StaticRuleParameters(whipsaw_enabled=False)
     _, state, _, bars, marks, cross = observed(tmp_path, params=params)
@@ -265,14 +273,18 @@ def test_actual_fake_broker_submission_and_last_moment_checks(tmp_path, clock, s
         return {"symbol": "TEST", "price": latest, "ask": latest, "timestamp": NOW.timestamp(), "source": "WS"}
     if scenario == "expired":
         state.save_session_cross("TEST", "REAL", {**cross, "expires_at": NOW.timestamp()})
+    if scenario == "latest_threshold":
+        state.save_session_cross("TEST", "REAL", {**cross, "threshold_price": 105})
+    if scenario == "closed":
+        state.save_session_cross("TEST", "REAL", {**cross, "observation_mode": "CLOSED", "threshold_price": 1e30})
     execution = ExecutionService(broker, broker, queue, JSONLineJournal(tmp_path / "journal.jsonl"),
                                  quote_provider=quote,
                                  trade_state=trades, rule_state=state)
     execution.process_due(phase="OPEN", execution_mode="REAL")
     execution.process_due(phase="OPEN", execution_mode="REAL")
-    assert len(sent) == (1 if scenario in {"valid", "unknown"} else 0)
-    assert queue.get(intent.id).status == {"valid": "WORKING", "unknown": "UNKNOWN",
-                                           "down": "CANCELLED", "last_quote_down": "CANCELLED", "expired": "CANCELLED"}[scenario]
+    assert len(sent) == (1 if scenario in {"valid", "closed", "unknown"} else 0)
+    assert queue.get(intent.id).status == {"valid": "WORKING", "closed": "WORKING", "unknown": "UNKNOWN",
+                                           "down": "CANCELLED", "last_quote_down": "CANCELLED", "latest_threshold": "CANCELLED", "expired": "CANCELLED"}[scenario]
 
 
 def test_off_does_not_consume_cross_and_buy_window_still_waits(tmp_path):
@@ -299,17 +311,18 @@ def test_explicit_no_trades_response_can_be_cached_without_inventing_a_cross(tmp
     broker = MinuteBroker()
     broker.get_ohlc = lambda *_: {"s": "no_data"}
     _, _, _, _, _, cross = observed(tmp_path, broker=broker)
-    assert cross["ready"] and not cross["valid"] and not cross["cross_id"]
+    assert cross["ready"] and cross["valid"] and cross["up_count"] == 1
+    assert cross["cross_at"] == NOW.isoformat()
 
 
-def test_new_day_fetches_new_session_and_never_reuses_old_identity(tmp_path):
+def test_new_day_keeps_unused_va_identity_without_fabricating_new_cross(tmp_path):
     service, state, broker, bars, marks, old = observed(tmp_path)
     later = NOW + timedelta(days=3)
     new_bars = daily_bars(later)
     new_marks = indicator_snapshot(new_bars, 3, 6, 14)
     current = service.observe("TEST", "REAL", new_bars, new_marks, parameters(), later, "HOSE")
-    assert current["day"] == later.date().isoformat() and current["cross_id"] != old["cross_id"]
-    assert len(broker.calls) == 4
+    assert current["day"] == later.date().isoformat() and current["cross_id"] == old["cross_id"]
+    assert len(broker.calls) == 6  # Distinct ATO/OPEN/ATC windows, skipping the weekend.
 
 
 def test_old_window_or_confirmation_cannot_revive_used_cross(tmp_path):
@@ -355,17 +368,17 @@ def test_confirmed_session_does_not_restart_timer_while_waiting_for_capital(tmp_
     assert approved.action == "BUY" and approved.details["buy_confirmation"]["minutes_held"] == 5
 
 
-def test_cross_expires_after_close_and_old_day_cannot_be_claimed(tmp_path, clock):
+def test_va_cross_survives_close_and_can_be_claimed_next_session(tmp_path, clock):
     service, state, broker, bars, marks, cross = observed(tmp_path)
     closed = service.observe("TEST", "REAL", bars, marks, parameters(), NOW.replace(hour=15), "HOSE")
-    assert closed["state"] == "EXPIRED" and not closed["valid"]
+    assert closed["state"] == "SESSION_ACTIVE" and closed["valid"]
     state.save_session_cross("TEST", "REAL", cross)
-    assert not state.claim_session_cross("TEST", "REAL", cross["cross_id"], now=(NOW + timedelta(days=1)).timestamp())
+    assert state.claim_session_cross("TEST", "REAL", cross["cross_id"], now=(NOW + timedelta(days=3)).timestamp())
 
 
 @pytest.mark.parametrize("configured,expected", [(None, True), ({}, True),
     ({"buy_signal_session_cross_enabled": True}, True),
-    ({"buy_signal_session_cross_enabled": False}, False)])
+    ({"buy_signal_session_cross_enabled": False}, True)])
 def test_session_cross_default_and_saved_preference_survive_load_save(tmp_path, monkeypatch, configured, expected):
     import json
     from viking_v2 import config
@@ -395,7 +408,7 @@ def test_switch_roundtrip_and_preview_are_small_and_explicit(ui_root, monkeypatc
         popup.save()
         assert "ĐÃ LƯU" in popup.status.cget("text")
         saved = config.load_settings("SESSION_UI")
-        assert StaticRuleParameters.from_dict(saved.rule_parameters).buy_signal_session_cross_enabled is enabled
+        assert StaticRuleParameters.from_dict(saved.rule_parameters).buy_signal_session_cross_enabled is True
     finally:
         popup._close()
     for state, text in (("SESSION_ACTIVE", "CÒN HIỆU LỰC 14:10"), ("SESSION_USED", "ĐÃ DÙNG 14:10")):
@@ -432,9 +445,9 @@ def test_backtest_ui_syncs_same_session_option(ui_root, monkeypatch, tmp_path, e
             popup.cost_entries[key].delete(0, "end")
             popup.cost_entries[key].insert(0, str(value))
         popup._sync_from_bot()
-        assert popup.buy_signal_session_cross_enabled.get() is enabled
+        assert popup.buy_signal_session_cross_enabled.get() is True
         collected = popup._collect()
-        assert collected.rule_parameters["buy_signal_session_cross_enabled"] is enabled
+        assert collected.rule_parameters["buy_signal_session_cross_enabled"] is True
         assert all(getattr(collected, key) == value for key, value in costs.items())
     finally:
         popup.close()
@@ -474,9 +487,9 @@ def test_real_replay_accepts_later_rsi_only_if_session_option_is_enabled(tmp_pat
         fixed_market_phase="UPTREND", fixed_exposure_pct=100, simulation_mode="REPLAY", fill_session="CONTINUOUS",
         rule_parameters={"buy_window_enabled": False, "buy_ema_fast": 2, "buy_ema_slow": 3,
                          "rsi_period": 2, "whipsaw_enabled": False, "max_positions": 1,
-                         "buy_signal_session_cross_enabled": enabled}), save=False)
+                         "buy_signal_session_cross_enabled": enabled, "buy_signal_require_ema_cross": enabled}), save=False)
     buys = [event for event in result.events if event.side == "BUY"]
-    assert len(buys) == int(enabled)
+    assert len(buys) == 1
     if enabled:
         assert datetime.fromisoformat(buys[0].fill_time).strftime("%H:%M") == "14:21"
 
