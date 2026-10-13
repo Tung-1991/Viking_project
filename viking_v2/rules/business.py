@@ -380,6 +380,7 @@ class StaticRuleParameters:
     )
     # NORMAL remains the compatibility key; operators only see PROTECT.
     normal_policy: str = str(DEFAULT_RULE_PARAMETERS["normal_policy"])
+    dynamic_policy: str | None = None
     normal_dynamic_enabled: bool = bool(DEFAULT_RULE_PARAMETERS["normal_dynamic_enabled"])
     # Research switch: start pre-ARM DYNAMIC from the first sellable quote.
     # Existing accounts keep their pre-settlement floor unless enabled.
@@ -436,6 +437,7 @@ class StaticRuleParameters:
         self.buy_window_enabled = bool(self.buy_window_enabled)
         self.buy_window_start = str(self.buy_window_start).strip()
         self.normal_policy = normalize_normal_policy(self.normal_policy)
+        self.dynamic_policy = normalize_normal_policy(self.dynamic_policy or self.normal_policy)
         self.normal_dynamic_enabled = bool(self.normal_dynamic_enabled)
         self.normal_t2_reset_enabled = bool(self.normal_t2_reset_enabled)
         self.normal_repeat_enabled = bool(self.normal_repeat_enabled)
@@ -718,15 +720,15 @@ class ProtectLevel:
     state: str
 
 
-def average_true_range_pct(
+def average_true_range_snapshot(
     bars: list[dict[str, Any]],
     period: int = 14,
-) -> float:
-    """Return Wilder ATR as a percentage of the latest completed close."""
-    values = [row for row in bars if isinstance(row, dict)]
+) -> tuple[float, float]:
+    """Return Wilder ATR in price units and % of the last valid closed close."""
+    values = [row for row in bars if isinstance(row, dict) and bool(row.get("closed", True))]
     length = max(1, int(period or 14))
     if len(values) < length:
-        return 0.0
+        return 0.0, 0.0
     true_ranges: list[float] = []
     previous_close = 0.0
     for row in values:
@@ -745,11 +747,15 @@ def average_true_range_pct(
         true_ranges.append(true_range)
         previous_close = close
     if len(true_ranges) < length or previous_close <= 0:
-        return 0.0
+        return 0.0, 0.0
     atr = sum(true_ranges[:length]) / length
     for true_range in true_ranges[length:]:
         atr += (true_range - atr) / length
-    return max(0.0, atr / previous_close * 100.0)
+    return max(0.0, atr), max(0.0, atr / previous_close * 100.0)
+
+
+def average_true_range_pct(bars: list[dict[str, Any]], period: int = 14) -> float:
+    return average_true_range_snapshot(bars, period)[1]
 
 
 def protect_level(
@@ -1297,8 +1303,7 @@ class StaticRule:
         triggered: list[str] = []
         normal_enabled = "NORMAL" in em_modes and not bool(position.get("normal_execution_managed"))
         if normal_enabled:
-            policy = self.params.normal_policy
-            from .protection import sale_options, repeat_ready, dynamic_floor_previous
+            from .protection import sale_options, repeat_ready, dynamic_floor_previous, policy_for_stage
             # The live daily series marks today's in-progress candle as open.
             # DYNAMIC must only use information known before the current
             # session, so ATR never consumes that partial candle.
@@ -1306,7 +1311,7 @@ class StaticRule:
                 row for row in bars
                 if isinstance(row, dict) and bool(row.get("closed", True))
             ]
-            atr_pct = average_true_range_pct(completed_bars)
+            atr_value, atr_pct = average_true_range_snapshot(completed_bars)
             protection_peak = protect_peak_for_sellable_phase(
                 peak_profit,
                 float(position.get("normal_sellable_peak_profit_pct", 0.0) or 0.0),
@@ -1318,6 +1323,7 @@ class StaticRule:
                 ),
             )
             stage = "ARM" if protection_peak + 1e-9 >= self.params.normal_arm_pct else "DYN"
+            policy = policy_for_stage(self.params, stage)
             prefix = "normal" if stage == "ARM" else "dynamic"
             share, basis, repeat = sale_options(self.params, stage)
             repeat = bool(repeat and share < 100)
@@ -1342,11 +1348,14 @@ class StaticRule:
             )
             details.update(
                 normal_policy=policy,
+                arm_policy=self.params.normal_policy,
+                dynamic_policy=self.params.dynamic_policy,
                 normal_arm_pct=self.params.normal_arm_pct,
                 normal_giveback_pct=self.params.normal_giveback_pct,
                 sell_share_pct=share, sell_basis=basis, protection_stage=stage,
                 normal_dynamic_enabled=self.params.normal_dynamic_enabled,
                 normal_atr_pct=atr_pct,
+                normal_atr_value=atr_value,
                 normal_activation_mfe_pct=level.activation_mfe_pct,
                 normal_atr_activation_multiplier=self.params.normal_atr_activation_multiplier,
                 normal_atr_multiplier=self.params.normal_atr_multiplier,

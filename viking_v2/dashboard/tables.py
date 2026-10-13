@@ -382,9 +382,8 @@ class DashboardTablesMixin:
                     else f"{indicator_policy}·SIGNAL" if indicator_signal
                     else f"{indicator_policy}·WAIT"
                 )
-                protect_mode = str(
-                    decision_details.get("normal_policy", params.get("normal_policy", "AUTO")) or "AUTO"
-                ).upper()
+                from ..rules.protection import policy_for_stage
+                protect_mode = policy_for_stage(params, str(decision_details.get("protection_stage", "ARM")))
                 protect_mfe = decision_details.get("normal_mfe_pct")
                 protect_trail = decision_details.get("normal_effective_trail_pct")
                 protect_price = decision_details.get("normal_trigger_price")

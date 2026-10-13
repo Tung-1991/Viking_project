@@ -254,16 +254,21 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
         ctk.set_widget_scaling(1.0)
 
 
-def test_protect_policy_is_common_to_arm_and_dynamic_and_saves_alert(ui_root, tmp_path, monkeypatch):
+def test_protect_policies_are_separate_and_save(ui_root, tmp_path, monkeypatch):
     from viking_v2 import config
     monkeypatch.setattr(config, "ACCOUNTS_ROOT", tmp_path / "accounts")
     popup = RuleSettingsPopup(ui_root, AppSettings(), "PROTECT_MODE", lambda: None)
     try:
-        assert popup.normal_policy_menu.master.master is popup.protect_card
-        popup.normal_policy.set("ALERT")
+        assert popup.normal_policy_menu.master.master is popup.protect_trail_card
+        assert popup.dynamic_policy_menu.master.master is popup.dynamic_settings_card
+        popup.normal_policy.set("AUTO")
+        popup.dynamic_policy.set("ALERT")
+        popup.indicator_exit_policy.set("AUTO")
         popup.save()
         settings = config.load_settings("PROTECT_MODE")
-        assert settings.rule_parameters["normal_policy"] == "ALERT"
+        assert settings.rule_parameters["normal_policy"] == "AUTO"
+        assert settings.rule_parameters["dynamic_policy"] == "ALERT"
+        assert settings.rule_parameters["indicator_exit_policy"] == "AUTO"
         assert settings.rule_parameters["normal_retention_pct"] == 72
     finally:
         popup._close()

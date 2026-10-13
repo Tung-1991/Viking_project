@@ -13,7 +13,7 @@ Phần mô tả và số kiểm thử bên dưới là của bản 43b8aeb trư�
 - Restart giữ lịch sử/claim. Xóa rồi thêm lại, đổi cặp EMA hoặc REALTIME/CLOSED lập baseline mới. REALTIME khôi phục phút sau quan sát cuối; CLOSED chỉ nhận các nến ngày đã đóng sau baseline.
 - Preview gọn `∞ · ↑1 ↓1 · ✓` hoặc `⏳2/3P · ↑1 ↓1 · ⏸`; hint giải thích mốc và icon. TRACE/lịch sử/Excel lưu mode, số phiên, bộ đếm và mốc bắt đầu.
 - WHIPSAW giữ cách đếm trên nến ngày. ↑↓ mới là số lần đã quan sát/khôi phục, không khẳng định đầy đủ mọi dao động giữa hai mẫu phút.
-- ARM và DYNAMIC có `% bán`, `GỐC/CÒN LẠI`, `REPEAT` và trạng thái tiêu thụ riêng. DYNAMIC trước ARM; sau ARM dùng trail đã có. AUTO/ALERT là chính sách chung.
+- ARM và DYNAMIC có `AUTO/ALERT`, `% bán`, `GỐC/CÒN LẠI`, `REPEAT` và trạng thái tiêu thụ riêng. DYNAMIC trước ARM; sau ARM dùng trail đã có. Preset: ARM AUTO / DYNAMIC ALERT / E AUTO.
 - Mặc định và preset: mỗi nhóm 33% GỐC, REPEAT ON. GỐC tính trên tổng cổ đã mua khớp của giao dịch; CÒN LẠI tính trên số còn giữ. Làm tròn lô, chặn theo số cổ quản lý/bán được và reservation.
 - REPEAT nhận hồi trên mức rồi chạm lại hoặc giảm tiếp; không đòi đỉnh mới. Giá đứng yên không lặp, lệnh đang chờ/UNKNOWN chặn lượt tiếp theo. Khớp nhiều phần chỉ tính một lượt.
 - Mốc REPEAT gắn với hoàn tất lệnh, kể cả khớp một phần rồi hủy phần còn lại. Ghi nhận hoàn tất lặp/điều chỉnh phí không xóa trạng thái hồi giá.

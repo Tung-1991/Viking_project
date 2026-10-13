@@ -47,7 +47,7 @@ from ..services.indicator_comparison import DNSEIndicatorNormalizer
 from ..services.signal_trace import SignalTraceStore, compare_entry
 from ..rules.observations import exit_conditions
 from ..rules.ema_memory import memory_fields
-from ..rules.protection import sale_quantity, PROTECTION_EVENTS
+from ..rules.protection import sale_quantity, PROTECTION_EVENTS, policy_for_stage, protection_stages
 from ..storage import CSVOrderJournal
 from ..trading.market import VN_TZ, market_phase, market_session_clock, normalize_exchange
 from ..trading.portfolio import (
@@ -1257,7 +1257,7 @@ class DashboardActionsMixin:
         watch, lost = self.rule_state.observe_telegram_buy(
             symbol, execution_mode, technical["valid"] if technical else None,
             session_key=session_key, snapshot=technical,
-            queued=bool(order_intent or (decision.action == "BUY" and signal_id)
+            queued=bool((order_intent and order_intent.side == "BUY") or (decision.action == "BUY" and signal_id)
                         or decision.reason == "BUY_ALREADY_PENDING"),
         )
         if lost and session["active"]:
@@ -1302,6 +1302,11 @@ class DashboardActionsMixin:
                     "protect_price": float(details.get("normal_trigger_price", 0.0) or 0.0),
                     "sell_pct": float(details.get("sell_share_pct", 0.0) or 0.0),
                     "dynamic": bool(details.get("normal_dynamic_enabled", False)),
+                    "stage": str(details.get("protection_stage", "") or ""),
+                    "atr_value": float(details.get("normal_atr_value", 0.0) or 0.0),
+                    "order_id": order_intent.id if order_intent else "",
+                    "order_quantity": order_intent.quantity if order_intent else 0,
+                    "order_status": order_intent.status if order_intent else "",
                     "atr_pct": float(details.get("normal_atr_pct", 0.0) or 0.0),
                     "atr_activation_multiplier": float(
                         details.get("normal_atr_activation_multiplier", 0.0) or 0.0
@@ -2653,7 +2658,8 @@ class DashboardActionsMixin:
             ("TP", f"Lãi chạm +{take_profit:g}% · bán sạch vị thế"),
             (
                 "PROTECT",
-                f"{normal_policy} · ARM {normal_arm:g}% · TRAIL {normal_giveback:g}% · SELL {normal_share:g}%"
+                f"ARM {normal_policy} · {normal_arm:g}% · TRAIL {normal_giveback:g}% · SELL {normal_share:g}%"
+                f" · DYN {policy_for_stage(params, 'DYN')}"
                 f" · {dynamic_summary}"
                 f" · REPEAT {'ON' if normal_repeat else 'OFF'}",
             ),
@@ -3071,6 +3077,11 @@ class DashboardActionsMixin:
     ) -> Any:
         details = decision.details if isinstance(decision.details, dict) else {}
         checks = details.get("entry_checks") if isinstance(details.get("entry_checks"), dict) else {}
+        if decision.action == "SELL":
+            stages = protection_stages(f"{decision.reason}+{decision.event}", details)
+            if any(policy_for_stage(self.settings.rule_parameters or {}, stage) == "ALERT" for stage in stages):
+                from ..rules.planner import PlanResult
+                return PlanResult(None, "PROTECT_POLICY_CHANGED")
         if decision.action == "BUY":
             details["entry_checks"] = checks
             balance, positions, _orders = self.snapshots[mode]
@@ -3569,15 +3580,17 @@ class DashboardActionsMixin:
             other_status = {**status, "decisions": books[other_mode]}
             DashboardActionsMixin._consume_book_decisions(self, other_status, daemon_status, other_mode, True)
 
+    def _protection_policy(self, stage: str) -> str:
+        return policy_for_stage(self.settings.rule_parameters or {}, stage)
+
     def _consume_book_decisions(self, status: dict[str, Any], daemon_status: str, mode: str, management_only: bool) -> None:
         self._technical_signal_status = status
         if daemon_status != "RUNNING":
             return
         runtime = self.bridge.read_config()
-        protect_policy = str(
-            (self.settings.rule_parameters or {}).get("normal_policy", "AUTO") or "AUTO"
-        ).upper()
-        if protect_policy == "ALERT":
+        alert_stages = {stage for stage in ("ARM", "DYN")
+                        if policy_for_stage(self.settings.rule_parameters or {}, stage) == "ALERT"}
+        if alert_stages:
             cancelled: list[OrderIntent] = []
             broker_managed: list[OrderIntent] = []
             # PROTECT settings are global.  Clear safe local requests in both
@@ -3585,7 +3598,7 @@ class DashboardActionsMixin:
             # AUTO request created before ALERT was selected.
             for protect_mode in ("PAPER", "REAL"):
                 local_cancelled, local_broker_managed = (
-                    self.execution.cancel_unsubmitted_protect_sells(protect_mode)
+                    self.execution.cancel_unsubmitted_protect_sells(protect_mode, stages=alert_stages)
                 )
                 cancelled.extend(local_cancelled)
                 broker_managed.extend(local_broker_managed)
@@ -3665,12 +3678,14 @@ class DashboardActionsMixin:
             tick = ticks.get(symbol) if isinstance(ticks.get(symbol), dict) else {}
             self._notify_corporate_action(symbol, decision, mode)
             final = decision
+            exit_intent = None
             if decision.action == "SELL":
                 if decision.scope != "POSITION_MANAGEMENT" and not bot_enabled:
                     final = self._blocked_decision(decision, "BOT_OFF")
                 else:
                     result = self._plan_rule_decision(decision, tick, mode)
                     if result.intent:
+                        exit_intent = result.intent
                         self._log(
                             f"[RULE] {decision.event or decision.reason} → {mode} "
                             f"{result.intent.side} {result.intent.quantity} {symbol} {result.intent.order_type}",
@@ -3680,7 +3695,7 @@ class DashboardActionsMixin:
                         final = self._blocked_decision(decision, result.reason)
             self._claim_terminal_buy(final, mode)
             self._record_signal_decision(final, tick, mode, allocator)
-            self._notify_rule_signal(symbol, final, tick, execution_mode=mode)
+            self._notify_rule_signal(symbol, final, tick, execution_mode=mode, order_intent=exit_intent)
 
         ranked_buys = [
             item for item in decisions.values()

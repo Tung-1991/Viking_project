@@ -51,6 +51,8 @@ def test_preset_changes_only_agreed_allocation_e_and_signal_fields_and_backup_is
     assert current["market_phase_override_enabled"] and current["market_phase_override_exposure_pct"] == 100
     assert current["rule_parameters"]["max_positions"] == 4
     assert current["rule_parameters"]["indicator_exit_policy"] == "AUTO"
+    assert current["rule_parameters"]["normal_policy"] == "AUTO"
+    assert current["rule_parameters"]["dynamic_policy"] == "ALERT"
     assert current["rule_parameters"]["buy_signal_require_ema_cross"] is True
     assert current["rule_parameters"]["buy_signal_session_cross_enabled"] is True
     assert current["rule_parameters"]["buy_ema_va_lookback_enabled"] is False

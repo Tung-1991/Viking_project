@@ -323,6 +323,7 @@ class BacktestTrade:
     mfe_peak_phase: str = ""
     profit_path: list[dict[str, Any]] = field(default_factory=list)
     normal_policy: str = "AUTO"
+    dynamic_policy: str | None = None
     normal_arm_time: str = ""
     normal_arm_price: float = 0.0
     mfe_after_arm_pct: float = 0.0
@@ -342,6 +343,10 @@ class BacktestTrade:
     # spell out "PROTECT 1500@21.24 + E 3000@21.09" instead of one blended
     # average price that never traded.
     exit_fills: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.dynamic_policy is None:
+            self.dynamic_policy = self.normal_policy
 
     @property
     def stop_price(self) -> float:

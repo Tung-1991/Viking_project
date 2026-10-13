@@ -49,7 +49,7 @@ def test_dynamic_atr_preview_uses_the_selected_symbols_completed_daily_atr() -> 
         "normal_sell_pct": 100, "dynamic_sell_pct": 100, "protect_config_version": 2,
     }
     text = _dynamic_atr_preview_text({"normal_atr_pct": 4.118}, params)
-    assert text == "DYN · ATR 4.12% · BÁN 100%"
+    assert text == "DYN AUTO · ATR 4.12% · BÁN 100%"
     params["normal_atr_activation_enabled"] = False
     params["normal_atr_trail_enabled"] = False
     assert _dynamic_atr_preview_text({"normal_atr_pct": 4.118}, params) == text

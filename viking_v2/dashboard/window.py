@@ -92,6 +92,7 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
             ),
             bot_entry_guard=self._check_bot_entry_limits,
             manual_buy_guard=self._check_manual_buy_capital,
+            protection_policy_provider=self._protection_policy,
         )
         self.daily_fees = DailyFeeTracker(
             self.bridge.history_csv_path,

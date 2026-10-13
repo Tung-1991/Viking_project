@@ -47,7 +47,7 @@ def test_protect_alert_names_the_enabled_dynamic_layers_without_sending_orders()
     message = tele.sent[0][1]
     assert "START ATR: OFF · TRAIL ATR: OFF" in message
     assert "Giữ 87.5% lãi cao nhất tới ARM" in message
-    assert "ALERT chỉ ghi nhận, không đặt lệnh" in message
+    assert "ALERT · chỉ báo, không đặt lệnh" in message
 
 
 def test_protect_alert_hides_dormant_layers_when_dynamic_is_off():
@@ -65,7 +65,7 @@ def test_protect_alert_hides_dormant_layers_when_dynamic_is_off():
     assert "Giữ lãi: OFF" in message
 
 
-def test_protect_auto_notification_states_that_sell_was_requested():
+def test_protect_auto_notification_requires_evidence_of_queued_order():
     tele = Telegram()
     service = SignalTelegramService(tele, chat_id="7")
 
@@ -76,7 +76,8 @@ def test_protect_auto_notification_states_that_sell_was_requested():
 
     message = tele.sent[0][1]
     assert "PROTECT HIT · VIX" in message
-    assert "AUTO · ĐÃ TẠO YÊU CẦU BÁN" in message
+    assert "AUTO · tín hiệu bán; chưa xác nhận tạo/gửi/khớp lệnh" in message
+    assert "ĐÃ TẠO YÊU CẦU BÁN" not in message
     assert "ALERT chỉ ghi nhận" not in message
 
 

@@ -27,12 +27,14 @@ PRESET_FIELDS = {
     "daily_stats_mode", "daily_stats_reset_time", "daily_stats_schedule_version",
 }
 PRESET_RULE_FIELDS = {
+    "normal_policy", "dynamic_policy",
     "normal_sell_pct", "dynamic_sell_basis", "normal_repeat_enabled", "dynamic_repeat_enabled",
     "normal_sell_basis", "buy_ema_cross_mode", "dynamic_sell_pct", "protect_config_version",
     "max_positions", "buy_signal_require_ema_cross", "buy_signal_session_cross_enabled",
     "buy_ema_cross_sessions", "buy_ema_va_lookback_enabled", "indicator_exit_policy", "normal_retention_pct",
 }
 PRESET_MEMORY_PROTECTION = {
+    "normal_policy": "AUTO", "dynamic_policy": "ALERT",
     "buy_ema_cross_mode": "VA", "buy_ema_cross_sessions": 3,
     "buy_signal_session_cross_enabled": True, "buy_ema_va_lookback_enabled": False,
     "normal_sell_pct": 33, "normal_sell_basis": "ORIGINAL", "normal_repeat_enabled": True,
@@ -143,12 +145,12 @@ def main() -> int:
         print(f"[MAT BUY] {'ON' if settings.telegram_notifications['buy_lost'] else 'OFF'}; "
               f"gian {settings.telegram_cooldown_minutes['buy_lost']} phut.")
         print(f"[HE THONG] Gian canh bao {settings.telegram_cooldown_minutes['system']} phut.")
-        print("[PROTECT] Bat tin cham muc; khong thay doi cong tac bao ve hay AUTO/ALERT.")
+        print("[PROTECT] ARM AUTO / DYNAMIC ALERT / E AUTO; khong thay doi cong tac bao ve tren trade.")
         print("[ENTRY] VA: QUET QUA KHU OFF (0P); cat len sau khi theo doi, giu toi khi dung.")
         print("[ENTRY] Ban dau EMA nhanh < cham: mot lan cat len la du; RSI/gio mua/von van phai dat.")
         print("[PREVIEW] 0P: chi hom nay; XP: hom nay + X phien truoc. X=3 chi dung khi doi mode/ON quet truoc.")
         print(f"[KL] AUTO tinh so CP theo ngan sach; preset nay cap IDC {caps['IDC']:g} trieu.")
-        print("[PROTECT] ARM va DYNAMIC: BAN 33% GOC + LAP ON rieng; E AUTO ban 100%. Khong tu bat PROTECT tren trade.")
+        print("[PROTECT] ARM AUTO: ban 33% GOC, LAP ON. DYNAMIC ALERT: chi bao, khong ban. E AUTO: ban 100%.")
         print("[DYNAMIC] Giu 72% lai dinh = cho lai giam 28% tu dinh; ATR van dung muc bao ve cao hon.")
         trace_start = datetime.strptime(settings.signal_trace_start, "%H:%M")
         trace_end = datetime.strptime(settings.signal_trace_end, "%H:%M")

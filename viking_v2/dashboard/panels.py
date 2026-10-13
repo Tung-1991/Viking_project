@@ -15,7 +15,8 @@ from ..connections.dnse.snapshot_health import (
     FAST_POLL_SECONDS, IDLE_POLL_SECONDS, end_of_day_order_pause,
     rest_is_end_of_day_order_pause, safe_detail, snapshot_failure_summary,
 )
-from ..rules.business import average_true_range_pct, indicator_snapshot, protect_level
+from ..rules.business import average_true_range_pct, average_true_range_snapshot, indicator_snapshot, protect_level
+from ..rules.protection import policy_for_stage
 from ..rules.observations import ema_cross_caption, finite
 from ..trading.market import VN_TZ, exchange_close_minute, market_now, market_phase, merge_tick_into_daily_bars
 from ..trading.portfolio import (
@@ -143,7 +144,8 @@ def _dynamic_atr_preview_text(
     if details.get("protection_stage") == "ARM":
         sell = _number(details.get("sell_share_pct", params.get("normal_sell_pct", 33)))
         basis = "GỐC" if details.get("sell_basis", params.get("normal_sell_basis", "ORIGINAL")) == "ORIGINAL" else "CÒN"
-        return f"ARM · BÁN {sell:g}% {basis}"
+        policy = policy_for_stage(params, "ARM")
+        return f"ARM {policy} · " + ("CHỈ BÁO" if policy == "ALERT" else f"BÁN {sell:g}% {basis}")
     sell = _number(details.get("sell_share_pct") if details.get("protection_stage") == "DYN"
                    else params.get("dynamic_sell_pct", 33.0))
     dynamic = bool(details.get(
@@ -151,10 +153,13 @@ def _dynamic_atr_preview_text(
     ))
     if not dynamic:
         return f"DYN OFF · BÁN {sell:g}%"
+    policy = policy_for_stage(params, "DYN")
+    if policy == "ALERT":
+        return "DYN ALERT · CHỈ BÁO"
     atr = _number(details.get("normal_atr_pct"))
     if atr <= 0:
-        return f"DYN · ATR -- · BÁN {sell:g}%"
-    return f"DYN · ATR {atr:.2f}% · BÁN {sell:g}%"
+        return f"DYN AUTO · ATR -- · BÁN {sell:g}%"
+    return f"DYN AUTO · ATR {atr:.2f}% · BÁN {sell:g}%"
 
 
 def _rsi_comparison_preview(current: Any, previous: Any) -> tuple[str, str]:
@@ -1034,6 +1039,7 @@ class DashboardPanelsMixin:
         management = ctk.CTkFrame(order_group, height=84, fg_color="transparent")
         management.grid(row=2, column=0, sticky="nsew", padx=6, pady=(3, 6))
         management.grid_propagate(False)
+        self.preview_management = management
         self._preview_level_cards = []
         management.grid_rowconfigure((0, 1), weight=1, uniform="preview_management_rows")
         for column in range(3):
@@ -1467,6 +1473,7 @@ class DashboardPanelsMixin:
             rules.grid(row=0, column=1 if overview else 0, columnspan=1 if overview else 2,
                        sticky="nsew", padx=(3, 0) if overview else 0, pady=0)
             self.preview_metrics.configure(height=96 if compact else 62)
+            self.preview_management.grid_rowconfigure((0, 1), minsize=int(52 * scale))
             for column in range(6):
                 self.preview_metrics.grid_columnconfigure(
                     column, weight=(1 if column < 2 else 0) if compact else (2 if column == 3 else 1),
@@ -1842,9 +1849,14 @@ class DashboardPanelsMixin:
                 indicators = {**calculated, **{key: value for key, value in indicators.items() if value is not None}}
                 source = "DAILY_PREVIEW"
                 asof = datetime.fromtimestamp(float(working[-1]["time"]), VN_TZ).strftime("%Y-%m-%d %H:%M") if working else ""
-            if _number(details.get("atr14_daily_pct")) <= 0 and len(completed) >= 14:
-                details["atr14_daily_pct"] = average_true_range_pct(completed)
-                details["atr14_daily_asof"] = completed[-1]["time"]
+            if len(completed) >= 14:
+                cached_value, cached_pct = average_true_range_snapshot(completed)
+                reported_pct = _number(details.get("atr14_daily_pct"))
+                if reported_pct <= 0:
+                    details["atr14_daily_value"], details["atr14_daily_pct"] = cached_value, cached_pct
+                    details["atr14_daily_asof"] = completed[-1]["time"]
+                elif _number(details.get("atr14_daily_value")) <= 0 and math.isclose(reported_pct, cached_pct, rel_tol=1e-6):
+                    details["atr14_daily_value"] = cached_value
         details["indicators"] = {**expected_periods, **indicators}
         if source != "DECISION":
             details.pop("ema_cross", None)  # A price-only fallback cannot prove an observed crossing.
@@ -2103,8 +2115,8 @@ class DashboardPanelsMixin:
         except (TypeError, ValueError, OSError, OverflowError):
             asof = "chưa có đủ nến"
         return (
-            "ATR14: biến động của 14 nến ngày đã đóng.\n"
-            "START / LÙI = ATR × hệ số trong RULE.\n"
+            "ATR14: biến động giá, lấy nến ngày đã đóng.\n"
+            "% = ATR / giá đóng phiên cuối. START / LÙI dùng % × hệ số.\n"
             f"Phiên cuối: {asof}."
         )
 
@@ -2175,7 +2187,8 @@ class DashboardPanelsMixin:
         return (
             "ARM: bắt đầu theo đỉnh. Đỉnh cao hơn → mốc BÁN tăng.\n"
             f"{example}"
-            "AUTO bán; ALERT chỉ báo. Dynamic có thể chạy trước ARM."
+            "ARM và DYNAMIC có AUTO/ALERT riêng; AUTO bán, ALERT chỉ báo.\n"
+            "Chưa có cổ bán được: không tạo SELL PROTECT."
         )
 
     def _fit_protect_preview(self) -> None:
@@ -2545,6 +2558,7 @@ class DashboardPanelsMixin:
         normal_arm = float(params.get("normal_arm_pct", 7.0) or 7.0)
         normal_giveback = float(params.get("normal_giveback_pct", 2.0) or 2.0)
         normal_policy = str(params.get("normal_policy", "AUTO") or "AUTO").upper()
+        dynamic_policy = policy_for_stage(params, "DYN")
         normal_dynamic = bool(params.get("normal_dynamic_enabled", False))
         normal_repeat = bool(params.get("normal_repeat_enabled", True))
         normal_sell = float(params.get("normal_sell_pct", 33.0) or 33.0)
@@ -2572,18 +2586,11 @@ class DashboardPanelsMixin:
                 f"{' · LẶP' if normal_repeat and normal_sell < 100 else ''}"
             ),
         )
-        self._preview_protect_detail = (
-            f"{normal_policy} · ARM {normal_arm:g}% · TRAIL {normal_giveback:g}% · BÁN {normal_sell:g}%"
-            f"{' · LẶP' if normal_repeat and normal_sell < 100 else ''}",
-            f"{normal_policy} · BÁN {normal_sell:g}% · LÙI {normal_giveback:g}%"
-            f"{' · LẶP' if normal_repeat and normal_sell < 100 else ''}",
-        )
-        self._preview_protect_detail = (
-            f"{normal_policy} · ARM {normal_sell:g}% {normal_basis}{' ↻' if normal_repeat and normal_sell < 100 else ''}",
-            f"DYN {dynamic_sell:g}% {dynamic_basis}{' ↻' if dynamic_repeat else ''}" if normal_dynamic else "DYN OFF",
-        )
-        if normal_policy == "ALERT":
-            self._preview_protect_detail = ("ALERT · CHỈ BÁO · KHÔNG BÁN", "ALERT · CHỈ BÁO")
+        arm_detail = f"ARM {normal_policy} · " + ("CHỈ BÁO" if normal_policy == "ALERT"
+                     else f"{normal_sell:g}% {normal_basis}{' ↻' if normal_repeat and normal_sell < 100 else ''}")
+        dynamic_detail = (f"DYN {dynamic_policy} · " + ("CHỈ BÁO" if dynamic_policy == "ALERT"
+                          else f"{dynamic_sell:g}% {dynamic_basis}{' ↻' if dynamic_repeat else ''}")) if normal_dynamic else "DYN OFF"
+        self._preview_protect_detail = (f"{arm_detail} · {dynamic_detail}", f"ARM {normal_policy} · DYN {dynamic_policy if normal_dynamic else 'OFF'}")
         em_labels = {
             "normal_protection": "PROTECT",
             "indicator_exit": "E",
@@ -2600,10 +2607,12 @@ class DashboardPanelsMixin:
         decision = decisions.get(symbol) if isinstance(decisions.get(symbol), dict) else {}
         decision_details = self._preview_indicator_details(status, symbol)
         atr_pct = _number(decision_details.get("atr14_daily_pct"))
+        atr_value = _number(decision_details.get("atr14_daily_value"))
         start_pct = _number(decision_details.get("dynamic_start_pct"))
         trail_pct = _number(decision_details.get("dynamic_trail_pct"))
         self.preview_atr.configure(
-            text=f"{atr_pct:.2f}%" if atr_pct > 0 else "--",
+            text=(f"{_display_price(atr_value)}đ {atr_pct:.2f}%" if atr_value > 0
+                  else f"{atr_pct:.2f}%" if atr_pct > 0 else "--"),
             text_color=(COL_GREEN if normal_dynamic and atr_pct > 0 else "#60A5FA"),
         )
         start_enabled = bool(params.get("normal_atr_activation_enabled", True))
@@ -2620,7 +2629,8 @@ class DashboardPanelsMixin:
         for key, widget in em_widgets.items():
             enabled = bool(self._em_states.get(key, False))
             state_label = (
-                (indicator_exit_policy if key == "indicator_exit" else normal_policy) if enabled else "OFF"
+                (indicator_exit_policy if key == "indicator_exit" else
+                 normal_policy if normal_policy == dynamic_policy or not normal_dynamic else "AUTO/ALERT") if enabled else "OFF"
             )
             widget.configure(
                 text=f"{em_labels[key]} · {state_label}",
@@ -2641,6 +2651,7 @@ class DashboardPanelsMixin:
             signal, exit_enabled, position_quantity, indicator_exit_policy,
         )
         if current_profit is not None and _number(decision_details.get("normal_trigger_price")) > 0:
+            normal_policy = policy_for_stage(params, str(decision_details.get("protection_stage", "ARM")))
             protected = decision_details.get("normal_trigger_price")
             protect_state = str(decision_details.get("normal_state", "WAIT") or "WAIT").upper()
             effective_trail = decision_details.get("normal_effective_trail_pct")
@@ -2661,12 +2672,12 @@ class DashboardPanelsMixin:
                 selected_pct = _number(decision_details.get("sell_share_pct", normal_sell))
                 selected_basis = "GỐC" if decision_details.get("sell_basis", "ORIGINAL") == "ORIGINAL" else "CÒN"
                 self._preview_protect_prices["sell_pct"] = selected_pct
+                stage_label = "DYN" if decision_details.get("protection_stage") == "DYN" else "ARM"
                 self._preview_protect_detail = (
                     _dynamic_atr_preview_text(decision_details, params),
-                    f"{normal_policy} · BÁN {selected_pct:g}% {selected_basis} · LÙI {_number(effective_trail):g}%",
+                    f"{stage_label} {normal_policy} · " + ("CHỈ BÁO" if normal_policy == "ALERT"
+                        else f"BÁN {selected_pct:g}% {selected_basis}"),
                 )
-                if normal_policy == "ALERT":
-                    self._preview_protect_detail = ("ALERT · CHỈ BÁO · KHÔNG BÁN", "ALERT · CHỈ BÁO")
                 self.preview_normal_detail.configure(
                     text=_dynamic_atr_preview_text(decision_details, params),
                 )
@@ -2884,6 +2895,8 @@ class DashboardPanelsMixin:
             "INDICATOR_EXIT": "KÍCH HOẠT EXIT SELL",
             "INDICATOR_EXIT_ALERT": "E ALERT · KHÔNG ĐẶT LỆNH",
             "PRICE_PROTECTION": "KÍCH HOẠT BẢO VỆ GIÁ",
+            "PROTECT_WAITING_SETTLEMENT": "PROTECT: CHỜ CỔ VỀ · CHƯA TẠO SELL",
+            "PROTECT_POLICY_CHANGED": "PROTECT ALERT · CHƯA TẠO SELL",
             "NORMAL_PROTECTION": "PROTECT", "DYNAMIC_PROTECTION": "PROTECT DYNAMIC",
             "NORMAL_ARMED": "PROTECT AUTO ĐÃ KÍCH HOẠT",
             "BUY_CONFIRMATION_WAIT": "CHỜ XÁC NHẬN BUY",
@@ -2902,7 +2915,15 @@ class DashboardPanelsMixin:
         reason_text = str(details.get("status_text") or "") or reason_labels.get(
             reason, reason.replace("_", " ") if reason else "CHỜ DỮ LIỆU"
         )
-        if action == "WAIT" and signal == "SELL" and reason != "INDICATOR_EXIT_ALERT":
+        if reason == "PROTECT_WAITING_SETTLEMENT":
+            stage_label = "DYNAMIC" if details.get("protection_stage") == "DYN" else "ARM"
+            reason_text = f"{stage_label}: CHỜ CỔ VỀ · CHƯA TẠO SELL"
+        elif reason == "PROTECT_ALERT":
+            stage_label = "DYNAMIC" if details.get("protection_stage") == "DYN" else "ARM"
+            reason_text = f"{stage_label} ALERT · KHÔNG ĐẶT LỆNH"
+        if action == "WAIT" and signal == "SELL" and reason not in {
+            "INDICATOR_EXIT_ALERT", "PROTECT_WAITING_SETTLEMENT", "PROTECT_ALERT", "PROTECT_POLICY_CHANGED", "NORMAL_ARMED",
+        }:
             reason_text = "CHỜ BUY"
         if reason == "BUY_SIGNAL":
             reason_color = COL_GREEN

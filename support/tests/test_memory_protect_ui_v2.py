@@ -92,7 +92,7 @@ def test_rule_save_keeps_modes_bases_and_repeats_independent(ui_root,tmp_path,mo
         popup.dynamic_sell.insert(0,"100")
         popup._refresh_execution_preview()
         assert popup.dynamic_repeat_switch.cget("state") == "disabled"
-        assert "DYN ON 100% CÒN LẠI · LẶP OFF" in popup.execution_preview["NORMAL"].cget("text")
+        assert "DYN AUTO 100% CÒN LẠI · LẶP OFF" in popup.execution_preview["NORMAL"].cget("text")
     finally:
         popup._close()
 

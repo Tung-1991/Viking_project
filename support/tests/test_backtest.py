@@ -430,6 +430,8 @@ def test_mode2_replay_catches_intraday_daily_ema_cross_and_fills_next_bar(tmp_pa
     source = tmp_path / "HOSE_DLY_FPT, 1.csv"
     source.write_text(
         "time,open,high,low,close,Volume\n"
+        # Observe EMA below first; equality is not an admitted VA crossing.
+        f"{test_day}T02:14:00Z,8,8,7,7,100\n"
         f"{test_day}T02:15:00Z,8,9,8,9,100\n"
         f"{test_day}T02:16:00Z,9,9,9,9,100\n"
         f"{test_day}T07:45:00Z,8,8,8,8,100\n",
@@ -498,6 +500,7 @@ def test_replay_confirms_buy_for_five_exchange_minutes_then_fills_next_bar(tmp_p
         f"{test_day}T02:{minute:02d}:00Z,{8 if minute == 15 else 9},9,{8 if minute == 15 else 9},9,100"
         for minute in range(15, 22)
     ]
+    intraday.insert(0, f"{test_day}T02:14:00Z,8,8,7,7,100")
     source.write_text(
         "time,open,high,low,close,Volume\n" + "\n".join([
             *intraday,
@@ -577,9 +580,9 @@ def test_replay_buy_window_with_two_minute_data_and_confirmation(tmp_path, windo
     store = HistoricalDataStore(root=tmp_path / "data", fetcher=lambda _s, res, *_: payload if res == "1D" else None)
     replay = ReplayDataStore(tmp_path / "replay")
     source = tmp_path / "HOSE_DLY_FPT, 2.csv"
-    times = ["02:14", "02:16", "06:58", "07:00", "07:02", "07:04", "07:06", "07:08", "07:30", "07:44"]
+    times = ["02:12", "02:14", "02:16", "06:58", "07:00", "07:02", "07:04", "07:06", "07:08", "07:30", "07:44"]
     source.write_text("time,open,high,low,close,Volume\n" + "\n".join(
-        f"{test_day}T{stamp}:00Z,{8 if stamp == times[0] else 9},9,{8 if stamp == times[0] else 9},9,100" for stamp in times
+        f"{test_day}T{stamp}:00Z,{8 if stamp == times[0] else 9},9,{7 if stamp == times[0] else 9},{7 if stamp == times[0] else 9},100" for stamp in times
     ) + "\n", encoding="utf-8")
     replay.import_file(source, price_scale=1)
     result = BacktestEngine(store, replay).run(BacktestConfig(
@@ -679,7 +682,7 @@ def test_replay_atc_signal_carries_to_next_eligible_session(tmp_path, fill_sessi
     # Override filename inference because the test suffix follows the resolution.
     source.write_text(
         "time,open,high,low,close,Volume\n"
-        f"{signal_day}T02:15:00Z,8,8,8,8,100\n"
+        f"{signal_day}T02:15:00Z,8,8,7,7,100\n"
         f"{signal_day}T07:45:00Z,8,9,8,9,100\n"
         f"{fill_day}T02:15:00Z,9,9,9,9,100\n"
         f"{fill_day}T02:16:00Z,9,9,9,9,100\n"

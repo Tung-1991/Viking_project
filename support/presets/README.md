@@ -15,7 +15,8 @@ Cập nhật ngày 13/10/2026. Preset: `VA_4_MA_50M.json`.
 | Giữ EMA | ∞ VA; có thể đổi ⏳ X PHIÊN trong RULE (ô X lưu 3) |
 | VA quét trước | OFF (0 phiên); ghi nhận từ lúc theo dõi mã |
 | Dòng số cắt | `37 CẮT - 0P`: 37 lần ghi nhận hôm nay; XP cộng thêm X phiên trước |
-| ARM và DYNAMIC | Mỗi nhóm bán 33% GỐC, REPEAT ON riêng |
+| ARM | AUTO, bán 33% GỐC, REPEAT ON |
+| DYNAMIC trước ARM | ALERT, chỉ báo; KL/REPEAT giữ riêng cho khi chọn AUTO |
 | Lùi lãi đỉnh DYNAMIC | 28% phần lãi → GIỮ LÃI 72%; ATR vẫn lấy mức bảo vệ cao hơn |
 | E AUTO | Bán 100% phần còn lại |
 | Chốt thống kê ngày | 15:00 Việt Nam; giữ PNL/phí đến 09:00 sáng hôm sau |
@@ -40,9 +41,12 @@ Xem: **LỊCH SỬ → TÍN HIỆU → LÀM MỚI → Ngày → Mã → ĐỊNH 
 Git mang theo preset, không tự ghi đè cấu hình tài khoản trên VM. Nếu cần nạp toàn bộ preset VA: đóng app, dùng BAT **2 → 4 → kiểm tra tài khoản và xác nhận → 3**. Preset còn chứa hạn mức, P1, E và lựa chọn tin Telegram đã chốt; muốn chỉ chỉnh lịch TRACE thì dùng **⚙ GHI TÍN HIỆU**.
 
 Với tài khoản đã lưu GIỮ LÃI 90%, update source vẫn giữ lựa chọn đã lưu. Để chỉ đổi mức này,
-vào **RULE → E/M → DYNAMIC → GIỮ LÃI (%) = 72 → LƯU**. MODE ở đầu khung PROTECT dùng chung
-cho ARM và DYNAMIC; **ALERT** chỉ thông báo và huỷ yêu cầu PROTECT chưa gửi.
+vào **RULE → E/M → DYNAMIC → GIỮ LÃI (%) = 72 → LƯU**. ARM và DYNAMIC có MODE riêng;
+**ALERT** chỉ thông báo và huỷ yêu cầu chưa gửi của đúng nhóm. Preset đặt ARM AUTO / DYNAMIC ALERT / E AUTO.
+Không có cổ bán được: PROTECT hiện CHỜ CỔ VỀ, không tạo SELL hoặc phát HIT. Khi cổ về,
+AUTO xét lại giá mới; ALERT vẫn không bán. SL/TP/E có cơ chế chờ và huỷ riêng.
 Chi tiết sửa NAV/preview/T+: [ghi chú 13/10/2026](../docs/NAV_PROTECT_REVIEW_2026-10-13.md).
+MODE riêng và flow HDB: [ARM / DYNAMIC / E](../docs/EXIT_POLICY_FLOW_2026-10-13.md).
 
 Kiểm chứng offline ngày 12/10/2026 bằng chính preset: REAL/PAPER, BOT ON/OFF, không có BUY vẫn đủ bốn nhóm mã, 16 mốc/mã và 64 mẫu/sổ trong bảng và Excel. 186 kiểm thử liên quan đạt qua `support/tools/run_offline.py`; kết quả tại `.artifacts/va_trace_preset_20261012/verified.xml`.
 

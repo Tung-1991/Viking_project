@@ -21,9 +21,10 @@ chưa cập nhật, không phải bằng chứng đã truy xuất payload thật
 - Ngài xác nhận **cho lãi giảm 28% từ đỉnh = giữ 72% lãi đỉnh**. Default và preset VA là 72.
   Khi operator đổi tỷ lệ giữ lãi, DYNAMIC tính lại sàn đã lưu; cùng tỷ lệ thì sàn vẫn không hạ
   vì ATR thay đổi/restart. Sau ARM giữ cơ chế trail hiện có. ATR có thể tạo sàn cao hơn mức giữ lãi.
-- MODE AUTO/ALERT đặt ở đầu khung PROTECT và áp dụng chung ARM + DYNAMIC. ALERT tự theo dõi,
-  chỉ báo; Telegram phải bật nhóm PROTECT. Preview ghi CHỈ BÁO/MỐC. Ba cột giữ chiều rộng cân đối,
-  giảm padding/chiều cao ô Dynamic, giữ font. Đổi ALERT huỷ yêu cầu PROTECT chưa gửi.
+- ARM, DYNAMIC trước ARM và E có MODE AUTO/ALERT riêng. Preset đặt ARM AUTO / DYNAMIC ALERT / E AUTO.
+  ALERT chỉ báo; Telegram phải bật nhóm PROTECT. Đổi ALERT huỷ yêu cầu chưa gửi của đúng nhóm,
+  kể cả KEEP/T+2 cũ; kiểm tra lại trước hand-off. Lệnh broker đã nhận không tự hủy.
+  ATR hiện giá trị tiền và %, cùng tính từ nến ngày đã đóng; % chia cho giá đóng cuối.
 - Bảng lệnh: chữ nội dung 14 → 16, tiêu đề 15 bold, dòng 48 → 58px. Nới các cột,
   đặc biệt PNL/MAE/MFE và trạng thái; đo mẫu nội dung bằng đúng font hiển thị để ba cặp
   số tiền/% không bị cắt sát cột bên cạnh. Giữ cuộn ngang và menu chuột phải/huỷ lệnh.

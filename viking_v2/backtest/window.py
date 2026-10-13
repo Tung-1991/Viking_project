@@ -171,7 +171,7 @@ PHASE_PARAMETER_KEYS = frozenset(
 BACKTEST_RULE_KEYS = PHASE_PARAMETER_KEYS | {
     "exposure", "whipsaw_enabled", "loss_lock_hours", "loss_lock_mode", "max_positions",
     "indicator_exit_policy",
-    "normal_policy", "normal_dynamic_enabled", "normal_repeat_enabled",
+    "normal_policy", "dynamic_policy", "normal_dynamic_enabled", "normal_repeat_enabled",
     "normal_atr_activation_enabled", "normal_atr_trail_enabled",
     "normal_retention_enabled", "normal_retention_until_enabled",
     "normal_t2_reset_enabled",
@@ -1502,7 +1502,7 @@ class BacktestPopup:
 
         normal_row = ctk.CTkFrame(card, fg_color="transparent")
         normal_row.grid(row=7, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
-        self._label(normal_row, "PROTECT MODE", 14, bold=True).grid(
+        self._label(normal_row, "ARM MODE", 14, bold=True).grid(
             row=0, column=0, sticky="w", padx=(0, 12),
         )
         self.normal_policy = ctk.StringVar(value=params.normal_policy)
@@ -1512,10 +1512,14 @@ class BacktestPopup:
             font=FONT_VALUE, fg_color=COL_BLUE, dynamic_resizing=False,
         )
         self.normal_policy_menu.grid(row=0, column=1, sticky="w")
-        self._hint(
-            normal_row,
-            "AUTO phát lệnh bán. ALERT dùng cùng điều kiện nhưng chỉ log; Telegram theo công tắc thông báo chung.",
-        ).grid(row=0, column=2, padx=10)
+        self._label(normal_row, "DYNAMIC MODE", 14, bold=True).grid(row=0, column=2, padx=(20, 12))
+        self.dynamic_policy = ctk.StringVar(value=params.dynamic_policy)
+        self.dynamic_policy_menu = ctk.CTkOptionMenu(
+            normal_row, values=["AUTO", "ALERT"], variable=self.dynamic_policy,
+            width=180, height=36, font=FONT_VALUE, fg_color=COL_BLUE, dynamic_resizing=False,
+        )
+        self.dynamic_policy_menu.grid(row=0, column=3, sticky="w")
+        self._hint(normal_row, "AUTO bán; ALERT chỉ ghi nhận. ARM và DYNAMIC chọn riêng.").grid(row=0, column=4, padx=10)
 
         protect_option_row = ctk.CTkFrame(card, fg_color="transparent")
         protect_option_row.grid(row=8, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
@@ -1635,6 +1639,8 @@ class BacktestPopup:
         self.buy_window_enabled.set(bool(params.get("buy_window_enabled", False)))
         normal_policy = str(params.get("normal_policy", "AUTO") or "AUTO").upper()
         self.normal_policy.set(normal_policy if normal_policy in {"AUTO", "ALERT"} else "AUTO")
+        dynamic_policy = str(params.get("dynamic_policy", normal_policy) or normal_policy).upper()
+        self.dynamic_policy.set(dynamic_policy if dynamic_policy in {"AUTO", "ALERT"} else "AUTO")
         self.normal_dynamic.set(bool(params.get("normal_dynamic_enabled", False)))
         self.normal_repeat.set(bool(params.get("normal_repeat_enabled", False)))
         self.dynamic_repeat.set(bool(params.get("dynamic_repeat_enabled", True)))
@@ -1808,6 +1814,7 @@ class BacktestPopup:
         params.update(buy_window_enabled=bool(self.buy_window_enabled.get()),
                       buy_window_start=window_start)
         params["normal_policy"] = self.normal_policy.get()
+        params["dynamic_policy"] = self.dynamic_policy.get()
         params["normal_dynamic_enabled"] = bool(self.normal_dynamic.get())
         params["normal_repeat_enabled"] = bool(self.normal_repeat.get())
         params["normal_sell_basis"] = "ORIGINAL" if self.normal_sell_basis.get() == "GỐC" else "REMAINING"

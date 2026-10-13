@@ -268,9 +268,9 @@ class InfoPopup:
             ("TP", f"{p.take_profit_pct:g}%", PALETTE["GREEN"]),
             (
                 "PROTECT",
-                f"{p.normal_policy} · ARM {p.normal_arm_pct:g}% · TRAIL {p.normal_giveback_pct:g}%"
+                f"ARM {p.normal_policy} · {p.normal_arm_pct:g}% · TRAIL {p.normal_giveback_pct:g}%"
                 f" · ARM BÁN {p.normal_sell_pct:g}% {p.normal_sell_basis} · {dynamic_summary}"
-                f" · DYN BÁN {p.dynamic_sell_pct:g}% {p.dynamic_sell_basis}"
+                f" · DYN {p.dynamic_policy} · {p.dynamic_sell_pct:g}% {p.dynamic_sell_basis}"
                 f" LẶP {self._on_off(p.dynamic_repeat_enabled and p.dynamic_sell_pct < 100)}"
                 f" · REPEAT {self._on_off(p.normal_repeat_enabled and p.normal_sell_pct < 100)}",
                 PALETTE["TEXT"],

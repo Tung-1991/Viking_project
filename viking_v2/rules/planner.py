@@ -230,7 +230,7 @@ class StrategyOrderPlanner:
                 {
                     key: decision.details.get(key)
                     for key in (
-                        "normal_policy", "normal_dynamic_enabled", "normal_repeat_enabled",
+                        "normal_policy", "arm_policy", "dynamic_policy", "normal_atr_value", "normal_dynamic_enabled", "normal_repeat_enabled",
                         "normal_arm_pct", "normal_giveback_pct", "normal_atr_pct",
                         "normal_activation_mfe_pct", "normal_atr_activation_multiplier",
                         "normal_atr_multiplier", "normal_retention_pct",

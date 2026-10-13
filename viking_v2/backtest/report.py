@@ -177,7 +177,7 @@ def round_rows(results: list[BacktestResult]) -> list[tuple[Any, ...]]:
                 f"{trade.exit_ema_fast:.2f}/{trade.exit_ema_slow:.2f}" if trade.exit_fills else "—",
                 round(trade.exit_rsi, 1) if trade.exit_fills else "—",
                 round(trade.fees + trade.tax), round(trade.net_pnl), round(trade.pnl_pct, 2),
-                trade.normal_policy, trade.normal_arm_time or "—",
+                f"ARM {trade.normal_policy} / DYN {trade.dynamic_policy}", trade.normal_arm_time or "—",
                 round(trade.normal_arm_price, 2) if trade.normal_arm_price else "—",
                 round(trade.mfe_after_arm_pct, 2) if trade.normal_arm_time else "—",
                 round(trade.mfe_extra_pct, 2) if trade.normal_arm_time else "—",
@@ -247,11 +247,12 @@ def info_rows(results: list[BacktestResult]) -> list[tuple[str, Any]]:
             if values.get("normal_retention_until_enabled", True) else "TỚI ARM"
         ) if keep != "GIỮ OFF" else ""
         return (
-            f"{values.get('normal_policy', 'AUTO')} · "
+            f"ARM {values.get('normal_policy', 'AUTO')} · "
             f"ARM {values.get('normal_arm_pct')}% · "
             f"TRAIL {values.get('normal_giveback_pct')}% · "
             f"SELL {sell:g}% · "
             f"DYNAMIC {'ON' if values.get('normal_dynamic_enabled') else 'OFF'}"
+            f" {values.get('dynamic_policy', values.get('normal_policy', 'AUTO'))}"
             f" · T+2 RESET {'ON' if values.get('normal_t2_reset_enabled') else 'OFF'}"
             f" ({start} · {atr_trail})"
             f" · {keep}{' ' + until if until else ''} · "

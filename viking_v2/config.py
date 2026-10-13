@@ -158,6 +158,7 @@ DEFAULT_RULE_PARAMETERS: dict[str, Any] = {
     "normal_retention_enabled": True,
     "normal_retention_until_enabled": True,
     "normal_policy": "AUTO",
+    "dynamic_policy": "AUTO",
     "normal_dynamic_enabled": True,
     "normal_t2_reset_enabled": False,
     "normal_repeat_enabled": True,
@@ -193,6 +194,9 @@ def merge_rule_parameters(values: dict[str, Any] | None) -> dict[str, Any]:
     """Overlay saved values on operating defaults while preserving migrations."""
 
     configured = dict(values) if isinstance(values, dict) else {}
+    # Saved accounts previously shared one policy. Preserve that choice until
+    # the operator explicitly configures the independent DYNAMIC policy.
+    configured.setdefault("dynamic_policy", configured.get("normal_policy", "AUTO"))
     # The former session-only switch is superseded by the two memory modes.
     configured["buy_signal_session_cross_enabled"] = True
     if "protect_config_version" not in configured:

@@ -4,6 +4,29 @@ from __future__ import annotations
 PROTECTION_EVENTS = frozenset({"NORMAL_PROTECTION", "DYNAMIC_PROTECTION"})
 
 
+def policy_for_stage(params, stage):
+    """Resolve ARM/DYNAMIC independently, retaining legacy shared settings."""
+    from ..exit_modes import normalize_normal_policy
+    read = params.get if isinstance(params, dict) else lambda key, default=None: getattr(params, key, default)
+    arm = read("normal_policy", "AUTO")
+    return normalize_normal_policy((read("dynamic_policy", None) or arm) if stage == "DYN" else arm)
+
+
+def protection_stages(reason, details):
+    """Identify old/new protection requests without mistaking SL/E for them."""
+    details = details if isinstance(details, dict) else {}
+    events = set(str(reason or "").upper().split("+"))
+    events.update(str(value).upper() for value in details.get("triggered_events", []) or [])
+    stages = {stage for stage, event in (("ARM", "NORMAL_PROTECTION"), ("DYN", "DYNAMIC_PROTECTION"))
+              if event in events}
+    if not stages and events.intersection({"PRICE_PROTECTION", "PROTECT"}):
+        stage = str(details.get("protection_stage", "")).upper()
+        # A legacy request with no stage cannot be proved safe under a mixed
+        # policy. Cancel it locally if either protection group is now ALERT.
+        stages = {stage} if stage in {"ARM", "DYN"} else {"ARM", "DYN"}
+    return stages
+
+
 def dynamic_floor_previous(position, retention_pct):
     """An operator edit to retention rebases DYNAMIC; unchanged rules keep their floor."""
     previous = position.get("dynamic_retention_pct", position.get("normal_retention_pct"))

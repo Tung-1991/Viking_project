@@ -9,7 +9,7 @@ from ..rules.business import (
     EXPOSURE_DEFAULTS,
     StaticRule,
     StaticRuleParameters,
-    average_true_range_pct,
+    average_true_range_pct, average_true_range_snapshot,
     classify_market_state,
     indicator_snapshot,
     protect_level,
@@ -19,7 +19,7 @@ from ..rules.business import (
 )
 from ..rules.entry_filters import apply_buy_filters
 from ..rules.ema_memory import advance_memory, lookback_start, seed_lookback
-from ..rules.protection import sale_options, sale_quantity, repeat_ready
+from ..rules.protection import sale_options, sale_quantity, repeat_ready, policy_for_stage
 from ..trading.portfolio import (
     bot_slot_state,
     order_budget,
@@ -340,7 +340,8 @@ def _pending_protect_matches(
     """Recheck a T+2 PROTECT request with current price and current rule."""
     if not _is_pending_protect(order):
         return False
-    if params.normal_policy != "AUTO" or "NORMAL" not in position.em_modes:
+    stage = _pending_protect_stage(order)
+    if policy_for_stage(params, stage) != "AUTO" or "NORMAL" not in position.em_modes:
         return False
     current = float(price or 0.0)
     sl_price = position.avg_price * (1.0 + position.sl_pct / 100.0)
@@ -372,6 +373,12 @@ def _pending_protect_matches(
     return bool(level.active and current > 0 and current <= level.trigger_price + 1e-9)
 
 
+def _pending_protect_stage(order: _Pending) -> str:
+    return str((order.details or {}).get("protection_stage") or
+               ("DYN" if "DYNAMIC_PROTECTION" in {order.event, *order.triggered_events, *str(order.reason or "").upper().split("+")}
+                else "ARM"))
+
+
 def _start_sellable_dynamic(
     position: _Position,
     params: StaticRuleParameters,
@@ -381,7 +388,7 @@ def _start_sellable_dynamic(
     if (
         not params.normal_t2_reset_enabled
         or not params.normal_dynamic_enabled
-        or params.normal_policy != "AUTO"
+        or params.dynamic_policy != "AUTO"
         or position.normal_t2_started
         or observed_price <= 0
     ):
@@ -537,6 +544,7 @@ def _normal_policy_fill(
     ALERT observes the same hit but never creates a fill.
     """
     policy = "ALERT" if str(policy or "AUTO").upper() == "ALERT" else "AUTO"
+    arm_policy = policy
     peak = float(peak_profit_pct or 0.0)
     armed = bool(already_armed or peak >= arm_pct)
     armed_at = 0
@@ -566,6 +574,7 @@ def _normal_policy_fill(
         opened = float(bar.get("open", 0.0) or 0.0)
         low = float(bar.get("low", 0.0) or 0.0)
         stage = "ARM" if peak + 1e-9 >= arm_pct else "DYN"
+        policy = policy_for_stage(params, stage) if params is not None else arm_policy
         prefix = "normal" if stage == "ARM" else "dynamic"
         if position is not None:
             carried_trigger = getattr(position, prefix + "_trigger_price")
@@ -648,6 +657,7 @@ def _normal_trade_metrics(
     mfe = float(position.mfe_after_arm_pct or 0.0)
     return {
         "normal_policy": params.normal_policy,
+        "dynamic_policy": params.dynamic_policy,
         "normal_arm_time": position.normal_arm_time,
         "normal_arm_price": (
             position.avg_price * (1.0 + params.normal_arm_pct / 100.0) if armed else 0.0
@@ -814,6 +824,7 @@ def exit_comparison_variants(
         )
         params = base.to_dict()
         params["normal_policy"] = policy
+        params["dynamic_policy"] = policy
         params["normal_dynamic_enabled"] = dynamic
         variants.append((BacktestScenario.from_dict(scenario_values), params))
     return variants
@@ -1386,6 +1397,9 @@ class BacktestEngine:
                         if not position or position.trade_id != order.trade_id:
                             pending.pop(symbol, None)
                             continue
+                        if _is_pending_protect(order) and policy_for_stage(params, _pending_protect_stage(order)) == "ALERT":
+                            pending.pop(symbol, None)
+                            continue
                         # DAILY has no afternoon price.  On T+2 it must not use
                         # the morning Open, so it waits for the next session;
                         # REPLAY handles the legal 13:00 boundary precisely.
@@ -1514,7 +1528,7 @@ class BacktestEngine:
                 ):
                     intraday = execution_resolution.get(symbol) != "1D"
                     normal_bars = execution_day(symbol, day) if intraday else [row]
-                    atr_pct = average_true_range_pct(history[symbol][:-1])
+                    atr_value, atr_pct = average_true_range_snapshot(history[symbol][:-1])
                     observation = _normal_policy_fill(
                         normal_bars,
                         policy=params.normal_policy,
@@ -1567,8 +1581,8 @@ class BacktestEngine:
                             position.normal_arm_time = datetime.fromtimestamp(
                                 observation.armed_at, VN_TZ,
                             ).isoformat()
-                    normal_fill = observation.fill
-                    if observation.triggered and params.normal_policy == "ALERT":
+                    normal_fill = observation.fill if day > position.settle_date else 0.0
+                    if observation.triggered and day > position.settle_date and policy_for_stage(params, stage) == "ALERT":
                         _record_protect_event(
                             position, params, alert=True, stage=stage,
                                     price=observation.hit_price, level=observation.trigger_price,
@@ -1589,6 +1603,7 @@ class BacktestEngine:
                                 "normal_trigger_price": observation.trigger_price,
                                 "normal_protected_profit_pct": observation.protected_profit_pct,
                                 "normal_atr_pct": atr_pct,
+                                "normal_atr_value": atr_value,
                                 "normal_activation_mfe_pct": observation.activation_mfe_pct,
                                 "normal_atr_activation_multiplier": params.normal_atr_activation_multiplier,
                                 "normal_atr_multiplier": params.normal_atr_multiplier,
@@ -1608,13 +1623,14 @@ class BacktestEngine:
                     if normal_fill > 0:
                         details = {
                             "triggered_events": [protect_event], "protection_stage": stage, "sell_basis": basis, "sell_share_pct": sell_pct,
-                            "normal_policy": params.normal_policy,
+                            "normal_policy": policy_for_stage(params, stage),
                             "normal_arm_time": position.normal_arm_time,
                             "mfe_after_arm_pct": position.mfe_after_arm_pct,
                             "normal_protected_profit_pct": position.normal_protected_profit_pct,
                             "normal_effective_trail_pct": position.normal_effective_trail_pct,
                             "normal_trigger_price": observation.trigger_price,
                             "normal_atr_pct": atr_pct,
+                            "normal_atr_value": atr_value,
                             "normal_activation_mfe_pct": observation.activation_mfe_pct,
                             "normal_atr_activation_multiplier": params.normal_atr_activation_multiplier,
                             "normal_atr_multiplier": params.normal_atr_multiplier,
@@ -1642,13 +1658,6 @@ class BacktestEngine:
                                     [protect_event], signal_date=day,
                                     reason=protect_event, details=details,
                                 )
-                        else:
-                            pending[symbol] = _Pending(
-                                "SELL", symbol, day, "PRICE_PROTECTION", share,
-                                position.trade_id, current_phase,
-                                [protect_event], True,
-                                protect_event, details,
-                            )
 
             nav, stock_value = portfolio_value(day)
             for symbol in settings.symbols:
@@ -2437,6 +2446,9 @@ class BacktestEngine:
             if not position or position.trade_id != order.trade_id:
                 pending.pop(symbol, None)
                 return
+            if _is_pending_protect(order) and policy_for_stage(params, _pending_protect_stage(order)) == "ALERT":
+                pending.pop(symbol, None)
+                return
             if not stock_is_sellable_after_settlement(
                 position.settle_date, datetime.fromtimestamp(stamp, VN_TZ),
             ):
@@ -2670,7 +2682,7 @@ class BacktestEngine:
                             and "NORMAL" in position.em_modes
                             and not _auto_e_active(position, params, current_indicators, previous_indicators)
                         ):
-                            atr_pct = average_true_range_pct(history[symbol])
+                            atr_value, atr_pct = average_true_range_snapshot(history[symbol])
                             observation = _normal_policy_fill(
                                 [bar], policy=params.normal_policy,
                                 entry_price=position.avg_price,
@@ -2720,8 +2732,9 @@ class BacktestEngine:
                                 position.normal_arm_time = iso_time(
                                     observation.armed_at or stamp,
                                 )
-                            fill = observation.fill
-                            if observation.triggered and params.normal_policy == "ALERT":
+                            sellable = stock_is_sellable_after_settlement(position.settle_date, datetime.fromtimestamp(stamp, VN_TZ))
+                            fill = observation.fill if sellable else 0.0
+                            if observation.triggered and sellable and policy_for_stage(params, stage) == "ALERT":
                                 _record_protect_event(
                                     position, params, alert=True, stage=stage,
                                     price=observation.hit_price, level=observation.trigger_price,
@@ -2746,6 +2759,7 @@ class BacktestEngine:
                                         "normal_trigger_price": observation.trigger_price,
                                         "normal_protected_profit_pct": observation.protected_profit_pct,
                                         "normal_atr_pct": atr_pct,
+                                        "normal_atr_value": atr_value,
                                         "normal_activation_mfe_pct": observation.activation_mfe_pct,
                                         "normal_atr_activation_multiplier": params.normal_atr_activation_multiplier,
                                         "normal_atr_multiplier": params.normal_atr_multiplier,
@@ -2767,13 +2781,14 @@ class BacktestEngine:
                                 quantity = sale_quantity(position.quantity, position.entry_quantity, share, basis)
                                 details.update(
                                     triggered_events=[protect_event], protection_stage=stage, sell_basis=basis, sell_share_pct=sell_pct,
-                                    normal_policy=params.normal_policy,
+                                    normal_policy=policy_for_stage(params, stage),
                                     normal_arm_time=position.normal_arm_time,
                                     mfe_after_arm_pct=position.mfe_after_arm_pct,
                                     normal_protected_profit_pct=position.normal_protected_profit_pct,
                                     normal_effective_trail_pct=position.normal_effective_trail_pct,
                                     normal_trigger_price=observation.trigger_price,
                                     normal_atr_pct=atr_pct,
+                                    normal_atr_value=atr_value,
                                     normal_activation_mfe_pct=observation.activation_mfe_pct,
                                     normal_atr_activation_multiplier=params.normal_atr_activation_multiplier,
                                     normal_atr_multiplier=params.normal_atr_multiplier,
@@ -2798,12 +2813,6 @@ class BacktestEngine:
                                         stamp=stamp, signal_time=iso_time(stamp), reason=protect_event,
                                         details=details, triggered=[protect_event],
                                         resolution=resolution, quality=quality,
-                                    )
-                                elif quantity > 0:
-                                    pending[symbol] = _Pending(
-                                        "SELL", symbol, day, "PRICE_PROTECTION", share,
-                                        position.trade_id, current_phase, [protect_event], True,
-                                        protect_event, details, iso_time(stamp), resolution, quality,
                                     )
                     # A waiting T+2 request does not freeze MFE/MAE.  REAL
                     # keeps observing the position until shares are sold, so

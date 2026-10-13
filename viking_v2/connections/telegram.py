@@ -467,12 +467,25 @@ class SignalTelegramService:
         retention_until_enabled: bool = True,
         policy: str = "ALERT",
         execution_mode: str = "",
+        stage: str = "",
+        atr_value: float = 0.0,
+        order_id: str = "",
+        order_quantity: int = 0,
+        order_status: str = "",
     ) -> bool:
         """Report a PROTECT hit; RULE policy remains the source of action."""
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return False
         policy = "AUTO" if str(policy or "").upper() == "AUTO" else "ALERT"
+        stage = str(stage or "").upper()
+        stage_label = "DYNAMIC" if stage == "DYN" else "SAU ARM" if stage == "ARM" else "PROTECT"
+        action_line = "ALERT · chỉ báo, không đặt lệnh."
+        if policy == "AUTO":
+            action_line = (
+                f"AUTO · SELL #{order_id[:10]} · {int(order_quantity):,} CP · {order_status}. Chưa xác nhận khớp."
+                if order_id else "AUTO · tín hiệu bán; chưa xác nhận tạo/gửi/khớp lệnh."
+            )
         start_label = (
             f"×{float(atr_activation_multiplier):g}"
             if dynamic and atr_activation_enabled else "OFF"
@@ -487,19 +500,17 @@ class SignalTelegramService:
         )
         return self._send(
             "\n".join((
-                f"🟠 PROTECT HIT · {symbol}"
+                "🟠 PROTECT HIT" + (f" · {stage_label}" if stage else "") + f" · {symbol}"
                 + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
                 f"Giá: {self._price(price)} · MFE {float(mfe_pct):+.2f}%",
                 f"Peak: {self._price(peak_price)} · PROTECT: {self._price(protect_price)}",
-                f"ATR14 (nến ngày đã đóng tới phiên trước): {float(atr_pct):.2f}%",
+                "ATR14 · phiên trước: "
+                + (f"{self._price(atr_value)} · " if atr_value > 0 else "")
+                + f"{float(atr_pct):.2f}%",
                 f"START ATR: {start_label} · TRAIL ATR: {trail_label}",
                 keep_label,
                 f"Khối lượng {float(sell_pct):g}% · DYNAMIC {'ON' if dynamic else 'OFF'}",
-                (
-                    "AUTO · ĐÃ TẠO YÊU CẦU BÁN."
-                    if policy == "AUTO"
-                    else "ALERT chỉ ghi nhận, không đặt lệnh."
-                ),
+                action_line,
             ))
         )
 

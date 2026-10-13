@@ -27,7 +27,7 @@ from .portfolio import (
 from ..storage import CSVOrderJournal, JSONLineJournal
 from .state import TradeStateStore
 from .orders import FINAL_STATUSES
-from ..rules.protection import PROTECTION_EVENTS, sale_quantity
+from ..rules.protection import PROTECTION_EVENTS, sale_quantity, protection_stages
 from .validation import quote_is_fresh
 from .portfolio import cash_from_balance
 from ..rules.state import RuleStateStore
@@ -49,6 +49,7 @@ class ExecutionService:
         bot_buy_allowed_provider: Callable[[str], bool] | None = None,
         bot_entry_guard: Callable[[OrderIntent, dict[str, Any]], str] | None = None,
         manual_buy_guard: Callable[[OrderIntent, dict[str, Any]], str] | None = None,
+        protection_policy_provider: Callable[[str], str] | None = None,
     ):
         self.real = real
         self.paper = paper
@@ -64,6 +65,7 @@ class ExecutionService:
         self.bot_buy_allowed_provider = bot_buy_allowed_provider
         self.bot_entry_guard = bot_entry_guard
         self.manual_buy_guard = manual_buy_guard
+        self.protection_policy_provider = protection_policy_provider
         self.database = queue.store.database
         self._blocked_rechecks: set[str] = set()
         self._deferred_events: list[tuple[str, TradeCycle, OrderIntent]] | None = None
@@ -210,7 +212,8 @@ class ExecutionService:
             self.process_due(phase=phase, execution_mode=intent.execution_mode)
         return self.queue.get(intent.id) or intent
 
-    def cancel_unsubmitted_protect_sells(self, execution_mode: str) -> tuple[list[OrderIntent], list[OrderIntent]]:
+    def cancel_unsubmitted_protect_sells(self, execution_mode: str, *,
+                                        stages: set[str] | None = None) -> tuple[list[OrderIntent], list[OrderIntent]]:
         """Cancel local PROTECT requests when global mode changes to ALERT.
 
         Orders DNSE may already have accepted are returned separately and are
@@ -219,13 +222,12 @@ class ExecutionService:
         mode = "REAL" if str(execution_mode or "").upper() == "REAL" else "PAPER"
         cancelled: list[OrderIntent] = []
         broker_managed: list[OrderIntent] = []
+        selected_stages = {"ARM", "DYN"} if stages is None else stages
         for intent in self.queue.list_all():
             if (
                 intent.execution_mode != mode
                 or intent.side != "SELL"
-                or not PROTECTION_EVENTS.intersection({
-                    value for value in str(intent.reason or "").upper().split("+") if value
-                })
+                or not selected_stages.intersection(protection_stages(intent.reason, intent.details))
                 or intent.status.upper() in {"FILLED", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"}
             ):
                 continue
@@ -321,6 +323,11 @@ class ExecutionService:
         mode = str(execution_mode).upper()
         token_ready = True if mode == "PAPER" else self.real.has_trading_token()
         broker: Any = self.paper if mode == "PAPER" else self.real
+        if self.protection_policy_provider:
+            alert_stages = {stage for stage in ("ARM", "DYN")
+                            if self.protection_policy_provider(stage) == "ALERT"}
+            if alert_stages:
+                self.cancel_unsubmitted_protect_sells(mode, stages=alert_stages)
         self._revalidate_waiting_sells(phase, mode, broker, phase_provider)
         due = self.queue.claim_due(
             phase=phase,
@@ -552,6 +559,18 @@ class ExecutionService:
                 )):
                     self.queue.cancel_claimed_local(intent.id, "BUY bỏ qua: lần cắt EMA không còn hiệu lực")
                     continue
+            # Re-read independent policies after slow snapshot/quote calls.
+            # A legacy KEEP/T+2 request cannot bypass an operator's ALERT edit.
+            if intent.side == "SELL" and self.protection_policy_provider:
+                stages = protection_stages(intent.reason, intent.details)
+                if any(self.protection_policy_provider(stage) == "ALERT" for stage in stages):
+                    message = "PROTECT chuyển sang ALERT; huỷ SELL chưa gửi"
+                    cancelled = self.queue.cancel_claimed_local(intent.id, message)
+                    result = BrokerOrderResult(True, "CANCELLED", message=message)
+                    self._append_local_event({"ts": time.time(), "intent": (cancelled or intent).to_dict(),
+                                              "queue_status": "CANCELLED", "result": asdict(result)})
+                    completed.append((intent, result))
+                    continue
             # Durable hand-off identity BEFORE the network call. A timeout never
             # authorizes another POST. Persist the package on the original, too.
             if intent.side == "BUY" and self.trade_state:
@@ -677,7 +696,7 @@ class ExecutionService:
                     refreshed_details = {
                         key: decision_details.get(key)
                         for key in (
-                            "normal_policy", "normal_dynamic_enabled", "normal_repeat_enabled",
+                            "normal_policy", "arm_policy", "dynamic_policy", "normal_atr_value", "normal_dynamic_enabled", "normal_repeat_enabled",
                             "normal_arm_pct", "normal_giveback_pct", "normal_atr_pct",
                             "normal_activation_mfe_pct", "normal_atr_activation_multiplier",
                             "normal_atr_multiplier", "normal_retention_pct",

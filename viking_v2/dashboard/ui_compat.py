@@ -38,6 +38,14 @@ def _without_idle_flush(draw):
     return deferred
 
 
+def _rounded_window_dimensions_event(window, event=None):
+    """Native sizes lose fractions of a pixel; never truncate again on decode."""
+    if not window._block_update_dimensions_event:
+        scale = window._get_window_scaling()
+        window._current_width = round(window.winfo_width() / scale)
+        window._current_height = round(window.winfo_height() / scale)
+
+
 def install_dpi_resize_guard() -> None:
     """Defer idle layout until all widgets have received the new DPI.
 
@@ -67,5 +75,9 @@ def install_dpi_resize_guard() -> None:
     guarded_window.__func__._money_hunter_dpi_guard = True
     ctk.CTkScrollbar._draw = _without_idle_flush(ctk.CTkScrollbar._draw)
     ctk.CTkOptionMenu._draw = _without_idle_flush(ctk.CTkOptionMenu._draw)
+    # CTk truncates both logical→native and native→logical dimensions. At
+    # 125%/150% that shrinks the window by a pixel on each DPI round trip.
+    ctk.CTk._update_dimensions_event = _rounded_window_dimensions_event
+    ctk.CTkToplevel._update_dimensions_event = _rounded_window_dimensions_event
     ScalingTracker.update_scaling_callbacks_for_window = guarded_window
     ScalingTracker.update_scaling_callbacks_all = guarded_all

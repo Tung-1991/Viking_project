@@ -28,7 +28,7 @@ from ..trading.validation import MAX_DECISION_AGE, quote_diagnostics, quote_is_f
 from ..rules.business import (
     StaticRule,
     StaticRuleParameters,
-    average_true_range_pct,
+    average_true_range_pct, average_true_range_snapshot,
     classify_market_state,
     indicator_snapshot,
 )
@@ -756,7 +756,7 @@ def run(account_id: str | None = None) -> int:
                                     normal_t2_reset_enabled=bool(
                                         rule.params.normal_dynamic_enabled
                                         and rule.params.normal_t2_reset_enabled
-                                        and rule.params.normal_policy == "AUTO"
+                                        and rule.params.dynamic_policy == "AUTO"
                                     ),
                                     normal_arm_pct=rule.params.normal_arm_pct,
                                 )
@@ -773,7 +773,8 @@ def run(account_id: str | None = None) -> int:
                                     row for row in bars
                                     if isinstance(row, dict) and bool(row.get("closed", True))
                                 ]
-                                atr14_daily_pct = average_true_range_pct(completed_daily)
+                                atr14_daily_value, atr14_daily_pct = average_true_range_snapshot(completed_daily)
+                                decision.details["atr14_daily_value"] = atr14_daily_value
                                 decision.details["atr14_daily_pct"] = atr14_daily_pct
                                 decision.details["atr14_daily_asof"] = (
                                     (completed_daily[-1] if completed_daily else {}).get("time", "")

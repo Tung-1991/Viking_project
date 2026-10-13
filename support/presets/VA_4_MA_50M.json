@@ -67,6 +67,8 @@
   "rule_parameters": {
     "max_positions": 4,
     "indicator_exit_policy": "AUTO",
+    "normal_policy": "AUTO",
+    "dynamic_policy": "ALERT",
     "buy_signal_require_ema_cross": true,
     "buy_signal_session_cross_enabled": true,
     "buy_ema_cross_mode": "VA",

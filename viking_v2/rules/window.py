@@ -866,29 +866,10 @@ class RuleSettingsPopup:
         self.protect_card = self._card(
             body, "PROTECT · BẢO VỆ & THOÁT",
             "Ba cách bảo vệ nằm cùng khung: sau ARM, Dynamic trước ARM, và tín hiệu E.\n"
-            "PROTECT/Dynamic dùng chung MODE, có KL bán và LẶP riêng. E AUTO bán 100% và không đợi ARM.\n"
+            "ARM, DYNAMIC và E có AUTO/ALERT riêng. E AUTO bán hết, không đợi ARM.\n"
             "Công tắc E/M của từng vị thế quyết định có dùng PROTECT/E hay không.",
             2, 0, span=2,
         )
-        policy_row = ctk.CTkFrame(self.protect_card, fg_color="transparent")
-        policy_row.pack(fill="x", padx=16, pady=(0, 2))
-        self.protect_policy_row = policy_row
-        ctk.CTkLabel(policy_row, text="MODE · ARM + DYNAMIC", font=FONT_KEY,
-                    text_color=self.TITLE).pack(side="left")
-        self.normal_policy = tk.StringVar(value=self.params.normal_policy)
-        self.normal_policy_menu = ctk.CTkOptionMenu(
-            policy_row, values=["AUTO", "ALERT"], variable=self.normal_policy,
-            width=95, height=34, font=FONT_VALUE, fg_color=self.BLUE,
-            button_color="#245C92", button_hover_color="#1D4D7B",
-            command=self._select_normal_policy,
-        )
-        self.normal_policy_menu.pack(side="right")
-        self._hint_icon(policy_row,
-            "Dùng chung cho PROTECT sau ARM và Dynamic trước ARM.\n"
-            "AUTO: tạo SELL khi chạm mức và có cổ bán được. ALERT: tự theo dõi, chỉ cảnh báo, không bán.\n"
-            "Chưa có cổ bán được: chờ cổ về, không phát PROTECT HIT.\n"
-            "Telegram bật riêng tại KẾT NỐI → TELEGRAM. Chuyển ALERT huỷ yêu cầu PROTECT chưa gửi."
-        ).pack(side="right", padx=(0, 6))
         groups = ctk.CTkFrame(self.protect_card, fg_color="transparent")
         groups.pack(fill="x", padx=4, pady=(0, 2))
         groups.grid_columnconfigure((0, 1, 2), weight=1, uniform="protect-groups")
@@ -900,6 +881,22 @@ class RuleSettingsPopup:
             0, 0,
         )
         self.protect_trail_card = normal
+        policy_row = ctk.CTkFrame(normal, fg_color="transparent")
+        policy_row.pack(fill="x", padx=12, pady=4)
+        self.protect_policy_row = policy_row
+        ctk.CTkLabel(policy_row, text="MODE", font=FONT_KEY, text_color=self.TITLE).pack(side="left")
+        self.normal_policy = tk.StringVar(value=self.params.normal_policy)
+        self.normal_policy_menu = ctk.CTkOptionMenu(
+            policy_row, values=["AUTO", "ALERT"], variable=self.normal_policy,
+            width=95, height=34, font=FONT_VALUE, fg_color=self.BLUE, dynamic_resizing=False,
+            button_color="#245C92", button_hover_color="#1D4D7B",
+            command=self._select_normal_policy,
+        )
+        self.normal_policy_menu.pack(side="right")
+        self._hint_icon(policy_row,
+            "Sau ARM: AUTO bán theo KL; ALERT chỉ báo.\n"
+            "Chưa có cổ bán được: không tạo SELL. Đổi ALERT huỷ lệnh ARM chưa gửi."
+        ).pack(side="right", padx=(0, 6))
         self.normal_arm = self._field(normal, "ARM (%)", self.params.normal_arm_pct,
             "MFE ≥ ARM mới bật bảo vệ sau ARM. Mua 100, ARM 7% → từng lên ít nhất 107; không bán ngay tại 107.")
         self.normal_giveback = self._field(normal, "Lùi đỉnh (%)", self.params.normal_giveback_pct,
@@ -925,7 +922,7 @@ class RuleSettingsPopup:
         dynamic_box = self._card(
             groups, "DYNAMIC",
             "TRƯỚC ARM: ON bảo vệ bằng ATR và/hoặc phần lãi giữ lại; OFF chỉ đợi ARM.\n"
-            "Chạm mức → dùng KL và LẶP của DYNAMIC. MODE AUTO/ALERT dùng chung với PROTECT.",
+            "AUTO bán theo KL; ALERT chỉ báo. Độc lập phần sau ARM.",
             0, 1,
         )
         self.dynamic_settings_card = dynamic_box
@@ -937,6 +934,20 @@ class RuleSettingsPopup:
             button_color=self.TEXT, text_color=self.TEXT,
         ).pack(side="left", before=next(child for child in dynamic_header.winfo_children()
                                         if isinstance(child, ctk.CTkLabel)), padx=(0, 6))
+        dynamic_policy_row = ctk.CTkFrame(dynamic_box, fg_color="transparent")
+        dynamic_policy_row.pack(fill="x", padx=12, pady=4)
+        ctk.CTkLabel(dynamic_policy_row, text="MODE", font=FONT_KEY, text_color=self.TITLE).pack(side="left")
+        self.dynamic_policy = tk.StringVar(value=self.params.dynamic_policy)
+        self.dynamic_policy_menu = ctk.CTkOptionMenu(
+            dynamic_policy_row, values=["AUTO", "ALERT"], variable=self.dynamic_policy,
+            width=95, height=34, font=FONT_VALUE, fg_color=self.BLUE, dynamic_resizing=False,
+            button_color="#245C92", button_hover_color="#1D4D7B",
+        )
+        self.dynamic_policy_menu.pack(side="right")
+        self._hint_icon(dynamic_policy_row,
+            "Trước ARM: AUTO bán theo KL; ALERT chỉ báo.\n"
+            "Chưa có cổ bán được: không tạo SELL. Đổi ALERT huỷ lệnh DYNAMIC chưa gửi."
+        ).pack(side="right", padx=(0, 6))
         dynamic_groups = ctk.CTkFrame(dynamic_box, fg_color="transparent")
         dynamic_groups.pack(fill="x", padx=8, pady=(4, 2))
         dynamic_groups.grid_columnconfigure(0, weight=1)
@@ -1021,7 +1032,7 @@ class RuleSettingsPopup:
         ctk.CTkOptionMenu(
             indicator_policy_row, values=["ALERT", "AUTO"],
             variable=self.indicator_exit_policy, width=95, height=34,
-            font=FONT_VALUE, fg_color=self.BLUE,
+            font=FONT_VALUE, fg_color=self.BLUE, dynamic_resizing=False,
             button_color="#245C92", button_hover_color="#1D4D7B",
         ).pack(side="right")
         self._hint_icon(
@@ -1237,9 +1248,9 @@ class RuleSettingsPopup:
         return {
             "SL": f"SL {get(self.initial_sl)}% / vào lại {get(self.reentry_sl)}% · bán 100%",
             "TP": f"TP +{get(self.take_profit)}% · bán 100%",
-            "NORMAL": (f"PROTECT {self.normal_policy.get()}{' · chỉ báo, không bán' if self.normal_policy.get() == 'ALERT' else ''} · ARM {get(self.normal_arm)}% · lùi {get(self.normal_giveback)}%"
+            "NORMAL": (f"ARM {self.normal_policy.get()} · ARM {get(self.normal_arm)}% · lùi {get(self.normal_giveback)}%"
                        f"\nARM {get(self.normal_sell)}% {self.normal_sell_basis.get()} · LẶP {'ON' if self._protect_repeat_enabled() else 'OFF'}"
-                       f"\nDYN {'ON' if self.normal_dynamic.get() else 'OFF'} {get(self.dynamic_sell)}% {self.dynamic_sell_basis.get()} · LẶP {'ON' if self._protect_repeat_enabled(dynamic=True) else 'OFF'}{dynamic}"),
+                       f"\nDYN {self.dynamic_policy.get() if self.normal_dynamic.get() else 'OFF'} {get(self.dynamic_sell)}% {self.dynamic_sell_basis.get()} · LẶP {'ON' if self._protect_repeat_enabled(dynamic=True) else 'OFF'}{dynamic}"),
             "IND_EXIT": (f"E {self.indicator_exit_policy.get()} · {'bán 100%' if self.indicator_exit_policy.get() == 'AUTO' else 'chỉ báo'}\n"
                          f"{f'EMA {get(self.sell_ema_fast)}/{get(self.sell_ema_slow)}' if self.sell_signal_ema.get() else 'EMA OFF'} · "
                          f"{f'RSI{get(self.rsi_period)}' if self.sell_signal_rsi.get() else 'RSI OFF'}"),
@@ -1275,7 +1286,7 @@ class RuleSettingsPopup:
         self._saved_execution_preview = self._execution_preview_values()
         self._saved_execution_flags = {"SL": self.bot_sl_enabled.get(), **{key: value.get() for key, value in self.bot_em_vars.items()}}
         self._preview_traces = []
-        variables = [self.normal_policy, self.indicator_exit_policy, self.normal_dynamic, self.normal_repeat,
+        variables = [self.normal_policy, self.dynamic_policy, self.indicator_exit_policy, self.normal_dynamic, self.normal_repeat,
                      self.normal_sell_basis, self.dynamic_sell_basis, self.dynamic_repeat,
                      self.shared_rsi_period, self.bot_sl_enabled, *self.bot_em_vars.values(),
                      self.normal_atr_activation_enabled, self.normal_atr_trail_enabled,
@@ -1610,6 +1621,7 @@ class RuleSettingsPopup:
             self.params.whipsaw_x = whipsaw_x
             self.params.take_profit_pct = take_profit
             self.params.normal_policy = self.normal_policy.get()
+            self.params.dynamic_policy = self.dynamic_policy.get()
             self.params.normal_arm_pct = normal_arm
             self.params.normal_giveback_pct = normal_giveback
             self.params.normal_atr_activation_multiplier = normal_atr_activation_multiplier
