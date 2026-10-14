@@ -132,8 +132,8 @@ def test_popup_references_current_rule_keeps_custom_targets_and_colors_each_over
         top, = [w for w in ui_root.winfo_children() if w not in previous and isinstance(w, ctk.CTkToplevel)]
         widgets = list(_widgets(top))
         menus = [w for w in widgets if isinstance(w, ctk.CTkOptionMenu)]
-        fields = [w for w in widgets if isinstance(w, ctk.CTkEntry)]
-        assert all(menu.get() == "Theo RULE" and menu.cget("fg_color") != "#F59E0B" for menu in menus)
+        fields = [w for w in widgets if isinstance(w, ctk.CTkEntry) and w.cget("placeholder_text") == "Giá hoặc %"]
+        assert all(menu.get().endswith(" · RULE") and menu.cget("fg_color") != "#F59E0B" for menu in menus)
         menus[0].set("ALERT")
         assert menus[0].cget("fg_color") == "#F59E0B"
         tp_switch = next(w for w in widgets if isinstance(w, ctk.CTkSwitch) and w.cget("text") == "TP")

@@ -36,6 +36,21 @@
    không phải chờ giá giảm để mua/bán. Hover dòng/ⓘ xem trạng thái và tỷ trọng trước/sau.
 5. Lệnh REAL đầu tiên đối chiếu ID, khớp/còn lại, giá vốn và phí trước khi tăng quy mô.
 
+## Quản lý vị thế và lịch sử MAE/MFE
+
+Chuột phải vị thế → **Mở bảng**: dropdown ARM/DYNAMIC/E hiển thị chế độ thực tế
+`AUTO/ALERT/OFF · RULE` khi kế thừa cấu hình chính. **VỀ RULE** chỉ bỏ cấu hình riêng,
+áp dụng sau **LƯU**; không tải lại lịch sử giá.
+
+**Đo lại MAE/MFE → Số phiên** mặc định **3**, cho nhập **1–30 phiên giao dịch**,
+gồm hôm nay nếu phiên đã bắt đầu. App tải đỉnh/đáy nến phút sau thời điểm mở vị thế,
+loại nến phút chứa lúc mua nếu mua giữa phút; không dùng giá trước lúc mua.
+Nếu mới mua chưa đủ số phiên thì chỉ tải các phiên kể từ khi mua và hiện số phiên đã tải.
+Các phiên kết thúc nằm trọn trong khoảng tải được đối chiếu đỉnh/đáy nến ngày;
+thiếu nến hoặc dữ liệu không khớp thì giữ số cũ. Xác nhận sẽ lưu số cũ đối chiếu,
+giữ nguyên cổ/fill, tạm dừng tự bán rồi tiếp tục theo dõi MAE/MFE trên nền lịch sử vừa tải.
+Hover MAE/MFE xem khoảng đã tải; muốn tự bán lại, bật BOT vị thế và **LƯU**.
+
 ## Bộ thử MSN / CTS / HDB / IDC
 
 Thiết lập khi đây đúng là vốn dành cho bộ thử: watchlist/Priority gồm 4 mã;

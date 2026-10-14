@@ -200,6 +200,12 @@ def _populate_position_management(app, action: dict, top, cycle, tick) -> None:
         }
     summaries = rule_summaries()
     policy_refreshers = []
+    def inherited_policy(stage, key):
+        if stage == "DYN" and not rule_params.get("normal_dynamic_enabled"):
+            return "OFF"
+        return rule_params[key]
+    def follows_rule(value):
+        return value == "Theo RULE" or value.endswith(" · RULE")
     for index, (stage, key, label) in enumerate(names):
         active = ("IND_EXIT" in modes if stage == "E" else
                   "NORMAL" in modes and overrides.get("normal_arm_enabled" if stage == "ARM" else "normal_dynamic_enabled") is not False)
@@ -212,17 +218,20 @@ def _populate_position_management(app, action: dict, top, cycle, tick) -> None:
         caption = ctk.CTkLabel(group, text=label, width=74, height=22, anchor="w", font=("Segoe UI", 12, "bold"))
         caption.grid(row=0, column=0, sticky="w")
         menu = ctk.CTkOptionMenu(group, values=["Theo RULE", "OFF", "ALERT", "AUTO"], variable=variable,
-                               width=104, height=28, dynamic_resizing=False, font=("Segoe UI", 12))
+                               width=116, height=28, dynamic_resizing=False, font=("Segoe UI", 12))
         menu.grid(row=0, column=1, sticky="e", padx=8)
         detail = ctk.CTkLabel(group, text=summaries[stage], width=1, height=22,
                              font=("Segoe UI", 12), anchor="w", justify="left", wraplength=0)
         detail.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(2, 2))
         def show_policy(*_args, variable=variable, detail=detail, stage=stage, key=key):
             summaries.update(rule_summaries())
-            explicit = variable.get() != "Theo RULE"
-            inherited = rule_params[key]
-            if stage == "DYN" and not rule_params.get("normal_dynamic_enabled"):
-                inherited = "OFF"
+            inherited = inherited_policy(stage, key)
+            inherited_label = f"{inherited} · RULE"
+            menu_for_policy = policies[stage]._viking_menu
+            menu_for_policy.configure(values=[inherited_label, "OFF", "ALERT", "AUTO"])
+            if follows_rule(variable.get()) and variable.get() != inherited_label:
+                variable.set(inherited_label)
+            explicit = not follows_rule(variable.get())
             if variable.get() == "OFF":
                 default_modes = set(app.settings.bot_em_modes)
                 switch_key = "normal_arm_enabled" if stage == "ARM" else "normal_dynamic_enabled"
@@ -231,7 +240,6 @@ def _populate_position_management(app, action: dict, top, cycle, tick) -> None:
                             "NORMAL" in default_modes and (stage != "DYN" or rule_params["normal_dynamic_enabled"]))
             detail.configure(text=f"RULE {inherited} · {summaries[stage]}",
                              text_color="#F59E0B" if explicit else "#E8EBEF")
-            menu_for_policy = policies[stage]._viking_menu
             menu_for_policy.configure(fg_color="#F59E0B" if explicit else "#2B6CB0",
                                      button_color="#D97706" if explicit else "#245C92",
                                      text_color="#171B21" if explicit else "#E8EBEF")
@@ -239,7 +247,7 @@ def _populate_position_management(app, action: dict, top, cycle, tick) -> None:
         variable.trace_add("write", show_policy)
         policy_refreshers.append(show_policy)
         show_policy()
-        policy_hint = ("Theo RULE: lấy chế độ trong cấu hình chính, không ghi đè.\n"
+        policy_hint = ("AUTO/ALERT/OFF · RULE: chế độ thực tế từ cấu hình chính, tự nhận thay đổi mới.\n"
                    "OFF: không theo dõi nhánh này. ALERT: chỉ báo. AUTO: tự bán.\n"
                    "Lựa chọn chỉ áp dụng vị thế đang mở; không đổi mã khác.")
         hint(menu, policy_hint)
@@ -345,21 +353,21 @@ def _populate_position_management(app, action: dict, top, cycle, tick) -> None:
             tp_mode, tp_value = "NONE", 0.
         for stage, key, _label in names:
             value = policies[stage].get()
-            if value == "Theo RULE":
+            if follows_rule(value):
                 saved_overrides.pop(key, None)
             elif value in {"AUTO", "ALERT"}:
                 saved_overrides[key] = value
             if stage == "E":
-                selected.add("IND_EXIT") if value != "OFF" else selected.discard("IND_EXIT")
+                selected.add("IND_EXIT") if value not in {"OFF", "OFF · RULE"} else selected.discard("IND_EXIT")
             else:
                 switch_key = "normal_arm_enabled" if stage == "ARM" else "normal_dynamic_enabled"
-                if value == "Theo RULE":
+                if follows_rule(value):
                     saved_overrides.pop(switch_key, None)
                 elif value == "OFF":
                     saved_overrides[switch_key] = False
                 elif value in {"AUTO", "ALERT"}:
                     saved_overrides[switch_key] = True
-        if policies["ARM"].get() != "OFF" or policies["DYN"].get() != "OFF":
+        if policies["ARM"].get() not in {"OFF", "OFF · RULE"} or policies["DYN"].get() not in {"OFF", "OFF · RULE"}:
             selected.add("NORMAL")
         else:
             selected.discard("NORMAL")
@@ -400,10 +408,29 @@ def _populate_position_management(app, action: dict, top, cycle, tick) -> None:
     footer.grid(row=2, column=0, columnspan=2, sticky="ew", padx=12, pady=(4, 10))
     footer.grid_columnconfigure(1, weight=1)
     if cycle:
-        repair = ctk.CTkButton(footer, text="Đo lại MAE/MFE", width=114, height=28, font=("Segoe UI", 11), fg_color="#3A3F47",
-                              command=lambda: (top.destroy(), app._restart_position_metrics({**action, "trade_id": cycle.id})))
-        repair.grid(row=0, column=0, sticky="w")
-        hint(repair, "Đọc và xác nhận giá G1 trước khi bắt đầu khoảng đo mới. Giữ nguyên cổ/fill; tự bán tạm dừng.")
+        repair_row = ctk.CTkFrame(footer, fg_color="transparent", height=1)
+        repair_row.grid(row=0, column=0, sticky="w")
+        def reload_history():
+            from ..trading.position_history import session_count
+            try:
+                count = session_count(session_entry.get())
+            except ValueError as exc:
+                show_status(str(exc))
+                return
+            top.destroy()
+            app._restart_position_metrics({**action, "trade_id": cycle.id}, sessions=count)
+        repair = ctk.CTkButton(repair_row, text="Đo lại MAE/MFE", width=114, height=28, font=("Segoe UI", 11), fg_color="#3A3F47",
+                              command=reload_history)
+        repair.pack(side="left")
+        ctk.CTkLabel(repair_row, text="Số phiên:", font=("Segoe UI", 11), height=28).pack(side="left", padx=(8, 4))
+        session_entry = ctk.CTkEntry(repair_row, width=40, height=28, font=("Segoe UI", 12), justify="center")
+        session_entry.insert(0, "3")
+        session_entry.pack(side="left")
+        history_hint = ("Tải đỉnh/đáy từ nến phút của số phiên giao dịch gần nhất (1–30, mặc định 3),\n"
+                        "gồm phiên hôm nay nếu đã bắt đầu; loại giá trước lúc mua.\n"
+                        "Bỏ nến phút chứa thời điểm mua. Giữ nguyên cổ/fill; tự bán tạm dừng sau xác nhận.")
+        hint(repair, history_hint)
+        hint(session_entry, history_hint)
     reset = ctk.CTkButton(footer, text="VỀ RULE", width=90, height=28, font=("Segoe UI", 11), fg_color="#3A3F47", command=reset_to_rule)
     reset.grid(row=0, column=1, sticky="w", padx=(6, 8))
     hint(reset, "Bỏ ghi đè: TP/SL AUTO; bật/tắt theo RULE → THỰC THI, chế độ theo RULE → E/M.\n"

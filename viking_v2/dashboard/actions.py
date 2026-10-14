@@ -2123,39 +2123,57 @@ class DashboardActionsMixin:
                 "Đã khóa tạo/gửi SELL tự động mới. Còn lệnh broker đã nhận; kiểm tra và hủy riêng trên DNSE.", parent=self)
         self._refresh_local()
 
-    def _restart_position_metrics(self, action: dict[str, Any]) -> None:
-        """Read a matched quote on the I/O worker, then review before local repair."""
+    def _restart_position_metrics(self, action: dict[str, Any], *, sessions: int = 3) -> None:
+        """Load session history off Tk, then review before local repair."""
         from ..trading.market import MarketDataService
+        from ..trading.position_history import load_position_history, session_count
         from ..trading.position_repair import restart_price_observations
         symbol, trade_id = str(action.get("symbol", "")), str(action.get("trade_id", ""))
+        try:
+            sessions = session_count(sessions)
+        except ValueError as exc:
+            messagebox.showwarning("MAE/MFE", str(exc), parent=self)
+            return
+        self._log(f"{symbol} · Đang tải lịch sử MAE/MFE {sessions} phiên...")
         def read():
-            return MarketDataService._normalize(symbol, self.real.get_latest_trade(symbol),
-                                                 self.real.get_latest_quote(symbol))
-        future = self._io_executor.submit(read)
+            cycle = self.trade_state.get(trade_id)
+            if not cycle:
+                raise ValueError("Vị thế đã thay đổi hoặc đã đóng.")
+            history = load_position_history(self.real, cycle, sessions,
+                holidays=getattr(self.settings, "trading_holidays", ()))
+            quote = MarketDataService._normalize(symbol, self.real.get_latest_trade(symbol),
+                                                self.real.get_latest_quote(symbol))
+            quote["price"] = _price_unit(quote["price"])
+            return quote, history
+        future = getattr(self, "_position_read_executor", self._io_executor).submit(read)
         def ready(result):
             try:
-                quote = result.result()
-            except Exception:
-                self._post_ui(lambda: messagebox.showwarning("MAE/MFE", "Chưa lấy được giá G1; dữ liệu chưa đổi.", parent=self))
+                quote, history = result.result()
+            except Exception as exc:
+                detail = str(exc) if isinstance(exc, ValueError) else "Không tải được lịch sử/giá G1; dữ liệu chưa đổi."
+                self._post_ui(lambda detail=detail: messagebox.showwarning("MAE/MFE", detail, parent=self))
                 return
             def review():
                 if not quote.get("price"):
                     messagebox.showwarning("MAE/MFE", "Chưa lấy được giá khớp lệnh G1 hợp lệ.", parent=self)
                     return
                 if not messagebox.askyesno("Đo lại MAE/MFE",
-                    f"{symbol} · giá G1 {_display_price(quote['price'])}\n"
-                    "Bắt đầu đo MAE/MFE từ mốc này; số cũ được lưu đối chiếu.\n"
+                    f"{symbol} · {history['loaded_sessions']}/{sessions} phiên · "
+                    f"{history['session_dates'][0]} → {history['session_dates'][-1]}\n"
+                    f"Đỉnh {_display_price(history['high'])} · Đáy {_display_price(history['low'])}\n"
+                    "Dựng lại từ nến phút sau lúc mua, rồi tiếp tục theo dõi; số cũ được lưu đối chiếu.\n"
+                    + ("Bỏ nến phút chứa thời điểm mua để loại giá trước khi mua.\n" if history['entry_minute_omitted'] else "") +
                     "Giữ nguyên số cổ và mọi lệnh đã khớp. Tự bán sẽ TẠM DỪNG.\nĐo lại?", parent=self):
                     return
                 try:
-                    repaired = restart_price_observations(self.trade_state, self.rule_state, self.queue, trade_id, quote)
+                    repaired = restart_price_observations(self.trade_state, self.rule_state, self.queue, trade_id, quote, history=history)
                 except (ValueError, TypeError) as exc:
                     messagebox.showwarning("MAE/MFE", str(exc), parent=self)
                     return
                 if repaired.get("blocked_by_broker_orders"):
                     messagebox.showwarning("SELL tại DNSE", "Đã tạm dừng tự bán. Cần đối soát/hủy SELL broker trước khi đo lại.", parent=self)
                 else:
-                    self._log(f"{symbol} · Đã đo lại MAE/MFE từ {_display_price(quote['price'])} · TỰ BÁN TẠM DỪNG")
+                    self._log(f"{symbol} · Đã tải lại MAE/MFE {history['loaded_sessions']} phiên · TỰ BÁN TẠM DỪNG")
                 self._refresh_local()
             self._post_ui(review)
         future.add_done_callback(ready)

@@ -599,6 +599,12 @@ class DashboardTablesMixin:
                 evidence = metrics.get("price_history_evidence") or {}
                 since = evidence.get("started_at") if evidence.get("coverage") == "FROM_RESTART" else None
                 period = f"Đo lại từ {self._row_time(since)}" if since else "Theo dõi từ khi mua"
+                if evidence.get("coverage") == "HISTORICAL_SESSIONS":
+                    period = (f"Đã tải {evidence.get('loaded_sessions')}/{evidence.get('requested_sessions')} phiên · "
+                              f"từ {self._row_time(evidence.get('started_at'))} đến {self._row_time(evidence.get('ended_at'))}; "
+                              "tiếp tục theo dõi giá mới")
+                    if evidence.get("entry_minute_omitted"):
+                        period += " (bỏ nến phút chứa lúc mua)"
                 tree._viking_row_hints[iid] = {
                     "Ticket": f"Vị thế #{trade_id}\nChuột phải → Mở bảng: sửa TP/SL, ARM/DYNAMIC/E hoặc đo lại MAE/MFE.",
                     "Order": f"{mode} · {source} · {symbol}\nGiá vốn {_display_price(avg_price)} · Còn {quantity:,} CP"

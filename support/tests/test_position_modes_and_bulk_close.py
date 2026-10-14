@@ -265,7 +265,8 @@ def test_compact_popup_edits_targets_and_three_modes_then_returns_to_rule(ui_roo
         assert left.winfo_x() + left.winfo_width() < right.winfo_x()
         assert not any(isinstance(w, ctk.CTkButton) and w.cget("text") == "TẮT TOÀN BỘ E/M" for w in widgets)
         menus = [w for w in widgets if isinstance(w, ctk.CTkOptionMenu)]
-        assert len(menus) == 3 and all(w.get() == "Theo RULE" for w in menus)
+        assert len(menus) == 3 and all(w.get().endswith(" · RULE") for w in menus)
+        assert menus[0].get() == "AUTO · RULE"
         for detail in (w for w in widgets if isinstance(w, ctk.CTkLabel) and w.cget("text").startswith("RULE ")):
             assert "\n" not in detail.cget("text") and detail.cget("wraplength") == 0
             font = tkfont.Font(root=top, font=detail._label.cget("font"))
@@ -274,11 +275,11 @@ def test_compact_popup_edits_targets_and_three_modes_then_returns_to_rule(ui_roo
             if isinstance(widget, (ctk.CTkEntry, ctk.CTkButton, ctk.CTkOptionMenu)):
                 assert widget.winfo_rootx() + widget.winfo_width() <= top.winfo_rootx() + top.winfo_width() + 2
                 assert widget.winfo_rooty() + widget.winfo_height() <= top.winfo_rooty() + top.winfo_height() + 2
-            if isinstance(widget, (ctk.CTkEntry, ctk.CTkOptionMenu)):
+            if isinstance(widget, ctk.CTkOptionMenu) or isinstance(widget, ctk.CTkEntry) and widget.cget("placeholder_text") == "Giá hoặc %":
                 panel = left if isinstance(widget, ctk.CTkEntry) else right
                 assert widget.winfo_rootx() >= panel.winfo_rootx()
                 assert widget.winfo_rootx() + widget.winfo_width() <= panel.winfo_rootx() + panel.winfo_width() + 2
-        targets = [w for w in widgets if isinstance(w, ctk.CTkEntry)]
+        targets = [w for w in widgets if isinstance(w, ctk.CTkEntry) and w.cget("placeholder_text") == "Giá hoặc %"]
         for field, value in zip(targets, ("8%", "96,500")):
             field.delete(0, "end")
             field.insert(0, value)

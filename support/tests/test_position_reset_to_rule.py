@@ -59,11 +59,11 @@ def test_reset_uses_current_rule_and_removes_overrides_only_when_saved(ui_root, 
         reset.invoke()
         assert trades.get(cycle.id).to_dict() == before
         assert rules.position_metrics(cycle.symbol, cycle.id) == history and queue.get(manual.id).to_dict() == pending
-        assert all(w.get() == "AUTO" for w in widgets if isinstance(w, ctk.CTkEntry))
+        assert all(w.get() == "AUTO" for w in widgets if isinstance(w, ctk.CTkEntry) and w.cget("placeholder_text") == "Giá hoặc %")
         menus = [w for w in widgets if isinstance(w, ctk.CTkOptionMenu)]
-        assert [w.get() for w in menus] == ["Theo RULE" if "NORMAL" in modes else "OFF",
-                                            "Theo RULE" if "NORMAL" in modes else "OFF",
-                                            "Theo RULE" if "IND_EXIT" in modes else "OFF"]
+        assert [w.get() for w in menus] == ["AUTO · RULE" if "NORMAL" in modes else "OFF",
+                                            ("ALERT · RULE" if dynamic else "OFF · RULE") if "NORMAL" in modes else "OFF",
+                                            "ALERT · RULE" if "IND_EXIT" in modes else "OFF"]
         assert all(w.cget("fg_color") != "#F59E0B" for w in menus)
         for w in widgets:
             if isinstance(w, ctk.CTkButton):
