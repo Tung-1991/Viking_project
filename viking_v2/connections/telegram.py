@@ -459,7 +459,7 @@ class SignalTelegramService:
             f"Peak {self._price(peak_price)} · PROTECT {self._price(protect_price)} · {policy}",
             "Chờ cổ về; khi bán được sẽ xét lại điều kiện. Chưa tạo SELL."
             if sellable_quantity < 100 else "Đã bật theo dõi sau ARM. Chưa tạo SELL.",
-            "Chuột phải vị thế → Tạm dừng tự bán nếu muốn giữ cổ.",
+            "Chuột phải vị thế → Mở bảng → tắt Tự bán → Lưu nếu muốn giữ cổ.",
         ]))
 
     def notify_exit_wait(self, *, symbol: str, execution_mode: str, kind: str, policy: str,
@@ -478,7 +478,7 @@ class SignalTelegramService:
         if peak_price > 0:
             lines.append(f"Đỉnh {self._price(peak_price)} · PROTECT {self._price(protect_price)}")
         lines.append("Tự bán đang tạm dừng; chỉ bật lại khi muốn tiếp tục." if auto_sell_paused else
-                     "Chuột phải vị thế → Tạm dừng tự bán để chặn khi cổ về.")
+                     "Chuột phải vị thế → Mở bảng → tắt Tự bán → Lưu để chặn khi cổ về.")
         return self._send("\n".join(lines))
 
     def notify_protect_alert(

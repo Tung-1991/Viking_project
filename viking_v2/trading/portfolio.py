@@ -418,6 +418,8 @@ class PortfolioContextBuilder:
         today: date | None = None,
         normal_t2_reset_enabled: bool = False,
         normal_arm_pct: float = 7.0,
+        normal_dynamic_enabled: bool = True,
+        normal_dynamic_policy: str = "AUTO",
         budget_only: bool = False,
         manual_buy: bool = False,
     ) -> dict[str, Any]:
@@ -556,6 +558,10 @@ class PortfolioContextBuilder:
             if str(value or "").strip()
         }
         active_trade = self.trades.active_for(symbol, mode)
+        overrides = active_trade.exit_rule_overrides if active_trade else {}
+        normal_t2_reset_enabled = bool(normal_t2_reset_enabled and
+            overrides.get("normal_dynamic_enabled", normal_dynamic_enabled) and
+            overrides.get("dynamic_policy", normal_dynamic_policy) == "AUTO")
         if active_trade and active_trade.loan_package_id:
             matching_rows = [row for row in matching_rows if str(row.get("loanPackageId", "")) == active_trade.loan_package_id]
         if active_trade and sum(position_quantity(row) for row in matching_rows) < active_trade.open_quantity:
@@ -693,6 +699,7 @@ class PortfolioContextBuilder:
             "is_reentry": bool(active_trade.is_reentry) if active_trade else False,
             "sl_enabled": bool(active_trade.sl_enabled) if active_trade else True,
             "auto_sell_enabled": bool(active_trade.auto_sell_enabled) if active_trade else True,
+            "exit_rule_overrides": dict(active_trade.exit_rule_overrides) if active_trade else {},
             "sl_mode": str(active_trade.sl_mode) if active_trade else "DEFAULT",
             "sl_value": float(active_trade.sl_value) if active_trade else 0.0,
             "tp_mode": str(active_trade.tp_mode) if active_trade else "NONE",

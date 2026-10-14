@@ -150,7 +150,7 @@ def test_recheck_missing_live_decision_waits_without_submitting(tmp_path):
 def test_recheck_never_expands_sell_before_deal_reconciliation(tmp_path):
     broker = FakeBroker(positions=[{"symbol": "FPT", "quantity": 300, "tradeQuantity": 300}])
     service, queue, trades = service_at(tmp_path, broker, sell_decision_provider=lambda *args: {"action": "SELL", "event": "NORMAL_PROTECTION", "quantity_fraction": 1.0, "details": {"position_quantity": 100}})
-    trades.create("FPT", "REAL", trade_id="T1")
+    trades.create("FPT", "REAL", trade_id="T1", em_modes=["NORMAL"])
     trades.record_buy_fill("T1", 100, 100)
     waiting_sell(queue)
     service.process_due(phase="OPEN", execution_mode="REAL")

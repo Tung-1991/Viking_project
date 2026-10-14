@@ -108,6 +108,15 @@ class DashboardTablesMixin:
             tree.selection_remove(*selected)
             self._sync_cancel_button()
 
+    def _select_all_running_positions(self, event: Any) -> str:
+        tree = event.widget
+        mode = "REAL" if tree is self.trees.get("REAL") else "PAPER"
+        actions = self._running_row_actions.get(mode, {})
+        positions = [iid for iid in tree.get_children() if actions.get(iid, {}).get("kind") == "position"]
+        tree.selection_set(positions or tree.get_children())
+        self._sync_cancel_button()
+        return "break"
+
     def _running_action_click(self, event: Any) -> None:
         """Restore the original last-column cancel affordance for open orders."""
         tree = event.widget
@@ -268,6 +277,8 @@ class DashboardTablesMixin:
                     cycle = active_cycles.get(key)
                 if cycle:
                     trade_id = cycle.id
+                from ..trading.position_controls import position_exit_params
+                params = position_exit_params(self.settings.rule_parameters, cycle)
                 metrics = self.rule_state.position_metrics(symbol, trade_id) if trade_id else {}
                 cycle_modes = set(cycle.em_modes if cycle else [])
                 sl_enabled = bool(cycle.sl_enabled) if cycle else False
@@ -399,6 +410,11 @@ class DashboardTablesMixin:
                 protect_mode = policy_for_stage(params, str(decision_details.get("protection_stage", "ARM")))
                 if cycle and not cycle.auto_sell_enabled:
                     protect_mode = "ALERT"
+                if (cycle and ((str(decision_details.get("protection_stage", "ARM")) == "ARM" and
+                                params.get("normal_arm_enabled") is False) or
+                               (str(decision_details.get("protection_stage", "ARM")) == "DYN" and
+                                params.get("normal_dynamic_enabled") is False))):
+                    protect_mode = "OFF"
                 protect_mfe = decision_details.get("normal_mfe_pct")
                 protect_trail = decision_details.get("normal_effective_trail_pct")
                 protect_price = decision_details.get("normal_trigger_price")
@@ -595,13 +611,13 @@ class DashboardTablesMixin:
                 since = evidence.get("started_at") if evidence.get("coverage") == "FROM_RESTART" else None
                 period = f"Đo lại từ {self._row_time(since)}" if since else "Theo dõi từ khi mua"
                 tree._viking_row_hints[iid] = {
-                    "Ticket": f"Vị thế #{trade_id}\nChuột phải: quản lý, tạm dừng tự bán hoặc đo lại MAE/MFE.",
+                    "Ticket": f"Vị thế #{trade_id}\nChuột phải → Mở bảng: sửa TP/SL, ARM/DYNAMIC/E hoặc đo lại MAE/MFE.",
                     "Order": f"{mode} · {source} · {symbol}\nGiá vốn {_display_price(avg_price)} · Còn {quantity:,} CP"
                              + (f"\nĐã mua {cycle.entry_quantity:,} CP · Bán khớp {cycle.sold_quantity:,} CP" if cycle else ""),
                     "PnL_MAE_MFE": f"PnL {_compact_vnd(pnl)} / vốn mua gốc {_compact_vnd(basis)} = {pnl_pct:+.2f}%\n"
                                     f"MAE/MFE theo giá vốn {_display_price(avg_price)}. {period}.\n"
                                     + (extrema_text if history_verified else
-                                       "Lịch sử cũ chưa xác minh; không dùng cho PROTECT. Chuột phải để đo lại từ giá G1."),
+                                       "Lịch sử cũ chưa xác minh; không dùng cho PROTECT. Mở bảng vị thế để đo lại từ giá G1."),
                     "Status": "\n".join(status_parts) + ("\nTỰ BÁN TẠM DỪNG: SL/TP/PROTECT/E chỉ báo." if cycle and not cycle.auto_sell_enabled else ""),
                 }
                 self._running_row_actions[mode][iid] = {

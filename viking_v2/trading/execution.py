@@ -228,10 +228,14 @@ class ExecutionService:
         broker_managed: list[OrderIntent] = []
         selected_stages = {"ARM", "DYN"} if stages is None else stages
         for intent in self.queue.list_all():
+            cycle = self.trade_state.get(intent.trade_id) if self.trade_state and intent.trade_id else None
+            applicable_stages = selected_stages - {
+                stage for stage in selected_stages if cycle and
+                cycle.exit_rule_overrides.get("normal_policy" if stage == "ARM" else "dynamic_policy") == "AUTO"}
             if (
                 intent.execution_mode != mode
                 or intent.side != "SELL"
-                or not selected_stages.intersection(protection_stages(intent.reason, intent.details))
+                or not applicable_stages.intersection(protection_stages(intent.reason, intent.details))
                 or intent.status.upper() in {"FILLED", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"}
             ):
                 continue
@@ -369,11 +373,14 @@ class ExecutionService:
             return False
         cycle = (self.trade_state.get(intent.trade_id) if intent.trade_id else
                  self.trade_state.active_for(intent.symbol, intent.execution_mode, intent.loan_package_id))
-        if not cycle or cycle.auto_sell_enabled:
+        from .position_controls import automatic_exit_allowed
+        if automatic_exit_allowed(cycle, intent):
             return False
-        cancelled = self._cancel_unsent_order(intent, "POSITION_AUTO_SELL_PAUSED: operator tạm dừng tự bán")
+        reason = ("POSITION_AUTO_SELL_PAUSED: operator tạm dừng tự bán" if cycle and not cycle.auto_sell_enabled
+                  else "POSITION_EXIT_MODE_CHANGED: nhánh bán OFF/ALERT")
+        cancelled = self._cancel_unsent_order(intent, reason)
         if not cancelled and intent.status == "SENDING":
-            self.queue.release(intent.id, "UNKNOWN", "Vị thế tạm dừng tự bán; đối soát lệnh đã gửi")
+            self.queue.release(intent.id, "UNKNOWN", "Chế độ bán đã đổi; đối soát lệnh đã gửi")
         return True
 
     def process_due(
@@ -641,7 +648,10 @@ class ExecutionService:
             # A legacy KEEP/T+2 request cannot bypass an operator's ALERT edit.
             if intent.side == "SELL" and self.protection_policy_provider:
                 stages = protection_stages(intent.reason, intent.details)
-                if any(self.protection_policy_provider(stage) == "ALERT" for stage in stages):
+                cycle = self.trade_state.get(intent.trade_id) if self.trade_state and intent.trade_id else None
+                overrides = cycle.exit_rule_overrides if cycle else {}
+                if any(overrides.get("normal_policy" if stage == "ARM" else "dynamic_policy",
+                                     self.protection_policy_provider(stage)) == "ALERT" for stage in stages):
                     message = "PROTECT chuyển sang ALERT; huỷ SELL chưa gửi"
                     cancelled = self.queue.cancel_claimed_local(intent.id, message)
                     result = BrokerOrderResult(True, "CANCELLED", message=message)

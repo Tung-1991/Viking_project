@@ -133,7 +133,7 @@ def test_wait_notice_survives_missed_event_and_retries_once(subject, monkeypatch
     app._notify_rule_signal("HDB", later, {"price": 23.1}, execution_mode="REAL")
     assert len(telegram.sent) == 1
     assert "CHỜ CỔ VỀ" in telegram.sent[0] and "Chưa gửi SELL" in telegram.sent[0]
-    assert "Tạm dừng tự bán" in telegram.sent[0]
+    assert "Mở bảng → tắt Tự bán → Lưu" in telegram.sent[0]
 
 
 def test_wait_episode_can_notify_again_only_after_condition_clears(tmp_path):
@@ -249,7 +249,7 @@ def test_management_popup_saves_hold_and_sl_off_without_altering_fills(ui_root, 
     top, = [w for w in ui_root.winfo_children() if w not in previous and isinstance(w, ctk.CTkToplevel)]
     try:
         widgets = list(_widgets(top))
-        next(w for w in widgets if isinstance(w, ctk.CTkButton) and w.cget("text") == "TỰ BÁN · BẬT").invoke()
+        next(w for w in widgets if isinstance(w, ctk.CTkSwitch) and w.cget("text") == "Tự bán").toggle()
         next(w for w in widgets if isinstance(w, ctk.CTkSwitch) and w.cget("text") == "SL").toggle()
         next(w for w in widgets if isinstance(w, ctk.CTkButton) and w.cget("text") == "LƯU").invoke()
         after = trades.get(cycle.id).to_dict()

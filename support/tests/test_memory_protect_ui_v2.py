@@ -14,7 +14,7 @@ def test_compact_ema_group_keeps_controls_inside_on_remote_scaling(ui_root,scale
     popup = RuleSettingsPopup(ui_root,AppSettings(), 'EMA_LAYOUT',lambda:None)
     try:
         popup.top.geometry('1080x720+0+0')
-        popup.phase_tabs.set('PHASE 2 · ENTRY BUY')
+        popup.phase_tabs.set('PHASE 1–2 · THỊ TRƯỜNG & BUY')
         popup.buy_ema_cross_mode.set('⏳ X PHIÊN')
         ui_root.update_idletasks()
         entry = popup.buy_ema_cross_sessions

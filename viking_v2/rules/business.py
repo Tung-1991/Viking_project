@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from math import isfinite
 from typing import Any, Iterable
@@ -1222,6 +1222,13 @@ class StaticRule:
         position: dict[str, Any],
         details: dict[str, Any],
     ) -> StrategyDecision:
+        from ..trading.position_controls import normalize_exit_overrides
+        overrides = normalize_exit_overrides(position.get("exit_rule_overrides"))
+        changes = {key: value for key, value in overrides.items() if hasattr(self.params, key)}
+        if changes:
+            effective = StaticRule(replace(self.params, **changes))
+            return effective._evaluate_position(symbol, market_state, signal, bars,
+                {**position, "exit_rule_overrides": {"normal_arm_enabled": overrides.get("normal_arm_enabled", True)}}, details)
         entry = float(position.get("avg_price", 0.0) or 0.0)
         current = float(position.get("current_price", closes(bars)[-1] if closes(bars) else 0.0) or 0.0)
         current_profit = ((current / entry) - 1.0) * 100.0 if entry > 0 and current > 0 else 0.0
@@ -1320,6 +1327,9 @@ class StaticRule:
 
         triggered: list[str] = []
         normal_enabled = "NORMAL" in em_modes and not bool(position.get("normal_execution_managed"))
+        if overrides.get("normal_arm_enabled") is False and peak_profit + 1e-9 >= self.params.normal_arm_pct:
+            normal_enabled = False
+            details["normal_state"] = "OFF"
         if normal_enabled and position.get("price_history_verified") is False:
             details["protection_history_unverified"] = True
             if not indicator_alert:

@@ -882,6 +882,12 @@ class DashboardActionsMixin:
             state="normal" if selected else "disabled",
             fg_color=COL_WARN if selected else "#2A2E34",
         )
+        close_button = getattr(self, "close_selected_button", None)
+        if close_button:
+            positions = [row_id for row_id in (tree.selection() if tree else ())
+                         if self._running_row_actions.get(mode, {}).get(row_id, {}).get("kind") == "position"]
+            close_button.configure(state="normal" if positions else "disabled",
+                                   text=f"BÁN ĐÃ CHỌN ({len(positions)})" if positions else "BÁN ĐÃ CHỌN")
 
     def _mode_changed(self, value: str) -> None:
         self._slot_summary = {}
@@ -2029,49 +2035,36 @@ class DashboardActionsMixin:
             tree.selection_set(row_id)
             selected = (row_id,)
         action = self._running_row_actions.get(mode, {}).get(row_id, {})
+        actions = [self._running_row_actions.get(mode, {}).get(iid, {}) for iid in selected]
         menu = tk.Menu(self, tearoff=0, font=("Segoe UI", 14))
-        if len(selected) == 1 and action.get("editable"):
-            menu.add_command(
-                label="✎  Sửa lệnh & quản lý",
-                command=lambda: self._edit_running_order(action),
-            )
-        if len(selected) == 1 and action.get("kind") == "position":
-            menu.add_command(
-                label="⚙  Quản lý vị thế",
-                command=lambda: self._show_position_management(action),
-            )
-            cycle = self.trade_state.get(str(action.get("trade_id", "") or ""))
-            if cycle:
-                menu.add_command(
-                    label="▶  Bật tự bán" if not cycle.auto_sell_enabled else "⏸  Tạm dừng tự bán",
-                    command=lambda: self._set_position_auto_sell(action, enabled=not cycle.auto_sell_enabled))
-                menu.add_command(label="↻  Đo lại MAE/MFE từ giá G1",
-                                 command=lambda: self._restart_position_metrics(action))
-                menu.add_separator()
-                for key, label in EM_TACTICS:
-                    active = key in cycle.em_modes
-                    menu.add_command(
-                        label=f"{'✓' if active else '○'}  {label} · {'ON' if active else 'OFF'}",
-                        command=lambda name=key: self._quick_toggle_position_mode(action, name),
-                    )
-                menu.add_command(
-                    label="■  Tắt toàn bộ E/M",
-                    command=lambda: self._set_position_modes(action, []),
-                )
-        cancellable_count = sum(
-            1
-            for selected_id in selected
-            if self._running_row_actions.get(mode, {}).get(selected_id, {}).get("cancellable")
-        )
-        if cancellable_count:
-            if menu.index("end") is not None:
-                menu.add_separator()
-            menu.add_command(
-                label=f"✕  Hủy {cancellable_count} lệnh đã chọn",
-                command=self._cancel_selected,
-            )
-        if menu.index("end") is not None:
-            menu.post(event.x_root, event.y_root)
+        manageable = any(item.get("kind") == "position" for item in actions) or (len(actions) == 1 and action.get("editable"))
+        closable = any(item.get("kind") == "position" or item.get("cancellable") for item in actions)
+        menu.add_command(label="Mở bảng", state="normal" if manageable else "disabled",
+                         command=lambda: self._open_running_selection(actions))
+        menu.add_command(label="Đóng", state="normal" if closable else "disabled",
+                         command=lambda: self._close_running_selection(actions))
+        menu.post(event.x_root, event.y_root)
+
+    def _selected_running_actions(self) -> list[dict]:
+        mode = "REAL" if self.tabs.get() == "CKCS REAL" else "PAPER"
+        return [self._running_row_actions.get(mode, {}).get(iid, {}) for iid in self.trees[mode].selection()]
+
+    def _open_running_selection(self, actions: list[dict]) -> None:
+        if len(actions) == 1:
+            if actions[0].get("kind") == "position":
+                self._show_position_management(actions[0])
+            elif actions[0].get("editable"):
+                self._edit_running_order(actions[0])
+        else:
+            self._close_running_selection(actions)
+
+    def _close_running_selection(self, actions: list[dict] | None = None) -> None:
+        from .position_close import show_close_positions
+        actions = self._selected_running_actions() if actions is None else actions
+        if any(item.get("kind") == "position" for item in actions):
+            show_close_positions(self, actions)
+        else:
+            self._cancel_selected()
 
     def _set_position_auto_sell(self, action: dict[str, Any], *, enabled: bool) -> None:
         from ..trading.position_repair import pause_position_auto_sell
@@ -2585,325 +2578,8 @@ class DashboardActionsMixin:
         ).grid(row=0, column=action_column, sticky="ew")
 
     def _show_position_management(self, action: dict[str, Any]) -> None:
-        symbol = str(action.get("symbol", "") or "").upper()
-        mode = str(action.get("mode", "PAPER") or "PAPER").upper()
-        trade_id = str(action.get("trade_id", "") or "")
-        cycle = self.trade_state.get(trade_id) if trade_id else None
-        if not cycle:
-            package_id = str((action.get("position") or {}).get("loanPackageId", "") or "")
-            cycle = (self.trade_state.active_for(symbol, mode, package_id) if package_id else self.trade_state.active_for(symbol, mode))
-        row = action.get("position") if isinstance(action.get("position"), dict) else {}
-        quantity = int(_number(row.get("openQuantity", row.get("quantity", 0))))
-        avg_price = _price_unit(row.get("costPrice", row.get("averagePrice", 0)))
-        if cycle:
-            quantity = min(quantity, cycle.open_quantity) if quantity else cycle.open_quantity
-            avg_price = cycle.avg_entry_price or avg_price
-
-        tick = self._shared_tick(symbol) or {}
-        market_price = _price_unit(
-            tick.get("price") or tick.get("lastPrice") or tick.get("matchPrice")
-            or row.get("marketPrice") or row.get("price") or avg_price
-        )
-        sellable = int(_number(row.get("tradeQuantity", row.get("sellableQuantity", 0))))
-        settle = str(row.get("settleDate", "") or "")[:10]
-        opened_at = cycle.opened_at if cycle else row.get("openedAt", row.get("createdAt", ""))
-        fees = float(cycle.fees_paid if cycle else _number(row.get("buyFee", row.get("fee", 0))))
-        pnl = (cycle.net_pnl if cycle else -fees) + (market_price - avg_price) * quantity * 1000.0 if avg_price > 0 else 0.0
-        basis = cycle.buy_notional if cycle else avg_price * quantity * 1000
-        pnl_pct = pnl / basis * 100 if basis > 0 else 0
-        params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
-        take_profit = float(params.get("take_profit_pct", 7.0) or 7.0)
-        normal_share = float(params.get("normal_sell_pct", 100.0) or 100.0)
-        normal_arm = float(params.get("normal_arm_pct", 7.0) or 7.0)
-        normal_giveback = float(params.get("normal_giveback_pct", 2.0) or 2.0)
-        normal_policy = str(params.get("normal_policy", "AUTO") or "AUTO").upper()
-        indicator_exit_policy = str(
-            params.get("indicator_exit_policy", "ALERT") or "ALERT"
-        ).upper()
-        normal_dynamic = bool(params.get("normal_dynamic_enabled", False))
-        normal_atr_activation_multiplier = float(
-            params.get("normal_atr_activation_multiplier", 0.6) or 0.6
-        )
-        normal_atr_multiplier = float(params.get("normal_atr_multiplier", 0.6) or 0.6)
-        normal_retention_pct = float(params.get("normal_retention_pct", 0.0) or 0.0)
-        normal_retention_until_pct = float(
-            params.get("normal_retention_until_pct", 0.0) or 0.0
-        )
-        dynamic_summary = "DYN OFF"
-        if normal_dynamic:
-            start_label = (
-                f"START×{normal_atr_activation_multiplier:g}"
-                if params.get("normal_atr_activation_enabled", True) else "START OFF"
-            )
-            atr_label = (
-                f"ATR×{normal_atr_multiplier:g}"
-                if params.get("normal_atr_trail_enabled", True) else "ATR OFF"
-            )
-            keeping = bool(params.get("normal_retention_enabled", True) and normal_retention_pct > 0)
-            keep_label = (
-                f"GIỮ {normal_retention_pct:g}%"
-                if keeping
-                else "GIỮ OFF"
-            )
-            until_label = (
-                f"→{normal_retention_until_pct:g}%"
-                if params.get("normal_retention_until_enabled", True) else "→ARM"
-            ) if keeping else ""
-            dynamic_summary = f"DYN ON · {start_label} · {atr_label} · {keep_label}{until_label}"
-        normal_repeat = bool(params.get("normal_repeat_enabled", False)) and normal_share < 100.0
-
-        top = ctk.CTkToplevel(self)
-        top.title("Quản lý vị thế")
-        top.geometry("620x450")
-        top.minsize(620, 450)
-        top.transient(self)
-        top.grab_set()
-        top.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(
-            top, text=f"{symbol} · {mode} · {quantity:,} CP",
-            font=("Segoe UI", 18, "bold"), text_color=COL_TITLE,
-        ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 2))
-        ctk.CTkLabel(
-            top,
-            text=(
-                f"ID #{cycle.id[:12]} · Mở {self._row_time(opened_at)}" if cycle
-                else "Vị thế ngoài hệ thống · cần xác nhận bắt đầu quản lý"
-            ),
-            font=("Segoe UI", 11), text_color=COL_WARN if not cycle else COL_TEXT,
-        ).grid(row=1, column=0, sticky="w", padx=14, pady=(0, 6))
-
-        summary = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
-        summary.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 4))
-        settle_short = settle
-        if len(settle) == 10:
-            settle_short = f"{settle[8:10]}/{settle[5:7]}/{settle[:4]}"
-        ctk.CTkLabel(summary, text=f"Vốn {_display_price(avg_price)} · Giá {_display_price(market_price)} · PNL {_compact_vnd(pnl)} ({pnl_pct:+.2f}%)",
-                    font=FONT_MONO_VALUE, text_color=COL_GREEN if pnl >= 0 else COL_RED,
-                    anchor="w").pack(fill="x", padx=10, pady=(4, 0))
-        ctk.CTkLabel(summary, text=f"Bán được {sellable:,} CP · Chờ về {max(0, quantity - sellable):,} CP" + (f" · {settle_short}" if settle_short else ""),
-                    font=("Segoe UI", 12), text_color=COL_WARN if quantity > sellable else COL_TEXT,
-                    anchor="w").pack(fill="x", padx=10, pady=(0, 4))
-
-        selected = set(cycle.em_modes if cycle else [])
-        buttons: dict[str, ctk.CTkButton] = {}
-        mode_frame = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
-        mode_frame.grid(row=3, column=0, sticky="ew", padx=14, pady=3)
-        for column, (key, label) in enumerate(EM_TACTICS):
-            mode_frame.grid_columnconfigure(column, weight=1, uniform="em")
-
-            def toggle(name: str = key) -> None:
-                if name in selected:
-                    selected.remove(name)
-                else:
-                    selected.add(name)
-                active = name in selected
-                buttons[name].configure(
-                    text=f"{EM_LABELS[name]} · {'ON' if active else 'OFF'}",
-                    fg_color="#168A47" if active else "#282D34",
-                    text_color=COL_TEXT if active else COL_MUTED,
-                )
-                refresh_preview()
-
-            active = key in selected
-            button = ctk.CTkButton(
-                mode_frame, text=f"{label} · {'ON' if active else 'OFF'}",
-                height=42, font=("Segoe UI", 11, "bold"), corner_radius=7,
-                fg_color="#168A47" if active else "#282D34",
-                hover_color="#1EA45A" if active else "#363C45",
-                text_color=COL_TEXT if active else COL_MUTED,
-                command=toggle,
-            )
-            button.grid(row=0, column=column, sticky="ew", padx=4, pady=4)
-            buttons[key] = button
-
-        auto_sell = tk.BooleanVar(master=self, value=cycle.auto_sell_enabled if cycle else True)
-        auto_button = ctk.CTkButton(mode_frame, height=32, font=("Segoe UI", 12, "bold"))
-        def refresh_auto():
-            auto_button.configure(text="TỰ BÁN · BẬT" if auto_sell.get() else "TỰ BÁN · TẠM DỪNG",
-                                  fg_color=COL_GREEN if auto_sell.get() else COL_WARN)
-        def toggle_auto():
-            auto_sell.set(not auto_sell.get())
-            refresh_auto()
-        auto_button.configure(command=toggle_auto)
-        auto_button.grid(row=1, column=0, columnspan=3, sticky="ew", padx=4, pady=(0, 4))
-        _HoverHint(auto_button, "Tạm dừng chặn SL/TP/PROTECT/E tự bán và hủy SELL tự động chưa gửi.\n"
-                   "Vẫn báo tín hiệu; bán tay vẫn dùng được. SELL đã gửi DNSE cần hủy riêng.", placement="inside")
-        refresh_auto()
-
-        targets = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
-        targets.grid(row=4, column=0, sticky="ew", padx=14, pady=4)
-        targets.grid_columnconfigure((1, 3), weight=1)
-        ctk.CTkLabel(targets, text="TP", font=FONT_KEY, text_color=COL_GREEN).grid(row=0, column=0, sticky="w", padx=(10, 6), pady=(4, 2))
-        tp_entry = ctk.CTkEntry(targets, font=FONT_MONO_VALUE, height=38)
-        if cycle and cycle.tp_mode == "PRICE":
-            tp_entry.insert(0, _display_price(cycle.tp_value))
-        elif cycle and cycle.tp_mode == "PERCENT":
-            tp_entry.insert(0, f"{abs(cycle.tp_value):g}%")
-        else:
-            # Was a dead field before, so a stray save must not now stamp a real
-            # target onto the position.  AUTO means "dùng tactic TP nếu bật".
-            tp_entry.insert(0, "AUTO")
-        tp_entry.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=(4, 2))
-        sl_on = tk.BooleanVar(master=self, value=cycle.sl_enabled if cycle else True)
-        sl_toggle = ctk.CTkSwitch(targets, text="SL", variable=sl_on, font=FONT_KEY, width=80)
-        sl_toggle.grid(row=0, column=2, sticky="w", padx=(8, 6), pady=(4, 2))
-        sl_entry = ctk.CTkEntry(targets, font=FONT_MONO_VALUE, height=38)
-        if cycle and cycle.sl_mode == "PRICE":
-            sl_entry.insert(0, _display_price(cycle.sl_value))
-        elif cycle and cycle.sl_mode == "PERCENT":
-            sl_entry.insert(0, f"{-abs(cycle.sl_value):g}%")
-        else:
-            sl_entry.insert(0, "AUTO")
-        sl_entry.grid(row=0, column=3, sticky="ew", padx=(0, 10), pady=(4, 2))
-        tp_preview = ctk.CTkLabel(targets, text="", font=("Segoe UI", 11), text_color=COL_GREEN)
-        tp_preview.grid(row=1, column=0, columnspan=2, sticky="w", padx=10, pady=(0, 4))
-        sl_preview = ctk.CTkLabel(targets, text="", font=("Segoe UI", 11), text_color=COL_RED)
-        sl_preview.grid(row=1, column=2, columnspan=2, sticky="w", padx=10, pady=(0, 4))
-
-        detail_values = (
-            ("TP", f"Lãi chạm +{take_profit:g}% · bán sạch vị thế"),
-            (
-                "PROTECT",
-                f"ARM {normal_policy} · {normal_arm:g}% · TRAIL {normal_giveback:g}% · SELL {normal_share:g}%"
-                f" · DYN {policy_for_stage(params, 'DYN')}"
-                f" · {dynamic_summary}"
-                f" · REPEAT {'ON' if normal_repeat else 'OFF'}",
-            ),
-            (
-                "E",
-                "Tín hiệu SELL · ALERT, không đặt lệnh"
-                if indicator_exit_policy == "ALERT"
-                else "Tín hiệu SELL · AUTO bán hết phần còn lại",
-            ),
-        )
-        for (key, _label), (_title, value) in zip(EM_TACTICS, detail_values):
-            _HoverHint(buttons[key], value, placement="inside")
-
-        status = ctk.CTkLabel(top, text="", height=16, font=("Segoe UI", 11), text_color=COL_WARN)
-        status.grid(row=6, column=0, sticky="w", padx=14, pady=(2, 0))
-
-        def parse_target(raw: str, *, stop: bool) -> tuple[str, float, float]:
-            value = str(raw or "").strip().replace(",", "")
-            if not stop and (not value or value.upper() == "AUTO"):
-                # No target of its own: the TP tactic and its global % take over.
-                return "NONE", 0.0, 0.0
-            if stop and (not value or value.upper() == "AUTO"):
-                pct = float(params.get("reentry_sl_pct", -2.5) if cycle and cycle.is_reentry else params.get("initial_sl_pct", -3.5) or -3.5)
-                return "DEFAULT", 0.0, avg_price * (1.0 + pct / 100.0)
-            if not stop and not value:
-                return "NONE", 0.0, 0.0
-            if value.endswith("%"):
-                pct = float(value[:-1])
-                if not math.isfinite(pct) or pct == 0:
-                    raise ValueError
-                pct = -abs(pct) if stop else abs(pct)
-                return "PERCENT", abs(pct) if stop else pct, avg_price * (1.0 + pct / 100.0)
-            price = _price_unit(float(value))
-            if price <= 0:
-                raise ValueError
-            return "PRICE", price, price
-
-        def refresh_preview(_event: Any = None) -> None:
-            try:
-                _tm, _tv, tp_price = parse_target(tp_entry.get(), stop=False)
-                _sm, _sv, sl_price = parse_target(sl_entry.get(), stop=True)
-                if not sl_on.get():
-                    sl_price = 0
-                if not tp_price and "TP" in selected and take_profit > 0:
-                    # AUTO with the tactic on still has a real target: the global %.
-                    tp_price = avg_price * (1.0 + take_profit / 100.0)
-                tp_gain = (tp_price - avg_price) * quantity * 1000.0 if tp_price else 0.0
-                sl_loss = (sl_price - avg_price) * quantity * 1000.0 if sl_price else 0.0
-                tp_preview.configure(
-                    text=f"{_display_price(tp_price)} · {tp_gain:+,.0f}đ" if tp_price
-                    else "TP: AUTO · theo công tắc TP",
-                )
-                sl_preview.configure(text=f"{_display_price(sl_price)} · {sl_loss:+,.0f}đ" if sl_on.get() else "SL OFF")
-                status.configure(text="")
-            except ValueError:
-                status.configure(text="TP hoặc SL không hợp lệ.", text_color=COL_RED)
-
-        tp_entry.bind("<KeyRelease>", refresh_preview)
-        sl_entry.bind("<KeyRelease>", refresh_preview)
-        sl_toggle.configure(command=refresh_preview)
-        refresh_preview()
-
-        def save_management() -> None:
-            nonlocal cycle
-            try:
-                sl_mode, sl_value, _sl_price = parse_target(sl_entry.get(), stop=True)
-                tp_mode, tp_value, _tp_price = parse_target(tp_entry.get(), stop=False)
-            except ValueError:
-                status.configure(text="TP hoặc SL không hợp lệ.", text_color=COL_RED)
-                return
-            if not cycle:
-                if quantity <= 0 or avg_price <= 0:
-                    status.configure(text="Không đủ giá vốn/khối lượng để quản lý.", text_color=COL_RED)
-                    return
-                if not messagebox.askyesno(
-                    "Bắt đầu quản lý",
-                    f"Đưa vị thế {symbol} vào quản lý của {APP_NAME}?",
-                    parent=top,
-                ):
-                    return
-                cycle = self.trade_state.create(
-                    symbol, mode, source="EXTERNAL_DNSE", trade_id=uuid.uuid4().hex,
-                    em_modes=sorted(selected), sl_enabled=sl_on.get(), auto_sell_enabled=auto_sell.get(),
-                    sl_mode=sl_mode, sl_value=sl_value,
-                    tp_mode=tp_mode, tp_value=tp_value,
-                    loan_package_id=str(row.get("loanPackageId", "") or ""),
-                    deal_id=str(row.get("id", row.get("positionId", "")) or ""),
-                )
-                self.trade_state.record_buy_fill(cycle.id, quantity, avg_price, 0.0)
-                if symbol not in self.settings.watchlist:
-                    self.settings.watchlist.append(symbol)
-                    save_settings(self.settings, self.account_id)
-                    current = self.bridge.read_config()
-                    self.bridge.write_config(
-                        RuntimeConfig(self.settings.watchlist, current.paper_mode, current.bot_enabled)
-                    )
-            else:
-                cycle = self.trade_state.update_management(
-                    cycle.id, em_modes=sorted(selected),
-                    sl_enabled=sl_on.get(), auto_sell_enabled=auto_sell.get(),
-                    sl_mode=sl_mode, sl_value=sl_value,
-                    tp_mode=tp_mode, tp_value=tp_value,
-                )
-            if not cycle:
-                status.configure(text="Không cập nhật được chu kỳ giao dịch.", text_color=COL_RED)
-                return
-            from ..trading.position_repair import pause_position_auto_sell
-            cycle, _cancelled, broker_pending = pause_position_auto_sell(
-                self.trade_state, self.queue, cycle.id, enabled=auto_sell.get())
-            if broker_pending:
-                messagebox.showwarning("SELL tại DNSE", "Tự bán đã tạm dừng; còn SELL đã gửi DNSE cần kiểm tra/hủy riêng.", parent=top)
-            self._log(
-                f"[E/M] {mode} {symbol} #{cycle.id[:8]}: "
-                f"{'+'.join(cycle.em_modes) or 'OFF'} · SL {cycle.sl_mode} {cycle.sl_value:g}"
-                f" · TP {cycle.tp_mode} {cycle.tp_value:g}"
-            )
-            self._refresh_local()
-            top.destroy()
-
-        def turn_off_all() -> None:
-            selected.clear()
-            for name, button in buttons.items():
-                label = EM_LABELS[name]
-                button.configure(text=f"{label} · OFF", fg_color="#282D34", text_color=COL_MUTED)
-
-        actions = ctk.CTkFrame(top, fg_color="transparent")
-        actions.grid(row=7, column=0, sticky="ew", padx=14, pady=(4, 10))
-        actions.grid_columnconfigure(1, weight=1)
-        ctk.CTkButton(
-            actions, text="TẮT TOÀN BỘ E/M", width=170, height=40,
-            font=("Segoe UI", 11, "bold"), fg_color="#3A3F47",
-            command=turn_off_all,
-        ).grid(row=0, column=0, padx=(0, 8))
-        ctk.CTkButton(
-            actions, text="LƯU", height=40,
-            font=("Segoe UI", 12, "bold"), fg_color=COL_GREEN,
-            hover_color="#16A34A", command=save_management,
-        ).grid(row=0, column=1, sticky="ew")
+        from .position_management import show_position_management
+        show_position_management(self, action)
 
     def _start_services(self) -> None:
         if not self.running:
@@ -3296,9 +2972,17 @@ class DashboardActionsMixin:
                         or details.get("price_history_repaired_at", 0.0) != history.get("price_history_repaired_at", 0.0)))):
                 from ..rules.planner import PlanResult
                 return PlanResult(None, "PROTECT_HISTORY_UNVERIFIED")
-            if any(policy_for_stage(self.settings.rule_parameters or {}, stage) == "ALERT" for stage in stages):
+            from ..trading.position_controls import position_exit_params, automatic_exit_allowed, exit_stage_policy
+            effective = position_exit_params(self.settings.rule_parameters, cycle)
+            if any(exit_stage_policy(effective, cycle, stage) != "AUTO" for stage in stages):
                 from ..rules.planner import PlanResult
                 return PlanResult(None, "PROTECT_POLICY_CHANGED")
+            probe = OrderIntent.create(decision.symbol, "SELL", 100, "MARKET", source="EM",
+                                       trade_id=str(details.get("trade_id", "")), reason=decision.reason,
+                                       details=details)
+            if not automatic_exit_allowed(cycle, probe):
+                from ..rules.planner import PlanResult
+                return PlanResult(None, "POSITION_EXIT_MODE_CHANGED")
         if decision.action == "BUY":
             details["entry_checks"] = checks
             balance, positions, _orders = self.snapshots[mode]

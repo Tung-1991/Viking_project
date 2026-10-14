@@ -385,6 +385,7 @@ class TradeStateStore:
         em_modes: list[str] | None = None,
         sl_enabled: bool | None = None,
         auto_sell_enabled: bool | None = None,
+        exit_rule_overrides: dict | None = None,
         sl_mode: str | None = None,
         sl_value: float | None = None,
         tp_mode: str | None = None,
@@ -405,6 +406,8 @@ class TradeStateStore:
                 cycle.sl_enabled = bool(sl_enabled)
             if auto_sell_enabled is not None:
                 cycle.auto_sell_enabled = bool(auto_sell_enabled)
+            if exit_rule_overrides is not None:
+                cycle.exit_rule_overrides = dict(exit_rule_overrides)
             if sl_mode is not None:
                 cycle.sl_mode = str(sl_mode)
             if sl_value is not None:

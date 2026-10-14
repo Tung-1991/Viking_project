@@ -754,12 +754,10 @@ def run(account_id: str | None = None) -> int:
                                     loss_lock_mode=rule.params.loss_lock_mode,
                                     corporate_actions=settings.corporate_actions,
                                     working_dates=working_dates,
-                                    normal_t2_reset_enabled=bool(
-                                        rule.params.normal_dynamic_enabled
-                                        and rule.params.normal_t2_reset_enabled
-                                        and rule.params.dynamic_policy == "AUTO"
-                                    ),
+                                    normal_t2_reset_enabled=rule.params.normal_t2_reset_enabled,
                                     normal_arm_pct=rule.params.normal_arm_pct,
+                                    normal_dynamic_enabled=rule.params.normal_dynamic_enabled,
+                                    normal_dynamic_policy=rule.params.dynamic_policy,
                                 )
                                 cycle_stage = "RULE_EVALUATION"
                                 if not symbol_exchange:
@@ -842,7 +840,7 @@ def run(account_id: str | None = None) -> int:
                                         "peak_price": float(decision.details.get("normal_peak_price", 0) or 0),
                                         "protect_price": float(decision.details.get("normal_trigger_price", 0) or 0),
                                         "arm_pct": rule.params.normal_arm_pct,
-                                        "policy": (rule.params.normal_policy if (portfolio.get("position") or {}).get("auto_sell_enabled", True) else "ALERT"),
+                                        "policy": (decision.details.get("arm_policy", rule.params.normal_policy) if (portfolio.get("position") or {}).get("auto_sell_enabled", True) else "ALERT"),
                                         "sellable_quantity": int((portfolio.get("position") or {}).get("trade_quantity", 0) or 0),
                                     })
                                     decision.details["protect_arm_notice"] = armed.get("protect_arm_notice")

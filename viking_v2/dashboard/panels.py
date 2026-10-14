@@ -690,6 +690,14 @@ class DashboardPanelsMixin:
             command=self._cancel_selected
         )
         self.cancel_button.pack(side="right", padx=(0, 5))
+        self.close_selected_button = ctk.CTkButton(
+            header, text="BÁN ĐÃ CHỌN", width=115, height=31, font=("Segoe UI", 11, "bold"),
+            fg_color="#B91C1C", hover_color="#DC2626", corner_radius=8,
+            state="disabled", command=self._close_running_selection)
+        self.close_selected_button.pack(side="right", padx=(0, 5))
+        _HoverHint(self.close_selected_button,
+                   "Ctrl + click: chọn nhiều mã. Shift + click: chọn một dải. Ctrl + A: chọn tất cả vị thế.\n"
+                   "Mở bảng kiểm tra mã và số cổ trước khi xác nhận bán.", placement="inside")
 
         self.tabs = ctk.CTkTabview(
             self.right, command=self._render_tables,
@@ -721,8 +729,8 @@ class DashboardPanelsMixin:
         )
         style.map(
             "Running.Treeview",
-            background=[("selected", "#5A471A")],
-            foreground=[("selected", "#FFF3B0")],
+            background=[("selected", "#5545A6")],
+            foreground=[("selected", "#FFFFFF")],
         )
         for mode in ("CKCS REAL", "CKCS PAPER"):
             frame = self.tabs.add(mode)
@@ -748,6 +756,8 @@ class DashboardPanelsMixin:
             tree.bind("<ButtonRelease-1>", self._running_action_click, add="+")
             tree.bind("<Escape>", lambda _event, widget=tree: self._clear_running_selection(widget), add="+")
             tree.bind("<Button-3>", self._running_right_click)
+            tree.bind("<Control-a>", self._select_all_running_positions, add="+")
+            tree.bind("<Control-A>", self._select_all_running_positions, add="+")
             scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
             scroll.grid(row=0, column=1, sticky="ns")
             scroll_x = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
@@ -2269,6 +2279,8 @@ class DashboardPanelsMixin:
         paused = details.get("auto_sell_enabled") is False
         unverified = bool(details.get("protection_history_unverified"))
         if active and active.open_quantity > 0 and active.avg_entry_price > 0:
+            from ..trading.position_controls import position_exit_params
+            params = position_exit_params(params, active)
             entry, position, enabled = active.avg_entry_price, True, "NORMAL" in active.em_modes
             paused = not getattr(active, "auto_sell_enabled", True)
             if getattr(self, "rule_state", None) is not None:
@@ -2648,6 +2660,11 @@ class DashboardPanelsMixin:
         )
         self.preview_route_value.configure(text=route, text_color=badge_fg)
         params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
+        trade_store = getattr(self, "trade_state", None)
+        active_cycle = trade_store.active_for(self.symbol.get(), self.mode.get()) if trade_store else None
+        if active_cycle:
+            from ..trading.position_controls import position_exit_params
+            params = position_exit_params(params, active_cycle)
         indicator_exit_policy = str(
             params.get("indicator_exit_policy", "ALERT") or "ALERT"
         ).upper()
