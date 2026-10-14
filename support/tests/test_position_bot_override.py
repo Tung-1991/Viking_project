@@ -180,10 +180,10 @@ def test_popup_bot_override_is_draft_until_save_and_reset_restores_rule(ui_root,
         return window, list(_widgets(window))
     try:
         top, widgets = open_popup()
-        switch = next(w for w in widgets if isinstance(w, ctk.CTkSwitch) and w.cget("text") == "BOT")
-        switch.toggle()
+        button = next(w for w in widgets if isinstance(w, ctk.CTkButton) and w.cget("text").startswith("BOT · "))
+        button.invoke()
         assert app.trade_state.get(cycle.id).to_dict() == before
-        assert any(isinstance(w, ctk.CTkLabel) and w.cget("text") == "Alert" for w in widgets)
+        assert button.cget("text") == "BOT · ALERT"
         next(w for w in widgets if isinstance(w, ctk.CTkButton) and w.cget("text") == "LƯU").invoke()
         saved = app.trade_state.get(cycle.id)
         assert not saved.bot_trade_enabled and not saved.auto_sell_enabled
@@ -213,8 +213,14 @@ def test_rule_keeps_tabs_merges_market_panel_and_equalizes_four_buy_panels(ui_ro
         ui_root.update_idletasks()
         assert popup.market_phase_override_exposure.master.master is popup.phase1_market_card
         assert len(popup.phase_tabs._tab_dict) == 3
+        content_widths = [popup._phase1_body.winfo_width()]
+        popup.phase_tabs.set("PHASE 3 · VỐN & BẢO VỆ")
+        ui_root.update_idletasks()
+        content_widths.append(popup.max_positions.master.master.master.winfo_width())
         popup.phase_tabs.set("PHASE 2 · ENTRY BUY")
         ui_root.update_idletasks()
+        content_widths.append(popup._phase2_body.winfo_width())
+        assert max(content_widths) - min(content_widths) <= 1
         cards = popup.phase2_cards
         assert max(card.winfo_width() for card in cards) - min(card.winfo_width() for card in cards) <= 1
         assert len({card.winfo_height() for card in cards}) == 1

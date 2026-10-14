@@ -2,6 +2,7 @@
 from copy import deepcopy
 from types import SimpleNamespace
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import ttk
 
 import customtkinter as ctk
@@ -205,7 +206,8 @@ def test_context_menu_has_only_open_and_close_and_keeps_multiselection(ui_root, 
         tree.insert("", "end", iid=name)
     tree.selection_set("A", "B")
     monkeypatch.setattr(tree, "identify_row", lambda y: "B")
-    menu = SimpleNamespace(entries=[], add_command=lambda **kw: menu.entries.append(kw), post=lambda *_a: None)
+    menu = SimpleNamespace(entries=[], add_command=lambda **kw: menu.entries.append(kw),
+                           delete=lambda *_a: menu.entries.clear(), post=lambda *_a: None)
     monkeypatch.setattr(tk, "Menu", lambda *_a, **_kw: menu)
     app = SimpleNamespace(trees={"REAL": tree}, _running_row_actions={"REAL": {
         name: {"kind": "position", "symbol": name, "mode": "REAL"} for name in ("A", "B")}},
@@ -250,15 +252,32 @@ def test_compact_popup_edits_targets_and_three_modes_then_returns_to_rule(ui_roo
         top, = [child for child in ui_root.winfo_children() if child not in previous and isinstance(child, ctk.CTkToplevel)]
         top.transient("")
         top.deiconify()
+        ui_root.update()
         ui_root.update_idletasks()
         widgets = list(_widgets(top))
+        panels = [w for w in top.winfo_children()
+                  if isinstance(w, ctk.CTkFrame) and w.cget("fg_color") == "#22262D"]
+        assert len(panels) == 2
+        left, right = sorted(panels, key=lambda w: w.winfo_x())
+        assert abs(left.winfo_width() - right.winfo_width()) <= 1
+        assert left.winfo_y() == right.winfo_y()
+        assert left.winfo_height() == right.winfo_height()
+        assert left.winfo_x() + left.winfo_width() < right.winfo_x()
         assert not any(isinstance(w, ctk.CTkButton) and w.cget("text") == "TẮT TOÀN BỘ E/M" for w in widgets)
         menus = [w for w in widgets if isinstance(w, ctk.CTkOptionMenu)]
         assert len(menus) == 3 and all(w.get() == "Theo RULE" for w in menus)
+        for detail in (w for w in widgets if isinstance(w, ctk.CTkLabel) and w.cget("text").startswith("RULE ")):
+            assert "\n" not in detail.cget("text") and detail.cget("wraplength") == 0
+            font = tkfont.Font(root=top, font=detail._label.cget("font"))
+            assert font.measure(detail.cget("text")) <= detail.winfo_width() + 2
         for widget in widgets:
             if isinstance(widget, (ctk.CTkEntry, ctk.CTkButton, ctk.CTkOptionMenu)):
                 assert widget.winfo_rootx() + widget.winfo_width() <= top.winfo_rootx() + top.winfo_width() + 2
                 assert widget.winfo_rooty() + widget.winfo_height() <= top.winfo_rooty() + top.winfo_height() + 2
+            if isinstance(widget, (ctk.CTkEntry, ctk.CTkOptionMenu)):
+                panel = left if isinstance(widget, ctk.CTkEntry) else right
+                assert widget.winfo_rootx() >= panel.winfo_rootx()
+                assert widget.winfo_rootx() + widget.winfo_width() <= panel.winfo_rootx() + panel.winfo_width() + 2
         targets = [w for w in widgets if isinstance(w, ctk.CTkEntry)]
         for field, value in zip(targets, ("8%", "96,500")):
             field.delete(0, "end")

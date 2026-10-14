@@ -902,6 +902,7 @@ class DashboardTablesMixin:
             pass
         self._stop_daemon()
         self._io_executor.shutdown(wait=True, cancel_futures=True)
+        self._position_read_executor.shutdown(wait=False, cancel_futures=True)
         self.real.close()
         if getattr(self, "_account_lease", None):
             self._account_lease.close()

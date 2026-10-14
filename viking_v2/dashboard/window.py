@@ -104,6 +104,7 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         # Account/order I/O is serialized here. Alternate EMA history has a
         # separate price-only client; Tk never waits on either DNSE worker.
         self._io_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="viking-io")
+        self._position_read_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="viking-position-view")
         self._order_worker_busy = False
         self._snapshot_busy = False
         self._fee_rates: dict[tuple[str, str], float | None] = {}
@@ -138,6 +139,7 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
         self._running_row_actions: dict[str, dict[str, dict[str, Any]]] = {"REAL": {}, "PAPER": {}}
         self._build_window()
         self._build_layout()
+        self.after_idle(self._prepare_running_menu)
         install_fast_scroll(self)
         self.bind("<Button-1>", self._minimize_popups_from_main_click, add="+")
         self.protocol("WM_DELETE_WINDOW", self.close)

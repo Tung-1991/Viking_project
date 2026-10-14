@@ -250,7 +250,7 @@ def test_management_popup_saves_hold_and_sl_off_without_altering_fills(ui_root, 
     top, = [w for w in ui_root.winfo_children() if w not in previous and isinstance(w, ctk.CTkToplevel)]
     try:
         widgets = list(_widgets(top))
-        next(w for w in widgets if isinstance(w, ctk.CTkSwitch) and w.cget("text") == "BOT").toggle()
+        next(w for w in widgets if isinstance(w, ctk.CTkButton) and w.cget("text").startswith("BOT · ")).invoke()
         next(w for w in widgets if isinstance(w, ctk.CTkSwitch) and w.cget("text") == "SL").toggle()
         next(w for w in widgets if isinstance(w, ctk.CTkButton) and w.cget("text") == "LƯU").invoke()
         after = trades.get(cycle.id).to_dict()

@@ -536,7 +536,10 @@ def test_management_popups_reject_invalid_targets_without_saving(ui_root, monkey
                 assert y + widget.winfo_height() <= top.winfo_height() + 2
         entries = [w for w in _widgets(top) if isinstance(w, ctk.CTkEntry) and ("AUTO" in w.get() or "%" in w.get())]
         if popup == "position":
-            chosen = next(w for w in entries if int(w.grid_info()["column"]) == (3 if target == "SL" else 1))
+            chosen = next(w for w in entries if any(
+                isinstance(sibling, ctk.CTkSwitch) and sibling.cget("text") == target
+                for sibling in w.master.winfo_children()
+            ))
         else:
             chosen = next(w for w in entries if ("-" in w.get()) == (target == "SL"))
         chosen.delete(0, "end")

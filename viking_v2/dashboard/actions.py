@@ -2025,6 +2025,43 @@ class DashboardActionsMixin:
 
         self._io_executor.submit(cancel_batch)
 
+    def _prepare_running_menu(self) -> None:
+        tree = next(iter(self.trees.values()), None)
+        if tree is not None:
+            self._running_menu(tree)
+
+    def _running_menu(self, tree: ttk.Treeview) -> tk.Menu:
+        scale = ctk.ScalingTracker.get_widget_scaling(tree)
+        icon_size = max(20, round(20 * scale))
+        cached = getattr(self, "_running_context_menu", None)
+        if cached is not None and cached._viking_icon_size == icon_size:
+            return cached
+        if cached is not None:
+            cached.destroy()
+        from PIL import Image, ImageDraw, ImageTk
+        menu = tk.Menu(self, tearoff=0, font=("Segoe UI", 16),
+                       background="#22262D", foreground="#E8EBEF",
+                       activebackground="#2B6CB0", activeforeground="#FFFFFF",
+                       disabledforeground="#7C8592", relief="flat", borderwidth=1,
+                       activeborderwidth=0)
+        icons = []
+        for kind, color in (("open", "#60A5FA"), ("close", "#F87171")):
+            artwork = Image.new("RGBA", (20, 20))
+            draw = ImageDraw.Draw(artwork)
+            if kind == "open":
+                draw.rounded_rectangle((2, 3, 17, 17), radius=2, outline=color, width=2)
+                draw.line((2, 7, 17, 7), fill=color, width=2)
+                draw.line((7, 8, 7, 17), fill=color, width=2)
+            else:
+                draw.rounded_rectangle((2, 2, 17, 17), radius=3, outline=color, width=2)
+                draw.line((6, 6, 13, 13), fill=color, width=2)
+                draw.line((13, 6, 6, 13), fill=color, width=2)
+            icons.append(ImageTk.PhotoImage(artwork.resize((icon_size, icon_size), Image.Resampling.LANCZOS), master=tree))
+        menu._viking_icons = icons
+        menu._viking_icon_size = icon_size
+        self._running_context_menu = menu
+        return menu
+
     def _running_right_click(self, event: Any) -> None:
         tree: ttk.Treeview = event.widget
         row_id = tree.identify_row(event.y)
@@ -2037,12 +2074,17 @@ class DashboardActionsMixin:
             selected = (row_id,)
         action = self._running_row_actions.get(mode, {}).get(row_id, {})
         actions = [self._running_row_actions.get(mode, {}).get(iid, {}) for iid in selected]
-        menu = tk.Menu(self, tearoff=0, font=("Segoe UI", 14))
+        menu = DashboardActionsMixin._running_menu(self, tree)
+        # Keep the menu/images, but bind actions to the current selection.
+        menu.delete(0, "end")
+        icons = menu._viking_icons
         manageable = any(item.get("kind") == "position" for item in actions) or (len(actions) == 1 and action.get("editable"))
         closable = any(item.get("kind") == "position" or item.get("cancellable") for item in actions)
         menu.add_command(label="Mở bảng", state="normal" if manageable else "disabled",
+                         image=icons[0], compound="left",
                          command=lambda: self._open_running_selection(actions))
         menu.add_command(label="Đóng", state="normal" if closable else "disabled",
+                         image=icons[1], compound="left",
                          command=lambda: self._close_running_selection(actions))
         menu.post(event.x_root, event.y_root)
 

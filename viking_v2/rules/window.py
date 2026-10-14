@@ -340,9 +340,10 @@ class RuleSettingsPopup:
         card = ctk.CTkFrame(
             parent, fg_color=self.SURFACE, corner_radius=9,
             border_width=1, border_color=self.BORDER,
+            height=1 if compact else 200,
         )
         card.grid(
-            row=row, column=column, columnspan=span, sticky="new" if compact else "nsew",
+            row=row, column=column, columnspan=span, sticky="nsew",
             padx=4 if compact else 6, pady=4 if compact else 6,
         )
         card._viking_compact = compact
@@ -718,10 +719,8 @@ class RuleSettingsPopup:
             "100% nghĩa volume hiện tại phải ít nhất bằng trung bình các phiên trước. Nếu chưa đủ lịch sử, BUY bị chặn rõ lý do.",
         )
         self.phase2_cards = (signal, mode, confirmation, buy_volume)
-        for card in self.phase2_cards:
-            card.configure(height=200)
-            card.pack_propagate(False)
-            card.grid_configure(sticky="nsew")
+        # Match both rows to their content instead of reserving 200px per card.
+        body.grid_rowconfigure((1, 2), weight=0, uniform="entry-panels")
 
     def _phase3(self, frame: ctk.CTkFrame) -> None:
         body = self._content(frame)

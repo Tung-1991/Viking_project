@@ -555,9 +555,11 @@ def minimize_popup(popup: Any) -> bool:
 
 
 class _HoverHint:
-    def __init__(self, widget: Any, text: str | Callable[[], str], placement: str = "side"):
+    def __init__(self, widget: Any, text: str | Callable[[], str], placement: str = "side", *,
+                 font: tuple | None = None, max_width: int = 780, padding: tuple[int, int] = (16, 14)):
         self.widget, self.text, self.popup = widget, text, None
         self.placement = placement
+        self.font, self.max_width, self.padding = font or HINT_FONT, max_width, padding
         widget.bind("<Enter>", self._show, add="+")
         widget.bind("<Leave>", self._hide, add="+")
 
@@ -570,9 +572,9 @@ class _HoverHint:
         # hundreds of pixels away from its icon.
         host = self.widget.winfo_toplevel()
         self.popup = tk.Label(
-            host, text=text, justify="left", wraplength=min(780, max(240, host.winfo_width() - 56)),
-            bg="#252A31", fg="#F5F7FA", padx=16, pady=14,
-            font=HINT_FONT, relief="solid", borderwidth=2,
+            host, text=text, justify="left", wraplength=min(self.max_width, max(240, host.winfo_width() - 56)),
+            bg="#252A31", fg="#F5F7FA", padx=self.padding[0], pady=self.padding[1],
+            font=self.font, relief="solid", borderwidth=1,
         )
         self.popup.update_idletasks()
         width, height = self.popup.winfo_reqwidth(), self.popup.winfo_reqheight()
