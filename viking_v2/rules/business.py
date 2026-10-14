@@ -1219,11 +1219,19 @@ class StaticRule:
         current = float(position.get("current_price", closes(bars)[-1] if closes(bars) else 0.0) or 0.0)
         current_profit = ((current / entry) - 1.0) * 100.0 if entry > 0 and current > 0 else 0.0
         peak_profit = max(current_profit, float(position.get("peak_profit_pct", current_profit) or current_profit))
+        if position.get("analysis_price_available") is False:
+            return StrategyDecision(
+                "WAIT", symbol, "NO_MATCHED_POSITION_PRICE", signal=signal,
+                market_state=market_state, details=details, scope="POSITION_MANAGEMENT",
+            )
         details.update({
             "current_price": current,
             "entry_quantity": int(position.get("entry_quantity", position.get("quantity", 0)) or 0),
             "current_profit_pct": current_profit,
             "peak_profit_pct": peak_profit,
+            "protect_arm_notice": position.get("protect_arm_notice"),
+            "market_data_policy": position.get("market_data_policy"),
+            "price_history_repaired_at": position.get("price_history_repaired_at", 0.0),
         })
         sl_enabled = bool(position.get("sl_enabled", True))
         sl_mode = str(position.get("sl_mode", "DEFAULT") or "DEFAULT").upper()
@@ -1302,6 +1310,14 @@ class StaticRule:
 
         triggered: list[str] = []
         normal_enabled = "NORMAL" in em_modes and not bool(position.get("normal_execution_managed"))
+        if normal_enabled and position.get("price_history_verified") is False:
+            details["protection_history_unverified"] = True
+            if not indicator_alert:
+                return StrategyDecision(
+                    "WAIT", symbol, "PROTECT_HISTORY_UNVERIFIED", signal=signal,
+                    market_state=market_state, details=details, scope="POSITION_MANAGEMENT",
+                )
+            normal_enabled = False
         if normal_enabled:
             from .protection import sale_options, repeat_ready, dynamic_floor_previous, policy_for_stage
             # The live daily series marks today's in-progress candle as open.

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Iterable
+import math
 import time
 
 from .. import config
+from .quote_boards import MATCHED_DATA_POLICY, select_round_lot_row
 
 if TYPE_CHECKING:
     from ..connections.dnse.client import DNSEClient
@@ -392,23 +394,33 @@ class MarketDataService:
 
     @staticmethod
     def _normalize(symbol: str, trade: dict[str, Any] | None, quote: dict[str, Any] | None) -> dict[str, Any]:
-        trade = trade or {}
-        quote = quote or {}
+        trade = select_round_lot_row(trade, symbol) or {}
+        quote = select_round_lot_row(quote, symbol) or {}
+        def number(value: Any) -> float:
+            try:
+                result = float(value or 0.0)
+                return result if math.isfinite(result) and result >= 0 else 0.0
+            except (TypeError, ValueError, OverflowError):
+                return 0.0
         bids = quote.get("bid") or quote.get("bids") or []
         offers = quote.get("offer") or quote.get("offers") or []
-        bid = float((bids[0] or {}).get("price", 0.0) or 0.0) if bids and isinstance(bids[0], dict) else 0.0
-        ask = float((offers[0] or {}).get("price", 0.0) or 0.0) if offers and isinstance(offers[0], dict) else 0.0
-        price = float(trade.get("matchPrice", trade.get("price", 0.0)) or 0.0)
+        bid = number((bids[0] or {}).get("price")) if bids and isinstance(bids[0], dict) else 0.0
+        ask = number((offers[0] or {}).get("price")) if offers and isinstance(offers[0], dict) else 0.0
+        price = number(trade.get("matchPrice", trade.get("price")))
         return {
             "symbol": symbol.upper(),
+            "boardId": "G1",
+            "price_source": "MATCH",
+            "market_data_policy": MATCHED_DATA_POLICY,
+            "exchange_time": trade.get("time", trade.get("sendingTime")),
             "price": price,
             "bid": bid,
             "ask": ask,
-            "reference": float(trade.get("referencePrice", trade.get("basicPrice", 0.0)) or 0.0),
-            "high": float(trade.get("highestPrice", 0.0) or 0.0),
-            "low": float(trade.get("lowestPrice", 0.0) or 0.0),
-            "open": float(trade.get("openPrice", 0.0) or 0.0),
-            "volume": int(trade.get("totalVolumeTraded", 0) or 0),
+            "reference": number(trade.get("referencePrice", trade.get("basicPrice"))),
+            "high": number(trade.get("highestPrice")),
+            "low": number(trade.get("lowestPrice")),
+            "open": number(trade.get("openPrice")),
+            "volume": int(number(trade.get("totalVolumeTraded"))),
             "timestamp": time.time(),
             "source": "REST",
         }
@@ -418,7 +430,8 @@ class MarketDataService:
         now = time.time()
         if not force_rest:
             ws_tick = self.ws.latest_tick(symbol)
-            if ws_tick and now - float(ws_tick.get("timestamp", 0.0) or 0.0) <= 10.0:
+            if (ws_tick and ws_tick.get("boardId") == "G1"
+                    and now - float(ws_tick.get("timestamp", 0.0) or 0.0) <= 10.0):
                 return ws_tick
         cached = self._rest_cache.get(symbol)
         if cached and now - cached[0] < config.REST_TICK_TTL_SECONDS:
@@ -431,6 +444,9 @@ class MarketDataService:
             self._rest_retry_after[symbol] = now + config.REST_TICK_TTL_SECONDS
             return {**cached[1], "stale": True, "health": "REST_UNAVAILABLE"} if cached else None
         result = self._normalize(symbol, trade, quote)
+        if result["price"] <= 0:
+            self._rest_retry_after[symbol] = now + config.REST_TICK_TTL_SECONDS
+            return {**cached[1], "stale": True, "health": "REST_UNAVAILABLE"} if cached else None
         self._rest_cache[symbol] = (now, result)
         self._rest_retry_after.pop(symbol, None)
         return result

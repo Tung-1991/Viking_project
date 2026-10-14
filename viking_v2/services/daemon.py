@@ -830,7 +830,17 @@ def run(account_id: str | None = None) -> int:
                                     decision.reason == "NORMAL_ARMED"
                                     or bool(decision.details.get("normal_should_arm"))
                                 ):
-                                    rule_state.arm_normal(symbol, trade_id)
+                                    armed = rule_state.arm_normal(symbol, trade_id, snapshot={
+                                        "symbol": symbol, "execution_mode": decision_mode,
+                                        "price": float(decision.details.get("current_price", 0) or 0),
+                                        "mfe_pct": float(decision.details.get("normal_mfe_pct", 0) or 0),
+                                        "peak_price": float(decision.details.get("normal_peak_price", 0) or 0),
+                                        "protect_price": float(decision.details.get("normal_trigger_price", 0) or 0),
+                                        "arm_pct": rule.params.normal_arm_pct,
+                                        "policy": rule.params.normal_policy,
+                                        "sellable_quantity": int((portfolio.get("position") or {}).get("trade_quantity", 0) or 0),
+                                    })
+                                    decision.details["protect_arm_notice"] = armed.get("protect_arm_notice")
                                 if trade_id and decision.reason == "PROTECT_ALERT":
                                     alert_state = rule_state.mark_protection_alert(
                                         symbol,

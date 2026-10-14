@@ -950,8 +950,8 @@ def test_dashboard_sends_each_indicator_exit_alert_once(monkeypatch, tmp_path):
 
 def test_websocket_decodes_msgpack_and_merges_tick_quote():
     ws = DNSEMarketWS("key", "secret")
-    ws._on_message(None, msgpack.packb({"symbol": "FPT", "matchPrice": 100, "referencePrice": 99}, use_bin_type=True))
-    ws._on_message(None, msgpack.packb({"symbol": "FPT", "bid": [{"price": 99.5}], "offer": [{"price": 100.5}]}, use_bin_type=True))
+    ws._on_message(None, msgpack.packb({"boardId": "G1", "symbol": "FPT", "matchPrice": 100, "referencePrice": 99}, use_bin_type=True))
+    ws._on_message(None, msgpack.packb({"boardId": "G1", "symbol": "FPT", "bid": [{"price": 99.5}], "offer": [{"price": 100.5}]}, use_bin_type=True))
     tick = ws.latest_tick("FPT")
     assert tick["price"] == 100
     assert tick["bid"] == 99.5
@@ -961,20 +961,20 @@ def test_websocket_decodes_msgpack_and_merges_tick_quote():
 
 def test_ato_atc_zero_expected_price_does_not_erase_last_valid_price(monkeypatch):
     ws = DNSEMarketWS("key", "secret")
-    ws._ingest({"symbol": "FPT", "matchPrice": 100})
-    ws._ingest({"symbol": "FPT", "matchPrice": 0, "expectedPrice": 0})
+    ws._ingest({"boardId": "G1", "symbol": "FPT", "matchPrice": 100})
+    ws._ingest({"boardId": "G1", "symbol": "FPT", "matchPrice": 0, "expectedPrice": 0})
     assert ws.latest_tick("FPT")["price"] == 100
     monkeypatch.setattr("viking_v2.connections.dnse.websocket.market_phase", lambda: ("ATC", "ATC"))
-    ws._ingest({"symbol": "FPT", "expectedPrice": 101.5})
+    ws._ingest({"boardId": "G1", "symbol": "FPT", "expectedPrice": 101.5})
     assert ws.latest_tick("FPT")["price"] == 101.5
 
 
 def test_open_market_estimate_cannot_replace_matched_price(monkeypatch):
     monkeypatch.setattr("viking_v2.connections.dnse.websocket.market_phase", lambda: ("OPEN", "MỞ"))
     ws = DNSEMarketWS("key", "secret")
-    ws._ingest({"symbol": "HDB", "matchPrice": 23.0, "expectedPrice": 21.1})
+    ws._ingest({"boardId": "G1", "symbol": "HDB", "matchPrice": 23.0, "expectedPrice": 21.1})
     assert ws.latest_tick("HDB")["price"] == 23.0
-    ws._ingest({"symbol": "HDB", "expectedPrice": 21.1})
+    ws._ingest({"boardId": "G1", "symbol": "HDB", "expectedPrice": 21.1})
     assert ws.latest_tick("HDB")["price"] == 23.0
 
 
@@ -982,12 +982,12 @@ def test_auction_estimate_is_stale_until_first_open_market_match(monkeypatch):
     phase = ["ATO"]
     monkeypatch.setattr("viking_v2.connections.dnse.websocket.market_phase", lambda: (phase[0], phase[0]))
     ws = DNSEMarketWS("key", "secret")
-    ws._ingest({"symbol": "HDB", "expectedPrice": 21.1})
+    ws._ingest({"boardId": "G1", "symbol": "HDB", "expectedPrice": 21.1})
     assert ws.latest_tick("HDB")["price"] == 21.1
     phase[0] = "OPEN"
-    ws._ingest({"symbol": "HDB", "expectedPrice": 21.1})
+    ws._ingest({"boardId": "G1", "symbol": "HDB", "expectedPrice": 21.1})
     assert ws.latest_tick("HDB").get("stale") and "price" not in ws.latest_tick("HDB")
-    ws._ingest({"symbol": "HDB", "matchPrice": 23.0})
+    ws._ingest({"boardId": "G1", "symbol": "HDB", "matchPrice": 23.0})
     assert ws.latest_tick("HDB")["price"] == 23.0 and not ws.latest_tick("HDB").get("stale")
 
 

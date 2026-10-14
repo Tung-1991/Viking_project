@@ -572,6 +572,8 @@ class RuleStateStore:
         sellable: bool = False,
         normal_arm_pct: float = 7.0,
         entry_avg_price: float = 0.0,
+        entry_notional_vnd: float = 0.0,
+        market_data_policy: str = "",
     ) -> dict[str, Any]:
         symbol = str(symbol or "").upper()
         trade_id = str(trade_id or "")
@@ -583,6 +585,12 @@ class RuleStateStore:
                 legacy = raw["symbols"].get(symbol)
                 current = legacy if isinstance(legacy, dict) and str(legacy.get("trade_id", "")) == trade_id else None
             current = current if isinstance(current, dict) and str(current.get("trade_id", "")) == trade_id else {"trade_id": trade_id}
+            if market_data_policy:
+                if current.get("market_data_policy") != market_data_policy:
+                    # A correct current quote cannot prove that an old peak
+                    # came from the matched board. Preserve it for review.
+                    current["price_history_verified"] = "peak_profit_pct" not in current
+                current["market_data_policy"] = market_data_policy
             if current.get("protection_state_version") != 2:
                 # Old versions shared ARM/DYNAMIC counters. A recorded
                 # pre-ARM peak identifies a DYNAMIC occurrence unambiguously.
@@ -658,6 +666,14 @@ class RuleStateStore:
                     float(current.get("mfe_net_pnl", 0.0) or 0.0),
                     float(net_pnl),
                 )
+            if math.isfinite(entry_notional_vnd) and entry_notional_vnd > 0:
+                current["entry_notional_vnd"] = max(
+                    float(current.get("entry_notional_vnd", 0.0) or 0.0), entry_notional_vnd)
+            basis = float(current.get("entry_notional_vnd", 0.0) or 0.0)
+            if basis > 0:
+                for name in ("current_net_pnl", "mae_net_pnl", "mfe_net_pnl"):
+                    if name in current:
+                        current[name + "_pct"] = float(current[name]) / basis * 100.0
             if float(market_price or 0.0) > 0:
                 current["market_price"] = float(market_price)
             current["updated_at"] = time.time()
@@ -776,7 +792,7 @@ class RuleStateStore:
                 self.store.write(raw)
             return dict(current)
 
-    def arm_normal(self, symbol: str, trade_id: str) -> dict[str, Any]:
+    def arm_normal(self, symbol: str, trade_id: str, *, snapshot: dict | None = None) -> dict[str, Any]:
         """Persist a PROTECT AUTO arm once for the current trade."""
         symbol = str(symbol or "").upper()
         trade_id = str(trade_id or "")
@@ -788,12 +804,70 @@ class RuleStateStore:
             current = raw["symbols"].get(key)
             if not isinstance(current, dict):
                 return {}
+            if current.get("price_history_verified") is False:
+                return dict(current)
             current["normal_armed"] = True
             current.setdefault("normal_armed_at", time.time())
+            if snapshot and current.get("price_history_verified") is not False:
+                current.setdefault("protect_arm_notice", {**snapshot, "armed_at": current["normal_armed_at"]})
             current["updated_at"] = time.time()
             raw["symbols"][key] = current
             self.store.write(raw)
             return dict(current)
+
+    def replace_verified_price_metrics(self, symbol: str, trade_id: str, *,
+                                       metrics: dict, evidence: dict) -> dict[str, Any]:
+        """Explicit repair from reviewed G1 history; never alter fills or counters."""
+        from ..trading.quote_boards import MATCHED_DATA_POLICY
+        if evidence.get("boardId") != "G1" or not str(evidence.get("source", "")).strip():
+            raise ValueError("Repair requires identified G1 matched history")
+        required = {"peak_profit_pct", "mae_pct", "mfe_pct", "market_price", "current_profit_pct",
+                    "current_net_pnl", "mae_net_pnl", "mfe_net_pnl", "entry_notional_vnd"}
+        if not required.issubset(metrics):
+            raise ValueError("Incomplete or invalid rebuilt price metrics")
+        try:
+            metrics = {key: float(metrics[key]) for key in required}
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Incomplete or invalid rebuilt price metrics") from exc
+        if any(not math.isfinite(value) for value in metrics.values()):
+            raise ValueError("Incomplete or invalid rebuilt price metrics")
+        if metrics["entry_notional_vnd"] <= 0 or metrics["market_price"] <= 0:
+            raise ValueError("Rebuilt price and original capital must be positive")
+        if not (metrics["mae_pct"] <= min(0.0, metrics["current_profit_pct"])
+                <= max(0.0, metrics["current_profit_pct"]) <= metrics["mfe_pct"]
+                and abs(metrics["peak_profit_pct"] - metrics["mfe_pct"]) <= 1e-8
+                and metrics["mae_net_pnl"] <= min(0.0, metrics["current_net_pnl"])
+                <= max(0.0, metrics["current_net_pnl"]) <= metrics["mfe_net_pnl"]):
+            raise ValueError("Rebuilt extrema do not contain the current value")
+        with self._lock:
+            raw = self._read()
+            key = self._position_key(symbol, trade_id)
+            current = raw["symbols"].get(key)
+            if not isinstance(current, dict) or current.get("trade_id") != trade_id:
+                raise ValueError("Position metrics no longer match this trade")
+            repaired = {**current, **{key: float(metrics[key]) for key in required},
+                        "market_data_policy": MATCHED_DATA_POLICY, "price_history_verified": True,
+                        "price_history_evidence": dict(evidence), "price_history_repaired_at": time.time(),
+                        "updated_at": time.time()}
+            repaired["price_history_before_repair"] = {
+                key: current[key] for key in required | {"normal_armed", "normal_trigger_price", "dynamic_trigger_price"}
+                if key in current
+            }
+            # Untrusted price-derived ARM/floors cannot survive a price repair.
+            # Actual executions, sold amounts and repeat counters remain intact.
+            for name in ("normal_armed", "normal_armed_at", "normal_trigger_price", "dynamic_trigger_price",
+                         "normal_sellable_peak_profit_pct", "protect_arm_notice",
+                         "normal_repeat_rearmed", "dynamic_repeat_rearmed",
+                         "normal_last_trigger_peak_pct", "normal_last_alert_peak_pct",
+                         "normal_rearm_mfe_pct", "normal_alert_rearm_mfe_pct",
+                         "normal_last_trigger_level", "dynamic_last_trigger_level",
+                         "normal_t2_started", "normal_t2_reset_applied", "normal_t2_seen_unsellable"):
+                repaired.pop(name, None)
+            for name in ("current_net_pnl", "mae_net_pnl", "mfe_net_pnl"):
+                repaired[name + "_pct"] = repaired[name] / repaired["entry_notional_vnd"] * 100.0
+            raw["symbols"][key] = repaired
+            self.store.write(raw)
+            return dict(repaired)
 
     def update_protect_metrics(
         self,

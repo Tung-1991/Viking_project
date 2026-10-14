@@ -229,13 +229,13 @@ def test_websocket_top_of_book_does_not_refresh_old_matched_price(monkeypatch):
     monkeypatch.setattr("viking_v2.connections.dnse.websocket.time.time", lambda: clock[0])
     monkeypatch.setattr("viking_v2.connections.dnse.websocket.market_phase", lambda: ("OPEN",))
     ws = DNSEMarketWS(api_key="test", api_secret="test")
-    ws._ingest({"symbol": "HDB", "matchPrice": 23.1})
+    ws._ingest({"boardId": "G1", "symbol": "HDB", "matchPrice": 23.1})
     first = ws.latest_tick("HDB")
     clock[0] += 30
-    ws._ingest({"symbol": "HDB", "bid": [{"price": 23.2}]})
+    ws._ingest({"boardId": "G1", "symbol": "HDB", "bid": [{"price": 23.2}]})
     after = ws.latest_tick("HDB")
     assert after["price"] == 23.1 and after["bid"] == 23.2
     assert after["timestamp"] == first["timestamp"]
     assert after["received_at"] == first["received_at"]
-    ws._ingest({"symbol": "HDB", "matchPrice": 23.15})
+    ws._ingest({"boardId": "G1", "symbol": "HDB", "matchPrice": 23.15})
     assert ws.latest_tick("HDB")["timestamp"] == clock[0]

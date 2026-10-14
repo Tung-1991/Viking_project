@@ -114,7 +114,7 @@ def run_daemon(monkeypatch, tmp_path, variant, mode, require_cross):
         def snapshot(self): return {}
         def latest_tick(self, symbol):
             live_ticks.append(clock["at"].isoformat())
-            return {"symbol": symbol, "price": 34.8, "bid": 34.8, "ask": 34.8,
+            return {"symbol": symbol, "boardId": "G1", "price": 34.8, "bid": 34.8, "ask": 34.8,
                     "timestamp": clock["at"].timestamp(), "source": "WS"}
 
     monkeypatch.setattr(daemon, "DNSEClient", Client)

@@ -94,6 +94,7 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
             manual_buy_guard=self._check_manual_buy_capital,
             protection_policy_provider=self._protection_policy,
             bot_trade_allowed_provider=lambda symbol: not config.is_priority_alert(self.settings, symbol),
+            protection_history_allowed_provider=self._protection_history_allowed,
         )
         self.daily_fees = DailyFeeTracker(
             self.bridge.history_csv_path,

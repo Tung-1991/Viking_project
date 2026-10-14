@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -11,6 +12,7 @@ from typing import Any, Iterable
 
 from ...config import WS_URL
 from ...trading.market import market_phase
+from ...trading.quote_boards import MATCHED_DATA_POLICY, ROUND_LOT_BOARD, message_board
 
 
 logger = logging.getLogger("VIKING_V2.market_ws")
@@ -28,14 +30,15 @@ except Exception:  # pragma: no cover
 
 def _float(value: Any, default: float | None = None) -> float | None:
     try:
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else default
     except (TypeError, ValueError):
         return default
 
 
 def _best(levels: Any) -> float | None:
     if isinstance(levels, (int, float)):
-        return float(levels)
+        return _float(levels)
     if isinstance(levels, list) and levels:
         return _best(levels[0])
     if isinstance(levels, dict):
@@ -140,10 +143,7 @@ class DNSEMarketWS:
 
     @staticmethod
     def _channels() -> list[str]:
-        ticks = [f"tick.{board}.json" for board in ("G1", "G3", "G4", "G7", "T1", "T2", "T3", "T4", "T6")]
-        quotes = [f"top_price.{board}.json" for board in ("G1", "G2", "G3", "G4", "G5", "G6", "G7")]
-        expected = [f"expected_price.{board}.json" for board in ("G1", "G3", "G4", "G7")]
-        return ticks + quotes + expected
+        return [f"{kind}.{ROUND_LOT_BOARD}.json" for kind in ("tick", "top_price", "expected_price")]
 
     def _send_channels(self, action: str, symbols: Iterable[str]) -> None:
         values = sorted(set(symbols))
@@ -203,22 +203,26 @@ class DNSEMarketWS:
             return
         data = payload.get("data", payload)
         if isinstance(data, dict):
-            self._ingest(data)
+            self._ingest(data, channel=payload.get("channel", payload.get("topic", "")))
 
-    def _ingest(self, data: dict[str, Any]) -> None:
+    def _ingest(self, data: dict[str, Any], *, channel: Any = "") -> None:
+        if message_board(data, channel) != ROUND_LOT_BOARD:
+            return
         symbol = str(data.get("symbol", data.get("Symbol", ""))).upper()
         if not symbol:
             return
         now = time.time()
         with self._lock:
-            tick = self._ticks.setdefault(symbol, {"symbol": symbol})
+            tick = self._ticks.setdefault(symbol, {"symbol": symbol, "boardId": ROUND_LOT_BOARD})
             last = _float(data.get("matchPrice"), None)
-            expected = _float(data.get("expectedPrice"), None)
+            expected = _float(data.get("expectedPrice", data.get("expectedTradePrice")), None)
             auction = market_phase()[0] in {"ATO", "ATC"}
             price_observed = False
             if last is not None and last > 0:
                 tick["price"] = last
                 tick["price_source"] = "MATCH"
+                tick["market_data_policy"] = MATCHED_DATA_POLICY
+                tick["exchange_time"] = data.get("time", data.get("sendingTime"))
                 tick.pop("stale", None)
                 price_observed = True
                 tick["high"] = _float(data.get("highestPrice"), tick.get("high", 0.0))

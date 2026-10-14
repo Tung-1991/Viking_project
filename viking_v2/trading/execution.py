@@ -51,6 +51,7 @@ class ExecutionService:
         manual_buy_guard: Callable[[OrderIntent, dict[str, Any]], str] | None = None,
         protection_policy_provider: Callable[[str], str] | None = None,
         bot_trade_allowed_provider: Callable[[str], bool] | None = None,
+        protection_history_allowed_provider: Callable[[OrderIntent], bool] | None = None,
     ):
         self.real = real
         self.paper = paper
@@ -68,6 +69,7 @@ class ExecutionService:
         self.manual_buy_guard = manual_buy_guard
         self.protection_policy_provider = protection_policy_provider
         self.bot_trade_allowed_provider = bot_trade_allowed_provider
+        self.protection_history_allowed_provider = protection_history_allowed_provider
         self.database = queue.store.database
         self._blocked_rechecks: set[str] = set()
         self._deferred_events: list[tuple[str, TradeCycle, OrderIntent]] | None = None
@@ -323,6 +325,26 @@ class ExecutionService:
                 or self.bot_trade_allowed_provider(intent.symbol)):
             return None
         message = "PRIORITY_ALERT: chỉ tín hiệu, huỷ lệnh tự động chưa gửi"
+        return self._cancel_unsent_order(intent, message)
+
+    def _cancel_unverified_protection(self, intent: OrderIntent) -> bool:
+        if (not self.protection_history_allowed_provider or intent.side != "SELL"
+                or intent.source not in {"BOT", "EM"}
+                or not protection_stages(intent.reason, intent.details)):
+            return False
+        try:
+            allowed = self.protection_history_allowed_provider(intent)
+        except Exception:
+            allowed = False
+        if allowed:
+            return False
+        message = "PROTECT_HISTORY_UNVERIFIED: chưa xác minh đỉnh từ khớp lệnh G1"
+        cancelled = self._cancel_unsent_order(intent, message)
+        if not cancelled and intent.status == "SENDING":
+            self.queue.release(intent.id, "UNKNOWN", message)
+        return True
+
+    def _cancel_unsent_order(self, intent: OrderIntent, message: str) -> OrderIntent | None:
         with self.database:
             current = self.queue.get(intent.id)
             if not current or current.broker_order_id or current.handed_off_at:
@@ -351,12 +373,13 @@ class ExecutionService:
         mode = str(execution_mode).upper()
         token_ready = True if mode == "PAPER" else self.real.has_trading_token()
         broker: Any = self.paper if mode == "PAPER" else self.real
-        if self.bot_trade_allowed_provider:
+        if self.bot_trade_allowed_provider or self.protection_history_allowed_provider:
             for pending in self.queue.list_all():
                 if pending.execution_mode == mode and pending.status.upper() in {
                     "PENDING", "WAITING_TOKEN", "WAITING_SETTLEMENT", "PAUSED",
                 }:
                     self._cancel_alert_order(pending)
+                    self._cancel_unverified_protection(pending)
         if self.protection_policy_provider:
             alert_stages = {stage for stage in ("ARM", "DYN")
                             if self.protection_policy_provider(stage) == "ALERT"}
@@ -390,6 +413,8 @@ class ExecutionService:
                     completed.append((current, BrokerOrderResult(True, "CANCELLED", message=current.result)))
                 continue
             intent = current
+            if self._cancel_unverified_protection(intent):
+                continue
             cancelled = self._cancel_alert_order(intent)
             if cancelled:
                 completed.append((cancelled, BrokerOrderResult(True, "CANCELLED", message=cancelled.result)))
@@ -611,6 +636,8 @@ class ExecutionService:
                     continue
             # Durable hand-off identity BEFORE the network call. A timeout never
             # authorizes another POST. Persist the package on the original, too.
+            if self._cancel_unverified_protection(intent):
+                continue
             cancelled = self._cancel_alert_order(intent)
             if cancelled:
                 completed.append((cancelled, BrokerOrderResult(True, "CANCELLED", message=cancelled.result)))

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from .. import config
 from ..config import STOCK_ROUND_LOT
+from .quote_boards import MATCHED_DATA_POLICY
 from .market import action_for_symbol
 
 if TYPE_CHECKING:
@@ -653,6 +654,9 @@ class PortfolioContextBuilder:
             )
         current_net_pnl = realized_net + unrealized - estimated_exit_cost
         fully_sellable = available_to_sell(matching_rows, symbol) >= quantity > 0
+        analysis_price_available = not (tick.get("frozen") or tick.get("stale")
+            or tick.get("price_source") == "EXPECTED"
+            or (tick.get("boardId") is not None and tick["boardId"] != "G1"))
         metrics = self.rule_state.update_position_metrics(
             symbol,
             trade_id,
@@ -663,12 +667,17 @@ class PortfolioContextBuilder:
             sellable=fully_sellable,
             normal_arm_pct=normal_arm_pct,
             entry_avg_price=avg_price if entry_orders["entry_orders_max"] > 1 else 0.0,
-        ) if trade_id else {}
+            entry_notional_vnd=(active_trade.buy_notional if active_trade else avg_price * broker_quantity * 1000.0),
+            market_data_policy=(MATCHED_DATA_POLICY if tick.get("market_data_policy") == MATCHED_DATA_POLICY
+                                and tick.get("boardId") == "G1" and tick.get("price_source") == "MATCH" else ""),
+        ) if trade_id and analysis_price_available else (
+            self.rule_state.position_metrics(symbol, trade_id) if trade_id else {})
         context["position"] = {
             "quantity": quantity,
             "entry_quantity": active_trade.entry_quantity if active_trade else broker_quantity,
             "avg_price": avg_price,
             "current_price": current_price,
+            "analysis_price_available": analysis_price_available,
             "trade_quantity": sum(
                 max(0, int(_number(row, "tradeQuantity"))) for row in matching_rows
             ) if not active_trade else min(

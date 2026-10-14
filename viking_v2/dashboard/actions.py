@@ -48,6 +48,7 @@ from ..services.signal_trace import SignalTraceStore, compare_entry
 from ..rules.observations import exit_conditions
 from ..rules.ema_memory import memory_fields
 from ..rules.protection import sale_quantity, PROTECTION_EVENTS, policy_for_stage, protection_stages
+from ..trading.quote_boards import MATCHED_DATA_POLICY
 from ..storage import CSVOrderJournal
 from ..trading.market import VN_TZ, market_phase, market_session_clock, normalize_exchange
 from ..trading.portfolio import (
@@ -1223,6 +1224,14 @@ class DashboardActionsMixin:
     ) -> dict[str, Any] | None:
         service = self.telegram
         details = decision.details if isinstance(decision.details, dict) else {}
+        arm_notice = details.get("protect_arm_notice")
+        if (isinstance(arm_notice, dict) and service and self.settings.telegram_enabled
+                and DashboardActionsMixin._telegram_notification_enabled(self, "protect")):
+            occurrence = f"{details.get('trade_id', '')}|{arm_notice['armed_at']}"
+            DashboardActionsMixin._queue_telegram_notice(
+                self, service, "protect", f"PROTECT_ARM|{execution_mode}", symbol,
+                occurrence, {**arm_notice, "notice_kind": "PROTECT_ARM"},
+            )
         candle_key = str(
             details.get("signal_cycle") or details.get("candle_key", "") or ""
         )
@@ -1611,6 +1620,9 @@ class DashboardActionsMixin:
                     payload = notice["payload"]
                     sent = bool(service.notify_closed(
                         cycle=TradeCycle.from_dict(payload["cycle"]), reason=payload["reason"]))
+                elif notice["category"] == "protect" and notice["payload"].get("notice_kind") == "PROTECT_ARM":
+                    payload = {key: value for key, value in notice["payload"].items() if key != "notice_kind"}
+                    sent = bool(service.notify_protect_armed(**payload))
                 else:
                     method = (service.notify_technical_buy if notice["category"] == "blocked_buy"
                               else service.notify_buy_lost)
@@ -3171,6 +3183,14 @@ class DashboardActionsMixin:
         checks = details.get("entry_checks") if isinstance(details.get("entry_checks"), dict) else {}
         if decision.action == "SELL":
             stages = protection_stages(f"{decision.reason}+{decision.event}", details)
+            state = getattr(self, "rule_state", None)
+            history = state.position_metrics(decision.symbol, str(details.get("trade_id", "") or "")) if stages and state else {}
+            if stages and (history.get("price_history_verified") is False or (
+                    history.get("market_data_policy") == MATCHED_DATA_POLICY and (
+                        details.get("market_data_policy") != MATCHED_DATA_POLICY
+                        or details.get("price_history_repaired_at", 0.0) != history.get("price_history_repaired_at", 0.0)))):
+                from ..rules.planner import PlanResult
+                return PlanResult(None, "PROTECT_HISTORY_UNVERIFIED")
             if any(policy_for_stage(self.settings.rule_parameters or {}, stage) == "ALERT" for stage in stages):
                 from ..rules.planner import PlanResult
                 return PlanResult(None, "PROTECT_POLICY_CHANGED")
@@ -3674,6 +3694,13 @@ class DashboardActionsMixin:
 
     def _protection_policy(self, stage: str) -> str:
         return policy_for_stage(self.settings.rule_parameters or {}, stage)
+
+    def _protection_history_allowed(self, intent: OrderIntent) -> bool:
+        history = self.rule_state.position_metrics(intent.symbol, intent.trade_id)
+        return (history.get("price_history_verified") is True
+                and history.get("market_data_policy") == MATCHED_DATA_POLICY
+                and intent.details.get("market_data_policy") == MATCHED_DATA_POLICY
+                and intent.details.get("price_history_repaired_at", 0.0) == history.get("price_history_repaired_at", 0.0))
 
     def _consume_book_decisions(self, status: dict[str, Any], daemon_status: str, mode: str, management_only: bool) -> None:
         self._technical_signal_status = status

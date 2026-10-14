@@ -446,6 +446,21 @@ class SignalTelegramService:
             lines.append(self._technical_delivery_note(observed_at, session_closed))
         return self._send("\n".join(lines))
 
+    def notify_protect_armed(self, *, symbol: str, execution_mode: str, price: float,
+                             mfe_pct: float, peak_price: float, protect_price: float,
+                             arm_pct: float, policy: str, sellable_quantity: int,
+                             armed_at: float) -> bool:
+        from ..trading.market import VN_TZ
+        from datetime import datetime
+        clock = datetime.fromtimestamp(armed_at, VN_TZ).strftime("%d/%m %H:%M:%S")
+        return self._send("\n".join([
+            f"🟡 PROTECT ARM · {symbol} · {execution_mode} · {clock}",
+            f"Giá {self._price(price)} · MFE {mfe_pct:+.2f}% · ARM {arm_pct:g}%",
+            f"Peak {self._price(peak_price)} · PROTECT {self._price(protect_price)} · {policy}",
+            "Chờ cổ về; khi bán được sẽ xét lại điều kiện. Chưa tạo SELL."
+            if sellable_quantity < 100 else "Đã bật theo dõi sau ARM. Chưa tạo SELL.",
+        ]))
+
     def notify_protect_alert(
         self,
         *,

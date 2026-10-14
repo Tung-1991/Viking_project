@@ -18,6 +18,7 @@ from ...trading.market import VN_TZ
 from ...trading.portfolio import available_to_sell, dnse_price, price_in_band, validate_quantity
 from .signing import generate_signature_header
 from .snapshot_health import FAST_POLL_SECONDS, IDLE_POLL_SECONDS, safe_detail
+from ...trading.quote_boards import select_round_lot_row
 
 
 logger = logging.getLogger("VIKING_V2.dnse")
@@ -557,16 +558,13 @@ class DNSEClient:
             "GET", f"/price/{symbol.upper()}/trades/latest", params={"boardId": "G1"}
         )
         value = _unwrap(data, ("trades",))
-        if isinstance(value, list):
-            value = value[0] if value else None
-        return value if ok and isinstance(value, dict) else None
+        return select_round_lot_row(value, symbol, scoped_request=True) if ok else None
 
     def get_latest_quote(self, symbol: str) -> dict[str, Any] | None:
-        ok, data, _status, _message = self._request("GET", f"/price/{symbol.upper()}/quotes/latest")
+        ok, data, _status, _message = self._request(
+            "GET", f"/price/{symbol.upper()}/quotes/latest", params={"boardId": "G1"})
         value = _unwrap(data, ("quotes",))
-        if isinstance(value, list):
-            value = value[0] if value else None
-        return value if ok and isinstance(value, dict) else None
+        return select_round_lot_row(value, symbol, scoped_request=True) if ok else None
 
     def get_ohlc(self, symbol: str, resolution: str, from_ts: int, to_ts: int) -> dict[str, Any] | None:
         symbol = str(symbol or "").upper()

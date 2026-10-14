@@ -15,6 +15,8 @@ QUOTE_ISSUES = {
     "NO_QUOTE": "Chưa nhận được giá mới.",
     "SYMBOL_MISMATCH": "Giá nhận được không đúng mã.",
     "SOURCE_ERROR": "Nguồn giá đang báo lỗi.",
+    "WRONG_BOARD": "Giá không thuộc bảng khớp lệnh lô chẵn.",
+    "INDICATIVE_PRICE": "Giá dự kiến đấu giá; chưa phải giá khớp lệnh.",
     "FROZEN": "Giá lưu/ngoài phiên, không dùng để giao dịch trong phiên.",
     "MISSING_TIMESTAMP": "Thiếu thời điểm nhận giá.",
     "INVALID_TIMESTAMP": "Thời điểm nhận giá không hợp lệ.",
@@ -65,6 +67,10 @@ def quote_is_fresh(quote: Any, symbol: str, *, now: float | None = None, require
         return False
     if str(quote.get('symbol', symbol)).upper() != str(symbol).upper():
         return False
+    if quote.get("boardId") is not None and quote["boardId"] != "G1":
+        return False
+    if quote.get("price_source") == "EXPECTED":
+        return False
     if str(quote.get('health', 'OK')).upper() not in {'', 'OK', 'HEALTHY'}:
         return False
     observed = timestamp_value(quote.get('received_at', quote.get('timestamp')))
@@ -96,6 +102,10 @@ def quote_diagnostics(quote: Any, symbol: str, *, now: float | None = None) -> d
             reason = "NO_QUOTE"
         elif str(row.get("symbol", symbol)).upper() != str(symbol).upper():
             reason = "SYMBOL_MISMATCH"
+        elif row.get("boardId") is not None and row["boardId"] != "G1":
+            reason = "WRONG_BOARD"
+        elif row.get("price_source") == "EXPECTED":
+            reason = "INDICATIVE_PRICE"
         elif str(row.get("health", "OK")).upper() not in {"", "OK", "HEALTHY"}:
             reason = "SOURCE_ERROR"
         elif row.get("frozen"):
