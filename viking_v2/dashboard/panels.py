@@ -684,12 +684,14 @@ class DashboardPanelsMixin:
         )
         self.backtest_button.pack(side="right")
         self.cancel_button = ctk.CTkButton(
-            header, text="✕ HỦY ĐÃ CHỌN", width=112, height=31, font=("Segoe UI", 11, "bold"),
+            header, text="HỦY LỆNH CHỜ", width=112, height=31, font=("Segoe UI", 11, "bold"),
             fg_color="#2A2E34", hover_color="#D97706", corner_radius=8,
             state="disabled",
             command=self._cancel_selected
         )
         self.cancel_button.pack(side="right", padx=(0, 5))
+        _HoverHint(self.cancel_button, "Hủy yêu cầu mua/bán chưa khớp của dòng đang chọn.\n"
+                   "Không bán cổ, không xóa vị thế và không hoàn tác phần đã khớp.", placement="inside")
         self.close_selected_button = ctk.CTkButton(
             header, text="BÁN ĐÃ CHỌN", width=115, height=31, font=("Segoe UI", 11, "bold"),
             fg_color="#B91C1C", hover_color="#DC2626", corner_radius=8,
@@ -753,7 +755,6 @@ class DashboardPanelsMixin:
             tree.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
             tree.bind("<<TreeviewSelect>>", lambda _event: self._sync_cancel_button())
             tree.bind("<Button-1>", self._clear_running_selection_on_blank, add="+")
-            tree.bind("<ButtonRelease-1>", self._running_action_click, add="+")
             tree.bind("<Escape>", lambda _event, widget=tree: self._clear_running_selection(widget), add="+")
             tree.bind("<Button-3>", self._running_right_click)
             tree.bind("<Control-a>", self._select_all_running_positions, add="+")

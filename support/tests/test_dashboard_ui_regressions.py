@@ -668,7 +668,7 @@ def test_running_table_keeps_the_completed_split_column_design() -> None:
         "Rủi ro/Kỳ vọng (%)",
         "PnL / MAE / MFE",
         "Trạng thái",
-        "✖",
+        "Override",
     ]
     assert all(tree.column_options[key]["width"] == RUNNING_WIDTHS[key] for key in RUNNING_COLUMNS)
     assert RUNNING_HEADERS["Order"] != "Lệnh / KL / SL / TP / FEE"

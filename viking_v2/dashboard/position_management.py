@@ -26,6 +26,7 @@ def show_position_management(app, action: dict) -> None:
     tick = app._shared_tick(symbol) or {}
     price = _price_unit(tick.get("price") or row.get("marketPrice") or entry)
     sellable = max(0, min(quantity, int(_number(row.get("tradeQuantity", row.get("sellableQuantity", 0))))))
+    rule_params = position_exit_params(app.settings.rule_parameters)
     params = position_exit_params(app.settings.rule_parameters, cycle)
     overrides = dict(cycle.exit_rule_overrides) if cycle else {}
     modes = set(cycle.em_modes) if cycle else set()
@@ -48,6 +49,8 @@ def show_position_management(app, action: dict) -> None:
     auto_switch = ctk.CTkSwitch(header, text="Tự bán", variable=auto_sell, width=100,
                               switch_width=32, switch_height=17, font=("Segoe UI", 11))
     auto_switch.grid(row=0, column=1, sticky="e")
+    auto_sell.trace_add("write", lambda *_a: auto_switch.configure(text_color="#F59E0B" if not auto_sell.get() else "#E8EBEF"))
+    auto_switch.configure(text_color="#F59E0B" if not auto_sell.get() else "#E8EBEF")
     _HoverHint(auto_switch, "Tắt: SL/TP/ARM/DYNAMIC/E chỉ báo; hủy SELL tự động chưa gửi.\n"
                "Bán tay vẫn dùng được. SELL đã gửi DNSE cần kiểm tra/hủy riêng.", placement="inside")
     summary = ctk.CTkFrame(top, fg_color="#22262D", corner_radius=7)
@@ -79,8 +82,13 @@ def show_position_management(app, action: dict) -> None:
         field.insert(0, value)
         field.grid(row=0, column=column + 1, sticky="ew", padx=(0, 8), pady=(6, 2))
         entries[label] = field
-        _HoverHint(field, f"{label}: nhập giá (23,500) hoặc % ({'-3.5%' if label == 'SL' else '7%'}).\n"
-                   "AUTO dùng ngưỡng trong RULE. Công tắc cạnh tên bật/tắt riêng ngưỡng này.", placement="inside")
+        def target_hint(label=label):
+            baseline = rule_params["take_profit_pct" if label == "TP" else
+                                   "reentry_sl_pct" if cycle and cycle.is_reentry else "initial_sl_pct"]
+            return (f"{label} · RULE → E/M: {baseline:+g}%.\n"
+                    f"Nhập giá (23,500) hoặc % ({'-3.5%' if label == 'SL' else '7%'}).\n"
+                    "AUTO: theo ngưỡng RULE và nhận thay đổi mới. Nhập riêng: ghi đè, tô vàng dù trùng RULE.")
+        _HoverHint(field, target_hint, placement="inside")
         preview = ctk.CTkLabel(targets, text="", height=22, font=("Segoe UI", 11), text_color=color, anchor="w")
         preview.grid(row=1, column=column, columnspan=2, sticky="ew", padx=8, pady=(0, 4))
         previews[label] = preview
@@ -89,11 +97,14 @@ def show_position_management(app, action: dict) -> None:
     controls.grid_columnconfigure(2, weight=1)
     policies = {}
     names = (("ARM", "normal_policy", "SAU ARM"), ("DYN", "dynamic_policy", "DYNAMIC"), ("E", "indicator_exit_policy", "E"))
-    summaries = {
+    def rule_summaries():
+        return {
         "ARM": f"ARM +{params.get('normal_arm_pct', 7):g}% · Lùi {params.get('normal_giveback_pct', 2.5):g}% · Bán {params.get('normal_sell_pct', 100):g}%",
         "DYN": f"ATR ×{params.get('normal_atr_activation_multiplier', .55):g}/{params.get('normal_atr_multiplier', .8):g} · Giữ {params.get('normal_retention_pct', 72):g}%",
         "E": f"EMA {params.get('sell_ema_fast', 3)}/{params.get('sell_ema_slow', 6)} · RSI {params.get('rsi_period', 14)} · Bán 100%",
-    }
+        }
+    summaries = rule_summaries()
+    policy_refreshers = []
     for index, (stage, key, label) in enumerate(names):
         active = ("IND_EXIT" in modes if stage == "E" else
                   "NORMAL" in modes and overrides.get("normal_arm_enabled" if stage == "ARM" else "normal_dynamic_enabled") is not False)
@@ -108,17 +119,34 @@ def show_position_management(app, action: dict) -> None:
         detail = ctk.CTkLabel(controls, text=summaries[stage], height=22, font=("Segoe UI", 11), anchor="w")
         detail.grid(row=index, column=2, sticky="ew", padx=(0, 8), pady=5)
         def show_policy(*_args, variable=variable, detail=detail, stage=stage, key=key):
+            summaries.update(rule_summaries())
+            explicit = variable.get() != "Theo RULE"
+            inherited = rule_params[key]
+            if stage == "DYN" and not rule_params.get("normal_dynamic_enabled"):
+                inherited = "OFF"
+            if variable.get() == "OFF":
+                default_modes = set(app.settings.bot_em_modes)
+                switch_key = "normal_arm_enabled" if stage == "ARM" else "normal_dynamic_enabled"
+                explicit = ((key in overrides or "IND_EXIT" in default_modes) if stage == "E" else
+                            switch_key in overrides or "NORMAL" in modes or
+                            "NORMAL" in default_modes and (stage != "DYN" or rule_params["normal_dynamic_enabled"]))
             if variable.get() == "Theo RULE":
-                effective = "OFF" if stage == "DYN" and not params.get("normal_dynamic_enabled") else params.get(key, "ALERT")
-                detail.configure(text=f"RULE {effective} · {summaries[stage]}")
+                detail.configure(text=f"RULE {inherited} · {summaries[stage]}", text_color="#E8EBEF")
             else:
-                detail.configure(text=summaries[stage])
+                detail.configure(text=f"RULE {inherited} · {summaries[stage]}", text_color="#F59E0B" if explicit else "#E8EBEF")
+            menu_for_policy = policies[stage]._viking_menu
+            menu_for_policy.configure(fg_color="#F59E0B" if explicit else "#2B6CB0",
+                                     button_color="#D97706" if explicit else "#245C92",
+                                     text_color="#171B21" if explicit else "#E8EBEF")
+        variable._viking_menu = menu
         variable.trace_add("write", show_policy)
+        policy_refreshers.append(show_policy)
         show_policy()
         _HoverHint(menu, "Theo RULE: lấy chế độ trong cấu hình chính, không ghi đè.\n"
                    "OFF: không theo dõi nhánh này. ALERT: chỉ báo. AUTO: tự bán.\n"
                    "Lựa chọn chỉ áp dụng vị thế đang mở; không đổi mã khác.", placement="inside")
-        _HoverHint(detail, summaries[stage] + "\nCác ngưỡng lấy từ cấu hình RULE; chế độ có thể ghi đè riêng ở bên trái.", placement="inside")
+        _HoverHint(detail, lambda stage=stage: rule_summaries()[stage] +
+                   "\nNguồn: RULE → E/M. Ngưỡng lấy trực tiếp từ RULE; menu bên trái chỉ ghi đè chế độ vị thế.", placement="inside")
     status = ctk.CTkLabel(top, text="", height=20, font=("Segoe UI", 11), text_color="#F59E0B", anchor="w")
     status.grid(row=4, column=0, sticky="ew", padx=12, pady=(2, 0))
     def target(raw, stop):
@@ -139,7 +167,17 @@ def show_position_management(app, action: dict) -> None:
         try:
             for label, variable in (("TP", tp_on), ("SL", sl_on)):
                 _, _, level = target(entries[label].get(), label == "SL")
-                previews[label].configure(text=f"{_display_price(level)} · {_compact_vnd((level - entry) * quantity * 1000)}" if variable.get() else f"{label} OFF")
+                text = entries[label].get().strip().upper()
+                explicit = text not in {"", "AUTO"} and (variable.get() or label == "SL")
+                default_enabled = ("TP" in app.settings.bot_em_modes) if label == "TP" else app.settings.bot_sl_enabled
+                changed = explicit or variable.get() != default_enabled
+                base = rule_params["take_profit_pct" if label == "TP" else "reentry_sl_pct" if cycle and cycle.is_reentry else "initial_sl_pct"]
+                previews[label].configure(text=(f"{_display_price(level)} · {_compact_vnd((level - entry) * quantity * 1000)}" if variable.get() else f"{label} OFF") +
+                                          f" · RULE {base:+g}%",
+                                          text_color="#F59E0B" if changed else "#22C55E" if label == "TP" else "#EF4444")
+                entries[label].configure(text_color="#F59E0B" if explicit else "#E8EBEF",
+                                         border_color="#F59E0B" if explicit else "#565B5E")
+                switches[label].configure(text_color="#F59E0B" if changed else "#22C55E" if label == "TP" else "#EF4444")
             status.configure(text="")
         except (ValueError, TypeError, OverflowError):
             status.configure(text="TP hoặc SL không hợp lệ.")
@@ -147,6 +185,24 @@ def show_position_management(app, action: dict) -> None:
         entries[label].bind("<KeyRelease>", refresh)
         switches[label].configure(command=refresh)
     refresh()
+    rule_refresh_job = None
+    def refresh_rule():
+        nonlocal rule_refresh_job
+        latest = position_exit_params(app.settings.rule_parameters)
+        if latest != rule_params:
+            rule_params.clear()
+            rule_params.update(latest)
+            params.clear()
+            params.update(position_exit_params(app.settings.rule_parameters, cycle))
+            for update in policy_refreshers:
+                update()
+            refresh()
+        rule_refresh_job = top.after(500, refresh_rule)
+    def cleanup(event):
+        if event.widget is top and rule_refresh_job is not None:
+            top.after_cancel(rule_refresh_job)
+    top.bind("<Destroy>", cleanup, add="+")
+    rule_refresh_job = top.after(500, refresh_rule)
     def save():
         nonlocal cycle
         try:

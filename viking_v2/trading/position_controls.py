@@ -25,6 +25,44 @@ def position_exit_params(params, cycle=None, *, overrides=None) -> dict:
     return base
 
 
+def position_override_items(settings, position) -> list[str]:
+    """Explain persisted local settings without changing any execution policy."""
+    if position is None:
+        return []
+    params = position_exit_params(getattr(settings, "rule_parameters", {}))
+    defaults = set(getattr(settings, "bot_em_modes", ["NORMAL", "IND_EXIT"]))
+    modes = set(position.em_modes)
+    overrides = normalize_exit_overrides(getattr(position, "exit_rule_overrides", {}))
+    items = []
+    if getattr(position, "auto_sell_enabled", True) is False:
+        items.append("Tự bán: TẠM DỪNG")
+    if position.sl_enabled != bool(getattr(settings, "bot_sl_enabled", True)):
+        items.append(f"SL: {'BẬT' if position.sl_enabled else 'OFF'} · RULE {'BẬT' if getattr(settings, 'bot_sl_enabled', True) else 'OFF'}")
+    sl_pct = params["reentry_sl_pct" if getattr(position, "is_reentry", False) else "initial_sl_pct"]
+    if position.sl_mode in {"PRICE", "PERCENT"} and position.sl_value:
+        value = f"{position.sl_value * 1000:,.0f}đ" if position.sl_mode == "PRICE" else f"-{abs(position.sl_value):g}%"
+        items.append(f"SL: {value} · RULE {sl_pct:g}%")
+    explicit_tp = position.tp_mode in {"PRICE", "PERCENT"} and position.tp_value > 0
+    if explicit_tp:
+        value = f"{position.tp_value * 1000:,.0f}đ" if position.tp_mode == "PRICE" else f"+{position.tp_value:g}%"
+        items.append(f"TP: {value} · RULE +{params['take_profit_pct']:g}%")
+    if (explicit_tp or "TP" in modes) != ("TP" in defaults):
+        items.append(f"TP: {'BẬT' if explicit_tp or 'TP' in modes else 'OFF'} · RULE {'BẬT' if 'TP' in defaults else 'OFF'}")
+    for stage, label, key, switch_key, tactic in (
+            ("ARM", "SAU ARM", "normal_policy", "normal_arm_enabled", "NORMAL"),
+            ("DYN", "DYNAMIC", "dynamic_policy", "normal_dynamic_enabled", "NORMAL"),
+            ("E", "E", "indicator_exit_policy", None, "IND_EXIT")):
+        inherited_active = tactic in defaults and (stage != "DYN" or params["normal_dynamic_enabled"])
+        local_active = tactic in modes and (switch_key is None or overrides.get(switch_key, True))
+        if stage == "DYN" and switch_key not in overrides:
+            local_active = tactic in modes and params["normal_dynamic_enabled"]
+        inherited = params[key] if inherited_active else "OFF"
+        local = overrides.get(key, params[key]) if local_active else "OFF"
+        if key in overrides or switch_key in overrides or local != inherited:
+            items.append(f"{label}: {local} · RULE {inherited}")
+    return items
+
+
 def exit_stage_policy(params, cycle, stage: str) -> str:
     effective = position_exit_params(params, cycle)
     if cycle and "NORMAL" not in cycle.em_modes:

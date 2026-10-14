@@ -25,7 +25,7 @@ RUNNING_COLUMNS = (
     "RR",
     "PnL_MAE_MFE",
     "Status",
-    "X",
+    "Override",
 )
 RUNNING_HEADERS = {
     "Ticket": "Ticket",
@@ -36,7 +36,7 @@ RUNNING_HEADERS = {
     "RR": "Rủi ro/Kỳ vọng (%)",
     "PnL_MAE_MFE": "PnL / MAE / MFE",
     "Status": "Trạng thái",
-    "X": "✖",
+    "Override": "Override",
 }
 RUNNING_WIDTHS = {
     "Ticket": 170,
@@ -47,7 +47,7 @@ RUNNING_WIDTHS = {
     "RR": 310,
     "PnL_MAE_MFE": 660,
     "Status": 900,
-    "X": 64,
+    "Override": 160,
 }
 RUNNING_FONT = ("Segoe UI", 16)
 RUNNING_HEADING_FONT = ("Segoe UI", 15, "bold")
@@ -72,7 +72,7 @@ RUNNING_ANCHORS = {
     "RR": "center",
     "PnL_MAE_MFE": "center",
     "Status": "w",
-    "X": "center",
+    "Override": "center",
 }
 VISIBLE_LOG_LINE_LIMIT = 2000
 
@@ -117,24 +117,6 @@ class DashboardTablesMixin:
         self._sync_cancel_button()
         return "break"
 
-    def _running_action_click(self, event: Any) -> None:
-        """Restore the original last-column cancel affordance for open orders."""
-        tree = event.widget
-        if tree.identify("region", event.x, event.y) != "cell":
-            return
-        if tree.identify_column(event.x) != f"#{len(RUNNING_COLUMNS)}":
-            return
-        row_id = tree.identify_row(event.y)
-        if not row_id:
-            return
-        mode = "REAL" if tree is self.trees.get("REAL") else "PAPER"
-        action = self._running_row_actions.get(mode, {}).get(row_id, {})
-        if not action.get("cancellable"):
-            return
-        tree.selection_set(row_id)
-        self._sync_cancel_button()
-        self.after_idle(self._cancel_selected)
-
     @staticmethod
     def _configure_tree(tree: ttk.Treeview, columns: tuple[str, ...]) -> None:
         tree.configure(columns=columns, show="tree headings")
@@ -157,6 +139,9 @@ class DashboardTablesMixin:
         if isinstance(tree, ttk.Treeview) and not hasattr(tree, "_viking_column_hint"):
             from .running_hints import RunningTableHint
             tree._viking_column_hint = RunningTableHint(tree, columns)
+        if isinstance(tree, ttk.Treeview) and not hasattr(tree, "_viking_override_cells"):
+            from .override_cells import OverrideCells
+            tree._viking_override_cells = OverrideCells(tree)
 
     @staticmethod
     def _running_rows(tree: ttk.Treeview, parent: str = "") -> tuple[str, ...]:
@@ -228,6 +213,7 @@ class DashboardTablesMixin:
                 active_cycles.setdefault((*key, cycle.loan_package_id), cycle)
         for mode, tree in self.trees.items():
             tree._viking_row_hints = {}
+            tree._viking_override_rows = {}
             runtime_decisions = decisions_for_mode(
                 runtime_status, mode, default_paper=getattr(self.settings, "paper_mode", True),
             )
@@ -591,6 +577,10 @@ class DashboardTablesMixin:
                     f"SL▼ {_display_price(sl_price)} ({sl_pct:+g}%)"
                     if sl_enabled else "SL OFF"
                 )
+                from ..trading.position_controls import position_override_items
+                override_items = position_override_items(self.settings, cycle)
+                if override_items:
+                    tree._viking_override_rows[iid] = override_items
                 self._update_running_row(
                     tree, existing, row_order, iid=iid, tags=(row_tag,),
                     values=(
@@ -604,7 +594,7 @@ class DashboardTablesMixin:
                         f"{pnl_icon}{_compact_vnd(pnl)} ({pnl_pct:+.2f}%)"
                         f" · {extrema_text}",
                         " · ".join(value for value in compact_status if value),
-                        "",
+                        "X" if override_items else "",
                     ),
                 )
                 evidence = metrics.get("price_history_evidence") or {}
@@ -619,6 +609,9 @@ class DashboardTablesMixin:
                                     + (extrema_text if history_verified else
                                        "Lịch sử cũ chưa xác minh; không dùng cho PROTECT. Mở bảng vị thế để đo lại từ giá G1."),
                     "Status": "\n".join(status_parts) + ("\nTỰ BÁN TẠM DỪNG: SL/TP/PROTECT/E chỉ báo." if cycle and not cycle.auto_sell_enabled else ""),
+                    "Override": "Cấu hình riêng của vị thế:\n" + "\n".join(override_items) +
+                                "\nTP/SL AUTO hoặc chế độ Theo RULE để bỏ ghi đè."
+                                if override_items else "Theo RULE; không có cấu hình riêng.",
                 }
                 self._running_row_actions[mode][iid] = {
                     "kind": "position", "mode": mode, "symbol": symbol,
@@ -645,6 +638,8 @@ class DashboardTablesMixin:
                 price_text = _display_price(item.limit_price) if item.limit_price > 0 else item.order_type
                 gross = item.limit_price * item.quantity * 1000.0 if item.limit_price > 0 else 0.0
                 cycle = cycles_by_id.get(item.trade_id) if item.trade_id else None
+                from ..trading.position_controls import position_override_items
+                override_items = position_override_items(self.settings, cycle or item) if cycle or item.action == "OPEN" else []
                 display_source = {
                     "MANUAL": "MANUAL_APP",
                     "MANUAL_VIKING": "MANUAL_APP",
@@ -739,9 +734,12 @@ class DashboardTablesMixin:
                         f"-- · -- · -- · Khớp {item.filled_quantity}/{item.quantity}",
                         f"{status_label} · Khớp {item.filled_quantity}/{item.quantity} · "
                         f"{remaining_label} · {em_text} · {item.result or item.reason or 'ĐANG CHỜ'}",
-                        "✖" if cancellable else "",
+                        "X" if override_items else "",
                     ),
                 )
+                tree._viking_row_hints[iid] = {"Override": "\n".join(override_items) if override_items else "Không có cấu hình riêng."}
+                if override_items:
+                    tree._viking_override_rows[iid] = override_items
                 self._running_row_actions[mode][iid] = {
                     "kind": "local", "mode": mode, "symbol": item.symbol,
                     "local_id": item.id, "broker_order_id": item.broker_order_id,
@@ -800,7 +798,7 @@ class DashboardTablesMixin:
                         f"[DNSE][{pending_ack or ('PARTIAL' if partial else 'WORKING')}] · "
                         f"Khớp {filled}/{quantity} · CÒN {remaining}"
                         + (" CHỜ KHỚP" if not pending_ack else ""),
-                        "✖" if mode == "REAL" and bool(order_id) and not pending_ack else "",
+                        "",
                     ),
                 )
                 self._running_row_actions[mode][iid] = {
@@ -837,6 +835,9 @@ class DashboardTablesMixin:
                 tree.selection_set(restored)
             if yview_before and previous_order != self._running_rows(tree):
                 tree.yview_moveto(yview_before[0])
+            cells = getattr(tree, "_viking_override_cells", None)
+            if cells:
+                cells.schedule()
         self._sync_cancel_button()
 
     def _log(self, message: str, target: str = "manual") -> None:

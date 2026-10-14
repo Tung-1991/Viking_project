@@ -881,6 +881,7 @@ class DashboardActionsMixin:
         self.cancel_button.configure(
             state="normal" if selected else "disabled",
             fg_color=COL_WARN if selected else "#2A2E34",
+            text=f"HỦY LỆNH CHỜ ({len(selected)})" if selected else "HỦY LỆNH CHỜ",
         )
         close_button = getattr(self, "close_selected_button", None)
         if close_button:
