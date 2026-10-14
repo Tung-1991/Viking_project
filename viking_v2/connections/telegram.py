@@ -459,7 +459,27 @@ class SignalTelegramService:
             f"Peak {self._price(peak_price)} · PROTECT {self._price(protect_price)} · {policy}",
             "Chờ cổ về; khi bán được sẽ xét lại điều kiện. Chưa tạo SELL."
             if sellable_quantity < 100 else "Đã bật theo dõi sau ARM. Chưa tạo SELL.",
+            "Chuột phải vị thế → Tạm dừng tự bán nếu muốn giữ cổ.",
         ]))
+
+    def notify_exit_wait(self, *, symbol: str, execution_mode: str, kind: str, policy: str,
+                         price: float, sellable_quantity: int, held_quantity: int,
+                         peak_price: float, protect_price: float, observed_at: float,
+                         occurrence: str = "", auto_sell_paused: bool = False) -> bool:
+        from datetime import datetime
+        from ..trading.market import VN_TZ
+        clock = datetime.fromtimestamp(observed_at, VN_TZ).strftime("%d/%m %H:%M:%S")
+        state = "CHỜ CỔ VỀ" if sellable_quantity < 100 else "TỰ BÁN TẠM DỪNG"
+        label = {"PROTECT ARM": "PROTECT HIT · SAU ARM", "PROTECT DYN": "PROTECT HIT · DYNAMIC",
+                 "STOP_LOSS": "SL", "TAKE_PROFIT": "TP"}.get(kind, kind)
+        lines = [f"🟠 {label} · {state} · {symbol} · {execution_mode} · {clock}",
+                 f"Giá {self._price(price)} · {policy}",
+                 f"Bán được {sellable_quantity:,}/{held_quantity:,} CP · Chưa gửi SELL."]
+        if peak_price > 0:
+            lines.append(f"Đỉnh {self._price(peak_price)} · PROTECT {self._price(protect_price)}")
+        lines.append("Tự bán đang tạm dừng; chỉ bật lại khi muốn tiếp tục." if auto_sell_paused else
+                     "Chuột phải vị thế → Tạm dừng tự bán để chặn khi cổ về.")
+        return self._send("\n".join(lines))
 
     def notify_protect_alert(
         self,

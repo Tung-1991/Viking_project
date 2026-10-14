@@ -37,7 +37,7 @@ def test_cost_basis_is_held_position_not_draft_price_and_books_are_separate():
     app.settings = SimpleNamespace(rule_parameters={})
     app.mode = SimpleNamespace(get=lambda: "PAPER")
     app.trade_state = SimpleNamespace(active_for=active)
-    app.rule_state = SimpleNamespace(position_metrics=lambda *_: {"peak_profit_pct": 3})
+    app.rule_state = SimpleNamespace(position_metrics=lambda *_: {"peak_profit_pct": 3, "price_history_verified": True})
     details = {"atr14_daily_pct": 2.6}
     paper = app._dynamic_start_context("MSN", 71.6, details)
     assert paper["entry"] == 71.4 and paper["state"] == "ĐÃ BẬT"
@@ -80,6 +80,7 @@ def test_cached_peak_uses_the_same_optional_settlement_reset_as_live_rule(reset,
     app.trade_state = SimpleNamespace(active_for=lambda *_: cycle)
     app.rule_state = SimpleNamespace(position_metrics=lambda *_: {
         "peak_profit_pct": 3, "normal_sellable_peak_profit_pct": .4, "normal_t2_reset_applied": True,
+        "price_history_verified": True,
     })
     value = app._dynamic_start_context("MSN", 71.6, {"atr14_daily_pct": 2.6})
     assert value["state"] == expected
@@ -92,7 +93,7 @@ def test_cached_dynamic_floor_preserves_activation_unless_retention_was_edited(s
     app.mode = SimpleNamespace(get=lambda: "PAPER")
     cycle = SimpleNamespace(open_quantity=100, avg_entry_price=71.4, em_modes=["NORMAL"], id="PAPER-MSN")
     app.trade_state = SimpleNamespace(active_for=lambda *_: cycle)
-    metrics = {"peak_profit_pct": 1.1, "dynamic_trigger_price": 72.114, "dynamic_retention_pct": saved_retention}
+    metrics = {"peak_profit_pct": 1.1, "dynamic_trigger_price": 72.114, "dynamic_retention_pct": saved_retention, "price_history_verified": True}
     app.rule_state = SimpleNamespace(position_metrics=lambda *_: metrics)
     details = {"atr14_daily_pct": 2.6}
     before = deepcopy((metrics, details))

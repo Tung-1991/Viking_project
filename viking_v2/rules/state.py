@@ -815,6 +815,29 @@ class RuleStateStore:
             self.store.write(raw)
             return dict(current)
 
+    def observe_exit_wait(self, symbol: str, trade_id: str, snapshot: dict | None) -> list[dict]:
+        """Retain one notice per condition episode, including a missed first GUI poll."""
+        with self._lock:
+            raw = self._read()
+            key = self._position_key(symbol, trade_id)
+            current = raw["symbols"].get(key)
+            if not isinstance(current, dict):
+                return []
+            kind = str((snapshot or {}).get("kind", ""))
+            prior = str(current.get("exit_wait_active_kind", ""))
+            if kind and kind != prior:
+                sequence = int(current.get("exit_wait_sequence", 0)) + 1
+                current["exit_wait_sequence"] = sequence
+                notices = {row["kind"]: row for row in current.get("exit_wait_notices", [])}
+                notices[kind] = {**snapshot, "observed_at": time.time(),
+                                 "occurrence": f"{trade_id}|{kind}|{sequence}|{time.time():.6f}"}
+                current["exit_wait_notices"] = list(notices.values())
+            if kind != prior:
+                current["exit_wait_active_kind"] = kind
+                raw["symbols"][key] = current
+                self.store.write(raw)
+            return [dict(row) for row in current.get("exit_wait_notices", [])]
+
     def replace_verified_price_metrics(self, symbol: str, trade_id: str, *,
                                        metrics: dict, evidence: dict) -> dict[str, Any]:
         """Explicit repair from reviewed G1 history; never alter fills or counters."""
@@ -861,7 +884,8 @@ class RuleStateStore:
                          "normal_last_trigger_peak_pct", "normal_last_alert_peak_pct",
                          "normal_rearm_mfe_pct", "normal_alert_rearm_mfe_pct",
                          "normal_last_trigger_level", "dynamic_last_trigger_level",
-                         "normal_t2_started", "normal_t2_reset_applied", "normal_t2_seen_unsellable"):
+                         "normal_t2_started", "normal_t2_reset_applied", "normal_t2_seen_unsellable",
+                         "exit_wait_active_kind", "exit_wait_notices"):
                 repaired.pop(name, None)
             for name in ("current_net_pnl", "mae_net_pnl", "mfe_net_pnl"):
                 repaired[name + "_pct"] = repaired[name] / repaired["entry_notional_vnd"] * 100.0

@@ -46,7 +46,7 @@ RUNNING_WIDTHS = {
     "CostInfo": 390,
     "RR": 310,
     "PnL_MAE_MFE": 660,
-    "Status": 1400,
+    "Status": 900,
     "X": 64,
 }
 RUNNING_FONT = ("Segoe UI", 16)
@@ -61,7 +61,7 @@ RUNNING_SAMPLES = {
     "Targets": "SL▼ 21,857 (-3.5%) · TP▲ 24,770 (+7.0%)",
     "CostInfo": "PHÍ MUA ~16.3K · DỰ KIẾN BÁN 16.7K",
     "RR": "R 3.50% · E 7.00% · 1:2.00",
-    "PnL_MAE_MFE": "▲300.0K (+2.21%) · ↘-120.0K (-0.88%) · ↗360.0K (+2.65%)",
+    "PnL_MAE_MFE": "▲300.0K (+2.21%) · MAE 22,450 (-0.88%) · MFE 23,450 (+3.53%)",
 }
 RUNNING_ANCHORS = {
     "Ticket": "center",
@@ -145,6 +145,9 @@ class DashboardTablesMixin:
                 anchor=RUNNING_ANCHORS.get(column, "w"),
                 stretch=False,
             )
+        if isinstance(tree, ttk.Treeview) and not hasattr(tree, "_viking_column_hint"):
+            from .running_hints import RunningTableHint
+            tree._viking_column_hint = RunningTableHint(tree, columns)
 
     @staticmethod
     def _running_rows(tree: ttk.Treeview, parent: str = "") -> tuple[str, ...]:
@@ -215,6 +218,7 @@ class DashboardTablesMixin:
                 active_cycles.setdefault(key, cycle)
                 active_cycles.setdefault((*key, cycle.loan_package_id), cycle)
         for mode, tree in self.trees.items():
+            tree._viking_row_hints = {}
             runtime_decisions = decisions_for_mode(
                 runtime_status, mode, default_paper=getattr(self.settings, "paper_mode", True),
             )
@@ -321,9 +325,16 @@ class DashboardTablesMixin:
                 pnl = float(metrics.get("current_net_pnl", fallback_pnl) or 0.0)
                 mae = float(metrics.get("mae_net_pnl", min(0.0, pnl)) or 0.0)
                 mfe = float(metrics.get("mfe_net_pnl", max(0.0, pnl)) or 0.0)
-                pnl_pct = pnl / gross * 100.0 if gross > 0 else 0.0
-                mae_pct = mae / gross * 100.0 if gross > 0 else 0.0
-                mfe_pct = mfe / gross * 100.0 if gross > 0 else 0.0
+                basis = (cycle.buy_notional if cycle else 0) or _number(metrics.get("entry_notional_vnd")) or gross
+                pnl_pct = pnl / basis * 100.0 if basis > 0 else 0.0
+                history_verified = metrics.get("price_history_verified") is True
+                history_untrusted = (metrics.get("price_history_verified") is False or (
+                    "peak_profit_pct" in metrics and metrics.get("market_data_policy") != "G1_MATCH_V1"))
+                extrema_text = "MAE — · MFE — · CHỜ XÁC MINH"
+                if history_verified:
+                    mae_pct, mfe_pct = _number(metrics.get("mae_pct")), _number(metrics.get("mfe_pct"))
+                    mae_price, mfe_price = avg_price * (1 + mae_pct / 100), avg_price * (1 + mfe_pct / 100)
+                    extrema_text = f"MAE {_display_price(mae_price)} ({mae_pct:+.2f}%) · MFE {_display_price(mfe_price)} ({mfe_pct:+.2f}%)"
                 pending = max(0, quantity - sellable)
                 settle = str(row.get("settleDate", "") or "")[:10]
                 row_source = str(row.get("source", "") or "").upper()
@@ -376,6 +387,8 @@ class DashboardTablesMixin:
                         params.get("indicator_exit_policy", "ALERT"),
                     ) or "ALERT"
                 ).upper()
+                if cycle and not cycle.auto_sell_enabled:
+                    indicator_policy = "ALERT"
                 indicator_signal = str(decision.get("signal", "")).upper() == "SELL"
                 indicator_state = (
                     "OFF" if not indicator_enabled
@@ -384,6 +397,8 @@ class DashboardTablesMixin:
                 )
                 from ..rules.protection import policy_for_stage
                 protect_mode = policy_for_stage(params, str(decision_details.get("protection_stage", "ARM")))
+                if cycle and not cycle.auto_sell_enabled:
+                    protect_mode = "ALERT"
                 protect_mfe = decision_details.get("normal_mfe_pct")
                 protect_trail = decision_details.get("normal_effective_trail_pct")
                 protect_price = decision_details.get("normal_trigger_price")
@@ -515,6 +530,16 @@ class DashboardTablesMixin:
                 ]
                 if cycle and cycle.is_reentry:
                     status_parts.append("[REENTRY]")
+                compact_settlement = f"BÁN ĐƯỢC {sellable} CP" + (f" · CHỜ VỀ {pending} CP" if pending else "")
+                paused = bool(cycle and not cycle.auto_sell_enabled)
+                compact_status = [compact_settlement,
+                    "TỰ BÁN TẠM DỪNG" if cycle and not cycle.auto_sell_enabled else "",
+                    f"TP {take_profit_state}" + (f"·+{tp_pct:g}%" if take_profit_enabled else ""),
+                    "PROTECT CHỜ XÁC MINH" if normal_enabled and history_untrusted else
+                    "PROTECT ALERT" if normal_enabled and paused else
+                    f"PROTECT {protect_mode}/{normal_state}" + ("·CHỜ DỮ LIỆU" if protect_mfe is None and normal_state != "DONE" else "")
+                    if normal_enabled else "PROTECT OFF",
+                    "E ALERT" if indicator_enabled and paused else f"E {indicator_state}"]
                 if pending_close and pending_close.status.upper() != "WAITING_SETTLEMENT":
                     close_label = {
                         "PENDING": "ĐÓNG·CACHE",
@@ -525,6 +550,7 @@ class DashboardTablesMixin:
                         "UNKNOWN": "ĐÓNG·KIỂM TRA",
                     }.get(pending_close.status.upper(), "ĐÓNG·CHỜ")
                     status_parts.insert(0, close_label)
+                    compact_status.insert(0, close_label)
                 if pending_close and pending_close.status.upper() == "WAITING_SETTLEMENT":
                     row_tag = "position_waiting"
                 elif pending_close:
@@ -560,12 +586,24 @@ class DashboardTablesMixin:
                         f"{buy_fee_text} · DỰ KIẾN BÁN {_compact_vnd(estimated_exit_cost)}",
                         rr_text,
                         f"{pnl_icon}{_compact_vnd(pnl)} ({pnl_pct:+.2f}%)"
-                        f" · ↘{_compact_vnd(mae)} ({mae_pct:+.2f}%)"
-                        f" · ↗{_compact_vnd(mfe)} ({mfe_pct:+.2f}%)",
-                        " · ".join(status_parts),
+                        f" · {extrema_text}",
+                        " · ".join(value for value in compact_status if value),
                         "",
                     ),
                 )
+                evidence = metrics.get("price_history_evidence") or {}
+                since = evidence.get("started_at") if evidence.get("coverage") == "FROM_RESTART" else None
+                period = f"Đo lại từ {self._row_time(since)}" if since else "Theo dõi từ khi mua"
+                tree._viking_row_hints[iid] = {
+                    "Ticket": f"Vị thế #{trade_id}\nChuột phải: quản lý, tạm dừng tự bán hoặc đo lại MAE/MFE.",
+                    "Order": f"{mode} · {source} · {symbol}\nGiá vốn {_display_price(avg_price)} · Còn {quantity:,} CP"
+                             + (f"\nĐã mua {cycle.entry_quantity:,} CP · Bán khớp {cycle.sold_quantity:,} CP" if cycle else ""),
+                    "PnL_MAE_MFE": f"PnL {_compact_vnd(pnl)} / vốn mua gốc {_compact_vnd(basis)} = {pnl_pct:+.2f}%\n"
+                                    f"MAE/MFE theo giá vốn {_display_price(avg_price)}. {period}.\n"
+                                    + (extrema_text if history_verified else
+                                       "Lịch sử cũ chưa xác minh; không dùng cho PROTECT. Chuột phải để đo lại từ giá G1."),
+                    "Status": "\n".join(status_parts) + ("\nTỰ BÁN TẠM DỪNG: SL/TP/PROTECT/E chỉ báo." if cycle and not cycle.auto_sell_enabled else ""),
+                }
                 self._running_row_actions[mode][iid] = {
                     "kind": "position", "mode": mode, "symbol": symbol,
                     "trade_id": trade_id, "position": row,

@@ -227,6 +227,7 @@ class TradeCycle:
     exit_events: list[str] = field(default_factory=list)
     em_modes: list[str] = field(default_factory=list)
     sl_enabled: bool = True
+    auto_sell_enabled: bool = True
     sl_mode: str = "DEFAULT"
     sl_value: float = 0.0
     tp_mode: str = "NONE"
@@ -260,6 +261,7 @@ class TradeCycle:
         self.entry_order_ids = list(dict.fromkeys(str(value) for value in self.entry_order_ids if str(value)))
         self.em_modes = normalize_exit_modes(self.em_modes)
         self.sl_enabled = bool(self.sl_enabled)
+        self.auto_sell_enabled = bool(self.auto_sell_enabled)
         self.sl_mode = str(self.sl_mode or "DEFAULT").strip().upper()
         if self.sl_mode not in {"DEFAULT", "PERCENT", "PRICE"}:
             self.sl_mode = "DEFAULT"

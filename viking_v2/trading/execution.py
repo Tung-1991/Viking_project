@@ -364,6 +364,18 @@ class ExecutionService:
                                       "queue_status": "CANCELLED", "result": asdict(result)})
         return cancelled
 
+    def _cancel_paused_position_sell(self, intent: OrderIntent) -> bool:
+        if not self.trade_state or intent.side != "SELL" or intent.source not in {"BOT", "EM"}:
+            return False
+        cycle = (self.trade_state.get(intent.trade_id) if intent.trade_id else
+                 self.trade_state.active_for(intent.symbol, intent.execution_mode, intent.loan_package_id))
+        if not cycle or cycle.auto_sell_enabled:
+            return False
+        cancelled = self._cancel_unsent_order(intent, "POSITION_AUTO_SELL_PAUSED: operator tạm dừng tự bán")
+        if not cancelled and intent.status == "SENDING":
+            self.queue.release(intent.id, "UNKNOWN", "Vị thế tạm dừng tự bán; đối soát lệnh đã gửi")
+        return True
+
     def process_due(
         self, *, phase: str, execution_mode: str,
         phase_provider: Callable[[str], str] | None = None,
@@ -373,13 +385,14 @@ class ExecutionService:
         mode = str(execution_mode).upper()
         token_ready = True if mode == "PAPER" else self.real.has_trading_token()
         broker: Any = self.paper if mode == "PAPER" else self.real
-        if self.bot_trade_allowed_provider or self.protection_history_allowed_provider:
+        if self.bot_trade_allowed_provider or self.protection_history_allowed_provider or self.trade_state:
             for pending in self.queue.list_all():
                 if pending.execution_mode == mode and pending.status.upper() in {
                     "PENDING", "WAITING_TOKEN", "WAITING_SETTLEMENT", "PAUSED",
                 }:
                     self._cancel_alert_order(pending)
                     self._cancel_unverified_protection(pending)
+                    self._cancel_paused_position_sell(pending)
         if self.protection_policy_provider:
             alert_stages = {stage for stage in ("ARM", "DYN")
                             if self.protection_policy_provider(stage) == "ALERT"}
@@ -413,6 +426,8 @@ class ExecutionService:
                     completed.append((current, BrokerOrderResult(True, "CANCELLED", message=current.result)))
                 continue
             intent = current
+            if self._cancel_paused_position_sell(intent):
+                continue
             if self._cancel_unverified_protection(intent):
                 continue
             cancelled = self._cancel_alert_order(intent)
@@ -636,6 +651,8 @@ class ExecutionService:
                     continue
             # Durable hand-off identity BEFORE the network call. A timeout never
             # authorizes another POST. Persist the package on the original, too.
+            if self._cancel_paused_position_sell(intent):
+                continue
             if self._cancel_unverified_protection(intent):
                 continue
             cancelled = self._cancel_alert_order(intent)

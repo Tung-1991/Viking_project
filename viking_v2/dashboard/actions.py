@@ -1224,6 +1224,13 @@ class DashboardActionsMixin:
     ) -> dict[str, Any] | None:
         service = self.telegram
         details = decision.details if isinstance(decision.details, dict) else {}
+        for notice in details.get("exit_wait_notices") or []:
+            category = "indicator_exit" if notice.get("kind") == "E" else "protect"
+            if (service and self.settings.telegram_enabled
+                    and DashboardActionsMixin._telegram_notification_enabled(self, category)):
+                DashboardActionsMixin._queue_telegram_notice(
+                    self, service, category, f"EXIT_WAIT|{notice['kind']}|{execution_mode}", symbol,
+                    notice["occurrence"], {**notice, "notice_kind": "EXIT_WAIT"})
         arm_notice = details.get("protect_arm_notice")
         if (isinstance(arm_notice, dict) and service and self.settings.telegram_enabled
                 and DashboardActionsMixin._telegram_notification_enabled(self, "protect")):
@@ -1282,6 +1289,10 @@ class DashboardActionsMixin:
             str(value or "").upper()
             for value in (details.get("triggered_events") or [])
         }
+        if (details.get("exit_wait_notices") and (
+                decision.reason == "PROTECT_WAITING_SETTLEMENT" or details.get("auto_sell_paused")
+                or (event == "INDICATOR_EXIT_ALERT" and int(details.get("sellable_quantity", 100) or 0) < 100))):
+            return None  # The durable position notice already covers this observation.
         protect_hit = event == "PROTECT_ALERT" or (
             decision.action == "SELL"
             and (
@@ -1620,6 +1631,9 @@ class DashboardActionsMixin:
                     payload = notice["payload"]
                     sent = bool(service.notify_closed(
                         cycle=TradeCycle.from_dict(payload["cycle"]), reason=payload["reason"]))
+                elif notice["payload"].get("notice_kind") == "EXIT_WAIT":
+                    payload = {key: value for key, value in notice["payload"].items() if key != "notice_kind"}
+                    sent = bool(service.notify_exit_wait(**payload))
                 elif notice["category"] == "protect" and notice["payload"].get("notice_kind") == "PROTECT_ARM":
                     payload = {key: value for key, value in notice["payload"].items() if key != "notice_kind"}
                     sent = bool(service.notify_protect_armed(**payload))
@@ -2028,6 +2042,11 @@ class DashboardActionsMixin:
             )
             cycle = self.trade_state.get(str(action.get("trade_id", "") or ""))
             if cycle:
+                menu.add_command(
+                    label="▶  Bật tự bán" if not cycle.auto_sell_enabled else "⏸  Tạm dừng tự bán",
+                    command=lambda: self._set_position_auto_sell(action, enabled=not cycle.auto_sell_enabled))
+                menu.add_command(label="↻  Đo lại MAE/MFE từ giá G1",
+                                 command=lambda: self._restart_position_metrics(action))
                 menu.add_separator()
                 for key, label in EM_TACTICS:
                     active = key in cycle.em_modes
@@ -2053,6 +2072,57 @@ class DashboardActionsMixin:
             )
         if menu.index("end") is not None:
             menu.post(event.x_root, event.y_root)
+
+    def _set_position_auto_sell(self, action: dict[str, Any], *, enabled: bool) -> None:
+        from ..trading.position_repair import pause_position_auto_sell
+        try:
+            cycle, cancelled, broker_pending = pause_position_auto_sell(
+                self.trade_state, self.queue, str(action.get("trade_id", "")), enabled=enabled)
+        except ValueError as exc:
+            messagebox.showwarning("Vị thế", str(exc), parent=self)
+            return
+        self._log(f"{cycle.symbol} · TỰ BÁN {'ON' if enabled else 'TẠM DỪNG'} · Hủy {len(cancelled)} SELL chưa gửi")
+        if broker_pending:
+            messagebox.showwarning("SELL tại DNSE",
+                "Đã khóa tạo/gửi SELL tự động mới. Còn lệnh broker đã nhận; kiểm tra và hủy riêng trên DNSE.", parent=self)
+        self._refresh_local()
+
+    def _restart_position_metrics(self, action: dict[str, Any]) -> None:
+        """Read a matched quote on the I/O worker, then review before local repair."""
+        from ..trading.market import MarketDataService
+        from ..trading.position_repair import restart_price_observations
+        symbol, trade_id = str(action.get("symbol", "")), str(action.get("trade_id", ""))
+        def read():
+            return MarketDataService._normalize(symbol, self.real.get_latest_trade(symbol),
+                                                 self.real.get_latest_quote(symbol))
+        future = self._io_executor.submit(read)
+        def ready(result):
+            try:
+                quote = result.result()
+            except Exception:
+                self._post_ui(lambda: messagebox.showwarning("MAE/MFE", "Chưa lấy được giá G1; dữ liệu chưa đổi.", parent=self))
+                return
+            def review():
+                if not quote.get("price"):
+                    messagebox.showwarning("MAE/MFE", "Chưa lấy được giá khớp lệnh G1 hợp lệ.", parent=self)
+                    return
+                if not messagebox.askyesno("Đo lại MAE/MFE",
+                    f"{symbol} · giá G1 {_display_price(quote['price'])}\n"
+                    "Bắt đầu đo MAE/MFE từ mốc này; số cũ được lưu đối chiếu.\n"
+                    "Giữ nguyên số cổ và mọi lệnh đã khớp. Tự bán sẽ TẠM DỪNG.\nĐo lại?", parent=self):
+                    return
+                try:
+                    repaired = restart_price_observations(self.trade_state, self.rule_state, self.queue, trade_id, quote)
+                except (ValueError, TypeError) as exc:
+                    messagebox.showwarning("MAE/MFE", str(exc), parent=self)
+                    return
+                if repaired.get("blocked_by_broker_orders"):
+                    messagebox.showwarning("SELL tại DNSE", "Đã tạm dừng tự bán. Cần đối soát/hủy SELL broker trước khi đo lại.", parent=self)
+                else:
+                    self._log(f"{symbol} · Đã đo lại MAE/MFE từ {_display_price(quote['price'])} · TỰ BÁN TẠM DỪNG")
+                self._refresh_local()
+            self._post_ui(review)
+        future.add_done_callback(ready)
 
     def _pause_running_order(self, action: dict[str, Any]) -> None:
         local_id = str(action.get("local_id", "") or "")
@@ -2525,6 +2595,9 @@ class DashboardActionsMixin:
         row = action.get("position") if isinstance(action.get("position"), dict) else {}
         quantity = int(_number(row.get("openQuantity", row.get("quantity", 0))))
         avg_price = _price_unit(row.get("costPrice", row.get("averagePrice", 0)))
+        if cycle:
+            quantity = min(quantity, cycle.open_quantity) if quantity else cycle.open_quantity
+            avg_price = cycle.avg_entry_price or avg_price
 
         tick = self._shared_tick(symbol) or {}
         market_price = _price_unit(
@@ -2535,8 +2608,9 @@ class DashboardActionsMixin:
         settle = str(row.get("settleDate", "") or "")[:10]
         opened_at = cycle.opened_at if cycle else row.get("openedAt", row.get("createdAt", ""))
         fees = float(cycle.fees_paid if cycle else _number(row.get("buyFee", row.get("fee", 0))))
-        pnl = (market_price - avg_price) * quantity * 1000.0 - fees if avg_price > 0 else 0.0
-        pnl_pct = pnl / (avg_price * quantity * 1000.0) * 100.0 if avg_price > 0 and quantity > 0 else 0.0
+        pnl = (cycle.net_pnl if cycle else -fees) + (market_price - avg_price) * quantity * 1000.0 if avg_price > 0 else 0.0
+        basis = cycle.buy_notional if cycle else avg_price * quantity * 1000
+        pnl_pct = pnl / basis * 100 if basis > 0 else 0
         params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
         take_profit = float(params.get("take_profit_pct", 7.0) or 7.0)
         normal_share = float(params.get("normal_sell_pct", 100.0) or 100.0)
@@ -2580,8 +2654,8 @@ class DashboardActionsMixin:
 
         top = ctk.CTkToplevel(self)
         top.title("Quản lý vị thế")
-        top.geometry("680x410")
-        top.minsize(620, 390)
+        top.geometry("620x450")
+        top.minsize(620, 450)
         top.transient(self)
         top.grab_set()
         top.grid_columnconfigure(0, weight=1)
@@ -2603,7 +2677,7 @@ class DashboardActionsMixin:
         settle_short = settle
         if len(settle) == 10:
             settle_short = f"{settle[8:10]}/{settle[5:7]}/{settle[:4]}"
-        ctk.CTkLabel(summary, text=f"Vào {_display_price(avg_price)} · Giá {_display_price(market_price)} · PNL {pnl:+,.0f}đ ({pnl_pct:+.2f}%)",
+        ctk.CTkLabel(summary, text=f"Vốn {_display_price(avg_price)} · Giá {_display_price(market_price)} · PNL {_compact_vnd(pnl)} ({pnl_pct:+.2f}%)",
                     font=FONT_MONO_VALUE, text_color=COL_GREEN if pnl >= 0 else COL_RED,
                     anchor="w").pack(fill="x", padx=10, pady=(4, 0))
         ctk.CTkLabel(summary, text=f"Bán được {sellable:,} CP · Chờ về {max(0, quantity - sellable):,} CP" + (f" · {settle_short}" if settle_short else ""),
@@ -2642,6 +2716,20 @@ class DashboardActionsMixin:
             button.grid(row=0, column=column, sticky="ew", padx=4, pady=4)
             buttons[key] = button
 
+        auto_sell = tk.BooleanVar(master=self, value=cycle.auto_sell_enabled if cycle else True)
+        auto_button = ctk.CTkButton(mode_frame, height=32, font=("Segoe UI", 12, "bold"))
+        def refresh_auto():
+            auto_button.configure(text="TỰ BÁN · BẬT" if auto_sell.get() else "TỰ BÁN · TẠM DỪNG",
+                                  fg_color=COL_GREEN if auto_sell.get() else COL_WARN)
+        def toggle_auto():
+            auto_sell.set(not auto_sell.get())
+            refresh_auto()
+        auto_button.configure(command=toggle_auto)
+        auto_button.grid(row=1, column=0, columnspan=3, sticky="ew", padx=4, pady=(0, 4))
+        _HoverHint(auto_button, "Tạm dừng chặn SL/TP/PROTECT/E tự bán và hủy SELL tự động chưa gửi.\n"
+                   "Vẫn báo tín hiệu; bán tay vẫn dùng được. SELL đã gửi DNSE cần hủy riêng.", placement="inside")
+        refresh_auto()
+
         targets = ctk.CTkFrame(top, fg_color=COL_SURFACE_2, corner_radius=9)
         targets.grid(row=4, column=0, sticky="ew", padx=14, pady=4)
         targets.grid_columnconfigure((1, 3), weight=1)
@@ -2656,7 +2744,9 @@ class DashboardActionsMixin:
             # target onto the position.  AUTO means "dùng tactic TP nếu bật".
             tp_entry.insert(0, "AUTO")
         tp_entry.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=(4, 2))
-        ctk.CTkLabel(targets, text="SL", font=FONT_KEY, text_color=COL_RED).grid(row=0, column=2, sticky="w", padx=(8, 6), pady=(4, 2))
+        sl_on = tk.BooleanVar(master=self, value=cycle.sl_enabled if cycle else True)
+        sl_toggle = ctk.CTkSwitch(targets, text="SL", variable=sl_on, font=FONT_KEY, width=80)
+        sl_toggle.grid(row=0, column=2, sticky="w", padx=(8, 6), pady=(4, 2))
         sl_entry = ctk.CTkEntry(targets, font=FONT_MONO_VALUE, height=38)
         if cycle and cycle.sl_mode == "PRICE":
             sl_entry.insert(0, _display_price(cycle.sl_value))
@@ -2717,6 +2807,8 @@ class DashboardActionsMixin:
             try:
                 _tm, _tv, tp_price = parse_target(tp_entry.get(), stop=False)
                 _sm, _sv, sl_price = parse_target(sl_entry.get(), stop=True)
+                if not sl_on.get():
+                    sl_price = 0
                 if not tp_price and "TP" in selected and take_profit > 0:
                     # AUTO with the tactic on still has a real target: the global %.
                     tp_price = avg_price * (1.0 + take_profit / 100.0)
@@ -2726,13 +2818,14 @@ class DashboardActionsMixin:
                     text=f"{_display_price(tp_price)} · {tp_gain:+,.0f}đ" if tp_price
                     else "TP: AUTO · theo công tắc TP",
                 )
-                sl_preview.configure(text=f"{_display_price(sl_price)} · {sl_loss:+,.0f}đ")
+                sl_preview.configure(text=f"{_display_price(sl_price)} · {sl_loss:+,.0f}đ" if sl_on.get() else "SL OFF")
                 status.configure(text="")
             except ValueError:
                 status.configure(text="TP hoặc SL không hợp lệ.", text_color=COL_RED)
 
         tp_entry.bind("<KeyRelease>", refresh_preview)
         sl_entry.bind("<KeyRelease>", refresh_preview)
+        sl_toggle.configure(command=refresh_preview)
         refresh_preview()
 
         def save_management() -> None:
@@ -2755,7 +2848,8 @@ class DashboardActionsMixin:
                     return
                 cycle = self.trade_state.create(
                     symbol, mode, source="EXTERNAL_DNSE", trade_id=uuid.uuid4().hex,
-                    em_modes=sorted(selected), sl_mode=sl_mode, sl_value=sl_value,
+                    em_modes=sorted(selected), sl_enabled=sl_on.get(), auto_sell_enabled=auto_sell.get(),
+                    sl_mode=sl_mode, sl_value=sl_value,
                     tp_mode=tp_mode, tp_value=tp_value,
                     loan_package_id=str(row.get("loanPackageId", "") or ""),
                     deal_id=str(row.get("id", row.get("positionId", "")) or ""),
@@ -2771,12 +2865,18 @@ class DashboardActionsMixin:
             else:
                 cycle = self.trade_state.update_management(
                     cycle.id, em_modes=sorted(selected),
+                    sl_enabled=sl_on.get(), auto_sell_enabled=auto_sell.get(),
                     sl_mode=sl_mode, sl_value=sl_value,
                     tp_mode=tp_mode, tp_value=tp_value,
                 )
             if not cycle:
                 status.configure(text="Không cập nhật được chu kỳ giao dịch.", text_color=COL_RED)
                 return
+            from ..trading.position_repair import pause_position_auto_sell
+            cycle, _cancelled, broker_pending = pause_position_auto_sell(
+                self.trade_state, self.queue, cycle.id, enabled=auto_sell.get())
+            if broker_pending:
+                messagebox.showwarning("SELL tại DNSE", "Tự bán đã tạm dừng; còn SELL đã gửi DNSE cần kiểm tra/hủy riêng.", parent=top)
             self._log(
                 f"[E/M] {mode} {symbol} #{cycle.id[:8]}: "
                 f"{'+'.join(cycle.em_modes) or 'OFF'} · SL {cycle.sl_mode} {cycle.sl_value:g}"
@@ -2800,7 +2900,7 @@ class DashboardActionsMixin:
             command=turn_off_all,
         ).grid(row=0, column=0, padx=(0, 8))
         ctk.CTkButton(
-            actions, text="LƯU QUẢN LÝ VỊ THẾ", height=40,
+            actions, text="LƯU", height=40,
             font=("Segoe UI", 12, "bold"), fg_color=COL_GREEN,
             hover_color="#16A34A", command=save_management,
         ).grid(row=0, column=1, sticky="ew")
@@ -3182,6 +3282,11 @@ class DashboardActionsMixin:
         details = decision.details if isinstance(decision.details, dict) else {}
         checks = details.get("entry_checks") if isinstance(details.get("entry_checks"), dict) else {}
         if decision.action == "SELL":
+            trade_store = getattr(self, "trade_state", None)
+            cycle = trade_store.get(str(details.get("trade_id", "") or "")) if trade_store else None
+            if cycle and not cycle.auto_sell_enabled:
+                from ..rules.planner import PlanResult
+                return PlanResult(None, "POSITION_AUTO_SELL_PAUSED")
             stages = protection_stages(f"{decision.reason}+{decision.event}", details)
             state = getattr(self, "rule_state", None)
             history = state.position_metrics(decision.symbol, str(details.get("trade_id", "") or "")) if stages and state else {}

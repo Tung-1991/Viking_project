@@ -91,6 +91,7 @@ class TradeStateStore:
         trade_id: str = "",
         em_modes: list[str] | None = None,
         sl_enabled: bool = True,
+        auto_sell_enabled: bool = True,
         sl_mode: str = "DEFAULT",
         sl_value: float = 0.0,
         tp_mode: str = "NONE",
@@ -114,6 +115,7 @@ class TradeStateStore:
                 is_reentry=streak > 0,
                 em_modes=list(em_modes or []),
                 sl_enabled=sl_enabled,
+                auto_sell_enabled=auto_sell_enabled,
                 sl_mode=sl_mode,
                 sl_value=sl_value,
                 tp_mode=tp_mode,
@@ -381,6 +383,8 @@ class TradeStateStore:
         trade_id: str,
         *,
         em_modes: list[str] | None = None,
+        sl_enabled: bool | None = None,
+        auto_sell_enabled: bool | None = None,
         sl_mode: str | None = None,
         sl_value: float | None = None,
         tp_mode: str | None = None,
@@ -397,6 +401,10 @@ class TradeStateStore:
                 return None
             if em_modes is not None:
                 cycle.em_modes = list(em_modes)
+            if sl_enabled is not None:
+                cycle.sl_enabled = bool(sl_enabled)
+            if auto_sell_enabled is not None:
+                cycle.auto_sell_enabled = bool(auto_sell_enabled)
             if sl_mode is not None:
                 cycle.sl_mode = str(sl_mode)
             if sl_value is not None:

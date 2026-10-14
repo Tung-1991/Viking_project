@@ -2210,6 +2210,11 @@ class DashboardPanelsMixin:
 
     def _protect_preview_hint(self) -> str:
         preview = getattr(self, "_preview_protect_prices", {})
+        start = getattr(self, "_preview_dynamic_start", {})
+        if start.get("auto_sell_paused"):
+            return "Tự bán vị thế đang tạm dừng; SL/TP/PROTECT/E chỉ báo.\nChuột phải vị thế để bật lại khi muốn tiếp tục."
+        if start.get("history_unverified"):
+            return "Lịch sử đỉnh/đáy chưa xác minh từ khớp lệnh G1. PROTECT đang khóa.\nChuột phải vị thế để đo lại MAE/MFE; không xóa vị thế hoặc lịch sử khớp."
         arm, sell = preview.get("arm", 0), preview.get("sell", 0)
         example = (
             f"Nếu đỉnh chỉ tới ARM {_display_price(arm)} đ → mốc bán {_display_price(sell)} đ.\n"
@@ -2261,12 +2266,20 @@ class DashboardPanelsMixin:
             mfe = finite(details.get("normal_mfe_pct", details.get("peak_profit_pct")))
         store = getattr(self, "trade_state", None)
         active = store.active_for(symbol, self.mode.get()) if store is not None else None
+        paused = details.get("auto_sell_enabled") is False
+        unverified = bool(details.get("protection_history_unverified"))
         if active and active.open_quantity > 0 and active.avg_entry_price > 0:
             entry, position, enabled = active.avg_entry_price, True, "NORMAL" in active.em_modes
-            if mfe is None and getattr(self, "rule_state", None) is not None:
+            paused = not getattr(active, "auto_sell_enabled", True)
+            if getattr(self, "rule_state", None) is not None:
                 metrics = self.rule_state.position_metrics(symbol, active.id)
-                mfe = finite(metrics.get("peak_profit_pct"))
-                if mfe is not None:
+                unverified = unverified or (bool(metrics) and metrics.get("price_history_verified") is not True)
+                if unverified:
+                    mfe = None
+                    details = dict(details, normal_trigger_price=0)
+                elif mfe is None:
+                    mfe = finite(metrics.get("peak_profit_pct"))
+                if mfe is not None and not unverified:
                     rule = StaticRuleParameters.from_dict(params)
                     mfe = protect_peak_for_sellable_phase(
                         mfe, finite(metrics.get("normal_sellable_peak_profit_pct")) or 0,
@@ -2278,7 +2291,11 @@ class DashboardPanelsMixin:
                         details = dict(details, protection_stage="DYN", normal_trigger_price=dynamic_floor_previous(
                             metrics, rule.normal_retention_pct,
                         ))
-        return dynamic_start_preview(entry, params, details, position=position, enabled=enabled, mfe=mfe)
+        preview = dynamic_start_preview(entry, params, details, position=position, enabled=enabled, mfe=mfe)
+        preview.update(auto_sell_paused=paused, history_unverified=unverified)
+        if paused:
+            preview["policy"] = "ALERT"
+        return preview
 
     def _exit_preview_hint(self) -> str:
         preview = getattr(self, "_preview_exit_state", {})
@@ -2781,6 +2798,14 @@ class DashboardPanelsMixin:
             text=f"PROTECT · {'ON' if protect_on else 'OFF'} · ARM {policy_for_stage(params, 'ARM')}",
             text_color=COL_GREEN if protect_on else COL_MUTED,
         )
+        if self._preview_dynamic_start.get("auto_sell_paused"):
+            self.preview_em_normal.configure(text="PROTECT · TẠM DỪNG", text_color=COL_WARN)
+            self.preview_normal_value.configure(text="TỰ BÁN TẠM DỪNG")
+            self.preview_em_exit.configure(text="E · ALERT", text_color=COL_WARN)
+        elif self._preview_dynamic_start.get("history_unverified"):
+            self.preview_normal_value.configure(text="CHỜ XÁC MINH GIÁ")
+            self._preview_protect_prices.pop("actual_sell", None)
+        fit_label_text(self.preview_normal_value, base_font=("Cascadia Mono", 12))
         self.preview_normal_detail.configure(text=self._preview_protect_detail[0])
         fit_label_text(self.preview_normal_detail, base_font=("Segoe UI", 10))
         self._fit_protect_preview()
@@ -3079,6 +3104,8 @@ class DashboardPanelsMixin:
         policy: str = "ALERT",
     ) -> None:
         policy = str(policy or "ALERT").upper()
+        if position_quantity > 0 and getattr(self, "_preview_dynamic_start", {}).get("auto_sell_paused"):
+            policy = "ALERT"
         price = _number(getattr(self, "_current_tick_price", 0))
         signal = str(signal or "--").upper()
         self._preview_exit_state = {"price": price, "signal": signal, "enabled": enabled,

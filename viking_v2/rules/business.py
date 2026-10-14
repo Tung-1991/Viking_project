@@ -1145,6 +1145,13 @@ class StaticRule:
                     market_state=market_state, details=details, scope="POSITION_MANAGEMENT",
                 )
             exit_decision = self._evaluate_position(symbol, market_state, signal, bars, position, details)
+            if exit_decision.action == "SELL" and position.get("auto_sell_enabled") is False:
+                exit_decision.details.update(auto_sell_paused=True, held_exit_reason=exit_decision.reason)
+                exit_decision.action = "WAIT"
+                exit_decision.reason = "POSITION_AUTO_SELL_PAUSED"
+                exit_decision.event = (
+                    "PROTECT_ALERT" if exit_decision.event == "PRICE_PROTECTION" else
+                    "INDICATOR_EXIT_ALERT" if exit_decision.event == "INDICATOR_EXIT" else "EXIT_ALERT")
             if (exit_decision.reason == "HOLD_POSITION" and confirmed_entry
                     and portfolio.get("scale_in_allowed", False)):
                 signal = "BUY"
@@ -1232,6 +1239,9 @@ class StaticRule:
             "protect_arm_notice": position.get("protect_arm_notice"),
             "market_data_policy": position.get("market_data_policy"),
             "price_history_repaired_at": position.get("price_history_repaired_at", 0.0),
+            "auto_sell_enabled": position.get("auto_sell_enabled", True),
+            "sellable_quantity": int(position.get("trade_quantity", position.get("quantity", 0)) or 0),
+            "exit_wait_notices": position.get("exit_wait_notices", []),
         })
         sl_enabled = bool(position.get("sl_enabled", True))
         sl_mode = str(position.get("sl_mode", "DEFAULT") or "DEFAULT").upper()

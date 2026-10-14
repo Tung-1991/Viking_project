@@ -36,6 +36,7 @@ from ..rules.entry_filters import apply_buy_filters
 from ..trading.state import TradeStateStore
 from ..trading.durable import AccountLease
 from .session_cross import SessionPriceCache, SessionCrossService
+from .exit_notifications import settlement_exit_snapshot
 
 
 def merge_live_tick(
@@ -791,6 +792,10 @@ def run(account_id: str | None = None) -> int:
                                 decision.details["execution_mode"] = decision_mode
                                 cycle_stage = "RULE_STATE"
                                 trade_id = str(portfolio.get("trade_id", "") or "")
+                                if trade_id:
+                                    decision.details["exit_wait_notices"] = rule_state.observe_exit_wait(
+                                        symbol, trade_id, settlement_exit_snapshot(
+                                            decision, portfolio.get("position") or {}, mode=decision_mode))
                                 protect_state = str(
                                     decision.details.get("normal_state", "") or ""
                                 ).upper()
@@ -837,7 +842,7 @@ def run(account_id: str | None = None) -> int:
                                         "peak_price": float(decision.details.get("normal_peak_price", 0) or 0),
                                         "protect_price": float(decision.details.get("normal_trigger_price", 0) or 0),
                                         "arm_pct": rule.params.normal_arm_pct,
-                                        "policy": rule.params.normal_policy,
+                                        "policy": (rule.params.normal_policy if (portfolio.get("position") or {}).get("auto_sell_enabled", True) else "ALERT"),
                                         "sellable_quantity": int((portfolio.get("position") or {}).get("trade_quantity", 0) or 0),
                                     })
                                     decision.details["protect_arm_notice"] = armed.get("protect_arm_notice")
