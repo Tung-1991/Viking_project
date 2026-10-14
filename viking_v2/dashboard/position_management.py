@@ -10,7 +10,7 @@ import customtkinter as ctk
 from ..config import save_settings
 from ..services.runtime import RuntimeConfig
 from ..trading.position_controls import position_exit_params, save_position_controls
-from .view import _compact_vnd, _display_price, _number, _price_unit
+from .view import COL_GRAY, COL_GREEN, COL_TEXT, _compact_vnd, _display_price, _number, _price_unit
 from .windows import HINT_FONT, _HoverHint, _window
 
 
@@ -122,23 +122,22 @@ def _populate_position_management(app, action: dict, top, cycle, tick) -> None:
     bot_row.pack(fill="x", padx=10, pady=(0, 4))
     bot_on = tk.BooleanVar(master=top, value=bool(not cycle or cycle.bot_trade_enabled and cycle.auto_sell_enabled))
     bot_button = ctk.CTkButton(
-        bot_row, text="", width=146, height=30, corner_radius=6, border_width=1,
-        font=("Segoe UI", 13, "bold"), command=lambda: bot_on.set(not bot_on.get()),
+        bot_row, text="", width=146, height=32, corner_radius=7,
+        font=("Segoe UI", 11, "bold"), text_color=COL_TEXT,
+        command=lambda: bot_on.set(not bot_on.get()),
     )
     bot_button.pack(side="left")
     def refresh_bot(*_args):
         enabled = bot_on.get()
         bot_button.configure(
-            text="BOT · BẬT" if enabled else "BOT · ALERT",
-            fg_color="#166534" if enabled else "#4A3517",
-            hover_color="#15803D" if enabled else "#6C4A1C",
-            border_color="#22C55E" if enabled else "#D97706",
-            text_color="#ECFDF5" if enabled else "#FDE68A",
+            text="BOT · ON" if enabled else "BOT · OFF",
+            fg_color=COL_GREEN if enabled else COL_GRAY,
+            hover_color="#16A34A" if enabled else "#4B515B",
         )
     bot_on.trace_add("write", refresh_bot)
     refresh_bot()
-    hint(bot_button, "Bật: cho phép BOT giao dịch vị thế theo cấu hình chính và chế độ bên dưới.\n"
-               "Alert: chặn BUY thêm và mọi SELL tự động; giữ tín hiệu/Telegram và bán tay.\n"
+    hint(bot_button, "ON (xanh): cho phép BOT giao dịch vị thế theo cấu hình chính và chế độ bên dưới.\n"
+               "OFF (xám): chỉ báo; chặn BUY thêm và mọi SELL tự động, giữ tín hiệu/Telegram và bán tay.\n"
                "Chỉ đổi vị thế này, không đổi RULE hay BOT chung. Lệnh đã gửi DNSE cần kiểm tra/hủy riêng.")
     summary = ctk.CTkFrame(position_panel, fg_color="transparent", width=1, height=1)
     summary.pack(fill="x", padx=10, pady=(0, 6))

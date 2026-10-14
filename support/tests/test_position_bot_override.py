@@ -183,7 +183,7 @@ def test_popup_bot_override_is_draft_until_save_and_reset_restores_rule(ui_root,
         button = next(w for w in widgets if isinstance(w, ctk.CTkButton) and w.cget("text").startswith("BOT · "))
         button.invoke()
         assert app.trade_state.get(cycle.id).to_dict() == before
-        assert button.cget("text") == "BOT · ALERT"
+        assert button.cget("text") == "BOT · OFF"
         next(w for w in widgets if isinstance(w, ctk.CTkButton) and w.cget("text") == "LƯU").invoke()
         saved = app.trade_state.get(cycle.id)
         assert not saved.bot_trade_enabled and not saved.auto_sell_enabled
