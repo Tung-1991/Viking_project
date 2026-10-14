@@ -437,7 +437,8 @@ def test_package_action_installs_pins_and_checks_syntax_without_start(tmp_path):
     assert "install|--quiet|-r|" in calls[1] and calls[1].endswith("requirements.txt")
     assert "import importlib.metadata" in calls[2]
     assert calls[3] == "-m|pip|check"
-    assert calls[4].startswith("-c|import customtkinter, tkinter, numpy")
+    assert calls[4].startswith("-c|import customtkinter, tkinter,")
+    assert "PIL.Image, PIL.ImageDraw, PIL.ImageTk" in calls[4]
     assert calls[5].startswith("-m|compileall|-q|")
 
 

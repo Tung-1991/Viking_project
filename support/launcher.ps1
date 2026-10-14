@@ -193,7 +193,7 @@ function Ensure-VietnamTimeZone {
 
 function Assert-PackageImports {
     Write-Host '[PACKAGE] Kiem tra Tk va kha nang nap thu vien/DLL...'
-    Invoke-Native $PythonExe @('-c', 'import customtkinter, tkinter, numpy, pandas, numba, llvmlite.binding, requests, dotenv, websocket, msgpack, openpyxl; print(''IMPORT_OK'')')
+    Invoke-Native $PythonExe @('-c', 'import customtkinter, tkinter, PIL.Image, PIL.ImageDraw, PIL.ImageTk, numpy, pandas, numba, llvmlite.binding, requests, dotenv, websocket, msgpack, openpyxl; print(''IMPORT_OK'')')
 }
 
 function Assert-PinnedPackages {
