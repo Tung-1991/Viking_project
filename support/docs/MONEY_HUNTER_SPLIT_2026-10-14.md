@@ -22,6 +22,11 @@ Giảm khoảng cách giữa nhóm ATR/GIỮ LÃI, giữ nguyên các thiết l�
 Kiểm tra layout cùng tỷ lệ chữ/cửa sổ 100/150/200%: chiều cao nhóm giảm khoảng 32%,
 không chồng nút và không đổi kích thước khi chọn AUTO/ALERT.
 
+P2 phân biệt bộ đếm với lần cắt lên đang nhớ: `1 CẮT - 0P` là số lần đổi phía hôm nay;
+`NHỚ LÊN 13/10` là mốc cắt lên đã ghi nhận ngày trước. VA không quét trước lúc thêm mã
+vẫn giữ lần LIVE đã ghi nhận tới khi dùng. EMA hiện tại dưới EMA chậm thì vẫn CHƯA ĐẠT.
+Tái hiện 13/10 lên → 14/10 xuống: hôm nay 0 lên/1 xuống, giữ mốc lên 13/10, EMA chưa cho BUY.
+
 ## BAT mới
 
 1. Mở Money Hunter.
@@ -57,3 +62,4 @@ Không copy venv sang máy khác; dùng BAT 4 để tạo môi trường tại m
 - START/cache/UI refresh: 24 ca đạt trong lượt riêng, có ca trùng nhóm trên.
 - `compileall` và kiểm tra diff đạt. Không chạy giao dịch REAL hoặc nạp preset vào tài khoản.
 - Sau khi thu gọn DYNAMIC: 129 ca thiết lập/lưu và 139 ca UI/PROTECT đạt ở hai lượt riêng.
+- Sau khi làm rõ mốc VA: 87 ca UI/bộ nhớ/replay đạt; bộ đếm qua ngày giữ riêng với bằng chứng BUY.

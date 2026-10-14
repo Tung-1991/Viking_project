@@ -337,7 +337,7 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
             assert int(subject.preview_rule_cross.grid_info()["column"]) == 2
             assert int(subject.preview_rule_cross_detail.grid_info()["column"]) == 2
             if subject.preview_rule_cross.master._viking_cross_narrow and viewing_history:
-                assert subject.preview_rule_cross_detail.cget("text") == ("CẮT 12/10" if required else "OFF · 12/10")
+                assert subject.preview_rule_cross_detail.cget("text") == ("NHỚ LÊN 12/10" if required else "OFF · 12/10")
             assert (subject.settings.to_dict(), details) == before
     finally:
         top.destroy()
@@ -383,6 +383,52 @@ def test_preview_counts_today_without_losing_yesterdays_unused_cross(ui_root, mo
         assert subject._preview_ema_cross_evidence[1]["valid"]
         assert subject._preview_ema_cross_evidence[1]["cross_id"] == source["cross_id"]
         assert source == before
+    finally:
+        top.destroy()
+
+
+def test_va_today_down_count_is_separate_from_yesterdays_remembered_up(ui_root, monkeypatch):
+    from copy import deepcopy
+    from datetime import datetime, timedelta
+    import customtkinter as ctk
+    from viking_v2.rules.ema_memory import advance_memory
+    from viking_v2.trading.market import VN_TZ
+
+    now = datetime(2026, 10, 14, 9, 15, tzinfo=VN_TZ)
+    monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: now)
+    args = dict(pair="3/6", mode="VA", sessions=3, exchange="HOSE", va_lookback_enabled=False)
+    source = {}
+    for at, fast, slow in ((now.replace(day=13, hour=14, minute=34), 34.70, 34.78),
+                          (now.replace(day=13, hour=14, minute=35), 34.86, 34.78),
+                          (now, 34.38, 34.52)):
+        source = advance_memory(source, {"buy_ema_fast": fast, "buy_ema_slow": slow}, now=at, **args)
+    before = deepcopy(source)
+    top = ctk.CTkToplevel(ui_root)
+    top.geometry("1000x720+0+0")
+    view = DashboardPanelsMixin()
+    view.settings = AppSettings()
+    view.settings.rule_parameters.update(buy_ema_cross_mode="VA", buy_ema_va_lookback_enabled=False)
+    view._build_order_preview_tab(top)
+    try:
+        top.deiconify()
+        top.update()
+        view._render_ema_cross_preview({"ema_cross": source})
+        assert view.preview_rule_cross_counts.cget("text") == "1 CẮT - 0P"
+        assert view.preview_rule_cross_detail._viking_compact_detail_text == "NHỚ LÊN 13/10"
+        assert "CHƯA ĐẠT" in view.preview_ema_entry_gate.cget("text")
+        assert not view._preview_ema_gate_evidence["valid"]
+        hint = view._ema_memory_preview_hint()
+        assert "Hôm nay: 0 lên + 1 xuống" in hint
+        assert "không quét trước khi thêm mã" in hint
+        assert "VA: nhớ lần cắt lên 13/10 tới khi dùng" in hint
+        assert source == before
+        fresh = advance_memory(source, {"buy_ema_fast": 34.6, "buy_ema_slow": 34.52},
+                               now=now + timedelta(seconds=1), **args)
+        view._render_ema_cross_preview({"ema_cross": fresh})
+        assert view.preview_rule_cross_counts.cget("text") == "2 CẮT - 0P"
+        assert view.preview_rule_cross_detail._viking_compact_detail_text == "NHỚ LÊN 14/10"
+        assert view._preview_ema_gate_evidence["valid"]
+        assert fresh["cross_id"] != source["cross_id"] and source == before
     finally:
         top.destroy()
 

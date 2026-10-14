@@ -2063,7 +2063,7 @@ class DashboardPanelsMixin:
         when = str(evidence.get("cross_at", ""))
         short_date = f"{when[8:10]}/{when[5:7]}" if len(when) >= 10 else ""
         self.preview_rule_cross_detail._viking_compact_detail_text = (
-            (f"CẮT {short_date}" if short_date else "CHƯA GHI NHẬN") if required
+            (f"NHỚ LÊN {short_date}" if short_date else "CHƯA GHI NHẬN") if required
             else f"OFF · {short_date or 'CHƯA LƯU'}"
         ) if tracking else f"{label}: {text}"
         fit = getattr(self, "_fit_phase2_row", None)
@@ -2105,9 +2105,12 @@ class DashboardPanelsMixin:
                    if counts["up"] is not None else f"{period}: chưa đủ dữ liệu để đếm.")
         if counts["partial"]:
             counted += f" Đếm từ {str(counts['from'])[11:16]}."
+        when = str(evidence.get("cross_at") or "")
+        remembered = f" {when[8:10]}/{when[5:7]}" if len(when) >= 10 else ""
         policy = (f"X phiên: còn {evidence.get('remaining_sessions', 0)}/{evidence.get('sessions', 3)} phiên."
-                  if mode == "SESSIONS" else "VA: giữ lần cắt tới khi dùng.")
-        history = f"{scan}P: hôm nay + {scan} phiên trước; bỏ ngày nghỉ." if scan else "0P: chỉ đếm phiên hôm nay."
+                  if mode == "SESSIONS" else f"VA: nhớ lần cắt lên{remembered} tới khi dùng.")
+        history = (f"{scan}P: hôm nay + {scan} phiên trước; bỏ ngày nghỉ." if scan else
+                   "0P: chỉ đếm phiên hôm nay; không quét trước khi thêm mã.")
         return f"{counted}\n{history}\n{policy} ⇄ chỉ đổi góc xem."
 
     def _atr_preview_hint(self) -> str:
