@@ -2,16 +2,17 @@
 
 ## Cài / cập nhật / mở
 
-- Mở `START_SYSTEM.bat`: **1 → 1** chỉ rà soát; **1 → 2** cài phần thiếu
+- Mở `START_SYSTEM.bat`: **4 → 1** chỉ rà soát; **4 → 2** cài phần thiếu
   (Python x64/Tk, Git, VC++ x64, venv, package đúng phiên bản). Cài phần mềm hệ thống
   cần **Run as administrator**. Nếu yêu cầu reboot, reboot rồi kiểm tra lại.
 - **2** kiểm tra GitHub; có bản mới thì backup và ghi đè source. Đóng app trước.
   Bản ZIP thiếu `.git` được tự nối repo; mất mạng lúc nối thì chọn 2 lại để tiếp tục.
   `.env`, runtime và venv giữ tại máy; backup ở `.artifacts/update-backups/`, không lên Git.
-- **3** khởi động, giữ console xem log. Đóng app hoặc Ctrl+C để dừng.
+- **1** khởi động, giữ console xem log. Đóng app hoặc Ctrl+C để dừng.
   Giữ PC/VM bật, không sleep/logoff. Ngắt RDP không phải đăng xuất.
-- **5** mở thư mục log bằng Explorer; nhiều tài khoản thì chọn đúng ID.
+- **5 Chẩn đoán → 2** mở thư mục log bằng Explorer; nhiều tài khoản thì chọn đúng ID.
   Dùng được khi app đang chạy hoặc đã dừng, không cần OTP/venv, không sửa dữ liệu.
+- **5 → 1** kiểm tra môi trường; **5 → 3** kiểm tra cấu trúc dữ liệu local, chỉ đọc.
 
 ## Trước khi bật BUY BOT
 
@@ -36,12 +37,13 @@
 ## Bộ thử MSN / CTS / HDB / IDC
 
 Thiết lập khi đây đúng là vốn dành cho bộ thử: watchlist/Priority gồm 4 mã;
-**Nạp nhanh:** đóng app → BAT **4** → kiểm tra tài khoản trên máy đó → **y** → **3**.
-VPS chọn **2 → 4 → y → 3** để cập nhật rồi nạp bộ setting này.
+**Nạp nhanh:** đóng app → BAT **3** → kiểm tra tài khoản trên máy đó → **y** → **1**.
+VPS chọn **2 → 3 → y → 1** để cập nhật rồi nạp bộ setting này.
 Preset đi cùng Git; không tự đồng bộ mọi chỉnh sửa UI trên máy khác. Giữ API/token/
 Telegram tổng/token/chat, chu kỳ EMA/RSI, giờ mua, các mốc SL/TP/PROTECT của máy đó.
 Preset bật yêu cầu cắt lên, chọn ∞ VA; đặt ARM và DYNAMIC **33% GỐC, REPEAT ON** riêng;
-bật E mặc định cho BOT và đặt **E AUTO**. Không tự bật PROTECT trên giao dịch đang giữ.
+**ARM AUTO, DYNAMIC ALERT, E AUTO**; bật E mặc định cho BOT.
+Không tự bật PROTECT trên giao dịch đang giữ.
 Preset bật cả 9 loại tin Telegram, BUY gửi ngay, BUY kỹ thuật/MẤT BUY giãn 60 phút, hệ thống 30 phút.
 Không tự bật công tắc Telegram tổng nếu máy đang OFF; các khoảng giãn khác giữ lựa chọn tại máy.
 Backup setting cũ nằm cạnh `settings.json` (`settings.before-va-*.bak`), không lên Git.
@@ -83,7 +85,7 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 - BOT ON cho phép BUY tự động ở sổ đang chọn khi đủ tín hiệu, vốn và điều kiện an toàn.
   OFF vẫn tính chỉ báo/lưu lịch sử; tin BUY không thực hiện chỉ gửi nếu bật TÍN HIỆU.
 - SL → TP → E AUTO → PROTECT là thứ tự ưu tiên; E AUTO bán 100% cổ còn lại.
-  ARM và DYNAMIC có % bán, GỐC/CÒN LẠI, REPEAT riêng; AUTO/ALERT dùng chung chính sách.
+  ARM và DYNAMIC có AUTO/ALERT, % bán, GỐC/CÒN LẠI, REPEAT riêng.
   GỐC = % tổng cổ mua đã khớp của giao dịch; CÒN LẠI = % cổ chưa bán. Làm tròn lô, giới hạn theo cổ bán được.
   1.000 CP và 33%: GỐC bán 300 → 300 → 300; CÒN LẠI bán 300 → 200 → 100.
   REPEAT ON: hồi trên mốc rồi chạm lại, hoặc giảm tiếp đạt bảo vệ thì bán thêm. Không cần đỉnh mới;
@@ -302,7 +304,7 @@ Log ghi khi lỗi đổi hoặc phục hồi, không ghi lại cùng lỗi ở m
 LỊCH CHỜ lúc mở app = đang tải; LỊCH LỖI = chưa có lịch dùng được, không gửi lệnh mới.
 Token hết hạn: nhập OTP lại. UNKNOWN / RECONCILE_REQUIRED: đối chiếu lệnh DNSE trước,
 không đặt lại vì nghĩ chưa gửi. Giữ runtime/logs; không reset/xóa dữ liệu để chữa lỗi.
-Log: `<thư mục cài app>/viking_v2/runtime/accounts/<id>/logs/`; BAT **5** mở đúng tài khoản.
+Log: `<thư mục cài app>/viking_v2/runtime/accounts/<id>/logs/`; BAT **5 → 2** mở đúng tài khoản.
 Windows ẩn đuôi `.log` có thể hiện tên `daemon`, `ui`, `daemon-process` (Text Document).
 
 | File | Nội dung / khi cần gửi |

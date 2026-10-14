@@ -170,7 +170,7 @@ def main() -> int:
         target, backup = apply_preset(account)
         print(f"[OK] {target}")
         print(f"[BACKUP] {backup}")
-        print("[NEXT] Chon BAT > 3; kiem tra 4 ma / han muc, OTP va Telegram; BUY BOT van OFF khi mo app.")
+        print("[NEXT] Chon BAT > 1; kiem tra 4 ma / han muc, OTP va Telegram; BUY BOT van OFF khi mo app.")
         return 0
     except (OSError, ValueError, TypeError, RuntimeError, EOFError) as exc:
         print(f"[LOI] {exc}. Dong app/daemon truoc; khong reset runtime.")

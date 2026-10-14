@@ -34,8 +34,9 @@ chưa cập nhật, không phải bằng chứng đã truy xuất payload thật
 Thay đổi source không ghi đè settings tài khoản đã lưu. Sau khi bản sửa được phát hành tới nguồn
 cập nhật của VM, đóng app và cập nhật source theo BAT 2.
 Đổi riêng **RULE → E/M → DYNAMIC → GIỮ LÃI (%) = 72 → LƯU**; chọn ALERT nếu muốn chỉ báo.
-Để nạp toàn bộ preset VA đã chốt dùng BAT **2 → 4 → kiểm tra tài khoản/xác nhận → 3**;
-BAT 4 còn đổi hạn mức/P1/E/Telegram/TRACE. Preset không tự bật PROTECT cho vị thế đang có.
+Để nạp toàn bộ preset VA đã chốt, từ menu 14/10 dùng
+**2 → 3 → kiểm tra tài khoản/xác nhận → 1**.
+Nạp preset còn đổi hạn mức/P1/E/Telegram/TRACE. Preset không tự bật PROTECT cho vị thế đang có.
 
 Kiểm thử qua `support/tools/run_offline.py` với broker giả, runtime tạm và mạng bị chặn.
 Ca NAV dùng đúng các số trong ảnh, kiểm tra không sửa snapshot/vốn; PROTECT có ARM/DYNAMIC,

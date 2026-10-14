@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Check', 'Packages', 'Update', 'Start', 'PresetVA', 'Logs')]
+    [ValidateSet('Check', 'Packages', 'Update', 'Start', 'PresetVA', 'Logs', 'StateCheck')]
     [string]$Action = 'Packages'
 )
 
@@ -7,7 +7,12 @@ $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $PythonExe = Join-Path $ProjectRoot 'ckvnvenv\Scripts\python.exe'
 $PythonVersion = '3.13.16'
-$RepositoryUrl = 'https://github.com/Tung-1991/Viking_project.git'
+$RepositoryUrl = $null
+$repositoryConfig = Join-Path $ProjectRoot 'support\repository.json'
+if (Test-Path -LiteralPath $repositoryConfig -PathType Leaf) {
+    $repositorySettings = Get-Content -LiteralPath $repositoryConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+    $RepositoryUrl = [string]$repositorySettings.url
+}
 
 function Invoke-Native {
     param([string]$Command, [string[]]$Arguments)
@@ -83,7 +88,7 @@ function Get-GitExe {
     )) {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
     }
-    throw 'Chua co Git. Chon muc 1 > 2 de cai phan thieu.'
+    throw 'Chua co Git. Chon muc 4 > 2 de cai phan thieu.'
 }
 
 function Get-MissingVCRuntime {
@@ -96,7 +101,7 @@ function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        throw 'Can cai phan mem he thong. Dong BAT, chon Run as administrator, vao muc 1 > 2.'
+        throw 'Can cai phan mem he thong. Dong BAT, chon Run as administrator, vao muc 4 > 2.'
     }
 }
 
@@ -117,7 +122,7 @@ function Install-SignedTool {
     $result = Start-Process -FilePath $installer -ArgumentList $Arguments -WindowStyle Hidden -Wait -PassThru
     if ($result.ExitCode -notin $AllowedCodes) { throw "Cai $Name loi (exit $($result.ExitCode))." }
     if ($result.ExitCode -eq 3010) {
-        throw "$Name da cai; Windows yeu cau reboot. Reboot roi chon muc 1 > 2 de kiem tra tiep. Khong tu reboot."
+        throw "$Name da cai; Windows yeu cau reboot. Reboot roi chon muc 4 > 2 de kiem tra tiep. Khong tu reboot."
     }
     $env:PATH = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
         [Environment]::GetEnvironmentVariable('Path', 'User') + ';' + $env:PATH
@@ -165,7 +170,7 @@ function Ensure-Python {
         throw 'ckvnvenv da ton tai nhung thieu python.exe. Kiem tra venv; khong tu ghi de.'
     }
     $basePython = Find-SupportedPython
-    if (-not $basePython) { throw 'Chua co Python x64/Tk phu hop. Chon muc 1 > 2.' }
+    if (-not $basePython) { throw 'Chua co Python x64/Tk phu hop. Chon muc 4 > 2.' }
     Invoke-Native $basePython.Command ($basePython.Prefix + @('-m', 'venv', $venvRoot))
     Assert-SupportedPython $PythonExe
 }
@@ -244,7 +249,7 @@ function Test-Environment {
             } catch { Write-Host "[THIEU/LOI] ${check}: $($_.Exception.Message)"; $issues++ }
         }
     }
-    Write-Host "[CHECK] $issues nhom thieu / loi. Chon muc 1 > 2 de cai; khong sua API / tai khoan."
+    Write-Host "[CHECK] $issues nhom thieu / loi. Chon muc 4 > 2 de cai; khong sua API / tai khoan."
     return ($issues -eq 0)
 }
 
@@ -308,6 +313,7 @@ function Assert-UpdatePaths {
 function Connect-ZipRepository {
     param([string]$GitExe)
     Assert-AppStopped
+    if (-not $RepositoryUrl) { throw 'Chua co URL repo Money Hunter. Can support\repository.json truoc khi noi ban ZIP.' }
     $hasMetadata = Test-Path -LiteralPath (Join-Path $ProjectRoot '.git')
     if ($hasMetadata) {
         # Resume a first connection interrupted during fetch; never retarget another remote.
@@ -331,8 +337,8 @@ function Connect-ZipRepository {
     Invoke-Native $GitExe @('reset', '--hard', $target)
     Invoke-Native $GitExe @('branch', '--set-upstream-to=origin/main', 'main')
     Install-Packages
-    Write-Host '[OK] Da noi Git va cap nhat. Lan sau dung muc 2; chon muc 3 de khoi dong.'
-    Write-Host '[SETTING] Muc 4 nap preset VA moi. Cap nhat code khong tu doi setting/API/Telegram.'
+    Write-Host '[OK] Da noi Git va cap nhat. Lan sau dung muc 2; chon muc 1 de khoi dong.'
+    Write-Host '[SETTING] Muc 3 nap preset VA moi. Cap nhat code khong tu doi setting/API/Telegram.'
 }
 
 function Update-Code {
@@ -348,6 +354,12 @@ function Update-Code {
     if ([IO.Path]::GetFullPath([string]$gitRoot).TrimEnd('\', '/') -ine $ProjectRoot.TrimEnd('\', '/')) {
         throw 'Git root khong trung thu muc Money Hunter. Khong ghi de.'
     }
+    if ($RepositoryUrl) {
+        $origin = Invoke-Native $git @('remote', 'get-url', 'origin')
+        if ([string]$origin -ne $RepositoryUrl) {
+            throw 'Origin khong trung repo Money Hunter da cau hinh. Khong tu thay remote; kiem tra repo truoc khi cap nhat.'
+        }
+    }
     try { $current = Invoke-Native $git @('rev-parse', '--verify', '--quiet', 'HEAD') }
     catch {
         Connect-ZipRepository $git
@@ -359,7 +371,7 @@ function Update-Code {
     $target = Invoke-Native $git @('rev-parse', '@{u}')
     if ([string]$current -eq [string]$target) {
         Write-Host '[OK] Khong co ban cap nhat moi.'
-        Write-Host '[SETTING] Muc 4 nap preset VA. Muc 2 chi cap nhat code, khong tu doi setting.'
+        Write-Host '[SETTING] Muc 3 nap preset VA. Muc 2 chi cap nhat code, khong tu doi setting.'
         return
     }
     Assert-UpdatePaths $git $target
@@ -369,8 +381,8 @@ function Update-Code {
     # Deliberately overwrite tracked source, per operator request. Never git clean.
     Invoke-Native $git @('reset', '--hard', $target)
     Install-Packages
-    Write-Host '[OK] Da cap nhat. Chon muc 3 de khoi dong.'
-    Write-Host '[SETTING] Muc 4 nap preset VA moi. Cap nhat code khong tu doi setting/API/Telegram.'
+    Write-Host '[OK] Da cap nhat. Chon muc 1 de khoi dong.'
+    Write-Host '[SETTING] Muc 3 nap preset VA moi. Cap nhat code khong tu doi setting/API/Telegram.'
 }
 
 function Wait-AppRetry {
@@ -380,8 +392,13 @@ function Wait-AppRetry {
 
 function Apply-VASettings {
     Assert-AppStopped
-    if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) { throw 'Chua co venv. Chon muc 1 > 2 truoc.' }
+    if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) { throw 'Chua co venv. Chon muc 4 > 2 truoc.' }
     Invoke-Native $PythonExe @('-u', (Join-Path $ProjectRoot 'support\tools\apply_va_preset.py'))
+}
+
+function Check-LocalState {
+    if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) { throw 'Chua co venv. Chon muc 4 > 2 truoc.' }
+    Invoke-Native $PythonExe @('-u', (Join-Path $ProjectRoot 'support\tools\preflight.py'), '--state-only')
 }
 
 function Open-LogFolder {
@@ -425,7 +442,7 @@ function Open-LogFolder {
 }
 
 function Start-App {
-    if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) { throw 'Chua co venv. Chon muc 1 > 2 truoc.' }
+    if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) { throw 'Chua co venv. Chon muc 4 > 2 truoc.' }
     Assert-AppStopped
     Write-Host '[START] Giu console nay de xem log. Ctrl+C hoac dong cua so app de dung.'
     Write-Host '[LOG] viking_v2\runtime\accounts\<account>\logs\ (ui.log, daemon.log).'
@@ -453,6 +470,7 @@ if ($MyInvocation.InvocationName -ne '.') {
             'Start' { Start-App }
             'PresetVA' { Apply-VASettings }
             'Logs' { Open-LogFolder }
+            'StateCheck' { Check-LocalState }
         }
         exit 0
     } catch {

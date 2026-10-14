@@ -2,8 +2,8 @@
 
 Hướng dẫn gửi đối tác: [VAN_HANH.md](VAN_HANH.md). Code là nguồn sự thật;
 setting đang chạy nằm riêng theo tài khoản, không suy ra từ ảnh/backtest cũ.
-Tên hiển thị chung ở `viking_v2/branding.py`; giữ package/repo/runtime cũ để tương thích.
-Tài liệu dài/nghiên cứu trước đây còn trong lịch sử Git trước bản cập nhật này.
+Tên hiển thị chung ở `viking_v2/branding.py`; giữ package/runtime cũ để tương thích.
+Hiện cập nhật từ repo Viking. URL trong `support/repository.json`; chỉ đổi sang repo Money Hunter private khi Ngài chỉ định.
 
 ## Đường đi chính
 
@@ -23,10 +23,10 @@ UI/Telegram không thay rule.
 | `backtest/` | Mô phỏng dùng chung rule/sizing, không chứng minh giá khớp/độ trễ LIVE |
 
 `support/launcher.ps1`/`START_SYSTEM.bat`: môi trường, update, start Windows.
-BAT 4: `support/presets/VA_4_MA_50M.json` qua `tools/apply_va_preset.py`; chỉ sửa
+BAT 3: `support/presets/VA_4_MA_50M.json` qua `tools/apply_va_preset.py`; chỉ sửa
 danh sách/hạn mức/P1/max mã và E AUTO, bổ sung IND_EXIT cho trade BOT mới (không bỏ
 mode cũ), giữ kết nối/rule khác/runtime; yêu cầu app/daemon dừng. BAT 2 chỉ update source;
-BAT 4 xác nhận nạp preset trên tài khoản máy đích, không đồng bộ settings.json toàn bộ.
+BAT 3 xác nhận nạp preset trên tài khoản máy đích, không đồng bộ settings.json toàn bộ.
 Preset VA 50 triệu: MSN 16, CTS 12, HDB 15, IDC 7 triệu, 100%, MAX=1; IDC không mượn cap khác.
 TRACE ON cho bốn mã, 14:00–14:30 mỗi 2 phút (16 mẫu/mã/sổ, gồm mốc cuối), kể cả không BUY.
 `support/tests/`/`support/tools/`: regression offline, preflight, phục hồi có kiểm tra.
@@ -43,7 +43,7 @@ TRACE ON cho bốn mã, 14:00–14:30 mỗi 2 phút (16 mẫu/mã/sổ, gồm m�
 - Timeout gửi là chưa rõ kết quả, không POST lại trước đối soát. PendingCancel chưa
   phải hủy xong. Fill tích lũy chỉ áp dụng phần tăng mới; queue/vị thế cùng transaction
   SQLite. Khớp từng phần thuộc cùng lệnh/trade, không tự tách sổ.
-- SL/TP/E AUTO bán 100%; PROTECT/Dynamic dùng `normal_sell_pct`; E độc lập với ARM.
+- SL/TP/E AUTO bán 100%; ARM dùng `normal_sell_pct`, DYNAMIC dùng `dynamic_sell_pct`; AUTO/ALERT riêng. E độc lập với ARM.
   MFE là lãi đỉnh từng đạt, không phải PNL đã chốt. REPEAT giữ rule cũ.
   E/M mặc định chỉ gắn cho trade BOT mới, không xóa chế độ của vị thế đã mở.
 - SELL dùng sellable DNSE; RECHECK cần điều kiện còn đúng, KEEP giữ yêu cầu.

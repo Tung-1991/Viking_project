@@ -269,15 +269,17 @@ def test_start_crash_can_return_to_menu_without_retry(tmp_path):
 def test_batch_menu_routes_environment_update_start_and_preserves_logs():
     batch = (ROOT / "START_SYSTEM.bat").read_text(encoding="utf-8")
     menu = batch.split(":menu", 1)[1].split("choice /c 123450", 1)[0]
-    assert "echo   4. Nap setting\n" in menu
-    assert "echo   5. Mo thu muc log\n" in menu
+    assert "echo   1. Mo Money Hunter\n" in menu
+    assert "echo   3. Nap preset VA\n" in menu
+    assert "echo   5. Chan doan\n" in menu
     assert all(detail not in menu for detail in ("MSN", "CTS", "HDB", "IDC", "P1 100", "E AUTO"))
     assert "choice /c 123450" in batch
     assert "if errorlevel 6 exit /b 0" in batch
-    assert "if errorlevel 5 goto logs" in batch
-    assert "if errorlevel 4 goto preset" in batch
+    assert "if errorlevel 5 goto diagnostics" in batch
+    assert "if errorlevel 4 goto environment" in batch
     assert all(f"-Action {action}" in batch for action in ("Check", "Packages", "Update", "Start", "PresetVA", "Logs"))
-    assert "if errorlevel 3 goto start" in batch
+    assert "if errorlevel 3 goto preset" in batch
+    assert "if errorlevel 1 goto start" in batch
     assert "if errorlevel 2 goto update" in batch
     assert "choice /c 120" in batch
     assert 'support\\launcher.ps1' in batch and 'scripts\\launcher.ps1' not in batch
@@ -540,6 +542,7 @@ function Invoke-Native {{
     switch ($call) {{
         'rev-parse|--is-inside-work-tree' {{ 'true' }}
         'rev-parse|--show-toplevel' {{ $ProjectRoot }}
+        'remote|get-url|origin' {{ $RepositoryUrl }}
         'rev-parse|--abbrev-ref|--symbolic-full-name|@{{u}}' {{ 'origin/main' }}
         'fetch' {{}}
         'rev-parse|--verify|--quiet|HEAD' {{ 'old-sha' }}
@@ -678,6 +681,7 @@ def test_local_git_remote_update_integration(tmp_path, local_changes):
     git("push")
     expected_revision = git("rev-parse", "HEAD")
     result = _run_ps(
+        f"$RepositoryUrl = {_ps_quote(remote)}\n"
         "function Install-Packages { Write-Output 'PACKAGE_CHECK_MOCKED' }\nUpdate-Code", deployed,
     )
     _assert_ok(result)
@@ -780,7 +784,7 @@ def test_zip_update_refuses_to_initialize_before_stop_and_backup(tmp_path, failu
         "function Assert-AppStopped { throw 'RUNNING_APP' }\n" if failure == "running"
         else "function Backup-LocalData { throw 'BACKUP_FAILED' }\n"
     )
-    result = _run_ps(override + "Update-Code", tmp_path)
+    result = _run_ps("$RepositoryUrl='https://github.com/example/Money_hunter.git'\n" + override + "Update-Code", tmp_path)
     assert result.returncode != 0
     assert ("RUNNING_APP" if failure == "running" else "BACKUP_FAILED") in result.stderr
     assert not (tmp_path / ".git").exists()
@@ -809,11 +813,34 @@ def test_zip_update_rejects_remote_private_paths_before_overwrite(zip_repository
 
 
 def test_unborn_repository_with_another_origin_is_not_retargeted(zip_repository):
-    git, _remote, deployed, _author = zip_repository
+    git, remote, deployed, _author = zip_repository
     git("init", "--initial-branch=main", cwd=deployed)
     git("remote", "add", "origin", "https://example.invalid/not-viking.git", cwd=deployed)
-    result = _run_ps("Update-Code", deployed)
+    result = _run_ps(f"$RepositoryUrl={_ps_quote(remote)}\nUpdate-Code", deployed)
     assert result.returncode != 0
-    assert "origin khong dung Money Hunter" in result.stderr
+    assert "Origin khong trung repo Money Hunter" in result.stderr
     assert git("remote", "get-url", "origin", cwd=deployed) == "https://example.invalid/not-viking.git"
     assert (deployed / "code.txt").read_text() == "old ZIP source"
+
+
+def test_zip_without_repository_url_does_not_initialize_or_guess_viking(tmp_path):
+    result = _run_ps("$RepositoryUrl=$null\nUpdate-Code", tmp_path)
+    assert result.returncode != 0 and "Chua co URL repo Money Hunter" in result.stderr
+    assert not (tmp_path / ".git").exists()
+    assert not (tmp_path / ".artifacts").exists()
+
+
+def test_local_state_diagnostics_never_installs_stops_app_or_requests_broker(tmp_path):
+    python = tmp_path / "ckvnvenv/Scripts/python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"offline fake")
+    result = _run_ps(
+        "function Assert-AppStopped { throw 'UNEXPECTED_STOP' }\n"
+        "function Install-Packages { throw 'UNEXPECTED_INSTALL' }\n"
+        "function Invoke-Native { param($Command,$Arguments); "
+        "if ($Arguments.Count -ne 3 -or $Arguments[0] -ne '-u' -or $Arguments[1] -notlike '*preflight.py' "
+        "-or $Arguments[2] -ne '--state-only') { throw 'NOT_LOCAL_ONLY' }; 'STATE_ONLY_OK' }\n"
+        "Check-LocalState", tmp_path,
+    )
+    _assert_ok(result)
+    assert "STATE_ONLY_OK" in result.stdout

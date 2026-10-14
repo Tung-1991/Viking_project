@@ -15,7 +15,8 @@ nhóm nào được chạy. DYNAMIC ON vẫn tính mức trong ALERT. LẶP và 
 E AUTO ưu tiên trước PROTECT; SL và TP giữ thứ tự ưu tiên hiện có.
 
 Update source giữ lựa chọn tài khoản cũ: thiếu `dynamic_policy` thì kế thừa `normal_policy` trước đây.
-Để dùng ba chế độ trên, chọn từng MODE rồi LƯU; hoặc đóng app và nạp preset bằng BAT 2 → 4 → 3.
+Để dùng ba chế độ trên, chọn từng MODE rồi LƯU; hoặc đóng app và nạp preset bằng BAT 2 → 3 → 1
+(menu đổi từ ngày 14/10: 1 mở app, 3 nạp preset).
 Preset còn áp dụng hạn mức/P1/Telegram đã chốt, không tự bật PROTECT trên vị thế đang giữ.
 
 ## Chờ cổ về

@@ -38,7 +38,7 @@ App cần chạy suốt khung giờ. Ngày nghỉ không ghi; mở muộn hoặc
 
 Xem: **LỊCH SỬ → TÍN HIỆU → LÀM MỚI → Ngày → Mã → ĐỊNH KỲ**. Bốn mã được nhóm riêng dưới ngày ghi; cửa sổ đang mở cần bấm LÀM MỚI để đọc mẫu mới. XUẤT EXCEL lấy cả nhóm chưa xổ.
 
-Git mang theo preset, không tự ghi đè cấu hình tài khoản trên VM. Nếu cần nạp toàn bộ preset VA: đóng app, dùng BAT **2 → 4 → kiểm tra tài khoản và xác nhận → 3**. Preset còn chứa hạn mức, P1, E và lựa chọn tin Telegram đã chốt; muốn chỉ chỉnh lịch TRACE thì dùng **⚙ GHI TÍN HIỆU**.
+Git mang theo preset, không tự ghi đè cấu hình tài khoản trên VM. Nếu cần nạp toàn bộ preset VA: đóng app, dùng BAT **2 → 3 → kiểm tra tài khoản và xác nhận → 1**. Preset còn chứa hạn mức, P1, E và lựa chọn tin Telegram đã chốt; muốn chỉ chỉnh lịch TRACE thì dùng **⚙ GHI TÍN HIỆU**.
 
 Với tài khoản đã lưu GIỮ LÃI 90%, update source vẫn giữ lựa chọn đã lưu. Để chỉ đổi mức này,
 vào **RULE → E/M → DYNAMIC → GIỮ LÃI (%) = 72 → LƯU**. ARM và DYNAMIC có MODE riêng;

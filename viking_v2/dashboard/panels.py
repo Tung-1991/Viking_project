@@ -15,8 +15,11 @@ from ..connections.dnse.snapshot_health import (
     FAST_POLL_SECONDS, IDLE_POLL_SECONDS, end_of_day_order_pause,
     rest_is_end_of_day_order_pause, safe_detail, snapshot_failure_summary,
 )
-from ..rules.business import average_true_range_pct, average_true_range_snapshot, indicator_snapshot, protect_level
-from ..rules.protection import policy_for_stage
+from ..rules.business import (
+    StaticRuleParameters, average_true_range_pct, average_true_range_snapshot,
+    indicator_snapshot, protect_level, protect_peak_for_sellable_phase,
+)
+from ..rules.protection import dynamic_floor_previous, policy_for_stage
 from ..rules.observations import ema_cross_caption, finite
 from ..trading.market import VN_TZ, exchange_close_minute, market_now, market_phase, merge_tick_into_daily_bars
 from ..trading.portfolio import (
@@ -41,6 +44,7 @@ from .windows import (
 )
 from .tables import RUNNING_FONT, RUNNING_HEADING_FONT
 from .quote_direction import PRICE_DIRECTION_HINT, quote_background
+from .protect_preview import dynamic_start_preview, start_caption
 
 
 def _auto_quantity_feedback(
@@ -2184,7 +2188,23 @@ class DashboardPanelsMixin:
         actual = preview.get("actual_sell")
         if actual is not None and actual > 0:
             example = f"Mốc bán của vị thế: {_display_price(actual)} đ; theo đỉnh đã ghi nhận.\n"
+        start = getattr(self, "_preview_dynamic_start", {})
+        if start:
+            basis = "giá vốn vị thế" if start["position"] else "giá vào lệnh nháp"
+            target = f"{_display_price(start['start'])}đ" if start["start"] > 0 else "chờ dữ liệu"
+            if not start["start_enabled"]:
+                target = "sau lần có lãi đầu tiên"
+            stage = preview.get("actual_stage", "ARM" if start["state"] == "SAU ARM" else "DYN")
+            policy = policy_for_stage(self.settings.rule_parameters or {}, stage)
+            action = "chỉ cảnh báo" if policy == "ALERT" else "xét bán theo KL"
+            floor = f"MỐC {_display_price(actual)}đ · " if actual is not None and actual > 0 else ""
+            return (
+                f"Theo {basis}: {_display_price(start['entry'])}đ.\n"
+                f"START {target} · {start['state']}.\n"
+                f"{floor}{stage} {policy}: {action} khi giá lùi chạm mốc theo đỉnh."
+            )
         return (
+            "START bật theo dõi; giá lùi chạm MỐC/BÁN mới xử lý.\n"
             "ARM: bắt đầu theo đỉnh. Đỉnh cao hơn → mốc BÁN tăng.\n"
             f"{example}"
             "ARM và DYNAMIC có AUTO/ALERT riêng; AUTO bán, ALERT chỉ báo.\n"
@@ -2200,6 +2220,35 @@ class DashboardPanelsMixin:
             if label.cget("text") != shown:
                 label.configure(text=shown)
             fit_label_text(label, base_font=("Segoe UI", 10))
+
+    def _dynamic_start_context(self, symbol: str, draft_entry: float, details: dict[str, Any]) -> dict[str, Any]:
+        params = self.settings.rule_parameters or {}
+        entry, position, enabled, mfe = draft_entry, False, False, None
+        current, profit = finite(details.get("current_price")), finite(details.get("current_profit_pct"))
+        if current is not None and current > 0 and profit is not None and profit > -100:
+            entry, position = current / (1 + profit / 100), True
+            enabled = "NORMAL" in (details.get("em_modes") or [])
+            mfe = finite(details.get("normal_mfe_pct", details.get("peak_profit_pct")))
+        store = getattr(self, "trade_state", None)
+        active = store.active_for(symbol, self.mode.get()) if store is not None else None
+        if active and active.open_quantity > 0 and active.avg_entry_price > 0:
+            entry, position, enabled = active.avg_entry_price, True, "NORMAL" in active.em_modes
+            if mfe is None and getattr(self, "rule_state", None) is not None:
+                metrics = self.rule_state.position_metrics(symbol, active.id)
+                mfe = finite(metrics.get("peak_profit_pct"))
+                if mfe is not None:
+                    rule = StaticRuleParameters.from_dict(params)
+                    mfe = protect_peak_for_sellable_phase(
+                        mfe, finite(metrics.get("normal_sellable_peak_profit_pct")) or 0,
+                        rule.normal_arm_pct,
+                        reset_applied=bool(rule.normal_dynamic_enabled and rule.normal_t2_reset_enabled
+                                           and metrics.get("normal_t2_reset_applied")),
+                    )
+                    if mfe + 1e-9 < rule.normal_arm_pct:
+                        details = dict(details, protection_stage="DYN", normal_trigger_price=dynamic_floor_previous(
+                            metrics, rule.normal_retention_pct,
+                        ))
+        return dynamic_start_preview(entry, params, details, position=position, enabled=enabled, mfe=mfe)
 
     def _exit_preview_hint(self) -> str:
         preview = getattr(self, "_preview_exit_state", {})
@@ -2656,6 +2705,7 @@ class DashboardPanelsMixin:
             protect_state = str(decision_details.get("normal_state", "WAIT") or "WAIT").upper()
             effective_trail = decision_details.get("normal_effective_trail_pct")
             self._preview_protect_prices["actual_sell"] = _number(protected)
+            self._preview_protect_prices["actual_stage"] = str(decision_details.get("protection_stage", "ARM"))
             state_label = {"WAIT": "CHỜ", "ARM": "ĐÃ ARM", "DYN": "DYNAMIC",
                            "WAITING_SETTLEMENT": "CHỜ CỔ VỀ",
                            "REARM": "CHỜ LẶP", "DONE": "ĐÃ BÁN",
@@ -2682,6 +2732,26 @@ class DashboardPanelsMixin:
                     text=_dynamic_atr_preview_text(decision_details, params),
                 )
         fit_label_text(self.preview_normal_value, base_font=("Cascadia Mono", 12))
+        self._preview_dynamic_start = self._dynamic_start_context(symbol, entry_price, decision_details)
+        preview_entry = self._preview_dynamic_start["entry"]
+        if self._preview_dynamic_start["position"] and preview_entry > 0:
+            self._preview_protect_prices["arm"] = preview_entry * (1 + normal_arm / 100)
+            self._preview_protect_prices["sell"] = protect_level(preview_entry, normal_arm, normal_arm, normal_giveback).trigger_price
+            if not (current_profit is not None and _number(decision_details.get("normal_trigger_price")) > 0):
+                self.preview_normal_value.configure(text=(
+                    f"ARM: {_display_price(self._preview_protect_prices['arm'])} · "
+                    f"{'MỐC' if policy_for_stage(params, 'ARM') == 'ALERT' else 'BÁN'}: {_display_price(self._preview_protect_prices['sell'])}"
+                ))
+                fit_label_text(self.preview_normal_value, base_font=("Cascadia Mono", 12))
+        self._preview_protect_detail = (
+            start_caption(self._preview_dynamic_start), start_caption(self._preview_dynamic_start, compact=True),
+        )
+        protect_on = self._preview_dynamic_start["enabled"] if self._preview_dynamic_start["position"] else self._em_states.get("normal_protection", False)
+        self.preview_em_normal.configure(
+            text=f"PROTECT · {'ON' if protect_on else 'OFF'} · ARM {policy_for_stage(params, 'ARM')}",
+            text_color=COL_GREEN if protect_on else COL_MUTED,
+        )
+        self.preview_normal_detail.configure(text=self._preview_protect_detail[0])
         fit_label_text(self.preview_normal_detail, base_font=("Segoe UI", 10))
         self._fit_protect_preview()
         self._refresh_rule_preview(status, symbol)
