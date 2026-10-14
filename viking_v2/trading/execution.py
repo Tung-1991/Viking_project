@@ -368,19 +368,23 @@ class ExecutionService:
                                       "queue_status": "CANCELLED", "result": asdict(result)})
         return cancelled
 
-    def _cancel_paused_position_sell(self, intent: OrderIntent) -> bool:
-        if not self.trade_state or intent.side != "SELL" or intent.source not in {"BOT", "EM"}:
+    def _cancel_disabled_position_order(self, intent: OrderIntent) -> bool:
+        # Recheck both sides: a local BOT hold also blocks cached scale-in BUYs.
+        if not self.trade_state or intent.source not in {"BOT", "EM"}:
             return False
         cycle = (self.trade_state.get(intent.trade_id) if intent.trade_id else
                  self.trade_state.active_for(intent.symbol, intent.execution_mode, intent.loan_package_id))
-        from .position_controls import automatic_exit_allowed
-        if automatic_exit_allowed(cycle, intent):
+        if not cycle or cycle.status != "OPEN":
+            cycle = self.trade_state.active_for(intent.symbol, intent.execution_mode, intent.loan_package_id)
+        from .position_controls import automatic_trade_allowed
+        if automatic_trade_allowed(cycle, intent):
             return False
-        reason = ("POSITION_AUTO_SELL_PAUSED: operator tạm dừng tự bán" if cycle and not cycle.auto_sell_enabled
+        reason = ("POSITION_BOT_ALERT: vị thế chỉ nhận tín hiệu" if cycle and not cycle.bot_trade_enabled else
+                  "POSITION_AUTO_SELL_PAUSED: operator tạm dừng tự bán" if cycle and not cycle.auto_sell_enabled
                   else "POSITION_EXIT_MODE_CHANGED: nhánh bán OFF/ALERT")
         cancelled = self._cancel_unsent_order(intent, reason)
         if not cancelled and intent.status == "SENDING":
-            self.queue.release(intent.id, "UNKNOWN", "Chế độ bán đã đổi; đối soát lệnh đã gửi")
+            self.queue.release(intent.id, "UNKNOWN", "Chế độ vị thế đã đổi; đối soát lệnh đã gửi")
         return True
 
     def process_due(
@@ -399,7 +403,7 @@ class ExecutionService:
                 }:
                     self._cancel_alert_order(pending)
                     self._cancel_unverified_protection(pending)
-                    self._cancel_paused_position_sell(pending)
+                    self._cancel_disabled_position_order(pending)
         if self.protection_policy_provider:
             alert_stages = {stage for stage in ("ARM", "DYN")
                             if self.protection_policy_provider(stage) == "ALERT"}
@@ -433,7 +437,7 @@ class ExecutionService:
                     completed.append((current, BrokerOrderResult(True, "CANCELLED", message=current.result)))
                 continue
             intent = current
-            if self._cancel_paused_position_sell(intent):
+            if self._cancel_disabled_position_order(intent):
                 continue
             if self._cancel_unverified_protection(intent):
                 continue
@@ -661,25 +665,31 @@ class ExecutionService:
                     continue
             # Durable hand-off identity BEFORE the network call. A timeout never
             # authorizes another POST. Persist the package on the original, too.
-            if self._cancel_paused_position_sell(intent):
-                continue
-            if self._cancel_unverified_protection(intent):
-                continue
-            cancelled = self._cancel_alert_order(intent)
-            if cancelled:
-                completed.append((cancelled, BrokerOrderResult(True, "CANCELLED", message=cancelled.result)))
-                continue
-            if intent.side == "BUY" and self.trade_state:
-                active_cycle = self.trade_state.active_for(intent.symbol, mode, intent.loan_package_id)
-                if active_cycle:
-                    intent.trade_id = send_intent.trade_id = active_cycle.id
-            intent.request_tag = intent.request_tag or f"V2:{intent.id.upper()}:{intent.attempt}"
-            if intent.side == "SELL" and intent.details.get("protection_stage"):
-                intent.details["protection_handoff_price"] = board_price((handoff_quote or {}).get("price", 0))
-            intent.handed_off_at = time.time()
-            send_intent.request_tag = intent.request_tag
-            send_intent.handed_off_at = intent.handed_off_at
-            self.queue._update(intent.id, request_tag=intent.request_tag, handed_off_at=intent.handed_off_at, loan_package_id=intent.loan_package_id, trade_id=intent.trade_id, details=intent.details)
+            # Serialize the operator's edit with the durable handoff marker.
+            # The edit either cancels this unsent order or reports it as broker pending.
+            with self.database:
+                current = self.queue.get(intent.id)
+                if not current or current.status != "SENDING":
+                    continue
+                if self._cancel_disabled_position_order(intent):
+                    continue
+                if self._cancel_unverified_protection(intent):
+                    continue
+                cancelled = self._cancel_alert_order(intent)
+                if cancelled:
+                    completed.append((cancelled, BrokerOrderResult(True, "CANCELLED", message=cancelled.result)))
+                    continue
+                if intent.side == "BUY" and self.trade_state:
+                    active_cycle = self.trade_state.active_for(intent.symbol, mode, intent.loan_package_id)
+                    if active_cycle:
+                        intent.trade_id = send_intent.trade_id = active_cycle.id
+                intent.request_tag = intent.request_tag or f"V2:{intent.id.upper()}:{intent.attempt}"
+                if intent.side == "SELL" and intent.details.get("protection_stage"):
+                    intent.details["protection_handoff_price"] = board_price((handoff_quote or {}).get("price", 0))
+                intent.handed_off_at = time.time()
+                send_intent.request_tag = intent.request_tag
+                send_intent.handed_off_at = intent.handed_off_at
+                self.queue._update(intent.id, request_tag=intent.request_tag, handed_off_at=intent.handed_off_at, loan_package_id=intent.loan_package_id, trade_id=intent.trade_id, details=intent.details)
             try:
                 # Earlier broker calls in this batch may have crossed the
                 # deadline. Check again immediately before sending each BUY.

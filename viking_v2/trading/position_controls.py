@@ -34,7 +34,9 @@ def position_override_items(settings, position) -> list[str]:
     modes = set(position.em_modes)
     overrides = normalize_exit_overrides(getattr(position, "exit_rule_overrides", {}))
     items = []
-    if getattr(position, "auto_sell_enabled", True) is False:
+    if getattr(position, "bot_trade_enabled", True) is False:
+        items.append("BOT vị thế: ALERT · Chặn BUY/SELL tự động; giữ tín hiệu và bán tay.")
+    if getattr(position, "auto_sell_enabled", True) is False and getattr(position, "bot_trade_enabled", True):
         items.append("Tự bán: TẠM DỪNG")
     if position.sl_enabled != bool(getattr(settings, "bot_sl_enabled", True)):
         items.append(f"SL: {'BẬT' if position.sl_enabled else 'OFF'} · RULE {'BẬT' if getattr(settings, 'bot_sl_enabled', True) else 'OFF'}")
@@ -63,6 +65,16 @@ def position_override_items(settings, position) -> list[str]:
     return items
 
 
+def position_bot_cell(settings, position) -> str:
+    """Combine local trading permission and the override mark in one cell."""
+    if position is None:
+        return "—"
+    mark = " · X" if position_override_items(settings, position) else ""
+    state = ("Alert" if getattr(position, "bot_trade_enabled", True) is False else
+             "Bán Alert" if getattr(position, "auto_sell_enabled", True) is False else "Bật")
+    return state + mark
+
+
 def exit_stage_policy(params, cycle, stage: str) -> str:
     effective = position_exit_params(params, cycle)
     if cycle and "NORMAL" not in cycle.em_modes:
@@ -74,8 +86,12 @@ def exit_stage_policy(params, cycle, stage: str) -> str:
     return policy_for_stage(effective, stage)
 
 
-def automatic_exit_allowed(cycle, intent) -> bool:
-    if intent.source not in {"BOT", "EM"} or intent.side != "SELL" or not cycle:
+def automatic_trade_allowed(cycle, intent) -> bool:
+    if intent.source not in {"BOT", "EM"} or not cycle:
+        return True
+    if not cycle.bot_trade_enabled:
+        return False
+    if intent.side != "SELL":
         return True
     if not cycle.auto_sell_enabled:
         return False
@@ -105,9 +121,13 @@ def save_position_controls(trades, queue, trade_id, **changes):
             raise ValueError("Vị thế đã thay đổi hoặc đã đóng.")
         broker_pending = []
         for item in queue.list_all():
-            if item.trade_id != trade_id or item.status in {"FILLED", "CANCELLED", "EXPIRED", "FAILED", "REJECTED"}:
+            belongs = item.trade_id == trade_id or (
+                item.source in {"BOT", "EM"} and item.symbol == cycle.symbol
+                and item.execution_mode == cycle.execution_mode
+                and str(item.loan_package_id or "") == str(cycle.loan_package_id or ""))
+            if not belongs or item.status in {"FILLED", "CANCELLED", "EXPIRED", "FAILED", "REJECTED"}:
                 continue
-            if automatic_exit_allowed(cycle, item):
+            if automatic_trade_allowed(cycle, item):
                 continue
             if item.broker_order_id or item.handed_off_at:
                 broker_pending.append(item.id)

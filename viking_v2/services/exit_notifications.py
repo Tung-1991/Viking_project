@@ -6,7 +6,8 @@ from ..models import StrategyDecision
 
 def settlement_exit_snapshot(decision: StrategyDecision, position: dict, *, mode: str) -> dict | None:
     if not position or (int(position.get("trade_quantity", position.get("quantity", 0)) or 0) >= 100
-                        and position.get("auto_sell_enabled") is not False):
+                        and position.get("auto_sell_enabled") is not False
+                        and position.get("bot_trade_enabled") is not False):
         return None
     details = decision.details
     if (decision.reason == "PROTECT_WAITING_SETTLEMENT"
@@ -19,12 +20,13 @@ def settlement_exit_snapshot(decision: StrategyDecision, position: dict, *, mode
         kind, policy = details.get("held_exit_reason", decision.reason), "AUTO"
     else:
         return None
-    if position.get("auto_sell_enabled") is False:
+    paused = position.get("auto_sell_enabled") is False or position.get("bot_trade_enabled") is False
+    if paused:
         policy = "ALERT"
     return {"symbol": decision.symbol, "execution_mode": mode, "kind": kind,
             "policy": policy, "price": float(details.get("current_price", 0) or 0),
             "sellable_quantity": int(position.get("trade_quantity", 0) or 0),
             "held_quantity": int(position.get("quantity", 0) or 0),
-            "auto_sell_paused": position.get("auto_sell_enabled") is False,
+            "auto_sell_paused": paused,
             "peak_price": float(details.get("normal_peak_price", 0) or 0),
             "protect_price": float(details.get("normal_trigger_price", 0) or 0)}

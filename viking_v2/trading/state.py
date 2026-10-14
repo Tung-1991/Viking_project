@@ -92,6 +92,7 @@ class TradeStateStore:
         em_modes: list[str] | None = None,
         sl_enabled: bool = True,
         auto_sell_enabled: bool = True,
+        bot_trade_enabled: bool = True,
         sl_mode: str = "DEFAULT",
         sl_value: float = 0.0,
         tp_mode: str = "NONE",
@@ -116,6 +117,7 @@ class TradeStateStore:
                 em_modes=list(em_modes or []),
                 sl_enabled=sl_enabled,
                 auto_sell_enabled=auto_sell_enabled,
+                bot_trade_enabled=bot_trade_enabled,
                 sl_mode=sl_mode,
                 sl_value=sl_value,
                 tp_mode=tp_mode,
@@ -385,6 +387,7 @@ class TradeStateStore:
         em_modes: list[str] | None = None,
         sl_enabled: bool | None = None,
         auto_sell_enabled: bool | None = None,
+        bot_trade_enabled: bool | None = None,
         exit_rule_overrides: dict | None = None,
         sl_mode: str | None = None,
         sl_value: float | None = None,
@@ -406,6 +409,8 @@ class TradeStateStore:
                 cycle.sl_enabled = bool(sl_enabled)
             if auto_sell_enabled is not None:
                 cycle.auto_sell_enabled = bool(auto_sell_enabled)
+            if bot_trade_enabled is not None:
+                cycle.bot_trade_enabled = bool(bot_trade_enabled)
             if exit_rule_overrides is not None:
                 cycle.exit_rule_overrides = dict(exit_rule_overrides)
             if sl_mode is not None:

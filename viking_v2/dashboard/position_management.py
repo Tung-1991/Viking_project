@@ -34,8 +34,8 @@ def show_position_management(app, action: dict) -> None:
     capital = cycle.buy_notional if cycle else entry * quantity * 1000
     top = ctk.CTkToplevel(app)
     top.title("Quản lý vị thế")
-    top.geometry("620x350")
-    top.minsize(580, 350)
+    top.geometry("620x330")
+    top.minsize(580, 330)
     top.transient(app)
     top.grab_set()
     top.grid_columnconfigure(0, weight=1)
@@ -45,14 +45,20 @@ def show_position_management(app, action: dict) -> None:
     title = ctk.CTkLabel(header, text=f"{symbol} · {mode} · {quantity:,} CP", height=24, font=("Segoe UI", 16, "bold"), anchor="w")
     title.grid(row=0, column=0, sticky="w")
     _HoverHint(title, f"#{cycle.id if cycle else 'Ngoài hệ thống'}\nMở {app._row_time(cycle.opened_at if cycle else row.get('openedAt', ''))}", placement="inside")
-    auto_sell = tk.BooleanVar(master=top, value=cycle.auto_sell_enabled if cycle else True)
-    auto_switch = ctk.CTkSwitch(header, text="Tự bán", variable=auto_sell, width=100,
+    bot_on = tk.BooleanVar(master=top, value=bool(not cycle or cycle.bot_trade_enabled and cycle.auto_sell_enabled))
+    bot_switch = ctk.CTkSwitch(header, text="BOT", variable=bot_on, width=75,
                               switch_width=32, switch_height=17, font=("Segoe UI", 11))
-    auto_switch.grid(row=0, column=1, sticky="e")
-    auto_sell.trace_add("write", lambda *_a: auto_switch.configure(text_color="#F59E0B" if not auto_sell.get() else "#E8EBEF"))
-    auto_switch.configure(text_color="#F59E0B" if not auto_sell.get() else "#E8EBEF")
-    _HoverHint(auto_switch, "Tắt: SL/TP/ARM/DYNAMIC/E chỉ báo; hủy SELL tự động chưa gửi.\n"
-               "Bán tay vẫn dùng được. SELL đã gửi DNSE cần kiểm tra/hủy riêng.", placement="inside")
+    bot_switch.grid(row=0, column=1, sticky="e")
+    bot_state = ctk.CTkLabel(header, text="", height=20, width=46, font=("Segoe UI", 11))
+    bot_state.grid(row=0, column=2, sticky="e")
+    def refresh_bot(*_args):
+        bot_state.configure(text="Bật" if bot_on.get() else "Alert", text_color="#C5CBD4" if bot_on.get() else "#F59E0B")
+        bot_switch.configure(text_color="#E8EBEF" if bot_on.get() else "#F59E0B")
+    bot_on.trace_add("write", refresh_bot)
+    refresh_bot()
+    _HoverHint(bot_switch, "Bật: cho phép BOT giao dịch vị thế theo cấu hình chính và chế độ bên dưới.\n"
+               "Alert: chặn BUY thêm và mọi SELL tự động; giữ tín hiệu/Telegram và bán tay.\n"
+               "Chỉ đổi vị thế này, không đổi RULE hay BOT chung. Lệnh đã gửi DNSE cần kiểm tra/hủy riêng.", placement="inside")
     summary = ctk.CTkFrame(top, fg_color="#22262D", corner_radius=7)
     summary.grid(row=1, column=0, sticky="ew", padx=12, pady=3)
     ctk.CTkLabel(summary, text=f"Vốn {_display_price(entry)} · Giá {_display_price(price)} · PnL {_compact_vnd(pnl)} ({pnl / capital * 100 if capital else 0:+.2f}%)",
@@ -112,12 +118,12 @@ def show_position_management(app, action: dict) -> None:
         variable = tk.StringVar(master=top, value=initial)
         policies[stage] = variable
         caption = ctk.CTkLabel(controls, text=label, width=85, height=22, anchor="w", font=("Segoe UI", 12, "bold"))
-        caption.grid(row=index, column=0, sticky="w", padx=(9, 5), pady=5)
+        caption.grid(row=index, column=0, sticky="w", padx=(9, 5), pady=4)
         menu = ctk.CTkOptionMenu(controls, values=["Theo RULE", "OFF", "ALERT", "AUTO"], variable=variable,
                                width=110, height=27, dynamic_resizing=False, font=("Segoe UI", 11))
-        menu.grid(row=index, column=1, padx=(0, 8), pady=5)
+        menu.grid(row=index, column=1, padx=(0, 8), pady=4)
         detail = ctk.CTkLabel(controls, text=summaries[stage], height=22, font=("Segoe UI", 11), anchor="w")
-        detail.grid(row=index, column=2, sticky="ew", padx=(0, 8), pady=5)
+        detail.grid(row=index, column=2, sticky="ew", padx=(0, 8), pady=4)
         def show_policy(*_args, variable=variable, detail=detail, stage=stage, key=key):
             summaries.update(rule_summaries())
             explicit = variable.get() != "Theo RULE"
@@ -217,12 +223,12 @@ def show_position_management(app, action: dict) -> None:
             field.insert(0, "AUTO")
         tp_on.set("TP" in modes)
         sl_on.set(app.settings.bot_sl_enabled)
-        auto_sell.set(True)
+        bot_on.set(True)
         for stage, variable in policies.items():
             tactic = "IND_EXIT" if stage == "E" else "NORMAL"
             variable.set("Theo RULE" if tactic in modes else "OFF")
         refresh()
-        status.configure(text="Theo RULE · Tự bán BẬT · Bấm LƯU để áp dụng.", text_color="#C5CBD4")
+        status.configure(text="Theo RULE · BOT Bật · Bấm LƯU để áp dụng.", text_color="#C5CBD4")
     def save():
         nonlocal cycle
         try:
@@ -269,7 +275,7 @@ def show_position_management(app, action: dict) -> None:
             if not messagebox.askyesno("Bắt đầu quản lý", f"Đưa vị thế {symbol} vào quản lý?", parent=top):
                 return
             cycle = app.trade_state.create(symbol, mode, source="EXTERNAL_DNSE", trade_id=uuid.uuid4().hex,
-                em_modes=sorted(selected), sl_enabled=sl_on.get(), auto_sell_enabled=auto_sell.get(),
+                em_modes=sorted(selected), sl_enabled=sl_on.get(), auto_sell_enabled=bot_on.get(), bot_trade_enabled=bot_on.get(),
                 sl_mode=sl_mode, sl_value=sl_value, tp_mode=tp_mode, tp_value=tp_value,
                 loan_package_id=str(row.get("loanPackageId", "")), deal_id=str(row.get("id", "")))
             app.trade_state.record_buy_fill(cycle.id, quantity, entry, 0.)
@@ -280,27 +286,27 @@ def show_position_management(app, action: dict) -> None:
                 app.bridge.write_config(RuntimeConfig(app.settings.watchlist, current.paper_mode, current.bot_enabled))
         try:
             cycle, broker_pending = save_position_controls(app.trade_state, app.queue, cycle.id,
-                em_modes=sorted(selected), sl_enabled=sl_on.get(), auto_sell_enabled=auto_sell.get(),
+                em_modes=sorted(selected), sl_enabled=sl_on.get(), auto_sell_enabled=bot_on.get(), bot_trade_enabled=bot_on.get(),
                 sl_mode=sl_mode, sl_value=sl_value, tp_mode=tp_mode, tp_value=tp_value, exit_rule_overrides=saved_overrides)
         except ValueError as exc:
             status.configure(text=str(exc))
             return
         if broker_pending:
-            messagebox.showwarning("SELL tại DNSE", "Đã chặn SELL tự động mới. Còn SELL broker cần kiểm tra/hủy riêng.", parent=top)
+            messagebox.showwarning("Lệnh tại DNSE", "Đã chặn lệnh tự động mới. Còn lệnh broker cần kiểm tra/hủy riêng.", parent=top)
         app._log(f"{symbol} · Đã lưu TP/SL và chế độ ARM/DYNAMIC/E")
         app._refresh_local()
         top.destroy()
     footer = ctk.CTkFrame(top, fg_color="transparent")
     footer.grid(row=5, column=0, sticky="ew", padx=12, pady=(4, 10))
-    footer.grid_columnconfigure(0, weight=1)
+    footer.grid_columnconfigure(1, weight=1)
     if cycle:
-        repair = ctk.CTkButton(footer, text="Đo lại MAE/MFE", width=128, height=28, font=("Segoe UI", 11), fg_color="#3A3F47",
+        repair = ctk.CTkButton(footer, text="Đo lại MAE/MFE", width=114, height=28, font=("Segoe UI", 11), fg_color="#3A3F47",
                               command=lambda: (top.destroy(), app._restart_position_metrics({**action, "trade_id": cycle.id})))
         repair.grid(row=0, column=0, sticky="w")
         _HoverHint(repair, "Đọc và xác nhận giá G1 trước khi bắt đầu khoảng đo mới. Giữ nguyên cổ/fill; tự bán tạm dừng.", placement="inside")
-    reset = ctk.CTkButton(footer, text="VỀ RULE", width=90, height=28, font=("Segoe UI", 11), fg_color="#2B6CB0", command=reset_to_rule)
-    reset.grid(row=0, column=1, padx=(8, 8))
+    reset = ctk.CTkButton(footer, text="VỀ RULE", width=90, height=28, font=("Segoe UI", 11), fg_color="#3A3F47", command=reset_to_rule)
+    reset.grid(row=0, column=1, sticky="w", padx=(6, 8))
     _HoverHint(reset, "Bỏ ghi đè: TP/SL AUTO; bật/tắt theo RULE → THỰC THI, chế độ theo RULE → E/M.\n"
-               "Tự bán trở về BẬT. Chỉ áp dụng khi bấm LƯU. Giữ nguyên cổ, fill và MAE/MFE.", placement="inside")
+               "BOT vị thế trở về Bật. Chỉ áp dụng khi bấm LƯU. Giữ nguyên cổ, fill và MAE/MFE.", placement="inside")
     ctk.CTkButton(footer, text="LƯU", width=90, height=28, font=("Segoe UI", 12, "bold"), fg_color="#16A34A", command=save).grid(row=0, column=2)
     ctk.CTkButton(footer, text="ĐÓNG", width=80, height=28, font=("Segoe UI", 11), fg_color="#3A3F47", command=top.destroy).grid(row=0, column=3, padx=(8, 0))

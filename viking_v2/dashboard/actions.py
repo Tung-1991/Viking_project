@@ -2958,6 +2958,13 @@ class DashboardActionsMixin:
             return PlanResult(None, "PRIORITY_ALERT")
         details = decision.details if isinstance(decision.details, dict) else {}
         checks = details.get("entry_checks") if isinstance(details.get("entry_checks"), dict) else {}
+        trade_store = getattr(self, "trade_state", None)
+        controlled_cycle = trade_store.get(str(details.get("trade_id", "") or "")) if trade_store else None
+        if trade_store and not controlled_cycle:
+            controlled_cycle = trade_store.active_for(decision.symbol, mode)
+        if decision.action in {"BUY", "SELL"} and controlled_cycle and not controlled_cycle.bot_trade_enabled:
+            from ..rules.planner import PlanResult
+            return PlanResult(None, "POSITION_BOT_ALERT")
         if decision.action == "SELL":
             trade_store = getattr(self, "trade_state", None)
             cycle = trade_store.get(str(details.get("trade_id", "") or "")) if trade_store else None
@@ -2973,7 +2980,7 @@ class DashboardActionsMixin:
                         or details.get("price_history_repaired_at", 0.0) != history.get("price_history_repaired_at", 0.0)))):
                 from ..rules.planner import PlanResult
                 return PlanResult(None, "PROTECT_HISTORY_UNVERIFIED")
-            from ..trading.position_controls import position_exit_params, automatic_exit_allowed, exit_stage_policy
+            from ..trading.position_controls import position_exit_params, automatic_trade_allowed, exit_stage_policy
             effective = position_exit_params(self.settings.rule_parameters, cycle)
             if any(exit_stage_policy(effective, cycle, stage) != "AUTO" for stage in stages):
                 from ..rules.planner import PlanResult
@@ -2981,7 +2988,7 @@ class DashboardActionsMixin:
             probe = OrderIntent.create(decision.symbol, "SELL", 100, "MARKET", source="EM",
                                        trade_id=str(details.get("trade_id", "")), reason=decision.reason,
                                        details=details)
-            if not automatic_exit_allowed(cycle, probe):
+            if not automatic_trade_allowed(cycle, probe):
                 from ..rules.planner import PlanResult
                 return PlanResult(None, "POSITION_EXIT_MODE_CHANGED")
         if decision.action == "BUY":
@@ -3422,7 +3429,7 @@ class DashboardActionsMixin:
         params = getattr(getattr(self, "settings", None), "rule_parameters", {}) or {}
         requires_cross = bool(params.get("buy_signal_use_ema", True)
                               and params.get("buy_signal_require_ema_cross", True))
-        if (decision.reason in {"BOT_OFF", "MANUAL_SELL_PAUSE", "PRIORITY_ALERT"}
+        if (decision.reason in {"BOT_OFF", "MANUAL_SELL_PAUSE", "PRIORITY_ALERT", "POSITION_BOT_ALERT"}
                 and not requires_cross):
             # Level mode must recheck current conditions after operator arming
             # or a pause. No order is planned while the operating gate is off.

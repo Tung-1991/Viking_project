@@ -431,7 +431,7 @@ class RuleSettingsPopup:
 
     def _phase1(self, frame: ctk.CTkFrame) -> None:
         body = self._phase1_body = self._content(frame)
-        self._summary(
+        market = self.phase1_market_card = self._summary(
             body,
             "VNINDEX · 1D",
             "",
@@ -477,39 +477,37 @@ class RuleSettingsPopup:
         self.exp_acc = self._field(exposure, "Tích lũy (%)", self.params.exposure["ACCUMULATION"] * 100, "ACCUMULATION. Mặc định tối đa 60% NAV.")
         self.exp_dist = self._field(exposure, "Phân phối (%)", self.params.exposure["DISTRIBUTION"] * 100, "DISTRIBUTION. Mặc định tối đa 50% NAV.")
 
-        override = self._card(
-            body, "TỶ TRỌNG CHỌN TAY (P1)",
-            "BẬT: dùng CP% nhập bên dưới, không chờ VNINDEX xác nhận. Ví dụ CP 100% = P1 không yêu cầu giữ tiền.\n"
-            "Tên trạng thái là lựa chọn tay, không phải kết luận VNINDEX. Vẫn phải đủ tiền/hạn mức; không tự bán cổ phiếu.",
-            2, 0, span=3, compact=True,
-        )
-        override_row = ctk.CTkFrame(override, fg_color="transparent")
-        override_row.pack(fill="x", padx=12, pady=(2, 10))
+        override_row = ctk.CTkFrame(market, fg_color="transparent")
+        override_row.pack(fill="x", padx=13, pady=(0, 6))
         override_row.grid_columnconfigure(3, weight=1)
         self.market_phase_override_enabled = tk.BooleanVar(
             value=self.settings.market_phase_override_enabled,
         )
-        ctk.CTkSwitch(
-            override_row, text="BẬT", variable=self.market_phase_override_enabled,
-            font=("Segoe UI", 12, "bold"), progress_color=self.WARN,
+        manual_switch = ctk.CTkSwitch(
+            override_row, text="Tỷ trọng chọn tay", variable=self.market_phase_override_enabled,
+            font=("Segoe UI", 12), progress_color=self.WARN,
             text_color=self.TEXT,
-        ).grid(row=0, column=0, sticky="w", padx=(0, 14))
+        )
+        manual_switch.grid(row=0, column=0, sticky="w", padx=(0, 14))
+        _HoverHint(manual_switch,
+            "BẬT: dùng CP% nhập ở đây, không chờ VNINDEX xác nhận. CP 100% = P1 không yêu cầu giữ tiền.\n"
+            "Tên trạng thái là lựa chọn tay; vẫn phải đủ tiền/hạn mức. Không tự bán cổ phiếu.")
         self.market_phase_override = tk.StringVar(
             value=self.settings.market_phase_override,
         )
         ctk.CTkOptionMenu(
             override_row,
             values=["UPTREND", "ACCUMULATION", "DISTRIBUTION", "DOWNTREND"],
-            variable=self.market_phase_override, width=170, height=34,
+            variable=self.market_phase_override, width=170, height=27,
             font=("Segoe UI", 12), fg_color=self.BLUE,
             button_color="#245C92", button_hover_color="#1D4D7B",
         ).grid(row=0, column=1, sticky="w")
         ctk.CTkLabel(
-            override_row, text="CP %", font=FONT_KEY, text_color=self.TITLE,
+            override_row, text="CP %", font=("Segoe UI", 12), text_color=self.TITLE,
         ).grid(row=0, column=2, sticky="w", padx=(18, 7))
         self.market_phase_override_exposure = ctk.CTkEntry(
-            override_row, width=78, height=34, justify="right",
-            font=FONT_VALUE, fg_color="#181B20", border_color="#444B55",
+            override_row, width=68, height=27, justify="right",
+            font=("Segoe UI", 12), fg_color="#181B20", border_color="#444B55",
             text_color=self.TEXT,
         )
         self.market_phase_override_exposure.insert(
@@ -554,7 +552,36 @@ class RuleSettingsPopup:
             "Backend hiện dùng một chu kỳ RSI cho cả BUY và E. Ô này đồng bộ với ô RSI trong E/M.",
             variable=self.shared_rsi_period,
         )
-        self.buy_ema_memory_group = ctk.CTkFrame(buy_group, fg_color="#222831", corner_radius=7)
+        confirmation = self._card(
+            body, "XÁC NHẬN BUY",
+            "Lần cắt EMA và thời gian xác nhận trước BUY. SELL và SL không chờ.",
+            2, 0, compact=True,
+        )
+        self.phase2_confirmation_card = confirmation
+        row = ctk.CTkFrame(confirmation, fg_color="transparent")
+        row.pack(fill="x", padx=8, pady=3)
+        self.buy_confirmation_enabled = tk.BooleanVar(value=self.params.buy_confirmation_enabled)
+        self.buy_confirmation_ema = tk.BooleanVar(value=self.params.buy_confirmation_require_ema)
+        self.buy_confirmation_rsi = tk.BooleanVar(value=self.params.buy_confirmation_require_rsi)
+        ctk.CTkSwitch(
+            row, text="BẬT", variable=self.buy_confirmation_enabled, width=76,
+            switch_width=32, switch_height=18, font=("Segoe UI", 11),
+            progress_color=self.GREEN, text_color=self.TEXT,
+        ).pack(side="left")
+        self.buy_confirmation_minutes = ctk.CTkEntry(
+            row, width=48, height=27, justify="right", font=("Segoe UI", 12),
+            fg_color="#181B20", border_color="#444B55", text_color=self.TEXT,
+        )
+        self.buy_confirmation_minutes.insert(0, str(self.params.buy_confirmation_minutes))
+        self.buy_confirmation_minutes.pack(side="left", padx=(4, 4))
+        ctk.CTkLabel(row, text="phút", font=("Segoe UI", 11), text_color=self.TEXT).pack(side="left", padx=(0, 12))
+        for label, variable in (("EMA", self.buy_confirmation_ema), ("RSI", self.buy_confirmation_rsi)):
+            ctk.CTkCheckBox(
+                row, text=label, variable=variable, width=60, checkbox_width=20, checkbox_height=20,
+                font=("Segoe UI", 11), fg_color=self.GREEN, text_color=self.TEXT,
+            ).pack(side="left", padx=(0, 8))
+        _HoverHint(row, "BẬT: giữ các điều kiện EMA/RSI đã chọn đủ X phút giao dịch trước khi BUY. SELL/SL không chờ.")
+        self.buy_ema_memory_group = ctk.CTkFrame(confirmation, fg_color="#222831", corner_radius=7)
         self.buy_ema_memory_group.pack(fill="x", padx=8, pady=(3, 5))
         self.buy_ema_memory_group._viking_compact = True
         memory_hint = (
@@ -672,44 +699,12 @@ class RuleSettingsPopup:
             "Lệnh chưa gửi hết hạn khi hết khung; lệnh đã gửi sàn vẫn theo cơ chế khớp của sàn.",
         ).pack(side="left")
 
-        confirmation = self._card(
-            body, "XÁC NHẬN BUY",
-            "Sau tín hiệu BUY, hệ thống kiểm tra các điều kiện EMA/RSI đã chọn tại mỗi lần quan sát cho đến đủ X phút giao dịch. SELL và SL không chờ.",
-            2, 0, compact=True,
-        )
-        self.phase2_confirmation_card = confirmation
-        row = ctk.CTkFrame(confirmation, fg_color="transparent")
-        row.pack(fill="x", padx=8, pady=3)
-        self.buy_confirmation_enabled = tk.BooleanVar(value=self.params.buy_confirmation_enabled)
-        self.buy_confirmation_ema = tk.BooleanVar(value=self.params.buy_confirmation_require_ema)
-        self.buy_confirmation_rsi = tk.BooleanVar(value=self.params.buy_confirmation_require_rsi)
-        ctk.CTkSwitch(
-            row, text="BẬT", variable=self.buy_confirmation_enabled,
-            font=("Segoe UI", 12, "bold"), progress_color=self.GREEN,
-            text_color=self.TEXT,
-        ).pack(side="left")
-        self.buy_confirmation_minutes = ctk.CTkEntry(
-            row, width=60, height=27, justify="right", font=("Segoe UI", 12),
-            fg_color="#181B20", border_color="#444B55", text_color=self.TEXT,
-        )
-        self.buy_confirmation_minutes.insert(0, str(self.params.buy_confirmation_minutes))
-        self.buy_confirmation_minutes.pack(side="left", padx=(12, 5))
-        ctk.CTkLabel(row, text="PHÚT", font=("Segoe UI", 12), text_color=self.TEXT).pack(side="left")
-
-        conditions = ctk.CTkFrame(confirmation, fg_color="transparent")
-        conditions.pack(fill="x", padx=8, pady=(2, 6))
-        for label, variable in (("EMA", self.buy_confirmation_ema), ("RSI", self.buy_confirmation_rsi)):
-            ctk.CTkCheckBox(
-                conditions, text=label, variable=variable, width=68,
-                font=("Segoe UI", 12, "bold"), fg_color=self.GREEN,
-                text_color=self.TEXT,
-            ).pack(side="left", padx=(0, 12))
-
         buy_volume = self._card(
             body, "VOLUME ENTRY",
             "Mặc định OFF. Khi ON, BUY chỉ được qua nếu volume tích lũy của nến hiện tại đạt tỷ lệ tối thiểu so với trung bình các phiên đã đóng trước đó. Không dùng dữ liệu tương lai.",
             2, 1, compact=True,
         )
+        self.phase2_volume_card = buy_volume
         self.buy_volume_enabled = self._switch(
             buy_volume, "DÙNG VOLUME", self.params.buy_volume_enabled,
             "OFF không ảnh hưởng chiến lược hiện tại. ON biến volume thành điều kiện bắt buộc trước khi tạo BUY.",
@@ -722,6 +717,12 @@ class RuleSettingsPopup:
             buy_volume, "Tối thiểu (%)", self.params.buy_volume_min_ratio * 100.0,
             "100% nghĩa volume hiện tại phải ít nhất bằng trung bình các phiên trước. Nếu chưa đủ lịch sử, BUY bị chặn rõ lý do.",
         )
+        self.phase2_cards = (signal, mode, confirmation, buy_volume)
+        for card in self.phase2_cards:
+            card.configure(height=200)
+            card.pack_propagate(False)
+            card.grid_configure(sticky="nsew")
+
     def _phase3(self, frame: ctk.CTkFrame) -> None:
         body = self._content(frame)
         self._summary(

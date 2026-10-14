@@ -1145,13 +1145,26 @@ class StaticRule:
                     market_state=market_state, details=details, scope="POSITION_MANAGEMENT",
                 )
             exit_decision = self._evaluate_position(symbol, market_state, signal, bars, position, details)
-            if exit_decision.action == "SELL" and position.get("auto_sell_enabled") is False:
+            bot_alert = position.get("bot_trade_enabled") is False
+            if exit_decision.action == "SELL" and (bot_alert or position.get("auto_sell_enabled") is False):
                 exit_decision.details.update(auto_sell_paused=True, held_exit_reason=exit_decision.reason)
+                exit_decision.details["position_bot_alert"] = bot_alert
                 exit_decision.action = "WAIT"
-                exit_decision.reason = "POSITION_AUTO_SELL_PAUSED"
+                exit_decision.reason = "POSITION_BOT_ALERT" if bot_alert else "POSITION_AUTO_SELL_PAUSED"
                 exit_decision.event = (
                     "PROTECT_ALERT" if exit_decision.event == "PRICE_PROTECTION" else
                     "INDICATOR_EXIT_ALERT" if exit_decision.event == "INDICATOR_EXIT" else "EXIT_ALERT")
+            if bot_alert:
+                exit_decision.details.update(position_bot_alert=True, auto_sell_paused=True)
+                details.update(position_bot_alert=True, auto_sell_paused=True)
+                if exit_decision.reason == "HOLD_POSITION":
+                    # Keep a valid BUY observation for signal/Telegram delivery.
+                    # The planner and executor separately forbid its order.
+                    if not (portfolio.get("scale_in_allowed", False) and (signal == "BUY" or confirmed_entry)):
+                        exit_decision.reason = "POSITION_BOT_ALERT"
+                        return exit_decision
+                else:
+                    return exit_decision
             if (exit_decision.reason == "HOLD_POSITION" and confirmed_entry
                     and portfolio.get("scale_in_allowed", False)):
                 signal = "BUY"
@@ -1247,6 +1260,7 @@ class StaticRule:
             "market_data_policy": position.get("market_data_policy"),
             "price_history_repaired_at": position.get("price_history_repaired_at", 0.0),
             "auto_sell_enabled": position.get("auto_sell_enabled", True),
+            "bot_trade_enabled": position.get("bot_trade_enabled", True),
             "sellable_quantity": int(position.get("trade_quantity", position.get("quantity", 0)) or 0),
             "exit_wait_notices": position.get("exit_wait_notices", []),
         })

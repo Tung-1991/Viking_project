@@ -36,7 +36,7 @@ RUNNING_HEADERS = {
     "RR": "Rủi ro/Kỳ vọng (%)",
     "PnL_MAE_MFE": "PnL / MAE / MFE",
     "Status": "Trạng thái",
-    "Override": "Override",
+    "Override": "BOT / Override",
 }
 RUNNING_WIDTHS = {
     "Ticket": 170,
@@ -384,7 +384,7 @@ class DashboardTablesMixin:
                         params.get("indicator_exit_policy", "ALERT"),
                     ) or "ALERT"
                 ).upper()
-                if cycle and not cycle.auto_sell_enabled:
+                if cycle and (not cycle.auto_sell_enabled or not cycle.bot_trade_enabled):
                     indicator_policy = "ALERT"
                 indicator_signal = str(decision.get("signal", "")).upper() == "SELL"
                 indicator_state = (
@@ -394,7 +394,7 @@ class DashboardTablesMixin:
                 )
                 from ..rules.protection import policy_for_stage
                 protect_mode = policy_for_stage(params, str(decision_details.get("protection_stage", "ARM")))
-                if cycle and not cycle.auto_sell_enabled:
+                if cycle and (not cycle.auto_sell_enabled or not cycle.bot_trade_enabled):
                     protect_mode = "ALERT"
                 if (cycle and ((str(decision_details.get("protection_stage", "ARM")) == "ARM" and
                                 params.get("normal_arm_enabled") is False) or
@@ -533,9 +533,8 @@ class DashboardTablesMixin:
                 if cycle and cycle.is_reentry:
                     status_parts.append("[REENTRY]")
                 compact_settlement = f"BÁN ĐƯỢC {sellable} CP" + (f" · CHỜ VỀ {pending} CP" if pending else "")
-                paused = bool(cycle and not cycle.auto_sell_enabled)
+                paused = bool(cycle and (not cycle.auto_sell_enabled or not cycle.bot_trade_enabled))
                 compact_status = [compact_settlement,
-                    "TỰ BÁN TẠM DỪNG" if cycle and not cycle.auto_sell_enabled else "",
                     f"TP {take_profit_state}" + (f"·+{tp_pct:g}%" if take_profit_enabled else ""),
                     "PROTECT CHỜ XÁC MINH" if normal_enabled and history_untrusted else
                     "PROTECT ALERT" if normal_enabled and paused else
@@ -577,7 +576,7 @@ class DashboardTablesMixin:
                     f"SL▼ {_display_price(sl_price)} ({sl_pct:+g}%)"
                     if sl_enabled else "SL OFF"
                 )
-                from ..trading.position_controls import position_override_items
+                from ..trading.position_controls import position_override_items, position_bot_cell
                 override_items = position_override_items(self.settings, cycle)
                 if override_items:
                     tree._viking_override_rows[iid] = override_items
@@ -594,7 +593,7 @@ class DashboardTablesMixin:
                         f"{pnl_icon}{_compact_vnd(pnl)} ({pnl_pct:+.2f}%)"
                         f" · {extrema_text}",
                         " · ".join(value for value in compact_status if value),
-                        "X" if override_items else "",
+                        position_bot_cell(self.settings, cycle),
                     ),
                 )
                 evidence = metrics.get("price_history_evidence") or {}
@@ -608,10 +607,12 @@ class DashboardTablesMixin:
                                     f"MAE/MFE theo giá vốn {_display_price(avg_price)}. {period}.\n"
                                     + (extrema_text if history_verified else
                                        "Lịch sử cũ chưa xác minh; không dùng cho PROTECT. Mở bảng vị thế để đo lại từ giá G1."),
-                    "Status": "\n".join(status_parts) + ("\nTỰ BÁN TẠM DỪNG: SL/TP/PROTECT/E chỉ báo." if cycle and not cycle.auto_sell_enabled else ""),
+                    "Status": "\n".join(status_parts) + ("\nBOT vị thế: Alert, SL/TP/PROTECT/E chỉ báo." if cycle and not cycle.bot_trade_enabled else
+                                                             "\nTỰ BÁN TẠM DỪNG: SL/TP/PROTECT/E chỉ báo." if paused else ""),
                     "Override": "Cấu hình riêng của vị thế:\n" + "\n".join(override_items) +
                                 "\nTP/SL AUTO hoặc chế độ Theo RULE để bỏ ghi đè."
-                                if override_items else "Theo RULE; không có cấu hình riêng.",
+                                if override_items else "BOT vị thế: Bật, tuân theo BOT chung và RULE.\nKhông có cấu hình riêng. X = ghi đè; chuột phải → Mở bảng để chỉnh."
+                                if cycle else "Chưa quản lý vị thế này; chuột phải → Mở bảng để cấu hình.",
                 }
                 self._running_row_actions[mode][iid] = {
                     "kind": "position", "mode": mode, "symbol": symbol,
@@ -638,7 +639,7 @@ class DashboardTablesMixin:
                 price_text = _display_price(item.limit_price) if item.limit_price > 0 else item.order_type
                 gross = item.limit_price * item.quantity * 1000.0 if item.limit_price > 0 else 0.0
                 cycle = cycles_by_id.get(item.trade_id) if item.trade_id else None
-                from ..trading.position_controls import position_override_items
+                from ..trading.position_controls import position_override_items, position_bot_cell
                 override_items = position_override_items(self.settings, cycle or item) if cycle or item.action == "OPEN" else []
                 display_source = {
                     "MANUAL": "MANUAL_APP",
@@ -734,6 +735,8 @@ class DashboardTablesMixin:
                         f"-- · -- · -- · Khớp {item.filled_quantity}/{item.quantity}",
                         f"{status_label} · Khớp {item.filled_quantity}/{item.quantity} · "
                         f"{remaining_label} · {em_text} · {item.result or item.reason or 'ĐANG CHỜ'}",
+                        position_bot_cell(self.settings, cycle) if cycle else
+                        ("Bật · X" if override_items else "Bật") if item.source in {"BOT", "EM"} else
                         "X" if override_items else "",
                     ),
                 )

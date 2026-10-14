@@ -12,8 +12,10 @@ COLUMN_HINTS = {
                    "MAE/MFE hiện giá thấp/cao và % so với giá vốn trong khoảng theo dõi.",
     "Status": "Trạng thái cổ về và quản lý tự bán. Di chuột vào dòng để xem chi tiết.\n"
               "Tạm dừng tự bán chặn SL/TP/PROTECT/E mới; lệnh đã gửi broker cần hủy riêng.",
-    "Override": "X vàng: có cấu hình riêng cho vị thế/lệnh. Di chuột để xem những mục ghi đè.\n"
-                "Ô trống: theo RULE. Đây là thông tin, không phải nút hủy lệnh.",
+    "Override": "BOT Bật: cho phép giao dịch theo BOT chung và RULE. Alert: chỉ tín hiệu, chặn BUY/SELL tự động của vị thế.\n"
+                "X vàng: có cấu hình riêng. Di chuột để xem những mục ghi đè.\n"
+                "Bán Alert: chỉ tạm dừng bán của cấu hình cũ. Bật không ép BOT chung đang OFF thành ON.\n"
+                "Đây là thông tin, không phải nút hủy lệnh.",
 }
 
 

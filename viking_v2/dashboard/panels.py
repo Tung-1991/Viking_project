@@ -2279,13 +2279,13 @@ class DashboardPanelsMixin:
             mfe = finite(details.get("normal_mfe_pct", details.get("peak_profit_pct")))
         store = getattr(self, "trade_state", None)
         active = store.active_for(symbol, self.mode.get()) if store is not None else None
-        paused = details.get("auto_sell_enabled") is False
+        paused = details.get("auto_sell_enabled") is False or details.get("bot_trade_enabled") is False
         unverified = bool(details.get("protection_history_unverified"))
         if active and active.open_quantity > 0 and active.avg_entry_price > 0:
             from ..trading.position_controls import position_exit_params
             params = position_exit_params(params, active)
             entry, position, enabled = active.avg_entry_price, True, "NORMAL" in active.em_modes
-            paused = not getattr(active, "auto_sell_enabled", True)
+            paused = not getattr(active, "auto_sell_enabled", True) or not getattr(active, "bot_trade_enabled", True)
             if getattr(self, "rule_state", None) is not None:
                 metrics = self.rule_state.position_metrics(symbol, active.id)
                 unverified = unverified or (bool(metrics) and metrics.get("price_history_verified") is not True)
@@ -3036,6 +3036,8 @@ class DashboardPanelsMixin:
             "LOCKED_AFTER_LOSSES": "KHÓA SAU CHUỖI LỖ",
             "MANUAL_OR_EXTERNAL_POSITION": "VỊ THẾ MANUAL",
             "POSITION_MANAGED_SL_ONLY": "CHỈ THEO DÕI SL",
+            "POSITION_BOT_ALERT": "BOT VỊ THẾ ALERT · CHỈ TÍN HIỆU",
+            "POSITION_AUTO_SELL_PAUSED": "TỰ BÁN TẠM DỪNG · CHỈ TÍN HIỆU",
             "STOP_LOSS": "KÍCH HOẠT SL",
             "INDICATOR_EXIT": "KÍCH HOẠT EXIT SELL",
             "INDICATOR_EXIT_ALERT": "E ALERT · KHÔNG ĐẶT LỆNH",
@@ -3068,6 +3070,7 @@ class DashboardPanelsMixin:
             reason_text = f"{stage_label} ALERT · KHÔNG ĐẶT LỆNH"
         if action == "WAIT" and signal == "SELL" and reason not in {
             "INDICATOR_EXIT_ALERT", "PROTECT_WAITING_SETTLEMENT", "PROTECT_ALERT", "PROTECT_POLICY_CHANGED", "NORMAL_ARMED",
+            "POSITION_BOT_ALERT", "POSITION_AUTO_SELL_PAUSED",
         }:
             reason_text = "CHỜ BUY"
         if reason == "BUY_SIGNAL":

@@ -225,7 +225,8 @@ def test_running_row_has_correct_original_basis_prices_and_explicit_history_stat
             assert "22,450" in pnl and "23,450" in pnl and "+3.53%" in pnl
         else:
             assert "CHỜ XÁC MINH" in pnl and "23,450" not in pnl
-        assert "TỰ BÁN TẠM DỪNG" in values[RUNNING_COLUMNS.index("Status")]
+        assert values[RUNNING_COLUMNS.index("Override")] == "Bán Alert · X"
+        assert "TỰ BÁN TẠM DỪNG" in tree._viking_column_hint.text_for(iid, "Status")
         assert "Đã mua 600 CP · Bán khớp 200 CP" in tree._viking_column_hint.text_for(iid, "Order")
         assert "vốn mua gốc" in tree._viking_column_hint.text_for("", "PnL_MAE_MFE")
     finally:
@@ -249,12 +250,12 @@ def test_management_popup_saves_hold_and_sl_off_without_altering_fills(ui_root, 
     top, = [w for w in ui_root.winfo_children() if w not in previous and isinstance(w, ctk.CTkToplevel)]
     try:
         widgets = list(_widgets(top))
-        next(w for w in widgets if isinstance(w, ctk.CTkSwitch) and w.cget("text") == "Tự bán").toggle()
+        next(w for w in widgets if isinstance(w, ctk.CTkSwitch) and w.cget("text") == "BOT").toggle()
         next(w for w in widgets if isinstance(w, ctk.CTkSwitch) and w.cget("text") == "SL").toggle()
         next(w for w in widgets if isinstance(w, ctk.CTkButton) and w.cget("text") == "LƯU").invoke()
         after = trades.get(cycle.id).to_dict()
         assert set(after["em_modes"]) == set(before["em_modes"])
-        assert after == {**before, "em_modes": after["em_modes"], "auto_sell_enabled": False, "sl_enabled": False}
+        assert after == {**before, "em_modes": after["em_modes"], "auto_sell_enabled": False, "bot_trade_enabled": False, "sl_enabled": False}
     finally:
         if top.winfo_exists():
             top.destroy()

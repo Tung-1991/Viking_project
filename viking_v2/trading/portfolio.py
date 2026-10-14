@@ -699,6 +699,7 @@ class PortfolioContextBuilder:
             "is_reentry": bool(active_trade.is_reentry) if active_trade else False,
             "sl_enabled": bool(active_trade.sl_enabled) if active_trade else True,
             "auto_sell_enabled": bool(active_trade.auto_sell_enabled) if active_trade else True,
+            "bot_trade_enabled": bool(active_trade.bot_trade_enabled) if active_trade else True,
             "exit_rule_overrides": dict(active_trade.exit_rule_overrides) if active_trade else {},
             "sl_mode": str(active_trade.sl_mode) if active_trade else "DEFAULT",
             "sl_value": float(active_trade.sl_value) if active_trade else 0.0,

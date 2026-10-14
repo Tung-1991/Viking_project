@@ -228,6 +228,7 @@ class TradeCycle:
     em_modes: list[str] = field(default_factory=list)
     sl_enabled: bool = True
     auto_sell_enabled: bool = True
+    bot_trade_enabled: bool = True
     exit_rule_overrides: dict = field(default_factory=dict)
     sl_mode: str = "DEFAULT"
     sl_value: float = 0.0
@@ -263,6 +264,7 @@ class TradeCycle:
         self.em_modes = normalize_exit_modes(self.em_modes)
         self.sl_enabled = bool(self.sl_enabled)
         self.auto_sell_enabled = bool(self.auto_sell_enabled)
+        self.bot_trade_enabled = bool(self.bot_trade_enabled)
         from .trading.position_controls import normalize_exit_overrides
         self.exit_rule_overrides = normalize_exit_overrides(self.exit_rule_overrides)
         self.sl_mode = str(self.sl_mode or "DEFAULT").strip().upper()

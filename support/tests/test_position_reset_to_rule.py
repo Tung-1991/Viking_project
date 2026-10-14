@@ -68,7 +68,7 @@ def test_reset_uses_current_rule_and_removes_overrides_only_when_saved(ui_root, 
         for w in widgets:
             if isinstance(w, ctk.CTkButton):
                 assert w.winfo_rootx() + w.winfo_width() <= top.winfo_rootx() + top.winfo_width() + 2
-        assert any(isinstance(w, ctk.CTkLabel) and "Tự bán BẬT" in w.cget("text") and "LƯU" in w.cget("text") for w in widgets)
+        assert any(isinstance(w, ctk.CTkLabel) and "BOT Bật" in w.cget("text") and "LƯU" in w.cget("text") for w in widgets)
         next(w for w in widgets if isinstance(w, ctk.CTkButton) and w.cget("text") == "LƯU").invoke()
         after = trades.get(cycle.id)
         assert set(after.em_modes) == set(modes) and after.exit_rule_overrides == {}
