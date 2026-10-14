@@ -10,10 +10,10 @@ import pytest
 
 from viking_v2.config import AppSettings
 from viking_v2.dashboard.actions import DashboardActionsMixin
-from viking_v2.dashboard.ema_history import load_history, view_counts, with_history
+from viking_v2.dashboard.ema_history import latest_cross, load_history, view_counts, with_history
 from viking_v2.dashboard.panels import DashboardPanelsMixin
 from viking_v2.rules.business import StaticRuleParameters
-from viking_v2.rules.ema_memory import refresh_memory
+from viking_v2.rules.ema_memory import refresh_memory, seed_lookback
 from viking_v2.trading.market import VN_TZ
 
 NOW = datetime(2026, 10, 14, 9, 31, tzinfo=VN_TZ)
@@ -63,6 +63,7 @@ def test_recent_three_sessions_use_minute_prices_and_cache_without_fetching_toda
     result = load_history(client, cache, "MSN", daily(), params(), "REALTIME", NOW, "HOSE", [])
     assert result["ready"] and result["up"] == 3 and result["down"] == 2
     assert result["start"] == "2026-10-09" and result["cross"]["cross_at"].startswith("2026-10-13")
+    assert result["last_down_at"] == "2026-10-13T09:16:00+07:00"  # Minute-close time.
     assert client.calls and all(row[3] < NOW.replace(hour=0, minute=0).timestamp() for row in client.calls)
     requests = len(client.calls)
     repeated = load_history(client, cache, "MSN", daily(), params(), "REALTIME", NOW, "HOSE", [])
@@ -158,7 +159,7 @@ def test_seven_prior_sessions_can_contain_only_a_down_cross(ui_root, monkeypatch
         assert view.preview_rule_cross_counts.cget("text") == "1 CẮT - 7P"
         assert view._preview_ema_gate_evidence["state"] == "WAIT_UP"
         assert not view._preview_ema_gate_evidence["valid"]
-        assert view.preview_rule_cross_detail._viking_compact_detail_text == "CHƯA CÓ CẮT LÊN"
+        assert view.preview_rule_cross_detail._viking_compact_detail_text == "XUỐNG 05/10 09:16"
         assert "0 lên + 1 xuống" in view._ema_cross_hint()
         assert int(view.preview_ema_entry_gate.master.grid_info()["column"]) == 2
         phase = view.preview_rule_cross.master
@@ -177,6 +178,64 @@ def test_seven_prior_sessions_can_contain_only_a_down_cross(ui_root, monkeypatch
     finally:
         for hint in hints:
             hint._hide()
+        top.destroy()
+
+
+def test_latest_cross_preserves_consumption_and_respects_the_selected_history_view():
+    raw = {**source(), "mode": "VA", "cross_source": "LIVE", "cross_id": "USED-9",
+           "cross_at": "2026-10-09T09:31:00+07:00", "last_down_at": "2026-10-09T09:30:00+07:00",
+           "used": True, "ema_history_preview": {"ready": True,
+                "cross": {"cross_at": "2026-10-13T09:16:00+07:00"},
+                "last_down_at": "2026-10-13T10:43:00+07:00"}}
+    before = deepcopy(raw)
+    assert latest_cross(raw, now=NOW)["at"] == raw["cross_at"]
+    viewed = {**raw, "mode": "SESSIONS"}
+    assert latest_cross(viewed, now=NOW)["at"] == "2026-10-13T10:43:00+07:00"
+    assert latest_cross(viewed, now=NOW)["direction"] == "DOWN"
+    assert raw == before and viewed["cross_id"] == raw["cross_id"] and viewed["used"]
+    assert latest_cross({"cross_at": "bad", "last_down_at": "2026-10-15T09:00:00+07:00"}, now=NOW) == {}
+
+
+def test_seeded_down_timestamp_is_display_only_and_keeps_a_consumed_live_up():
+    raw = {**source(), "mode": "VA", "cross_source": "LIVE", "cross_id": "USED-LIVE",
+           "cross_at": "2026-10-09T09:31:00+07:00", "used": True}
+    before = deepcopy(raw)
+    down_at = NOW.replace(day=13, hour=10, minute=43)
+    seeded = seed_lookback(raw, [(NOW.replace(day=12), {"buy_ema_fast": 9, "buy_ema_slow": 8}),
+                                (down_at, {"buy_ema_fast": 7, "buy_ema_slow": 8})],
+                           start=NOW.replace(day=9), now=NOW, pair="2/3", mode="SESSIONS",
+                           sessions=3, exchange="HOSE")
+    assert seeded["lookback_down_count"] == 1 and seeded["lookback_last_down_at"] == down_at.isoformat()
+    assert seeded["cross_id"] == raw["cross_id"] and seeded["used"] and raw == before
+    assert latest_cross(seeded, now=NOW)["direction"] == "UP"  # VA ignores the pre-admission scan.
+    latest = latest_cross({**seeded, "mode": "SESSIONS"}, now=NOW)
+    assert latest["direction"] == "DOWN" and latest["at"] == down_at.isoformat()
+
+
+def test_three_session_expiry_can_remember_the_previous_fridays_up_cross(ui_root, monkeypatch):
+    import customtkinter as ctk
+    monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: NOW)
+    top = ctk.CTkToplevel(ui_root)
+    view = DashboardPanelsMixin()
+    view.settings = AppSettings()
+    view.settings.rule_parameters.update(buy_ema_cross_mode="SESSIONS", buy_ema_cross_sessions=3)
+    view._build_order_preview_tab(top)
+    raw = {**source(), "profile": "3/6", "started_at": "2026-10-08T09:00:00+07:00",
+           "current_fast": 23, "current_slow": 22, "daily_down_count": 0,
+           "count_days": {"2026-10-09": {"up": 3, "down": 3}},
+           "cross_source": "LIVE", "cross_id": "HDB-9", "cross_at": "2026-10-09T09:31:00+07:00",
+           "last_down_at": "2026-10-09T09:30:00+07:00", "used": False,
+           "lookback_ready": True, "lookback_started_at": "2026-10-09T00:00:00+07:00"}
+    before = deepcopy(raw)
+    try:
+        view._render_ema_cross_preview({"ema_cross": raw})
+        assert view.preview_rule_cross_counts.cget("text") == "6 CẮT - 3P"
+        assert view._preview_ema_gate_evidence["state"] == "EXPIRED"
+        assert view._preview_ema_gate_evidence["expiry_sessions"] == ["2026-10-09", "2026-10-12", "2026-10-13"]
+        assert view.preview_rule_cross_detail.cget("text") == "LÊN 09/10 09:31"
+        assert "hạn 13/10 14:45, gồm phiên cắt" in view._ema_cross_hint()
+        assert raw == before and not view._preview_ema_gate_evidence["valid"]
+    finally:
         top.destroy()
 
 

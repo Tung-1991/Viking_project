@@ -246,7 +246,7 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
         )
         assert subject.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
         assert subject.preview_rule_cross_detail.cget("text") == (
-            "CHƯA CÓ CẮT LÊN" if subject.preview_rule_cross.master._viking_cross_narrow else "TRƯỚC: —"
+            "—"
         )
         assert "⏸" not in subject.preview_rule_cross.cget("text")
     finally:
@@ -338,7 +338,7 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
             assert int(subject.preview_rule_cross.grid_info()["column"]) == 2
             assert int(subject.preview_rule_cross_detail.grid_info()["column"]) == 2
             if subject.preview_rule_cross.master._viking_cross_narrow and viewing_history:
-                assert subject.preview_rule_cross_detail.cget("text") == ("NHỚ LÊN 12/10" if required else "OFF · 12/10")
+                assert subject.preview_rule_cross_detail.cget("text") == "LÊN 12/10 14:10"
             assert (subject.settings.to_dict(), details) == before
     finally:
         top.destroy()
@@ -415,7 +415,7 @@ def test_va_today_down_count_is_separate_from_yesterdays_remembered_up(ui_root, 
         top.update()
         view._render_ema_cross_preview({"ema_cross": source})
         assert view.preview_rule_cross_counts.cget("text") == "1 CẮT - 0P"
-        assert view.preview_rule_cross_detail._viking_compact_detail_text == "NHỚ LÊN 13/10"
+        assert view.preview_rule_cross_detail._viking_compact_detail_text == "XUỐNG 14/10 09:15"
         assert "CHƯA ĐẠT" in view.preview_ema_entry_gate.cget("text")
         assert not view._preview_ema_gate_evidence["valid"]
         hint = view._ema_memory_preview_hint()
@@ -425,9 +425,10 @@ def test_va_today_down_count_is_separate_from_yesterdays_remembered_up(ui_root, 
         assert source == before
         fresh = advance_memory(source, {"buy_ema_fast": 34.6, "buy_ema_slow": 34.52},
                                now=now + timedelta(seconds=1), **args)
+        monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: now + timedelta(seconds=1))
         view._render_ema_cross_preview({"ema_cross": fresh})
         assert view.preview_rule_cross_counts.cget("text") == "2 CẮT - 0P"
-        assert view.preview_rule_cross_detail._viking_compact_detail_text == "NHỚ LÊN 14/10"
+        assert view.preview_rule_cross_detail._viking_compact_detail_text == "LÊN 14/10 09:15"
         assert view._preview_ema_gate_evidence["valid"]
         assert fresh["cross_id"] != source["cross_id"] and source == before
     finally:

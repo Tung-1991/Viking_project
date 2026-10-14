@@ -2083,12 +2083,18 @@ class DashboardPanelsMixin:
         self.preview_rule_cross_detail.configure(
             text=f"{label}: {text}", text_color=color)
         self.preview_rule_cross_detail._viking_full_detail_text = ("OFF · " if tracking and not required else "") + f"{label}: {text}"
-        when = str(evidence.get("cross_at", ""))
-        short_date = f"{when[8:10]}/{when[5:7]}" if len(when) >= 10 else ""
-        self.preview_rule_cross_detail._viking_compact_detail_text = (
-            (f"NHỚ LÊN {short_date}" if short_date else "CHƯA CÓ CẮT LÊN") if required
-            else f"OFF · {short_date or 'CHƯA LƯU'}"
-        ) if tracking else f"{label}: {text}"
+        if tracking:
+            from .ema_history import latest_cross
+            event = latest_cross(evidence, now=market_now())
+            when = datetime.fromisoformat(event["at"]) if event else None
+            direction = "LÊN" if event.get("direction") == "UP" else "XUỐNG"
+            recent = f"{direction} {when:%d/%m %H:%M}" if when else "—"
+            self.preview_rule_cross_detail._viking_full_detail_text = recent
+            self.preview_rule_cross_detail._viking_compact_detail_text = recent
+            self.preview_rule_cross_detail.configure(text=recent, text_color=(
+                COL_GREEN if event.get("direction") == "UP" else COL_RED if event else COL_MUTED))
+        else:
+            self.preview_rule_cross_detail._viking_compact_detail_text = f"{label}: {text}"
         fit = getattr(self, "_fit_phase2_row", None)
         if callable(fit) and widget.master.winfo_width() > 1:
             fit()
@@ -2157,8 +2163,13 @@ class DashboardPanelsMixin:
             }.get(history_status.get("issue"), "API lịch sử chưa sẵn sàng; thử lại sau 60 giây.")
         when = str(evidence.get("cross_at") or "")
         remembered = f" {when[8:10]}/{when[5:7]}" if len(when) >= 10 else ""
-        policy = (f"X phiên: còn {evidence.get('remaining_sessions', 0)}/{evidence.get('sessions', 3)} phiên."
-                  if mode == "SESSIONS" else f"VA: nhớ lần cắt lên{remembered} tới khi dùng.")
+        if mode == "SESSIONS":
+            expiry = finite(evidence.get("expires_at"))
+            deadline = datetime.fromtimestamp(expiry, VN_TZ) if expiry else None
+            policy = (f"Còn {evidence.get('remaining_sessions', 0)}/{sessions}P; hạn {deadline:%d/%m %H:%M}, gồm phiên cắt."
+                      if deadline else f"Cắt lên có hiệu lực {sessions} phiên, tính cả phiên cắt.")
+        else:
+            policy = f"VA: nhớ lần cắt lên{remembered} tới khi dùng."
         history = (f"{scan}P: hôm nay + {scan} phiên trước; bỏ ngày nghỉ." if scan else
                    "0P: chỉ đếm phiên hôm nay; không quét trước khi thêm mã.")
         return f"{counted}\n{history}\n{policy} ⇄ chỉ đổi góc xem."

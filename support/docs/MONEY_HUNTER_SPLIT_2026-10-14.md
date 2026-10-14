@@ -22,10 +22,11 @@ Giảm khoảng cách giữa nhóm ATR/GIỮ LÃI, giữ nguyên các thiết l�
 Kiểm tra layout cùng tỷ lệ chữ/cửa sổ 100/150/200%: chiều cao nhóm giảm khoảng 32%,
 không chồng nút và không đổi kích thước khi chọn AUTO/ALERT.
 
-P2 phân biệt bộ đếm với lần cắt lên đang nhớ: `1 CẮT - 0P` là số lần đổi phía hôm nay;
-`NHỚ LÊN 13/10` là mốc cắt lên đã ghi nhận ngày trước. VA không quét trước lúc thêm mã
-vẫn giữ lần LIVE đã ghi nhận tới khi dùng. EMA hiện tại dưới EMA chậm thì vẫn CHƯA ĐẠT.
-Tái hiện 13/10 lên → 14/10 xuống: hôm nay 0 lên/1 xuống, giữ mốc lên 13/10, EMA chưa cho BUY.
+P2 phân biệt bộ đếm với lần cắt lên đang nhớ: `1 CẮT - 0P` là số lần đổi phía hôm nay.
+Dòng cuối hiện giao cắt gần nhất: `LÊN/XUỐNG dd/mm HH:MM`, chưa có mốc thì `—`.
+VA không quét trước lúc thêm mã vẫn giữ lần LIVE đã ghi nhận tới khi dùng.
+Tái hiện 13/10 lên → 14/10 xuống: dòng cuối hiện XUỐNG 14/10, bộ nhớ BUY vẫn giữ
+mốc lên 13/10; EMA hiện tại dưới EMA chậm thì vẫn CHƯA ĐẠT.
 
 Góc xem ⇄ 3P nay tải nền ba phiên giao dịch gần nhất trước hôm nay. Ví dụ 14/10: 09, 12, 13/10.
 REALTIME tái dựng EMA 1D theo giá đóng từng phút, CLOSED dùng nến ngày đã đóng. Nếu mã mới
@@ -37,7 +38,11 @@ Worker giá riêng không giữ hàng đợi tiền/vị thế/lệnh. ⇄ vẫn
 X lấy từ setting: đổi thành 7 thì góc xem tải 7 phiên trước và hiện `7P`.
 Bộ đếm cộng cả lên/xuống: `1 CẮT` có thể chỉ là một lần xuống, không phải đủ điều kiện BUY.
 P2 đưa trạng thái CẮT sang cụm phải, hint chỉ mở trên hai nút ⓘ, không trên các dòng chỉ số.
-`CHƯA CÓ CẮT LÊN` thay chữ `CHƯA GHI NHẬN` để phân biệt với lịch sử đã tải xong.
+Dòng cuối giữ ngày giờ cả cắt xuống; không lặp `CHƯA CÓ CẮT LÊN` dưới trạng thái CHƯA ĐẠT.
+Hint X phiên ghi hạn dùng, tính cả phiên cắt. Ngày 14/10 quét 3 phiên trước là 09, 12, 13/10;
+lần cắt lên 09/10 dùng được trong 09, 12, 13 và hết hạn lúc 14:45 ngày 13/10 (HOSE).
+Tính lại từ cache giá 09–13/10: HDB 3 lên/3 xuống, đều ngày 09/10, lần lên cuối 09:31;
+MSN 0 lên/1 xuống, mốc xuống 13/10 10:43. Đọc cache trong thư mục tạm, không sửa dữ liệu tài khoản.
 
 ## BAT mới
 
@@ -79,3 +84,5 @@ Không copy venv sang máy khác; dùng BAT 4 để tạo môi trường tại m
   170 ca UI/replay đạt ở các lượt trước (có ca trùng). Kiểm tra giá chỉ dùng broker giả, không chạy API tài khoản thật.
 - Chuyển trạng thái CẮT sang phải và hint trên icon: 142 ca UI/EMA, 11 ca khởi động/refresh,
   3 ca vệ sinh repo đạt; có ca tải đủ 7 phiên, chỉ cắt xuống, không cho BUY.
+- Mốc giao cắt gần nhất và hạn 3P: 236 ca UI/bộ nhớ/lịch sử, 3 ca vệ sinh repo đạt.
+  Bộ nhớ BUY đã dùng vẫn giữ nguyên; kiểm tra giá HDB/MSN bằng cache, không gọi API tài khoản.

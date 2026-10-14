@@ -86,7 +86,8 @@ def load_history(client, cache_path: Path, symbol: str, bars: list[dict], params
     if cross:
         cross["cross_id"] = f"EMA:PREVIEW:{args['pair']}:{cross['cross_timestamp']}"
     return {"ready": True, "start": start.date().isoformat(), "end": (cutoff - timedelta(microseconds=1)).date().isoformat(),
-            "up": row.get("up_count", 0), "down": row.get("down_count", 0), "cross": cross}
+            "up": row.get("up_count", 0), "down": row.get("down_count", 0), "cross": cross,
+            "last_down_at": row.get("last_down_at", "")}
 
 
 def with_history(source: dict, result: dict) -> dict:
@@ -118,3 +119,29 @@ def view_counts(evidence, *, now, prior_sessions, holidays):
                 "up": live["up"] + history["up"] if live["up"] is not None else None,
                 "down": live["down"] + history["down"] if live["down"] is not None else None}
     return memory_window_counts(evidence, now=now, prior_sessions=prior_sessions, holidays=holidays)
+
+
+def latest_cross(evidence: dict, *, now: datetime) -> dict:
+    """Latest known up/down timestamp for display, separate from the retained BUY ID."""
+    events = []
+    def add(value, direction):
+        try:
+            at = datetime.fromisoformat(str(value))
+            at = at.replace(tzinfo=VN_TZ) if at.tzinfo is None else at.astimezone(VN_TZ)
+            if at <= now:
+                events.append({"at": at.isoformat(), "timestamp": at.timestamp(), "direction": direction})
+        except (TypeError, ValueError, OverflowError):
+            pass
+    historical = evidence.get("mode") == "SESSIONS" or evidence.get("va_lookback_enabled")
+    if historical or evidence.get("cross_source") not in {"HISTORY", "VA_HISTORY"}:
+        add(evidence.get("cross_at"), "UP")
+    add(evidence.get("last_down_at"), "DOWN")
+    if historical:
+        if evidence.get("lookback_ready") is True:
+            add((evidence.get("lookback_cross") or {}).get("cross_at"), "UP")
+            add(evidence.get("lookback_last_down_at"), "DOWN")
+        history = evidence.get("ema_history_preview") or {}
+        if history.get("ready"):
+            add((history.get("cross") or {}).get("cross_at"), "UP")
+            add(history.get("last_down_at"), "DOWN")
+    return max(events, key=lambda event: event["timestamp"], default={})

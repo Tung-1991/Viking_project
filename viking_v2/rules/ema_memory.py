@@ -138,6 +138,7 @@ def seed_lookback(row, observations, *, start, now, **args):
     return {**row, "lookback_ready": True, "lookback_started_at": start.isoformat(),
             "lookback_up_count": history.get("up_count", 0),
             "lookback_down_count": history.get("down_count", 0),
+            "lookback_last_down_at": history.get("last_down_at", ""),
             "lookback_count_days": history.get("count_days", {}), "lookback_cross": cross}
 
 

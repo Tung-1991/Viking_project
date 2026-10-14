@@ -144,7 +144,7 @@ class SessionCrossService:
                 row.pop("cross_source", None)
             row.update(lookback_key=key, lookback_requested_at=now.isoformat(),
                        lookback_ready=False, lookback_cross={},
-                       lookback_up_count=0, lookback_down_count=0)
+                       lookback_up_count=0, lookback_down_count=0, lookback_last_down_at="")
         requested = datetime.fromisoformat(row["lookback_requested_at"])
         admitted = (datetime.fromisoformat(row["started_at"])
                     if row.get("started_at") else requested)
@@ -163,7 +163,8 @@ class SessionCrossService:
                      requested.timestamp())
         if cutoff <= start.timestamp():
             return {**row, "lookback_ready": True, "lookback_started_at": start.isoformat(),
-                    "lookback_up_count": 0, "lookback_down_count": 0, "lookback_cross": {}}
+                    "lookback_up_count": 0, "lookback_down_count": 0, "lookback_cross": {},
+                    "lookback_last_down_at": ""}
         prior = [bar for bar in bars if bool(bar.get("closed", True))
                  and datetime.fromtimestamp(float(bar["time"]), VN_TZ).date() < start.date()]
         if len(prior) < params.buy_ema_slow:
