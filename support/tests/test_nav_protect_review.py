@@ -246,7 +246,7 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
         )
         assert subject.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
         assert subject.preview_rule_cross_detail.cget("text") == (
-            "CHƯA GHI NHẬN" if subject.preview_rule_cross.master._viking_cross_narrow else "TRƯỚC: —"
+            "CHƯA CÓ CẮT LÊN" if subject.preview_rule_cross.master._viking_cross_narrow else "TRƯỚC: —"
         )
         assert "⏸" not in subject.preview_rule_cross.cget("text")
     finally:
@@ -314,6 +314,7 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
             ui_root.update_idletasks()
             widgets = (subject.preview_rule_cross.master, subject.preview_rule_cross_title.master,
                        subject.preview_rule_cross_title, subject.preview_ema_swap,
+                       subject.preview_ema_entry_gate, subject.preview_ema_hint,
                        subject.preview_rule_cross_counts, subject.preview_rule_cross,
                        subject.preview_rule_cross_detail,
                        subject.preview_rule_ema, subject.preview_rule_rsi,
@@ -324,7 +325,7 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
                 positions = current_positions
             else:
                 assert current_positions == positions
-            for label in (subject.preview_rule_cross_title, subject.preview_rule_cross_counts,
+            for label in (subject.preview_rule_cross_title, subject.preview_ema_entry_gate, subject.preview_rule_cross_counts,
                           subject.preview_rule_cross, subject.preview_rule_cross_detail):
                 rendered = tkfont.Font(root=ui_root, font=label._label.cget("font"))
                 assert rendered.measure(label.cget("text")) <= label.winfo_width()

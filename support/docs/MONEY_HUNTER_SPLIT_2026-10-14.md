@@ -34,6 +34,11 @@ Dữ liệu giá được cache riêng, không sửa settings, rule_state, lư�
 Tải/lỗi API hiện `—`, có trạng thái và retry; không coi thiếu dữ liệu là 0 lần.
 Worker giá riêng không giữ hàng đợi tiền/vị thế/lệnh. ⇄ vẫn chỉ đổi góc xem; RULE chọn mode giao dịch.
 
+X lấy từ setting: đổi thành 7 thì góc xem tải 7 phiên trước và hiện `7P`.
+Bộ đếm cộng cả lên/xuống: `1 CẮT` có thể chỉ là một lần xuống, không phải đủ điều kiện BUY.
+P2 đưa trạng thái CẮT sang cụm phải, hint chỉ mở trên hai nút ⓘ, không trên các dòng chỉ số.
+`CHƯA CÓ CẮT LÊN` thay chữ `CHƯA GHI NHẬN` để phân biệt với lịch sử đã tải xong.
+
 ## BAT mới
 
 1. Mở Money Hunter.
@@ -72,3 +77,5 @@ Không copy venv sang máy khác; dùng BAT 4 để tạo môi trường tại m
 - Sau khi làm rõ mốc VA: 87 ca UI/bộ nhớ/replay đạt; bộ đếm qua ngày giữ riêng với bằng chứng BUY.
 - Tải lịch sử cho góc xem: 107 ca quét/UI/bộ nhớ đạt ở lượt cuối; 87 ca I/O/NAV/khởi động và
   170 ca UI/replay đạt ở các lượt trước (có ca trùng). Kiểm tra giá chỉ dùng broker giả, không chạy API tài khoản thật.
+- Chuyển trạng thái CẮT sang phải và hint trên icon: 142 ca UI/EMA, 11 ca khởi động/refresh,
+  3 ca vệ sinh repo đạt; có ca tải đủ 7 phiên, chỉ cắt xuống, không cho BUY.

@@ -104,6 +104,82 @@ def test_closed_mode_uses_daily_closes_without_minute_api(tmp_path):
     assert result["ready"] and not client.calls and not (tmp_path / "closed.json").exists()
 
 
+def test_seven_prior_sessions_can_contain_only_a_down_cross(ui_root, monkeypatch, tmp_path):
+    import customtkinter as ctk
+    from viking_v2.dashboard import panels
+
+    monkeypatch.setattr(panels, "market_now", lambda: NOW)
+    history_params = params()
+    history_params.buy_ema_cross_sessions = 7
+    bars = daily()
+    # Start above before the seven-session window; every subsequent quote is below.
+    for bar in bars:
+        if datetime.fromtimestamp(bar["time"], VN_TZ).date().isoformat() == "2026-10-04":
+            bar.update(open=9, high=9, low=9, close=9)
+    client = Prices()
+    client.points = [(int(NOW.replace(day=day, hour=9, minute=15).timestamp()), 7)
+                     for day in (5, 6, 7, 8, 9, 12, 13)]
+    scan = load_history(client, tmp_path / "seven.json", "MSN", bars, history_params,
+                        "REALTIME", NOW, "HOSE", [])
+    assert scan["ready"] and scan["start"] == "2026-10-05"
+    assert (scan["up"], scan["down"], scan["cross"]) == (0, 1, {})
+    requested_days = {datetime.fromtimestamp(row[2], VN_TZ).day for row in client.calls}
+    assert requested_days == {5, 6, 7, 8, 9, 12, 13}
+
+    hints = []
+    real_hint = panels._HoverHint
+    def capture_hint(*args, **kwargs):
+        hint = real_hint(*args, **kwargs)
+        hints.append(hint)
+        return hint
+    monkeypatch.setattr(panels, "_HoverHint", capture_hint)
+    top = ctk.CTkToplevel(ui_root)
+    top.geometry("1000x400+0+0")
+    view = DashboardPanelsMixin()
+    view.settings = AppSettings()
+    view.settings.rule_parameters.update(buy_ema_fast=2, buy_ema_slow=3,
+                                         rsi_period=2, buy_ema_cross_sessions=7)
+    view._build_order_preview_tab(top)
+    raw = {**source(), "daily_down_count": 0}
+    before = deepcopy((raw, view.settings.to_dict()))
+    requested_windows = []
+    def loader(_raw):
+        requested_windows.append(view.settings.rule_parameters["buy_ema_cross_sessions"])
+        return scan
+    view._alternate_ema_history = loader
+    try:
+        top.update()
+        view._render_ema_cross_preview({"ema_cross": raw})
+        assert view.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
+        view.preview_ema_swap.invoke()
+        top.update_idletasks()
+        assert requested_windows == [7]
+        assert view.preview_rule_cross_title.cget("text") == "⏳ 7P"
+        assert view.preview_rule_cross_counts.cget("text") == "1 CẮT - 7P"
+        assert view._preview_ema_gate_evidence["state"] == "WAIT_UP"
+        assert not view._preview_ema_gate_evidence["valid"]
+        assert view.preview_rule_cross_detail._viking_compact_detail_text == "CHƯA CÓ CẮT LÊN"
+        assert "0 lên + 1 xuống" in view._ema_cross_hint()
+        assert int(view.preview_ema_entry_gate.master.grid_info()["column"]) == 2
+        phase = view.preview_rule_cross.master
+        p2_labels = {phase._viking_title_widget, view.preview_ema_entry_gate,
+                     view.preview_rule_cross_title, view.preview_rule_cross_counts,
+                     view.preview_rule_cross, view.preview_rule_cross_detail,
+                     view.preview_rule_buy_ema_key, view.preview_rule_sell_ema_key,
+                     view.preview_rule_rsi_key, view.preview_rule_ema,
+                     view.preview_rule_sell_ema, view.preview_rule_rsi}
+        assert not p2_labels.intersection(hint.widget for hint in hints)
+        assert {phase._viking_hint_icon, view.preview_ema_hint}.issubset(hint.widget for hint in hints)
+        view.preview_ema_hint.invoke()
+        popup = next(hint.popup for hint in hints if hint.widget is view.preview_ema_hint)
+        assert popup is not None and "0 lên + 1 xuống" in popup.cget("text")
+        assert (raw, view.settings.to_dict()) == before
+    finally:
+        for hint in hints:
+            hint._hide()
+        top.destroy()
+
+
 def test_preview_preserves_live_consumption_and_never_overwrites_va_source():
     original = {**source(), "cross_id": "LIVE-ALREADY-USED", "cross_source": "LIVE",
                 "cross_at": "2026-10-13T09:17:00+07:00", "used": True, "current_fast": 9}

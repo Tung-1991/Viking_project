@@ -1141,16 +1141,21 @@ class DashboardPanelsMixin:
         )
         self.preview_rule_title.grid(row=0, column=2, sticky="e")
 
-        def phase_card(row: int, title: str, hint: str = ""):
+        def phase_card(row: int, title: str, hint: str = "", *, icon_hint: bool = False):
             card = ctk.CTkFrame(rule_group, width=1, fg_color=COL_SURFACE_2, corner_radius=6)
             card.grid(row=row, column=0, sticky="nsew", padx=8, pady=2)
             card.grid_columnconfigure(0, weight=0)
             card.grid_columnconfigure(1, weight=1)
+            title_host = card
+            if icon_hint:
+                title_host = ctk.CTkFrame(card, fg_color="transparent")
+                title_host.grid(row=0, column=0, sticky="w", padx=(8, 6), pady=4)
             title_widget = StatusLabel(
-                card, text=f"{title}{'  ⓘ' if hint else ''}", height=18, font=("Segoe UI", 12, "bold", "italic"),
+                title_host, text=f"{title}{'  ⓘ' if hint and not icon_hint else ''}", height=18, font=("Segoe UI", 12, "bold", "italic"),
                 text_color="#60A5FA", anchor="w",
             )
-            title_widget.grid(row=0, column=0, sticky="w", padx=(8, 6), pady=4)
+            title_widget.grid(row=0, column=0, sticky="w", padx=0 if icon_hint else (8, 6),
+                              pady=0 if icon_hint else 4)
             card._viking_title_widget = title_widget
             compact_title = {"P1 · VNINDEX": "P1 · VNI", "P3 · VỐN & KHÓA": "P3 · VỐN"}.get(title)
             if compact_title:
@@ -1161,7 +1166,18 @@ class DashboardPanelsMixin:
                         title_widget.configure(text=shown)
                 card.bind("<Configure>", resize_title, add="+")
             if hint:
-                _HoverHint(title_widget, hint, placement="inside")
+                if icon_hint:
+                    icon = ctk.CTkButton(
+                        title_host, text="ⓘ", width=22, height=22, corner_radius=5,
+                        font=("Segoe UI Symbol", 12, "bold"),
+                        fg_color="#343A43", hover_color="#4B515B", text_color="#60A5FA",
+                    )
+                    icon.grid(row=0, column=1, padx=(4, 0))
+                    help_hint = _HoverHint(icon, hint, placement="inside")
+                    icon.configure(command=help_hint._show)
+                    card._viking_hint_icon = icon
+                else:
+                    _HoverHint(title_widget, hint, placement="inside")
             return card
 
         phase1 = phase_card(1, "P1 · VNINDEX", self._market_confirmation_hint)
@@ -1214,38 +1230,44 @@ class DashboardPanelsMixin:
             2,
             "P2 · BUY / E",
             self._indicator_preview_hint,
+            icon_hint=True,
         )
         phase2._viking_title_widget.grid(columnspan=1)
         phase2.grid_columnconfigure(1, weight=2, minsize=165)
         phase2.grid_columnconfigure(2, weight=2, minsize=140)
-        entry_gate_header = ctk.CTkFrame(phase2, width=165, height=24, fg_color="transparent")
-        entry_gate_header.grid(row=0, column=1, sticky="ew", padx=(0, 4), pady=3)
-        entry_gate_header.grid_propagate(False)
-        entry_gate_header.grid_columnconfigure(0, weight=1)
-        self.preview_ema_entry_gate = StatusLabel(
-            entry_gate_header, text="EMA CẮT: CHỜ", width=1, height=18,
-            font=("Segoe UI", 10, "bold"), text_color=COL_MUTED, anchor="w",
+        # Keep mode and condition slots fixed so swapping VA/X cannot move values.
+        mode_header = ctk.CTkFrame(phase2, width=165, height=24, fg_color="transparent")
+        mode_header.grid(row=0, column=1, sticky="ew", padx=(0, 4), pady=3)
+        mode_header.grid_propagate(False)
+        mode_header.grid_columnconfigure(0, weight=1)
+        self.preview_rule_cross_title = StatusLabel(
+            mode_header, text="∞ VA", width=1, height=18,
+            font=("Segoe UI", 10, "bold"), text_color=COL_PREVIEW_TEXT, anchor="e",
         )
-        self.preview_ema_entry_gate.grid(row=0, column=0, sticky="ew")
-        _HoverHint(self.preview_ema_entry_gate, self._ema_entry_gate_hint, placement="inside")
-        # Reserve one stable width for both mode captions.  Otherwise Tk lets
-        # the longer VA+XP caption move the entire P2 value column on swap.
+        self.preview_rule_cross_title.grid(row=0, column=0, sticky="ew", padx=(0, 6))
         cross_header = ctk.CTkFrame(phase2, width=140, height=24, fg_color="transparent")
         cross_header.grid(row=0, column=2, sticky="ew", padx=(4, 6), pady=3)
         cross_header.grid_propagate(False)
         cross_header.grid_columnconfigure(0, weight=1)
-        self.preview_rule_cross_title = StatusLabel(
-            cross_header, text="∞ VA", width=1, height=18,
-            font=("Segoe UI", 10, "bold"), text_color=COL_PREVIEW_TEXT, anchor="w",
+        self.preview_ema_entry_gate = StatusLabel(
+            cross_header, text="EMA CẮT: CHỜ", width=1, height=18,
+            font=("Segoe UI", 10, "bold"), text_color=COL_MUTED, anchor="w",
         )
-        self.preview_rule_cross_title.grid(row=0, column=0, sticky="ew")
+        self.preview_ema_entry_gate.grid(row=0, column=0, sticky="ew")
+        self.preview_ema_hint = ctk.CTkButton(
+            cross_header, text="ⓘ", width=22, height=22, corner_radius=5,
+            font=("Segoe UI Symbol", 12, "bold"),
+            fg_color="#343A43", hover_color="#4B515B", text_color=COL_TEXT,
+        )
+        self.preview_ema_hint.grid(row=0, column=1, padx=(3, 0))
+        cross_hint = _HoverHint(self.preview_ema_hint, self._ema_cross_hint, placement="inside")
+        self.preview_ema_hint.configure(command=cross_hint._show)
         self.preview_ema_swap = ctk.CTkButton(
             cross_header, text="⇄", width=22, height=20, corner_radius=4,
             font=("Segoe UI Symbol", 12), fg_color="#343A43", hover_color="#4B515B",
             command=self._swap_ema_preview,
         )
-        self.preview_ema_swap.grid(row=0, column=1, padx=(3, 0))
-        _HoverHint(self.preview_ema_swap, self._ema_memory_preview_hint, placement="inside")
+        self.preview_ema_swap.grid(row=0, column=2, padx=(3, 0))
         self.preview_rule_cross_counts = StatusLabel(
             phase2, text="↑— ↓—", width=1, height=22,
             font=("Segoe UI", 14, "bold"), text_color=COL_MUTED, anchor="w",
@@ -1261,11 +1283,6 @@ class DashboardPanelsMixin:
             font=("Segoe UI", 10), text_color=COL_PREVIEW_TEXT, anchor="w",
         )
         self.preview_rule_cross_detail.grid(row=3, column=2, sticky="ew", padx=8, pady=(0, 3))
-        for widget, font in ((self.preview_rule_cross_title, ("Segoe UI", 10, "bold")),
-                             (self.preview_rule_cross_counts, ("Segoe UI", 14, "bold")),
-                             (self.preview_rule_cross, ("Segoe UI", 11, "bold")),
-                             (self.preview_rule_cross_detail, ("Segoe UI", 10))):
-            _HoverHint(widget, self._ema_memory_preview_hint, placement="inside")
         for row, name in ((1, "buy_ema"), (2, "sell_ema"), (3, "rsi")):
             key = StatusLabel(
                 phase2, text="--:", width=1, height=14,
@@ -1273,7 +1290,6 @@ class DashboardPanelsMixin:
             )
             key.grid(row=row, column=0, sticky="w", padx=(8, 6), pady=(0, 3) if row == 3 else 0)
             setattr(self, f"preview_rule_{name}_key", key)
-            _HoverHint(key, self._indicator_preview_hint, placement="inside")
         self.preview_rule_ema = StatusLabel(
             phase2, text="-- / --", width=1, height=14,
             font=("Cascadia Mono", 12), text_color=COL_PREVIEW_TEXT,
@@ -1298,20 +1314,15 @@ class DashboardPanelsMixin:
         self.preview_rule_rsi.grid(
             row=3, column=1, sticky="ew", padx=(0, 8), pady=(0, 3)
         )
-        for value in (self.preview_rule_ema, self.preview_rule_sell_ema, self.preview_rule_rsi):
-            _HoverHint(value, self._indicator_preview_hint, placement="inside")
-
         def fit_phase2_row(_event=None):
             narrow = phase2.winfo_width() / phase2._get_widget_scaling() < 440
             if getattr(phase2, "_viking_cross_narrow", None) != narrow:
                 phase2._viking_cross_narrow = narrow
                 phase2.grid_columnconfigure(1, weight=2, minsize=115 if narrow else 165)
                 phase2.grid_columnconfigure(2, weight=2, minsize=140)
-                entry_gate_header.configure(width=115 if narrow else 165)
-                entry_gate_header.grid(row=0, column=1, columnspan=1,
-                                       sticky="ew", padx=(0, 4), pady=3)
+                mode_header.configure(width=115 if narrow else 165)
                 phase2._viking_title_widget.grid(columnspan=1)
-                phase2._viking_title_widget.configure(text="P2  ⓘ" if narrow else "P2 · BUY / E  ⓘ")
+                phase2._viking_title_widget.configure(text="P2" if narrow else "P2 · BUY / E")
                 for value in (self.preview_rule_ema, self.preview_rule_sell_ema, self.preview_rule_rsi):
                     value.grid(padx=(0, 0) if narrow else (0, 8))
                 self.preview_rule_cross_detail.grid(row=3, column=2, columnspan=1, sticky="ew", padx=(4, 6))
@@ -1323,7 +1334,8 @@ class DashboardPanelsMixin:
             if self.preview_rule_cross.cget("text") != shown:
                 self.preview_rule_cross.configure(text=shown)
             gate = getattr(self.preview_ema_entry_gate, "_viking_full_gate_text", self.preview_ema_entry_gate.cget("text"))
-            self.preview_ema_entry_gate.configure(text=gate.removeprefix("EMA ") if narrow else gate)
+            self.preview_ema_entry_gate.configure(text=gate.removeprefix("EMA "))
+            fit_label_text(self.preview_ema_entry_gate, base_font=("Segoe UI", 10, "bold"), minimum_size=9)
             for name in ("buy_ema", "sell_ema", "rsi"):
                 key_widget = getattr(self, f"preview_rule_{name}_key")
                 key_widget.grid_configure(padx=(6, 4) if narrow else (8, 6))
@@ -2074,7 +2086,7 @@ class DashboardPanelsMixin:
         when = str(evidence.get("cross_at", ""))
         short_date = f"{when[8:10]}/{when[5:7]}" if len(when) >= 10 else ""
         self.preview_rule_cross_detail._viking_compact_detail_text = (
-            (f"NHỚ LÊN {short_date}" if short_date else "CHƯA GHI NHẬN") if required
+            (f"NHỚ LÊN {short_date}" if short_date else "CHƯA CÓ CẮT LÊN") if required
             else f"OFF · {short_date or 'CHƯA LƯU'}"
         ) if tracking else f"{label}: {text}"
         fit = getattr(self, "_fit_phase2_row", None)
@@ -2100,6 +2112,24 @@ class DashboardPanelsMixin:
         else:
             initial = "Mẫu đầu bằng nhau: chưa tính là giao cắt."
         return initial + "\nĐẠT chỉ là điều kiện EMA; BUY còn RSI, giờ mua và vốn."
+
+    def _ema_cross_hint(self) -> str:
+        """Explain the counter and entry condition only from the explicit help icon."""
+        lines = self._ema_memory_preview_hint().splitlines()
+        evidence = getattr(self, "_preview_ema_gate_evidence", {})
+        params = self.settings.rule_parameters
+        fast, slow = params.get("buy_ema_fast", 3), params.get("buy_ema_slow", 6)
+        state = evidence.get("state", "UNKNOWN")
+        condition = {
+            "WAIT_UP": f"Chờ EMA{fast} cắt từ dưới lên trên EMA{slow}.",
+            "WAIT_DOWN": "Đang ở trên, chưa có cắt lên: chờ xuống rồi lên.",
+            "SESSION_ACTIVE": "Cắt lên đạt; BUY còn RSI, giờ mua và vốn.",
+            "SESSION_USED": "Lần cắt lên đã dùng; cần lần cắt lên mới.",
+            "EXPIRED": "Lần cắt lên hết hạn; cần lần cắt lên mới.",
+        }.get(state, "Chưa đủ dữ liệu xác nhận cắt lên.")
+        if not (params.get("buy_signal_use_ema", True) and params.get("buy_signal_require_ema_cross", True)):
+            condition = "Điều kiện chờ EMA cắt lên đang OFF."
+        return f"{lines[0]}\n{condition}\n{lines[-1]}"
 
     def _ema_memory_preview_hint(self) -> str:
         from .ema_history import view_counts
