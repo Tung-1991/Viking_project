@@ -18,6 +18,8 @@ Không xóa dòng vị thế, `trading.sqlite3`, trade ledger hoặc journal. T�
 - Ctrl + click hoặc Shift + click chọn nhiều mã, Ctrl + A chọn mọi vị thế. **BÁN ĐÃ CHỌN** mở bảng kiểm tra chung trước khi enqueue SELL MANUAL. Chỉ bán cổ đã về theo lô 100; mã có SELL đang chờ được bỏ qua. Kiểm tra lại toàn bộ các mã trước khi ghi lệnh để ngăn snapshot cũ hoặc click trùng tạo bán vượt số cổ.
 - TP/SL **AUTO** và chế độ **Theo RULE** tham chiếu cấu hình chính. Popup hiện giá trị RULE bên cạnh, cập nhật khi RULE đổi; các ô nhập riêng và chế độ ghi đè được tô vàng. Nhập cùng giá trị RULE vẫn là cấu hình cố định riêng, không tự theo các lần đổi RULE sau. Công tắc vị thế khác mặc định RULE → THỰC THI cũng được đánh dấu.
 - Cột cuối là **Override**: **X vàng** khi có cấu hình riêng, hint liệt kê từng mục và giá trị RULE để đối chiếu. Đây là ô thông tin; click không hủy lệnh. **HỦY LỆNH CHỜ** là nút hủy yêu cầu mua/bán chưa khớp, khác với **BÁN ĐÃ CHỌN** bán cổ đang giữ.
+- **VỀ RULE** trả bản nháp về cấu hình chính đang lưu: TP/SL AUTO, bật/tắt theo RULE → THỰC THI, ARM/DYNAMIC/E theo RULE → E/M và Tự bán BẬT. Phải bấm **LƯU** mới áp dụng; bấm ĐÓNG bỏ bản nháp. Giữ nguyên số cổ, fill, MAE/MFE và các bộ đếm bảo vệ. Có thể sửa thêm từng mục sau khi reset trước khi lưu.
+- **CHỜ VỀ T+2** là cổ đã mua, không phải yêu cầu mua chưa khớp để hủy. Ví dụ BUY 100 cổ chưa khớp hoặc SELL chưa gửi là yêu cầu có thể hủy; phần đã khớp không hoàn tác. Nút HỦY LỆNH CHỜ xám khi dòng chọn không có yêu cầu hủy được.
 
 **Thông báo trước khi cổ bán được**
 
@@ -34,6 +36,8 @@ Các case offline mới nằm ở `support/tests/test_position_repair_and_tplus_
 Đợt UI tiếp theo: 34 case mới cho ghi đè ARM/DYNAMIC/E, bán nhiều mã, xác minh gói/book, chống lệnh trùng và sửa khi đang hand-off; các bộ liên quan cùng lần chạy lại cuối có 813 case đạt. Popup vị thế kiểm tra ở DPI 1/1,25/1,5, nhóm EMA ở 1/1,5/2. VNINDEX & phân bổ gộp cùng trang BUY, MA/Pivot/Volume thu trong nút Tham số; bốn panel BUY xếp theo hai cột và các giải thích dài nằm trong hint. Dòng chọn nền tím, chữ trắng, tách khỏi các màu trạng thái. Các kiểm thử chỉ dùng dữ liệu giả, không gửi broker thật.
 
 Đợt bổ sung dấu Override: 374 case UI/vị thế/hủy lệnh liên quan đạt, gồm 10 case mới kiểm tra tham chiếu RULE, giữ giá trị riêng khi RULE đổi, màu vàng trên dòng chọn, click X chỉ chọn dòng và không thay đổi fill. Ảnh kiểm tra dùng cửa sổ mô phỏng, không dữ liệu tài khoản thật.
+
+Đợt nút VỀ RULE: 276 case liên quan đạt, gồm 9 case mới cho reset bản nháp, reset rồi lưu theo nhiều cấu hình bật/tắt, reset rồi sửa riêng lại, DPI 1/1,5 và bảo toàn ledger/MAE/MFE/cấu hình mã khác. Không gửi broker thật.
 
 Trên bản sao dump HDB: mua 600, còn 400, đã bán 200, realized PNL 100.000 và hai lượt PROTECT giữ nguyên; restart mô phỏng ở giá G1 23.100 cho PNL 280.000 / 13.590.000 = +2,0603%, MFE từ mốc mới +1,9868%, MAE 0%. ARM/floor cũ được bỏ, tự bán tạm dừng. Đây là replay, không phải cập nhật VM.
 

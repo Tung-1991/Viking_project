@@ -690,8 +690,10 @@ class DashboardPanelsMixin:
             command=self._cancel_selected
         )
         self.cancel_button.pack(side="right", padx=(0, 5))
-        _HoverHint(self.cancel_button, "Hủy yêu cầu mua/bán chưa khớp của dòng đang chọn.\n"
-                   "Không bán cổ, không xóa vị thế và không hoàn tác phần đã khớp.", placement="inside")
+        _HoverHint(self.cancel_button, "Hủy yêu cầu BUY/SELL còn chờ gửi hoặc chờ khớp của dòng chọn.\n"
+                   "Ví dụ: BUY 100 CP chưa khớp → hủy phần còn chờ.\n"
+                   "CHỜ VỀ T+2 là cổ đã mua, không phải lệnh còn chờ để hủy.\n"
+                   "Nút xám: dòng chọn không có yêu cầu hủy được.", placement="inside")
         self.close_selected_button = ctk.CTkButton(
             header, text="BÁN ĐÃ CHỌN", width=115, height=31, font=("Segoe UI", 11, "bold"),
             fg_color="#B91C1C", hover_color="#DC2626", corner_radius=8,

@@ -180,7 +180,7 @@ def show_position_management(app, action: dict) -> None:
                 switches[label].configure(text_color="#F59E0B" if changed else "#22C55E" if label == "TP" else "#EF4444")
             status.configure(text="")
         except (ValueError, TypeError, OverflowError):
-            status.configure(text="TP hoặc SL không hợp lệ.")
+            status.configure(text="TP hoặc SL không hợp lệ.", text_color="#F59E0B")
     for label in entries:
         entries[label].bind("<KeyRelease>", refresh)
         switches[label].configure(command=refresh)
@@ -203,13 +203,33 @@ def show_position_management(app, action: dict) -> None:
             top.after_cancel(rule_refresh_job)
     top.bind("<Destroy>", cleanup, add="+")
     rule_refresh_job = top.after(500, refresh_rule)
+    def reset_to_rule():
+        nonlocal modes, overrides
+        latest = position_exit_params(app.settings.rule_parameters)
+        rule_params.clear()
+        rule_params.update(latest)
+        params.clear()
+        params.update(latest)
+        modes = set(app.settings.bot_em_modes)
+        overrides = {}
+        for field in entries.values():
+            field.delete(0, "end")
+            field.insert(0, "AUTO")
+        tp_on.set("TP" in modes)
+        sl_on.set(app.settings.bot_sl_enabled)
+        auto_sell.set(True)
+        for stage, variable in policies.items():
+            tactic = "IND_EXIT" if stage == "E" else "NORMAL"
+            variable.set("Theo RULE" if tactic in modes else "OFF")
+        refresh()
+        status.configure(text="Theo RULE · Tự bán BẬT · Bấm LƯU để áp dụng.", text_color="#C5CBD4")
     def save():
         nonlocal cycle
         try:
             sl_mode, sl_value, _ = target(entries["SL"].get(), True)
             tp_mode, tp_value, _ = target(entries["TP"].get(), False)
         except (ValueError, TypeError, OverflowError):
-            status.configure(text="TP hoặc SL không hợp lệ.")
+            status.configure(text="TP hoặc SL không hợp lệ.", text_color="#F59E0B")
             return
         selected, saved_overrides = set(modes), dict(overrides)
         if tp_on.get():
@@ -278,5 +298,9 @@ def show_position_management(app, action: dict) -> None:
                               command=lambda: (top.destroy(), app._restart_position_metrics({**action, "trade_id": cycle.id})))
         repair.grid(row=0, column=0, sticky="w")
         _HoverHint(repair, "Đọc và xác nhận giá G1 trước khi bắt đầu khoảng đo mới. Giữ nguyên cổ/fill; tự bán tạm dừng.", placement="inside")
-    ctk.CTkButton(footer, text="LƯU", width=90, height=28, font=("Segoe UI", 12, "bold"), fg_color="#16A34A", command=save).grid(row=0, column=1)
-    ctk.CTkButton(footer, text="ĐÓNG", width=80, height=28, font=("Segoe UI", 11), fg_color="#3A3F47", command=top.destroy).grid(row=0, column=2, padx=(8, 0))
+    reset = ctk.CTkButton(footer, text="VỀ RULE", width=90, height=28, font=("Segoe UI", 11), fg_color="#2B6CB0", command=reset_to_rule)
+    reset.grid(row=0, column=1, padx=(8, 8))
+    _HoverHint(reset, "Bỏ ghi đè: TP/SL AUTO; bật/tắt theo RULE → THỰC THI, chế độ theo RULE → E/M.\n"
+               "Tự bán trở về BẬT. Chỉ áp dụng khi bấm LƯU. Giữ nguyên cổ, fill và MAE/MFE.", placement="inside")
+    ctk.CTkButton(footer, text="LƯU", width=90, height=28, font=("Segoe UI", 12, "bold"), fg_color="#16A34A", command=save).grid(row=0, column=2)
+    ctk.CTkButton(footer, text="ĐÓNG", width=80, height=28, font=("Segoe UI", 11), fg_color="#3A3F47", command=top.destroy).grid(row=0, column=3, padx=(8, 0))
