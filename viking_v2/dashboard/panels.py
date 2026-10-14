@@ -1976,6 +1976,13 @@ class DashboardPanelsMixin:
         rule_mode = params.get("buy_ema_cross_mode", "VA")
         view_mode = ("SESSIONS" if rule_mode == "VA" else "VA") if getattr(self, "_preview_ema_alternate", False) else rule_mode
         tracking = raw.get("tracking_version") == 2
+        history_status = {}
+        loader = getattr(self, "_alternate_ema_history", None)
+        if tracking and view_mode == "SESSIONS" and getattr(self, "_preview_ema_alternate", False) and callable(loader):
+            from .ema_history import with_history
+            history_status = loader(raw)
+            raw = with_history(raw, history_status)
+        self._preview_ema_history_status = history_status
         if tracking:
             from ..rules.ema_memory import refresh_memory
             if raw.get("cross_id") and not raw.get("cross_source"):
@@ -2018,16 +2025,20 @@ class DashboardPanelsMixin:
         self._preview_ema_cross_evidence = (caption, evidence)
         widget._viking_full_cross_text = caption.removeprefix("CẮT EMA · ")
         if tracking:
-            from ..rules.ema_memory import memory_window_counts
+            from .ema_history import view_counts
             prior_sessions = (int(params.get("buy_ema_cross_sessions", 3))
                               if view_mode == "SESSIONS" or params.get("buy_ema_va_lookback_enabled") else 0)
-            counts = memory_window_counts(evidence, now=market_now(), prior_sessions=prior_sessions,
-                                          holidays=self.settings.trading_holidays)
+            counts = view_counts(evidence, now=market_now(), prior_sessions=prior_sessions,
+                                 holidays=self.settings.trading_holidays)
+            if history_status and not history_status.get("ready"):
+                counts.update(up=None, down=None)
             state_label = {
                 "SESSION_ACTIVE": "ĐÃ CẮT LÊN", "SESSION_USED": "ĐÃ DÙNG", "EXPIRED": "HẾT HẠN",
                 "WAIT_UP": "CHỜ EMA3 > EMA6", "WAIT_DOWN": "CHỜ XUỐNG→LÊN",
                 "UNKNOWN": "CHỜ DỮ LIỆU", "MARKET_CLOSED": "ĐÃ ĐÓNG",
             }.get(gate_state, "CHỜ")
+            if gate_state == "UNKNOWN" and history_status:
+                state_label = "ĐANG TẢI" if history_status.get("pending") else "CHƯA TẢI ĐƯỢC"
             total_crosses = counts["up"] + counts["down"] if counts["up"] is not None else "—"
             self.preview_rule_cross_counts.configure(
                 text=f"{total_crosses} CẮT - {prior_sessions}P",
@@ -2091,20 +2102,29 @@ class DashboardPanelsMixin:
         return initial + "\nĐẠT chỉ là điều kiện EMA; BUY còn RSI, giờ mua và vốn."
 
     def _ema_memory_preview_hint(self) -> str:
-        from ..rules.ema_memory import memory_window_counts
+        from .ema_history import view_counts
         _caption, evidence = getattr(self, "_preview_ema_cross_evidence", ("", {}))
         active = self.settings.rule_parameters.get("buy_ema_cross_mode", "VA")
         mode = evidence.get("mode", active)
         sessions = int(self.settings.rule_parameters.get("buy_ema_cross_sessions", 3))
         scan = sessions if mode == "SESSIONS" or self.settings.rule_parameters.get("buy_ema_va_lookback_enabled") else 0
-        counts = memory_window_counts(evidence, now=market_now(), prior_sessions=scan,
-                                      holidays=self.settings.trading_holidays)
+        counts = view_counts(evidence, now=market_now(), prior_sessions=scan,
+                             holidays=self.settings.trading_holidays)
         period = ((f"{counts['start']} → {counts['end']}" if counts['start'] else "Chưa đủ lịch phiên")
                   if scan else "Hôm nay")
         counted = (f"{period}: {counts['up']} lên + {counts['down']} xuống."
                    if counts["up"] is not None else f"{period}: chưa đủ dữ liệu để đếm.")
         if counts["partial"]:
             counted += f" Đếm từ {str(counts['from'])[11:16]}."
+        history_status = getattr(self, "_preview_ema_history_status", {})
+        if history_status.get("pending"):
+            counted = f"Đang tải lịch sử {scan} phiên trước."
+        elif history_status and not history_status.get("ready"):
+            counted = {
+                "CONNECTION": "Cần kết nối DNSE để tải lịch sử.",
+                "DAILY_HISTORY": "Chưa đủ nến ngày nền để tính EMA; thử lại sau 60 giây.",
+                "CALENDAR": "Chưa đủ lịch phiên để quét.",
+            }.get(history_status.get("issue"), "API lịch sử chưa sẵn sàng; thử lại sau 60 giây.")
         when = str(evidence.get("cross_at") or "")
         remembered = f" {when[8:10]}/{when[5:7]}" if len(when) >= 10 else ""
         policy = (f"X phiên: còn {evidence.get('remaining_sessions', 0)}/{evidence.get('sessions', 3)} phiên."

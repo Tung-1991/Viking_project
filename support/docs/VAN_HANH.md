@@ -30,6 +30,8 @@
    danh mục thực tế. VỐN AUTO là ngân sách gợi ý cho mã đang chọn, không ép lệnh MANUAL.
    Hover P1 xem số tiền; hover P2/ATR xem nguồn nến. Chưa có quyết định thì chỉ số
    vẫn có preview từ nến đã tải, không tạo lệnh. ATR chỉ dùng nến ngày đã đóng.
+   ⇄ ở P2 chỉ đổi góc xem VA/X phiên. Góc xem X phiên tự tải lịch sử nếu thiếu;
+   `ĐANG TẢI`/`—` là chưa có kết quả, không phải 0 lần cắt. RULE vẫn giữ mode giao dịch đã chọn.
    XÁC NHẬN GIẢM 1/3 PHIÊN: đang kiểm tra đổi trạng thái; vẫn dùng P1 đã xác nhận,
    không phải chờ giá giảm để mua/bán. Hover dòng/ⓘ xem trạng thái và tỷ trọng trước/sau.
 5. Lệnh REAL đầu tiên đối chiếu ID, khớp/còn lại, giá vốn và phí trước khi tăng quy mô.

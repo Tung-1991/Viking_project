@@ -25,7 +25,7 @@ from ..backtest.data import HistoricalDataStore
 from .. import config
 from ..branding import APP_NAME
 from ..config import AppSettings, save_settings
-from ..connections.dnse.client import BrokerSnapshotError
+from ..connections.dnse.client import BrokerSnapshotError, DNSEClient
 from ..connections.telegram import SignalTelegramService, TelegramClient
 from ..connections.window import ConnectionPopup
 from ..connections.dnse.snapshot_health import (
@@ -2848,6 +2848,91 @@ class DashboardActionsMixin:
             self._post_ui(apply)
 
         future.add_done_callback(completed)
+
+    def _alternate_ema_history(self, source: dict) -> dict:
+        """Load prices on a dedicated worker; never queue behind broker/order I/O."""
+        from concurrent.futures import ThreadPoolExecutor
+        from ..rules.business import StaticRuleParameters
+        from .ema_history import load_history, preview_key
+        from ..trading.market import market_now
+
+        now = market_now()
+        params = StaticRuleParameters.from_dict(self.settings.rule_parameters)
+        symbol, book = self.symbol.get().strip().upper(), self.mode.get()
+        exchange = self._symbol_exchange(symbol)
+        holidays = list(self.settings.trading_holidays)
+        signal_mode = self.settings.signal_mode
+        key = preview_key(symbol, book, source, params, signal_mode, exchange, holidays, now)
+        cache = getattr(self, "_ema_history_views", None)
+        if cache is None:
+            self._ema_history_views = cache = {}
+            self._ema_history_pending = set()
+        previous = cache.get(key) or {}
+        if previous.get("ready") or time.monotonic() < previous.get("retry_at", 0):
+            return previous
+        if key in self._ema_history_pending:
+            return {"ready": False, "pending": True}
+        if not self.running or not symbol or not exchange or not self.real.configured():
+            cache[key] = {"ready": False, "issue": "CONNECTION", "retry_at": time.monotonic() + 60}
+            return cache[key]
+        if getattr(self, "_ema_history_executor", None) is None:
+            self._ema_history_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ema-preview")
+            self._ema_history_stop = threading.Event()
+        stop = self._ema_history_stop
+        credentials = {name: str(getattr(self.real, name, "") or "")
+                       for name in ("api_key", "api_secret", "account_no", "base_url")}
+        bars = ([dict(row) for row in getattr(self, "_preview_bars", [])]
+                if getattr(self, "_preview_bars_symbol", "") == symbol else [])
+        market_cache = self.bridge.market_cache_path
+        prices_cache = self.bridge.root / "ema_preview_prices.json"
+        baseline = dict(source.get("baseline") or {"at": source.get("started_at")})
+
+        def read() -> dict:
+            client = DNSEClient(**credentials)
+            client.trading_token, client.trading_token_expires_at = "", 0
+            class Prices:
+                def get_ohlc(self, *args):
+                    if stop.is_set():
+                        raise InterruptedError("EMA_PREVIEW_STOPPED")
+                    return client.get_ohlc(*args)
+            try:
+                values = bars
+                if not values:
+                    try:
+                        raw = json.loads(market_cache.read_text(encoding="utf-8-sig"))
+                        values = (raw.get("symbols") or {}).get(symbol) or []
+                    except (OSError, ValueError, TypeError, AttributeError):
+                        values = []
+                return load_history(Prices(), prices_cache, symbol, values, params, signal_mode, now, exchange, holidays, baseline)
+            finally:
+                client.close()
+
+        self._ema_history_pending.add(key)
+        future = self._ema_history_executor.submit(read)
+
+        def completed(future) -> None:
+            try:
+                result = future.result()
+            except Exception:
+                result = {"ready": False, "issue": "HISTORY"}
+            def apply() -> None:
+                self._ema_history_pending.discard(key)
+                cache[key] = {**result, "retry_at": time.monotonic() + (0 if result.get("ready") else 60)}
+                while len(cache) > 32:
+                    cache.pop(next(iter(cache)))
+                if self.running and self.symbol.get().strip().upper() == symbol and self.mode.get() == book:
+                    self._update_order_preview()
+            self._post_ui(apply)
+        future.add_done_callback(completed)
+        return {"ready": False, "pending": True}
+
+    def _stop_ema_history_preview(self) -> None:
+        stop = getattr(self, "_ema_history_stop", None)
+        if stop is not None:
+            stop.set()
+        executor = getattr(self, "_ema_history_executor", None)
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def _symbol_exchange(self, symbol: str | None = None) -> str:
         selected = str(symbol or self.symbol.get() or "").strip().upper()

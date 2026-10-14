@@ -27,6 +27,13 @@ P2 phân biệt bộ đếm với lần cắt lên đang nhớ: `1 CẮT - 0P` l
 vẫn giữ lần LIVE đã ghi nhận tới khi dùng. EMA hiện tại dưới EMA chậm thì vẫn CHƯA ĐẠT.
 Tái hiện 13/10 lên → 14/10 xuống: hôm nay 0 lên/1 xuống, giữ mốc lên 13/10, EMA chưa cho BUY.
 
+Góc xem ⇄ 3P nay tải nền ba phiên giao dịch gần nhất trước hôm nay. Ví dụ 14/10: 09, 12, 13/10.
+REALTIME tái dựng EMA 1D theo giá đóng từng phút, CLOSED dùng nến ngày đã đóng. Nếu mã mới
+được thêm hôm nay, quét thêm đoạn trước mẫu đầu; phần LIVE sau mẫu đầu vẫn đếm riêng.
+Dữ liệu giá được cache riêng, không sửa settings, rule_state, lượt đã dùng, queue hoặc Telegram.
+Tải/lỗi API hiện `—`, có trạng thái và retry; không coi thiếu dữ liệu là 0 lần.
+Worker giá riêng không giữ hàng đợi tiền/vị thế/lệnh. ⇄ vẫn chỉ đổi góc xem; RULE chọn mode giao dịch.
+
 ## BAT mới
 
 1. Mở Money Hunter.
@@ -63,3 +70,5 @@ Không copy venv sang máy khác; dùng BAT 4 để tạo môi trường tại m
 - `compileall` và kiểm tra diff đạt. Không chạy giao dịch REAL hoặc nạp preset vào tài khoản.
 - Sau khi thu gọn DYNAMIC: 129 ca thiết lập/lưu và 139 ca UI/PROTECT đạt ở hai lượt riêng.
 - Sau khi làm rõ mốc VA: 87 ca UI/bộ nhớ/replay đạt; bộ đếm qua ngày giữ riêng với bằng chứng BUY.
+- Tải lịch sử cho góc xem: 107 ca quét/UI/bộ nhớ đạt ở lượt cuối; 87 ca I/O/NAV/khởi động và
+  170 ca UI/replay đạt ở các lượt trước (có ca trùng). Kiểm tra giá chỉ dùng broker giả, không chạy API tài khoản thật.

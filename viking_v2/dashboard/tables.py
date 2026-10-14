@@ -820,6 +820,7 @@ class DashboardTablesMixin:
 
     def close(self) -> None:
         self.running = False
+        self._stop_ema_history_preview()
         self._cancel_rule_preload()
         self.execution.stopping = True
         if getattr(self, "telegram", None):

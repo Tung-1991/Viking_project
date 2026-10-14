@@ -99,8 +99,8 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
             self.bridge.daily_stats_path,
         )
         self.strategy_planner = StrategyOrderPlanner(self.queue, self.trade_state, self.rule_state)
-        # All broker I/O in the UI process is serialized here.  Tk callbacks
-        # only render completed results and never wait on DNSE.
+        # Account/order I/O is serialized here. Alternate EMA history has a
+        # separate price-only client; Tk never waits on either DNSE worker.
         self._io_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="viking-io")
         self._order_worker_busy = False
         self._snapshot_busy = False
