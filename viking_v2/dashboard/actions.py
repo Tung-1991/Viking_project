@@ -3160,6 +3160,9 @@ class DashboardActionsMixin:
         self, decision: StrategyDecision, tick: dict[str, Any], mode: str,
         *, available_cash: float | None = None,
     ) -> Any:
+        if config.is_priority_alert(self.settings, decision.symbol):
+            from ..rules.planner import PlanResult
+            return PlanResult(None, "PRIORITY_ALERT")
         details = decision.details if isinstance(decision.details, dict) else {}
         checks = details.get("entry_checks") if isinstance(details.get("entry_checks"), dict) else {}
         if decision.action == "SELL":
@@ -3605,7 +3608,7 @@ class DashboardActionsMixin:
         params = getattr(getattr(self, "settings", None), "rule_parameters", {}) or {}
         requires_cross = bool(params.get("buy_signal_use_ema", True)
                               and params.get("buy_signal_require_ema_cross", True))
-        if (decision.reason in {"BOT_OFF", "MANUAL_SELL_PAUSE"}
+        if (decision.reason in {"BOT_OFF", "MANUAL_SELL_PAUSE", "PRIORITY_ALERT"}
                 and not requires_cross):
             # Level mode must recheck current conditions after operator arming
             # or a pause. No order is planned while the operating gate is off.

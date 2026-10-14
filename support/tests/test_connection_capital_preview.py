@@ -62,8 +62,8 @@ def test_private_pool_preview_shows_current_book_total_and_savings(tmp_path, mod
     assert "PRIORITY 50 tr = ĐƯỢC MUA 35 tr + ĐỂ DÀNH 15 tr" in overview
     assert "HẠN MỨC ĐÃ CHIA 50 tr · CHƯA CHIA 0 tr" in overview
     assert rows == [
-        ("MSN", "30 tr", "50%", "0/1", "15 tr", "15 tr", "15 tr"),
-        ("CTS", "20 tr", "100%", "0/1", "20 tr", "0 tr", "20 tr"),
+        ("MSN", "30 tr", "50%", "0/1", "Chờ", "Bật", "15 tr", "15 tr", "15 tr"),
+        ("CTS", "20 tr", "100%", "0/1", "Chờ", "Bật", "20 tr", "0 tr", "20 tr"),
     ]
     assert not invalid
     assert asdict(parent.settings) == before
@@ -76,7 +76,7 @@ def test_two_entries_preview_changes_total_not_per_entry_percentage(tmp_path):
     overview, rows, invalid = popup._priority_preview_data()
     assert not invalid
     assert "ĐƯỢC MUA 50 tr + ĐỂ DÀNH 0 tr" in overview
-    assert rows[0][2:6] == ("50%", "0/2", "30 tr", "0 tr")
+    assert rows[0][2:8] == ("50%", "0/2", "Chờ", "Bật", "30 tr", "0 tr")
     assert "mỗi lần ≤ 15 triệu, tối đa 2 lần; tổng ≤ 30 tr" in popup._priority_preview_hint(rows, invalid)
 
 
@@ -170,7 +170,7 @@ def test_division_preserves_maximum_and_gear_preview_fits(ui_root):
         ui_root.update_idletasks()
         labels = [child.cget("text") for child in top.winfo_children() if isinstance(child, ctk.CTkLabel)]
         assert any("MAX LỆNH" in text for text in labels)
-        assert any("Mỗi lần ≤ 7.5 triệu · Tổng ≤ 15 triệu" in text for text in labels)
+        assert any("Mỗi lần ≤ 7.5 tr · Tổng ≤ 15 tr" in text for text in labels)
         button = next(child for child in top.winfo_children() if isinstance(child, ctk.CTkButton))
         assert button.winfo_y() + button.winfo_height() <= top.winfo_height()
     finally:
@@ -196,7 +196,7 @@ def test_va_50m_preview_is_group_total_not_25m_per_symbol(tmp_path, use_pct, buy
     assert f"PRIORITY 50 tr = ĐƯỢC MUA {buy} tr + ĐỂ DÀNH {saved} tr" in overview
     assert "TÀI SẢN NGOÀI NGÂN SÁCH 49.974 tr" in overview
     assert len(overview.splitlines()) == 3
-    assert rows[0] == ("MSN", "15 tr", f"{use_pct}%", "0/1", "7.5 tr" if use_pct == 50 else "15 tr",
+    assert rows[0] == ("MSN", "15 tr", f"{use_pct}%", "0/1", "Chờ", "Bật", "7.5 tr" if use_pct == 50 else "15 tr",
                        "7.5 tr" if use_pct == 50 else "0 tr", "7.5 tr" if use_pct == 50 else "15 tr")
     hint = popup._priority_preview_hint(rows, invalid)
     assert f"MSN: 15 tr × {use_pct}% = được mua " in hint
@@ -239,7 +239,7 @@ def test_private_off_uses_original_p1_budget_ignoring_draft_limits(tmp_path):
     overview, rows, invalid = popup._priority_preview_data()
     assert "VỐN RIÊNG OFF" in overview
     assert "ĐƯỢC MUA" not in overview
-    assert rows[0] == ("MSN", "25.011 tr", "100%", "0/1", "25.011 tr", "0 tr", "25.011 tr")
+    assert rows[0] == ("MSN", "25.011 tr", "100%", "0/1", "Chờ", "Bật", "25.011 tr", "0 tr", "25.011 tr")
     assert not invalid
     assert parent._preview_entry_checks("MSN", {})["order_budget"] == 25_000_000
 
@@ -251,7 +251,7 @@ def test_draft_total_and_limits_refresh_without_saving_or_placing_orders(tmp_pat
     overview, rows, invalid = popup._priority_preview_data()
     assert "PRIORITY 60 tr = ĐƯỢC MUA 40 tr + ĐỂ DÀNH 20 tr" in overview
     assert "HẠN MỨC ĐÃ CHIA 60 tr" in overview
-    assert rows[0][4] == "20 tr"
+    assert rows[0][6] == "20 tr"
     assert parent.settings.priority_total_capital == 50_000_000
     assert parent.settings.priority_allocations["MSN"]["limit_vnd"] == 30_000_000
     assert parent.queue.list_all() == []
@@ -458,9 +458,9 @@ def test_va_priority_summary_stays_three_lines_at_supported_widths(ui_root, monk
         headers = [child for child in popup.priority_summary.winfo_children()
                    if child.grid_info()["row"] == 1]
         assert [child.cget("text") for child in headers] == [
-            "MÃ", "HẠN MỨC", "DÙNG", "LỆNH", "ĐƯỢC MUA", "ĐỂ DÀNH", "CÒN HẠN MỨC",
+            "MÃ", "HẠN MỨC", "DÙNG", "LỆNH", "TRẠNG THÁI", "BOT", "ĐƯỢC MUA", "ĐỂ DÀNH", "CÒN HẠN MỨC",
         ]
-        assert label.grid_info()["columnspan"] == 7
+        assert label.grid_info()["columnspan"] == 9
         for child in popup.priority_summary.winfo_children():
             assert child.winfo_x() + child.winfo_width() <= popup.priority_summary.winfo_width()
             text_font = tkfont.Font(root=ui_root, font=child._label.cget("font"))

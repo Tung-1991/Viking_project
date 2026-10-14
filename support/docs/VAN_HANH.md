@@ -78,6 +78,10 @@ Không tự co/chia lại hạn mức để cho một lệnh MANUAL vượt qua;
 Preview hiện NAV/tiền khả dụng, tổng quỹ, đã/chưa chia và phần giữ tiền.
 CÒN HẠN MỨC trừ vốn cổ đang giữ + BUY chờ, không phải tiền khả dụng.
 LỆNH **1/2** = đã dùng/đang chờ 1 lượt BUY BOT trên tối đa 2; khớp từng phần tính 1, bán hết đếm lại. REAL/PAPER đếm riêng.
+TRẠNG THÁI: **Chờ** / **Vào lệnh**, theo BUY BOT chờ hoặc đã khớp trong vị thế hiện tại.
+Trong bánh răng mỗi mã, chọn BOT **Bật** / **Alert**, bấm **ÁP DỤNG** rồi **LƯU PRIORITY**.
+Alert vẫn tính tín hiệu/gửi Telegram theo cấu hình, chặn BUY/SELL tự động trong cả REAL và PAPER,
+kể cả lệnh local chưa gửi. Lệnh broker đã nhận vẫn được đối soát; MANUAL vẫn theo thao tác người dùng.
 VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nháp.
 
 ## Khi đang chạy

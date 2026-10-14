@@ -50,6 +50,7 @@ class ExecutionService:
         bot_entry_guard: Callable[[OrderIntent, dict[str, Any]], str] | None = None,
         manual_buy_guard: Callable[[OrderIntent, dict[str, Any]], str] | None = None,
         protection_policy_provider: Callable[[str], str] | None = None,
+        bot_trade_allowed_provider: Callable[[str], bool] | None = None,
     ):
         self.real = real
         self.paper = paper
@@ -66,6 +67,7 @@ class ExecutionService:
         self.bot_entry_guard = bot_entry_guard
         self.manual_buy_guard = manual_buy_guard
         self.protection_policy_provider = protection_policy_provider
+        self.bot_trade_allowed_provider = bot_trade_allowed_provider
         self.database = queue.store.database
         self._blocked_rechecks: set[str] = set()
         self._deferred_events: list[tuple[str, TradeCycle, OrderIntent]] | None = None
@@ -314,6 +316,32 @@ class ExecutionService:
             self._append_local_event(event)
         return cancelled, broker_managed
 
+    def _cancel_alert_order(self, intent: OrderIntent) -> OrderIntent | None:
+        if (intent.source not in {"BOT", "EM"}
+                or intent.status.upper() in FINAL_STATUSES
+                or not self.bot_trade_allowed_provider
+                or self.bot_trade_allowed_provider(intent.symbol)):
+            return None
+        message = "PRIORITY_ALERT: chỉ tín hiệu, huỷ lệnh tự động chưa gửi"
+        with self.database:
+            current = self.queue.get(intent.id)
+            if not current or current.broker_order_id or current.handed_off_at:
+                return None
+            if current.status == "SENDING":
+                # A completed partial SELL may have a local T+2 remainder;
+                # cancel only that unsent remainder, preserving recorded fills.
+                cancelled = (self.queue.release(current.id, "CANCELLED", message)
+                             if current.filled_quantity else self.queue.cancel_claimed_local(current.id, message))
+            else:
+                cancelled = self.queue.cancel_local(current.id)
+                if cancelled:
+                    cancelled = self.queue._update(current.id, result=message)
+        if cancelled:
+            result = BrokerOrderResult(True, "CANCELLED", message=message)
+            self._append_local_event({"ts": time.time(), "intent": cancelled.to_dict(),
+                                      "queue_status": "CANCELLED", "result": asdict(result)})
+        return cancelled
+
     def process_due(
         self, *, phase: str, execution_mode: str,
         phase_provider: Callable[[str], str] | None = None,
@@ -323,6 +351,12 @@ class ExecutionService:
         mode = str(execution_mode).upper()
         token_ready = True if mode == "PAPER" else self.real.has_trading_token()
         broker: Any = self.paper if mode == "PAPER" else self.real
+        if self.bot_trade_allowed_provider:
+            for pending in self.queue.list_all():
+                if pending.execution_mode == mode and pending.status.upper() in {
+                    "PENDING", "WAITING_TOKEN", "WAITING_SETTLEMENT", "PAUSED",
+                }:
+                    self._cancel_alert_order(pending)
         if self.protection_policy_provider:
             alert_stages = {stage for stage in ("ARM", "DYN")
                             if self.protection_policy_provider(stage) == "ALERT"}
@@ -356,6 +390,10 @@ class ExecutionService:
                     completed.append((current, BrokerOrderResult(True, "CANCELLED", message=current.result)))
                 continue
             intent = current
+            cancelled = self._cancel_alert_order(intent)
+            if cancelled:
+                completed.append((cancelled, BrokerOrderResult(True, "CANCELLED", message=cancelled.result)))
+                continue
             if intent.id in self._blocked_rechecks:
                 self.queue.wait_for_settlement(intent.id, "RECHECK: chờ quyết định mới hợp lệ")
                 continue
@@ -573,6 +611,10 @@ class ExecutionService:
                     continue
             # Durable hand-off identity BEFORE the network call. A timeout never
             # authorizes another POST. Persist the package on the original, too.
+            cancelled = self._cancel_alert_order(intent)
+            if cancelled:
+                completed.append((cancelled, BrokerOrderResult(True, "CANCELLED", message=cancelled.result)))
+                continue
             if intent.side == "BUY" and self.trade_state:
                 active_cycle = self.trade_state.active_for(intent.symbol, mode, intent.loan_package_id)
                 if active_cycle:

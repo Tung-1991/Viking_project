@@ -344,12 +344,20 @@ def validate_priority_capital(total: float, symbols: Any, allocations: Any) -> N
         raise ValueError("Tổng hạn mức từng mã không được vượt tổng vốn Priority.")
 
 
+def is_priority_alert(settings: Any, symbol: str) -> bool:
+    normalized = str(symbol or "").strip().upper()
+    return (normalized in getattr(settings, "priority_symbols", ())
+            and normalized in getattr(settings, "priority_alert_symbols", ()))
+
+
 @dataclass(slots=True)
 class AppSettings:
     watchlist: list[str] = field(default_factory=_watchlist_from_env)
     # Symbols promoted inside the watchlist. They keep every normal entry
     # guard, are ranked first and own slots inside the total BOT quota.
     priority_symbols: list[str] = field(default_factory=list)
+    # Alert-only symbols remain monitored, but cannot submit BOT/EM orders.
+    priority_alert_symbols: list[str] = field(default_factory=list)
     priority_capital_enabled: bool = False
     priority_total_capital: float = 0.0
     priority_allocations: dict[str, dict[str, float]] = field(default_factory=dict)
@@ -430,6 +438,12 @@ class AppSettings:
             if symbol in watchlist_set
         ]
         self.priority_capital_enabled = bool(self.priority_capital_enabled)
+        self.priority_alert_symbols = [
+            symbol for symbol in dict.fromkeys(
+                str(item).strip().upper() for item in self.priority_alert_symbols
+                if str(item).strip()
+            ) if symbol in self.priority_symbols
+        ]
         self.priority_total_capital = finite_nonnegative(self.priority_total_capital)
         self.priority_allocations = normalize_priority_allocations(
             self.priority_allocations, self.priority_symbols,

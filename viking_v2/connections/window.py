@@ -454,6 +454,7 @@ class ConnectionPopup:
         self._watchlist_draft = list(settings.watchlist)
         self._priority_draft = list(settings.priority_symbols)
         self._priority_allocations = deepcopy(settings.priority_allocations)
+        self._priority_alert_symbols = set(settings.priority_alert_symbols)
         self._holiday_draft = sorted(
             set(settings.custom_holidays).difference(config.DEFAULT_VN_TRADING_HOLIDAYS)
         )
@@ -1838,18 +1839,20 @@ class ConnectionPopup:
             self.priority_summary, text=overview, font=("Segoe UI", 11), anchor="w",
             justify="left", wraplength=950, text_color=self.RED if invalid else self.MUTED,
         )
-        self.priority_preview.grid(row=0, column=0, columnspan=7, sticky="ew", padx=10, pady=(6, 5))
+        self.priority_preview.grid(row=0, column=0, columnspan=9, sticky="ew", padx=10, pady=(6, 5))
         _HoverHint(self.priority_preview, self._priority_preview_hint(rows, invalid))
         headings = (
             ("MÃ", "Mã Priority được cấu hình ở bảng này."),
             ("HẠN MỨC", "Ngân sách dành cho mã, gồm tiền mua và phí; không phải số tiền đã mua."),
             ("DÙNG", "% hạn mức cho một lần BUY. Ví dụ hạn mức 15 triệu, dùng 50%: mỗi lần ≤ 7,5 triệu, gồm phí."),
             ("LỆNH", "BUY BOT đã dùng/đang chờ / MAX LỆNH, theo REAL hoặc PAPER đang chọn.\n0/2: chưa mua, tối đa 2 lượt; 1/2: đã dùng hoặc đang chờ 1 lượt.\nKhớp từng phần tính 1 lượt; hủy chưa khớp không tính. Bán hết mới đếm lại. MANUAL không tính.\nVỐN RIÊNG OFF: tối đa 1 lượt. —/2: chưa đọc được bộ đếm, không có nghĩa là 0. Bản nháp phải LƯU PRIORITY mới áp dụng."),
+            ("TRẠNG THÁI", "Chờ: chưa có BUY BOT. Vào lệnh: có BUY BOT đang chờ hoặc đã khớp trong vị thế hiện tại."),
+            ("BOT", "Bật: giao dịch theo bot tổng. Alert: chỉ tín hiệu và Telegram, chặn BUY/SELL tự động. Lệnh đã gửi broker vẫn được đối soát."),
             ("ĐƯỢC MUA", "Tổng tối đa = hạn mức × % sử dụng × MAX LỆNH, không vượt hạn mức. 15 triệu × 50% × 2 = 15 triệu, gồm phí."),
             ("ĐỂ DÀNH", "Hạn mức − được mua. Ví dụ 15 triệu − 7,5 triệu = để dành 7,5 triệu."),
             ("CÒN HẠN MỨC", "Được mua trừ vốn cổ đang giữ và BUY đang chờ; không phải tiền khả dụng."),
         )
-        weights = (2, 4, 2, 3, 4, 4, 4)
+        weights = (18, 30, 20, 25, 35, 15, 35, 30, 45)
         for column, (title, hint) in enumerate(headings):
             self.priority_summary.grid_columnconfigure(column, weight=weights[column], uniform="priority-money")
             heading = ctk.CTkLabel(self.priority_summary, text=title, width=0, font=("Segoe UI", 11, "bold"),
@@ -1871,7 +1874,7 @@ class ConnectionPopup:
                 "Ví dụ 100 triệu × P1 100% / 4 mã = 25 triệu/mã. Bỏ qua hạn mức và % riêng đang nhập."
             )
         examples = []
-        for symbol, cap, pct, _orders, buy, saved, _remaining in rows:
+        for symbol, cap, pct, _orders, _state, _bot, buy, saved, _remaining in rows:
             allocation = self._priority_allocations.get(symbol, {})
             maximum = config.priority_max_orders(allocation.get("max_orders", 1))
             if maximum > 1:
@@ -1956,6 +1959,8 @@ class ConnectionPopup:
             remaining = max(0.0, buy_limit - capital["committed_vnd"]) if buy_limit is not None and "committed_vnd" in capital else None
             rows.append((symbol, money(cap) if cap is not None else "THEO RULE", f"{pct:g}%",
                          f"{used if used is not None else '—'}/{maximum}",
+                         "Vào lệnh" if used else ("Chờ" if used is not None else "—"),
+                         "Alert" if symbol in getattr(self, "_priority_alert_symbols", self.settings.priority_alert_symbols) else "Bật",
                          money(buy_limit) if buy_limit is not None else "THEO P1",
                          money(cap - buy_limit) if cap is not None else "—",
                          money(remaining) if remaining is not None else "—"))
@@ -1978,31 +1983,39 @@ class ConnectionPopup:
             self.priority_status.configure(text=str(exc), text_color=self.RED)
 
     def _configure_priority_symbol(self, symbol: str) -> None:
-        top = _window(self.top, f"PRIORITY · {symbol}", "480x390")
+        top = _window(self.top, f"PRIORITY · {symbol}", "400x300")
         row = self._priority_allocations.get(symbol, {"limit_vnd": 0.0, "use_pct": 100.0})
-        ctk.CTkLabel(top, text=f"{symbol} · NGÂN SÁCH RIÊNG", font=("Segoe UI", 16, "bold")).pack(pady=10)
-        ctk.CTkLabel(top, text="HẠN MỨC (triệu đồng, gồm phí)").pack()
-        limit = ctk.CTkEntry(top)
+        top.grid_columnconfigure((0, 1), weight=1, uniform="priority-fields")
+        ctk.CTkLabel(top, text=f"{symbol} · PRIORITY", font=("Segoe UI", 16, "bold")).grid(
+            row=0, column=0, columnspan=2, pady=(12, 8))
+        ctk.CTkLabel(top, text="Hạn mức (tr)", anchor="w").grid(row=1, column=0, sticky="ew", padx=(16, 8))
+        ctk.CTkLabel(top, text="Mua/lần (%)", anchor="w").grid(row=1, column=1, sticky="ew", padx=(8, 16))
+        limit = ctk.CTkEntry(top, height=32)
         limit.insert(0, f"{row['limit_vnd'] / 1_000_000:g}")
-        limit.pack()
-        ctk.CTkLabel(top, text="MỖI LẦN MUA (%) · tính trên hạn mức").pack()
-        use = ctk.CTkEntry(top)
+        limit.grid(row=2, column=0, sticky="ew", padx=(16, 8), pady=(0, 6))
+        use = ctk.CTkEntry(top, height=32)
         use.insert(0, f"{row['use_pct']:g}")
-        use.pack()
-        ctk.CTkLabel(top, text="MAX LỆNH · số lần BUY trong một vị thế BOT").pack(pady=(5, 0))
-        maximum = ctk.CTkEntry(top)
+        use.grid(row=2, column=1, sticky="ew", padx=(8, 16), pady=(0, 6))
+        ctk.CTkLabel(top, text="MAX LỆNH", anchor="w").grid(row=3, column=0, sticky="ew", padx=(16, 8))
+        ctk.CTkLabel(top, text="Bot", anchor="w").grid(row=3, column=1, sticky="ew", padx=(8, 16))
+        maximum = ctk.CTkEntry(top, height=32)
         maximum.insert(0, str(config.priority_max_orders(row.get("max_orders", 1))))
-        maximum.pack()
+        maximum.grid(row=4, column=0, sticky="ew", padx=(16, 8))
+        bot_enabled = tk.BooleanVar(master=top, value=symbol not in self._priority_alert_symbols)
+        bot = ctk.CTkSwitch(top, text="Bật" if bot_enabled.get() else "Alert", variable=bot_enabled,
+                           command=lambda: bot.configure(text="Bật" if bot_enabled.get() else "Alert"))
+        bot.grid(row=4, column=1, sticky="w", padx=(8, 16))
+        _HoverHint(bot, "Bật: giao dịch theo bot tổng.\nAlert: chỉ tín hiệu + Telegram; chặn BUY/SELL tự động của mã.\nÁp dụng rồi LƯU PRIORITY để có hiệu lực.")
         _HoverHint(maximum, "1–100 lần. Khớp nhiều đợt vẫn là 1; hủy chưa khớp không tính. Bán hết mới đếm lại.\nMua thêm phải có tín hiệu mới; không mua khi đang thoát/đã bán một phần. Các lần mua dùng chung SL/PROTECT theo giá vốn bình quân.\nVí dụ hạn mức 15 triệu, mỗi lần 50%, MAX 2: mỗi lần ≤ 7,5 triệu, tổng ≤ 15 triệu gồm phí. Chỉ áp dụng khi VỐN RIÊNG ON; MANUAL không dùng giới hạn số lần BOT.")
-        status = ctk.CTkLabel(top, text="Chỉ áp dụng khi VỐN RIÊNG được bật.", wraplength=450)
-        status.pack(pady=5)
+        status = ctk.CTkLabel(top, text="", font=("Segoe UI", 12), wraplength=368)
+        status.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(12, 8))
 
         def refresh(_event=None) -> None:
             try:
                 allocation = self._priority_allocation_inputs(limit.get(), use.get(), maximum.get())
                 once = allocation["limit_vnd"] * allocation["use_pct"] / 100
                 total = config.priority_buy_limit(allocation)
-                status.configure(text=f"Mỗi lần ≤ {once / 1_000_000:g} triệu · Tổng ≤ {total / 1_000_000:g} triệu\nĐể dành {(allocation['limit_vnd'] - total) / 1_000_000:g} triệu · gồm phí", text_color=self.MUTED)
+                status.configure(text=f"Mỗi lần ≤ {once / 1_000_000:g} tr · Tổng ≤ {total / 1_000_000:g} tr\nĐể dành {(allocation['limit_vnd'] - total) / 1_000_000:g} tr · gồm phí", text_color=self.MUTED)
             except (ValueError, TypeError):
                 status.configure(text="Hạn mức ≥ 0; mỗi lần 0–100%; MAX LỆNH nguyên 1–100.", text_color=self.RED)
         for entry in (limit, use, maximum):
@@ -2016,6 +2029,10 @@ class ConnectionPopup:
                 if symbol not in self.priority_picker.get():
                     raise ValueError("Mã đã bị bỏ khỏi Priority.")
                 self._priority_allocations[symbol] = allocation
+                if bot_enabled.get():
+                    self._priority_alert_symbols.discard(symbol)
+                else:
+                    self._priority_alert_symbols.add(symbol)
                 self._refresh_priority_summary()
                 self.priority_status.configure(
                     text=f"BẢN NHÁP · {symbol}: {cap / 1_000_000:g} triệu × {pct:g}% / lần · MAX {allocation['max_orders']} · cần LƯU", text_color=self.WARN,
@@ -2023,7 +2040,8 @@ class ConnectionPopup:
                 top.destroy()
             except (ValueError, TypeError) as exc:
                 status.configure(text=str(exc), text_color=self.RED)
-        ctk.CTkButton(top, text="ÁP DỤNG BẢN NHÁP", command=apply).pack(pady=5)
+        ctk.CTkButton(top, text="ÁP DỤNG", height=32, command=apply).grid(
+            row=6, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 12))
 
     @staticmethod
     def _priority_allocation_inputs(limit: str, use: str, maximum: str) -> dict:
@@ -2047,6 +2065,9 @@ class ConnectionPopup:
             self.settings.priority_capital_enabled = enabled
             self.settings.priority_total_capital = total
             self.settings.priority_allocations = allocations
+            self.settings.priority_alert_symbols = [
+                symbol for symbol in priority if symbol in self._priority_alert_symbols
+            ]
             self._apply_watchlist(symbols, priority_symbols=priority)
         except Exception as exc:
             self.priority_status.configure(text=f"LƯU THẤT BẠI · {exc}", text_color=self.RED)

@@ -144,6 +144,7 @@ def fit_label_text(
 
 
 _SIGNAL_REASONS = {
+    "PRIORITY_ALERT": "Alert · chỉ tín hiệu",
     "WHIPSAW_LOCK": "EMA nhiễu, khóa mua",
     "MAX_POSITIONS": "Đã đủ số vị thế",
     "MAX_SYMBOL_ORDERS": "Đã đủ số lần BUY của mã trong vị thế này",

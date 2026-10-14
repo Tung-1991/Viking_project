@@ -86,6 +86,16 @@ def test_loss_requires_a_buy_notice_that_was_really_sent(subject):
     assert client.sent == []
 
 
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+def test_priority_alert_still_delivers_technical_buy(subject, mode):
+    value, client = subject
+    value.settings.priority_symbols = ["HDB"]
+    value.settings.priority_alert_symbols = ["HDB"]
+    observe(value, mode=mode, reason="PRIORITY_ALERT")
+    assert len(client.sent) == 1 and f"HDB · {mode}" in client.sent[0]
+    assert "EMA 3/6:" in client.sent[0] and "RSI14" in client.sent[0]
+
+
 def test_technical_notice_uses_indicator_bucket_price_and_observation_time(subject):
     value, client = subject
     observe(value, indicator_price=21.1, indicator_observed_at='2026-10-12T09:15:00+07:00')
