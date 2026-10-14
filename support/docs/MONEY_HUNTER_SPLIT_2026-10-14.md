@@ -17,6 +17,11 @@ START OFF nghĩa là sau lần có lãi đầu tiên. Khi qua ARM dùng cơ ch�
 Đỉnh đã đạt START nhưng cổ chưa bán được vẫn có thể hiện ĐÃ BẬT; dòng mốc/reason tiếp tục
 ghi CHỜ CỔ VỀ và CHƯA TẠO SELL. Preview không tiêu thụ lượt, không gửi lệnh hoặc Telegram.
 
+Panel cấu hình DYNAMIC: AUTO/ALERT cùng dòng tiêu đề; GỐC/CÒN LẠI và LẶP cùng dòng.
+Giảm khoảng cách giữa nhóm ATR/GIỮ LÃI, giữ nguyên các thiết lập và hành vi bán.
+Kiểm tra layout cùng tỷ lệ chữ/cửa sổ 100/150/200%: chiều cao nhóm giảm khoảng 32%,
+không chồng nút và không đổi kích thước khi chọn AUTO/ALERT.
+
 ## BAT mới
 
 1. Mở Money Hunter.
@@ -51,3 +56,4 @@ Không copy venv sang máy khác; dùng BAT 4 để tạo môi trường tại m
 - Preview/UI/khởi động/PROTECT/repo: 141 ca đạt, dùng runtime tạm và broker giả.
 - START/cache/UI refresh: 24 ca đạt trong lượt riêng, có ca trùng nhóm trên.
 - `compileall` và kiểm tra diff đạt. Không chạy giao dịch REAL hoặc nạp preset vào tài khoản.
+- Sau khi thu gọn DYNAMIC: 129 ca thiết lập/lưu và 139 ca UI/PROTECT đạt ở hai lượt riêng.

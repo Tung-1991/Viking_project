@@ -927,29 +927,29 @@ class RuleSettingsPopup:
         )
         self.dynamic_settings_card = dynamic_box
         dynamic_header = dynamic_box._viking_header
+        dynamic_header.pack_configure(padx=10, pady=(6, 4))
+        dynamic_title = next(child for child in dynamic_header.winfo_children()
+                             if isinstance(child, ctk.CTkLabel) and child.cget("text") == "DYNAMIC")
+        dynamic_title.configure(font=("Segoe UI", 13, "bold"))
         self.normal_dynamic = tk.BooleanVar(value=self.params.normal_dynamic_enabled)
         ctk.CTkSwitch(
             dynamic_header, text="", width=36, variable=self.normal_dynamic,
             font=("Segoe UI", 12, "bold"), progress_color=self.GREEN,
             button_color=self.TEXT, text_color=self.TEXT,
-        ).pack(side="left", before=next(child for child in dynamic_header.winfo_children()
-                                        if isinstance(child, ctk.CTkLabel)), padx=(0, 6))
-        dynamic_policy_row = ctk.CTkFrame(dynamic_box, fg_color="transparent")
-        dynamic_policy_row.pack(fill="x", padx=12, pady=4)
-        ctk.CTkLabel(dynamic_policy_row, text="MODE", font=FONT_KEY, text_color=self.TITLE).pack(side="left")
+        ).pack(side="left", before=dynamic_title, padx=(0, 4))
         self.dynamic_policy = tk.StringVar(value=self.params.dynamic_policy)
         self.dynamic_policy_menu = ctk.CTkOptionMenu(
-            dynamic_policy_row, values=["AUTO", "ALERT"], variable=self.dynamic_policy,
-            width=95, height=34, font=FONT_VALUE, fg_color=self.BLUE, dynamic_resizing=False,
+            dynamic_header, values=["AUTO", "ALERT"], variable=self.dynamic_policy,
+            width=84, height=28, font=("Segoe UI", 12), fg_color=self.BLUE, dynamic_resizing=False,
             button_color="#245C92", button_hover_color="#1D4D7B",
         )
-        self.dynamic_policy_menu.pack(side="right")
-        self._hint_icon(dynamic_policy_row,
+        self.dynamic_policy_menu.pack(side="right", padx=(4, 0))
+        _HoverHint(self.dynamic_policy_menu,
             "Trước ARM: AUTO bán theo KL; ALERT chỉ báo.\n"
             "Chưa có cổ bán được: không tạo SELL. Đổi ALERT huỷ lệnh DYNAMIC chưa gửi."
-        ).pack(side="right", padx=(0, 6))
+        )
         dynamic_groups = ctk.CTkFrame(dynamic_box, fg_color="transparent")
-        dynamic_groups.pack(fill="x", padx=8, pady=(4, 2))
+        dynamic_groups.pack(fill="x", padx=8, pady=(0, 6))
         dynamic_groups.grid_columnconfigure(0, weight=1)
 
         atr_box = ctk.CTkFrame(
@@ -960,19 +960,19 @@ class RuleSettingsPopup:
         self.dynamic_atr_card = atr_box
         ctk.CTkLabel(
             atr_box, text="ATR14 · PHIÊN TRƯỚC",
-            font=("Segoe UI", 11, "bold"), text_color="#60A5FA", anchor="w",
-        ).pack(fill="x", padx=12, pady=(6, 2))
+            font=("Segoe UI", 11, "bold"), text_color="#60A5FA", anchor="w", height=18,
+        ).pack(fill="x", padx=8, pady=(4, 0))
         self.normal_atr_activation_multiplier, self.normal_atr_activation_enabled = self._dynamic_field(
             atr_box, "BẮT ĐẦU ×", self.params.normal_atr_activation_multiplier,
             self.params.normal_atr_activation_enabled,
-            "ON: bắt đầu Dynamic khi MFE ≥ ATR% × hệ số. ATR14 lấy phiên ngày đã đóng gần nhất.\n"
-            "ATR 4%, START ×0,55 → từng lãi 2,2%. OFF: bỏ ngưỡng ATR, vẫn cần từng có lãi.",
+            "ON: từng lãi ít nhất ATR% × hệ số mới bật theo dõi.\n"
+            "ATR 4%, ×0,55 → START +2,2%. OFF: bắt đầu sau lần có lãi đầu tiên.",
         )
         self.normal_atr_multiplier, self.normal_atr_trail_enabled = self._dynamic_field(
             atr_box, "LÙI ĐỈNH ×", self.params.normal_atr_multiplier,
             self.params.normal_atr_trail_enabled,
-            "ON: khoảng lùi từ đỉnh = ATR% × hệ số.\nATR 4%, TRAIL ×0,8 → lùi 3,2% từ đỉnh. "
-            "OFF: bỏ trail ATR; GIỮ LÃI vẫn dùng nếu bật.",
+            "Lùi ATR% × hệ số từ đỉnh. ATR 4%, ×0,8 → lùi 3,2%.\n"
+            "OFF: bỏ mốc ATR; GIỮ LÃI vẫn dùng nếu bật.",
         )
 
         retention_box = ctk.CTkFrame(
@@ -983,34 +983,44 @@ class RuleSettingsPopup:
         self.dynamic_retention_card = retention_box
         ctk.CTkLabel(
             retention_box, text="GIỮ LÃI THEO ĐỈNH",
-            font=("Segoe UI", 11, "bold"), text_color="#60A5FA", anchor="w",
-        ).pack(fill="x", padx=12, pady=(6, 2))
+            font=("Segoe UI", 11, "bold"), text_color="#60A5FA", anchor="w", height=18,
+        ).pack(fill="x", padx=8, pady=(4, 0))
         self.normal_retention_pct, self.normal_retention_enabled = self._dynamic_field(
             retention_box, "GIỮ LÃI (%)", self.params.normal_retention_pct,
             self.params.normal_retention_enabled,
-            "ON: giữ X% phần lãi tại đỉnh, không phải X% giá cổ phiếu.\n"
-            "Mua 100, đỉnh 104, giữ 72% → mức bảo vệ 102,88 (lãi được giảm 28% từ đỉnh).\n"
-            "Giữ 90% chỉ cho lãi giảm 10%. Nếu trail ATR cũng bật, dùng mức cao hơn.",
+            "Giữ X% lãi đỉnh: mua 100, đỉnh 104, giữ 72% → mốc 102,88.\n"
+            "Giữ 90% cho lãi giảm 10%. Nếu bật cả mốc ATR, chọn mốc cao hơn.",
         )
         self.normal_retention_until_pct, self.normal_retention_until_enabled = self._dynamic_field(
             retention_box, "TỚI MFE (%)", self.params.normal_retention_until_pct,
             self.params.normal_retention_until_enabled,
-            "ON: chỉ nâng mức GIỮ LÃI khi MFE dưới ngưỡng này; mức đã lưu không hạ.\n"
-            "MFE 5% = mua 100, từng lên 105. OFF: nâng GIỮ LÃI tới trước ARM. Không tác dụng khi GIỮ LÃI tắt.",
+            "Đạt ngưỡng (ví dụ 5%): ngừng nâng mốc GIỮ LÃI, giữ mốc đã lưu.\n"
+            "OFF: nâng tới trước ARM. Chỉ dùng khi GIỮ LÃI bật.",
         )
         sale = ctk.CTkFrame(dynamic_groups, fg_color="#20252C", corner_radius=7)
         sale.grid(row=2, column=0, sticky="ew", pady=(5, 0))
-        ctk.CTkLabel(sale, text="BÁN", font=("Segoe UI", 12, "bold"), text_color=self.TITLE).pack(anchor="w", padx=12)
-        self.dynamic_sell = self._field(sale, "KL (%)", self.params.dynamic_sell_pct,
+        self.dynamic_sell = self._field(sale, "BÁN (%)", self.params.dynamic_sell_pct,
             "GỐC: % KL mua đã khớp. CÒN LẠI: % KL chưa bán. KL và LẶP độc lập phần sau ARM.")
+        self.dynamic_sell.configure(width=58, height=28, font=("Segoe UI", 12))
+        self.dynamic_sell.master.pack_configure(padx=6, pady=(4, 2))
         self.dynamic_sell_basis = tk.StringVar(value="GỐC" if self.params.dynamic_sell_basis == "ORIGINAL" else "CÒN LẠI")
-        ctk.CTkSegmentedButton(sale, values=["GỐC", "CÒN LẠI"], variable=self.dynamic_sell_basis,
-                              selected_color=self.BLUE).pack(fill="x", padx=12, pady=4)
-        self.dynamic_repeat = self._switch(sale, "LẶP BÁN", self.params.dynamic_repeat_enabled,
+        self.dynamic_repeat = self._switch(sale, "LẶP", self.params.dynamic_repeat_enabled,
             "ON: chạm lại mức hoặc giảm tiếp đạt điều kiện → bán thêm theo %.\n"
             "Giá đứng im không bán lặp; chờ lệnh trước kết thúc. OFF: bán một lần.")
-        self.dynamic_repeat_switch = next(child for child in self.dynamic_repeat._viking_row.winfo_children()
+        repeat_row = self.dynamic_repeat._viking_row
+        repeat_row.pack_configure(padx=6, pady=(2, 4))
+        self.dynamic_repeat_switch = next(child for child in repeat_row.winfo_children()
                                           if isinstance(child, ctk.CTkSwitch))
+        self.dynamic_repeat_switch.configure(width=76, font=("Segoe UI", 11))
+        self.dynamic_repeat_switch.grid_configure(column=1, padx=(6, 4))
+        next(child for child in repeat_row.winfo_children()
+             if isinstance(child, ctk.CTkLabel)).grid_configure(column=2)
+        self.dynamic_sell_basis_selector = ctk.CTkSegmentedButton(
+            repeat_row, values=["GỐC", "CÒN LẠI"], variable=self.dynamic_sell_basis,
+            selected_color=self.BLUE, height=28, width=140,
+            font=("Segoe UI", 11), dynamic_resizing=False,
+        )
+        self.dynamic_sell_basis_selector.grid(row=0, column=0, sticky="ew")
         indicator = self._card(
             groups, "E · BÁN 100%",
             "OFF nằm ở công tắc E/M của từng trade. Khi E được bật: ALERT chỉ ghi nhận; AUTO bán toàn bộ phần còn lại. "
