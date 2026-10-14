@@ -250,8 +250,8 @@ def test_compact_rules_priority_draft_and_read_only_previews(ui_root, monkeypatc
         for name in rule.phase_tabs._tab_dict:
             rule.phase_tabs.set(name)
             capture(rule.top, name.split(" · ")[0].replace(" ", "-"))
-            body = (rule.max_positions.master.master.master if name.startswith("PHASE 3")
-                    else rule.market_allocation_card.master)
+            body = (rule.ma_period.master.master.master if name.startswith("PHASE 1") else
+                    rule.max_positions.master.master.master if name.startswith("PHASE 3") else rule.phase2_signal_card.master)
             cards = [child for child in body.winfo_children() if isinstance(child, ctk.CTkFrame) and int(child.grid_info().get("row", -1)) == 1]
             assert max(card.winfo_width() for card in cards) - min(card.winfo_width() for card in cards) <= 2
             if name.startswith("PHASE 3"):
@@ -1026,11 +1026,11 @@ def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> 
 
         assert not clashes, "control bị đè lên nhau: " + ", ".join(clashes)
         rule_popup = popups[0][1]
-        assert rule_popup.phase2_signal_card.master is rule_popup.phase2_confirmation_card.master
+        assert rule_popup.phase2_signal_card.master is rule_popup.phase2_mode_card.master
         assert rule_popup.phase2_mode_card.master is rule_popup.phase2_right_column
-        assert rule_popup.phase2_mode_card.master is not rule_popup.phase2_signal_card.master
-        assert int(rule_popup.phase2_mode_card.grid_info()["row"]) == 0
-        assert int(rule_popup.phase2_confirmation_card.grid_info()["row"]) == 1
+        assert int(rule_popup.phase2_mode_card.grid_info()["row"]) == 1
+        assert int(rule_popup.phase2_mode_card.grid_info()["column"]) == 1
+        assert int(rule_popup.phase2_confirmation_card.grid_info()["row"]) == 2
         connection_popup = popups[1][1]
         assert connection_popup.otp_card.master is connection_popup.dnse_compact_row
         assert connection_popup.paper_card.master is connection_popup.dnse_compact_row

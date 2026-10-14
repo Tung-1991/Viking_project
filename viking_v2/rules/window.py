@@ -266,9 +266,9 @@ class RuleSettingsPopup:
         self.phase_tabs = phases
         phases.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
         self._tab_font(phases, 12)
-        combined = phases.add("PHASE 1–2 · THỊ TRƯỜNG & BUY")
-        capital = phases.add("PHASE 3 · VỐN & BẢO VỆ")
-        self._phase_frames = [combined, combined, capital]
+        self._phase_frames = [phases.add(name) for name in (
+            "PHASE 1 · THỊ TRƯỜNG", "PHASE 2 · ENTRY BUY", "PHASE 3 · VỐN & BẢO VỆ",
+        )]
         if populate:
             for build, phase in zip((self._phase1, self._phase2, self._phase3), self._phase_frames):
                 build(phase)
@@ -430,89 +430,102 @@ class RuleSettingsPopup:
         return variable
 
     def _phase1(self, frame: ctk.CTkFrame) -> None:
-        body = self._combined_body = self._content(frame, columns=2)
-        market = self._card(body, "VNINDEX & PHÂN BỔ",
-            "VNINDEX 1D xác định Tăng/Giảm/Tích lũy/Phân phối; CP% là giới hạn vốn cổ phiếu. "
-            "Chọn tay ghi đè trạng thái và CP%, không tự bán cổ. Tham số mở MA/Pivot/Volume.",
-            0, 0, span=2, compact=True)
-        self.market_allocation_card = market
-        allocations = ctk.CTkFrame(market, fg_color="transparent")
-        allocations.pack(fill="x", padx=4, pady=2)
-        for column, (attribute, state, label) in enumerate((
-            ("exp_up", "UPTREND", "Tăng %"), ("exp_down", "DOWNTREND", "Giảm %"),
-            ("exp_acc", "ACCUMULATION", "Tích lũy %"), ("exp_dist", "DISTRIBUTION", "Phân phối %"))):
-            allocations.grid_columnconfigure(column, weight=1, uniform="allocation")
-            host = ctk.CTkFrame(allocations, fg_color="transparent")
-            host._viking_compact = True
-            host.grid(row=0, column=column, sticky="ew")
-            setattr(self, attribute, self._field(host, label, self.params.exposure[state] * 100,
-                    f"{state}: phần trăm NAV tối đa nằm trong cổ phiếu. Không tự bán để cân bằng."))
-        override = ctk.CTkFrame(market, fg_color="transparent")
-        override.pack(fill="x", padx=12, pady=(3, 7))
-        override.grid_columnconfigure(5, weight=1)
-        self.market_phase_override_enabled = tk.BooleanVar(value=self.settings.market_phase_override_enabled)
-        manual = ctk.CTkSwitch(override, text="Chọn tay", variable=self.market_phase_override_enabled,
-            width=100, switch_width=30, switch_height=17, font=("Segoe UI", 11), progress_color=self.WARN)
-        manual.grid(row=0, column=0, sticky="w", padx=(0, 8))
-        _HoverHint(manual, "BẬT: dùng trạng thái và CP% chọn tay, không chờ VNINDEX xác nhận.\n"
-                   "CP 100%: không yêu cầu giữ tiền. Vẫn phải đủ tiền/hạn mức; không tự bán cổ phiếu.")
-        self.market_phase_override = tk.StringVar(value=self.settings.market_phase_override)
-        ctk.CTkOptionMenu(override, values=["UPTREND", "ACCUMULATION", "DISTRIBUTION", "DOWNTREND"],
-            variable=self.market_phase_override, width=158, height=27, font=("Segoe UI", 11),
-            fg_color=self.BLUE, dynamic_resizing=False).grid(row=0, column=1, sticky="w")
-        ctk.CTkLabel(override, text="CP %", height=22, font=("Segoe UI", 12), text_color=self.TITLE
-                    ).grid(row=0, column=2, padx=(12, 6))
-        self.market_phase_override_exposure = ctk.CTkEntry(override, width=68, height=27, justify="right",
-            font=("Segoe UI", 12), fg_color=self.BG, border_color="#444B55")
-        self.market_phase_override_exposure.insert(0, f"{self.settings.market_phase_override_exposure_pct:g}")
-        self.market_phase_override_exposure.grid(row=0, column=3)
-        groups = self.market_advanced_frame = ctk.CTkFrame(market, fg_color="transparent")
-        for column in range(2):
-            groups.grid_columnconfigure(column, weight=1, uniform="market")
-        def toggle_advanced():
-            visible = groups.winfo_manager() == "pack"
-            if visible:
-                groups.pack_forget()
-            else:
-                groups.pack(fill="x", padx=4, pady=(0, 4))
-            advanced.configure(text="Thu gọn" if not visible else "Tham số")
-        advanced = self.market_advanced_button = ctk.CTkButton(override, text="Tham số", width=88, height=27,
-            fg_color="#3A3F47", font=("Segoe UI", 11), command=toggle_advanced)
-        advanced.grid(row=0, column=6, sticky="e")
-        _HoverHint(advanced, "Mở cấu hình MA dài hạn, Pivot và độ tin cậy Volume. Các giá trị vẫn được giữ khi thu gọn.")
-        structure = self._card(groups, "CẤU TRÚC VNINDEX", "MA/Pivot và số phiên xác nhận trạng thái thị trường.",
-                               0, 0, compact=True)
-        for attribute, label, value, hint in (
-            ("ma_period", "MA dài hạn", self.params.ma_period, "Đường MA dài hạn của VNINDEX; mặc định 200."),
-            ("pivot_left", "Pivot trái", self.params.pivot_left, "Số nến bên trái để xác nhận Pivot."),
-            ("pivot_right", "Pivot phải", self.params.pivot_right, "Số nến bên phải để xác nhận Pivot."),
-            ("pivot_horizontal", "Pivot ngang (%)", self.params.pivot_horizontal_pct, "Sai số coi hai Pivot đi ngang."),
-            ("ma_zone", "Vùng MA (%)", self.params.ma_zone_pct, "Vùng đệm quanh MA dài hạn."),
-            ("confirm_sessions", "Xác nhận (phiên)", self.params.confirm_sessions,
-             "Số phiên giao dịch liên tiếp cần để đổi P1. Không phải số lần quét hoặc thời gian chờ mua từng mã.")):
-            setattr(self, attribute, self._field(structure, label, value, hint))
-        volume = self._card(groups, "ĐỘ TIN CẬY VOLUME", "Volume xác nhận độ tin cậy; không tự đổi trạng thái hoặc tạo BUY/SELL.",
-                            0, 1, compact=True)
-        self.volume_confirmation = self._switch(volume, "HIỆN ĐỘ TIN CẬY", self.params.volume_confirmation,
-            "ON: hiện nhãn CAO/TRUNG BÌNH/THẤP theo volume; không thay đổi quyết định bot.")
-        self.volume_average = self._field(volume, "Trung bình (phiên)", self.params.volume_average_sessions,
-                                          "Số phiên dùng tính Volume trung bình.")
-        self.high_volume = self._field(volume, "Volume cao (%)", self.params.high_volume_ratio * 100,
-                                      "Từ tỷ lệ này trở lên được coi là Volume cao.")
-        self.low_volume = self._field(volume, "Volume thấp (%)", self.params.low_volume_ratio * 100,
-                                     "Dưới tỷ lệ này được coi là Volume thấp.")
+        body = self._phase1_body = self._content(frame)
+        self._summary(
+            body,
+            "VNINDEX · 1D",
+            "",
+            "UPTREND: HH + HL và ở trên vùng MA. DOWNTREND: LH + LL và ở dưới vùng MA. "
+            "ACCUMULATION/DISTRIBUTION dùng cấu trúc Pivot đi ngang. Volume chỉ xác nhận độ tin cậy, không tự tạo trạng thái.",
+        )
+
+        structure = self._card(
+            body, "CẤU TRÚC",
+            "Nhóm nhận diện xu hướng VNINDEX bằng MA dài hạn, Pivot và số phiên xác nhận.",
+            1, 0, compact=True,
+        )
+        self.ma_period = self._field(structure, "MA dài hạn", self.params.ma_period, "Mặc định 200. Đường MA dùng xác định bối cảnh dài hạn của VNINDEX.")
+        self.pivot_left = self._field(structure, "Pivot trái", self.params.pivot_left, "Mặc định 3 nến bên trái để xác nhận một Pivot.")
+        self.pivot_right = self._field(structure, "Pivot phải", self.params.pivot_right, "Mặc định 3 nến bên phải để xác nhận một Pivot.")
+        self.pivot_horizontal = self._field(structure, "Pivot ngang (%)", self.params.pivot_horizontal_pct, "Mặc định 1%. Sai số tối đa để coi hai Pivot đang đi ngang.")
+        self.ma_zone = self._field(structure, "Vùng MA (%)", self.params.ma_zone_pct, "Mặc định 1%. Vùng đệm quanh MA dài hạn.")
+        self.confirm_sessions = self._field(structure, "Xác nhận (phiên)", self.params.confirm_sessions,
+            "Số phiên giao dịch liên tiếp cần để đổi trạng thái P1. Mặc định 3, chỉnh được.\n"
+            "CHỜ TĂNG 1/3 = ứng viên TĂNG mới đạt 1 phiên, chưa thay trạng thái cũ. "
+            "Không phải 3 lần quét và không phải chờ riêng từng lệnh mua.")
+
+        volume = self._card(
+            body, "KHỐI LƯỢNG",
+            "Volume chỉ tính nhãn độ tin cậy cho trạng thái thị trường; không đổi state và không tạo tín hiệu BUY/SELL.",
+            1, 1, compact=True,
+        )
+        self.volume_confirmation = self._switch(
+            volume, "HIỆN ĐỘ TIN CẬY", self.params.volume_confirmation,
+            "Mặc định OFF. ON để tính và hiện nhãn CAO/TRUNG BÌNH/THẤP theo volume; nhãn này không thay đổi quyết định của bot.",
+        )
+        self.volume_average = self._field(volume, "Trung bình (phiên)", self.params.volume_average_sessions, "Mặc định 20 phiên dùng tính volume trung bình.")
+        self.high_volume = self._field(volume, "Volume cao (%)", self.params.high_volume_ratio * 100, "Mặc định 150%. Từ mức này trở lên được coi là volume cao.")
+        self.low_volume = self._field(volume, "Volume thấp (%)", self.params.low_volume_ratio * 100, "Mặc định 80%. Dưới mức này được coi là volume thấp.")
+
+        exposure = self._card(
+            body, "TỶ TRỌNG TỐI ĐA",
+            "Phần trăm NAV tối đa được phép nằm trong cổ phiếu ở từng trạng thái VNINDEX.",
+            1, 2, compact=True,
+        )
+        self.exp_up = self._field(exposure, "Tăng (%)", self.params.exposure["UPTREND"] * 100, "UPTREND. Mặc định tối đa 90% NAV.")
+        self.exp_down = self._field(exposure, "Giảm (%)", self.params.exposure["DOWNTREND"] * 100, "DOWNTREND. Mặc định tối đa 10% NAV.")
+        self.exp_acc = self._field(exposure, "Tích lũy (%)", self.params.exposure["ACCUMULATION"] * 100, "ACCUMULATION. Mặc định tối đa 60% NAV.")
+        self.exp_dist = self._field(exposure, "Phân phối (%)", self.params.exposure["DISTRIBUTION"] * 100, "DISTRIBUTION. Mặc định tối đa 50% NAV.")
+
+        override = self._card(
+            body, "TỶ TRỌNG CHỌN TAY (P1)",
+            "BẬT: dùng CP% nhập bên dưới, không chờ VNINDEX xác nhận. Ví dụ CP 100% = P1 không yêu cầu giữ tiền.\n"
+            "Tên trạng thái là lựa chọn tay, không phải kết luận VNINDEX. Vẫn phải đủ tiền/hạn mức; không tự bán cổ phiếu.",
+            2, 0, span=3, compact=True,
+        )
+        override_row = ctk.CTkFrame(override, fg_color="transparent")
+        override_row.pack(fill="x", padx=12, pady=(2, 10))
+        override_row.grid_columnconfigure(3, weight=1)
+        self.market_phase_override_enabled = tk.BooleanVar(
+            value=self.settings.market_phase_override_enabled,
+        )
+        ctk.CTkSwitch(
+            override_row, text="BẬT", variable=self.market_phase_override_enabled,
+            font=("Segoe UI", 12, "bold"), progress_color=self.WARN,
+            text_color=self.TEXT,
+        ).grid(row=0, column=0, sticky="w", padx=(0, 14))
+        self.market_phase_override = tk.StringVar(
+            value=self.settings.market_phase_override,
+        )
+        ctk.CTkOptionMenu(
+            override_row,
+            values=["UPTREND", "ACCUMULATION", "DISTRIBUTION", "DOWNTREND"],
+            variable=self.market_phase_override, width=170, height=34,
+            font=("Segoe UI", 12), fg_color=self.BLUE,
+            button_color="#245C92", button_hover_color="#1D4D7B",
+        ).grid(row=0, column=1, sticky="w")
+        ctk.CTkLabel(
+            override_row, text="CP %", font=FONT_KEY, text_color=self.TITLE,
+        ).grid(row=0, column=2, sticky="w", padx=(18, 7))
+        self.market_phase_override_exposure = ctk.CTkEntry(
+            override_row, width=78, height=34, justify="right",
+            font=FONT_VALUE, fg_color="#181B20", border_color="#444B55",
+            text_color=self.TEXT,
+        )
+        self.market_phase_override_exposure.insert(
+            0, f"{self.settings.market_phase_override_exposure_pct:g}",
+        )
+        self.market_phase_override_exposure.grid(row=0, column=3, sticky="w")
 
     def _phase2(self, frame: ctk.CTkFrame) -> None:
-        body = self._combined_body
-        left = ctk.CTkFrame(body, fg_color="transparent")
-        right = ctk.CTkFrame(body, fg_color="transparent")
-        for column, host in enumerate((left, right)):
-            host.grid(row=1, column=column, sticky="new")
-            host.grid_columnconfigure(0, weight=1)
-        signal = self._card(left, "CHỈ BÁO BUY", "Chỉ báo mở vị thế; E có điều khiển riêng ở tab E/M.", 0, 0, compact=True)
+        body = self._phase2_body = self._content(frame, columns=2)
+        self._summary(body, "ENTRY BUY · TÍN HIỆU 1D", "",
+            "BUY mở vị thế mới. EMA BUY tách khỏi EMA SELL; E chỉnh trong tab E/M. "
+            "Chu kỳ RSI dùng chung BUY và E. Các giải thích nằm trong hint từng trường.", columns=2)
+        signal = self._card(body, "CHỈ BÁO BUY", "Chỉ báo mở vị thế; E có điều khiển riêng ở tab E/M.", 1, 0, compact=True)
         self.phase2_signal_card = signal
 
-        self.phase2_right_column = right
+        self.phase2_right_column = body
 
         def indicator_group(title: str, color: str) -> ctk.CTkFrame:
             group = ctk.CTkFrame(
@@ -596,9 +609,9 @@ class RuleSettingsPopup:
         refresh_memory_field()
 
         mode = self._card(
-            right, "NẾN & GIỜ MUA",
+            body, "NẾN & GIỜ MUA",
             "REALTIME dùng nến đang chạy; CLOSED chỉ dùng nến đã đóng. Khung giờ chỉ chặn BUY, không chặn SELL/SL.",
-            0, 0, compact=True,
+            1, 1, compact=True,
         )
         self.phase2_mode_card = mode
         self.signal_mode = tk.StringVar(value=self.settings.signal_mode)
@@ -660,9 +673,9 @@ class RuleSettingsPopup:
         ).pack(side="left")
 
         confirmation = self._card(
-            left, "XÁC NHẬN BUY",
+            body, "XÁC NHẬN BUY",
             "Sau tín hiệu BUY, hệ thống kiểm tra các điều kiện EMA/RSI đã chọn tại mỗi lần quan sát cho đến đủ X phút giao dịch. SELL và SL không chờ.",
-            1, 0, compact=True,
+            2, 0, compact=True,
         )
         self.phase2_confirmation_card = confirmation
         row = ctk.CTkFrame(confirmation, fg_color="transparent")
@@ -693,9 +706,9 @@ class RuleSettingsPopup:
             ).pack(side="left", padx=(0, 12))
 
         buy_volume = self._card(
-            right, "VOLUME ENTRY",
+            body, "VOLUME ENTRY",
             "Mặc định OFF. Khi ON, BUY chỉ được qua nếu volume tích lũy của nến hiện tại đạt tỷ lệ tối thiểu so với trung bình các phiên đã đóng trước đó. Không dùng dữ liệu tương lai.",
-            1, 0, compact=True,
+            2, 1, compact=True,
         )
         self.buy_volume_enabled = self._switch(
             buy_volume, "DÙNG VOLUME", self.params.buy_volume_enabled,

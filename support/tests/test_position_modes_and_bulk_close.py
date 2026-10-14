@@ -290,24 +290,20 @@ def test_compact_popup_edits_targets_and_three_modes_then_returns_to_rule(ui_roo
         ctk.set_window_scaling(1.)
 
 
-def test_rule_merges_market_allocation_and_compacts_buy_without_losing_values(ui_root, tmp_path, monkeypatch):
+def test_rule_preserves_original_tabs_and_compacts_panels_without_losing_values(ui_root, tmp_path, monkeypatch):
     from viking_v2 import config
     monkeypatch.setattr(config, "RUNTIME_ROOT", tmp_path)
     settings = AppSettings(rule_parameters={"buy_ema_fast": 4, "buy_ema_slow": 9, "rsi_period": 13,
                                            "normal_policy": "ALERT", "dynamic_policy": "AUTO"})
     popup = RuleSettingsPopup(ui_root, settings, "MERGED_UI", lambda: None)
     try:
-        assert len(popup.phase_tabs._tab_dict) == 2
-        assert popup._phase_frames[0] is popup._phase_frames[1]
-        assert popup.market_allocation_card.master is popup._combined_body
-        assert popup.phase2_mode_card.master is popup.phase2_right_column
-        assert popup.market_advanced_frame.winfo_manager() == ""
-        popup.market_advanced_button.invoke()
-        assert popup.market_advanced_frame.winfo_manager() == "pack"
+        assert list(popup.phase_tabs._tab_dict) == ["PHASE 1 · THỊ TRƯỜNG", "PHASE 2 · ENTRY BUY", "PHASE 3 · VỐN & BẢO VỆ"]
+        assert popup._phase_frames[0] is not popup._phase_frames[1]
+        assert popup._phase1_body is not popup._phase2_body
+        assert popup.phase2_mode_card.master is popup._phase2_body
+        assert popup.ma_period.master.master.winfo_manager() == "grid"
         popup.ma_period.delete(0, "end")
         popup.ma_period.insert(0, "180")
-        popup.market_advanced_button.invoke()
-        assert popup.market_advanced_frame.winfo_manager() == ""
         popup.save()
         saved = config.load_settings("MERGED_UI")
         assert saved.rule_parameters["buy_ema_fast"] == 4 and saved.rule_parameters["rsi_period"] == 13

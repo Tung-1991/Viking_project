@@ -33,7 +33,9 @@ Các case offline mới nằm ở `support/tests/test_position_repair_and_tplus_
 
 88 case mới đạt. Suite đầy đủ và các lần kiểm tra lại phần vừa chỉnh cuối đối chiếu 2.678 case hiện tại: 2.664 đạt, 14 lỗi UI/launcher còn lại đúng cùng các lỗi đã tái hiện trên baseline trước. Kiểm tra trực tiếp popup/hint bằng cửa sổ Tk mô phỏng cũng đạt; không chạy app giao dịch thật để test.
 
-Đợt UI tiếp theo: 34 case mới cho ghi đè ARM/DYNAMIC/E, bán nhiều mã, xác minh gói/book, chống lệnh trùng và sửa khi đang hand-off; các bộ liên quan cùng lần chạy lại cuối có 813 case đạt. Popup vị thế kiểm tra ở DPI 1/1,25/1,5, nhóm EMA ở 1/1,5/2. VNINDEX & phân bổ gộp cùng trang BUY, MA/Pivot/Volume thu trong nút Tham số; bốn panel BUY xếp theo hai cột và các giải thích dài nằm trong hint. Dòng chọn nền tím, chữ trắng, tách khỏi các màu trạng thái. Các kiểm thử chỉ dùng dữ liệu giả, không gửi broker thật.
+Đợt UI tiếp theo: 34 case mới cho ghi đè ARM/DYNAMIC/E, bán nhiều mã, xác minh gói/book, chống lệnh trùng và sửa khi đang hand-off; các bộ liên quan cùng lần chạy lại cuối có 813 case đạt. Popup vị thế kiểm tra ở DPI 1/1,25/1,5, nhóm EMA ở 1/1,5/2. Dòng chọn nền tím, chữ trắng, tách khỏi các màu trạng thái. Các kiểm thử chỉ dùng dữ liệu giả, không gửi broker thật.
+
+Bố cục RULE đã khôi phục các tab cũ: PHASE 1 · THỊ TRƯỜNG và PHASE 2 · ENTRY BUY tách riêng, PHASE 3 · VỐN & BẢO VỆ ở vị trí cũ. Tham số MA/Pivot/Volume hiện trực tiếp, bốn panel BUY trở về lưới hai hàng/hai cột. Chỉ thu kích thước panel và đưa giải thích vào hint; không sửa cấu hình đang lưu. 150 kiểm thử RULE, preload, save và UI liên quan đạt; đã kiểm tra ảnh native của từng tab.
 
 Đợt bổ sung dấu Override: 374 case UI/vị thế/hủy lệnh liên quan đạt, gồm 10 case mới kiểm tra tham chiếu RULE, giữ giá trị riêng khi RULE đổi, màu vàng trên dòng chọn, click X chỉ chọn dòng và không thay đổi fill. Ảnh kiểm tra dùng cửa sổ mô phỏng, không dữ liệu tài khoản thật.
 
