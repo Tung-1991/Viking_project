@@ -13,6 +13,29 @@ from viking_v2.trading.execution import ExecutionService
 from viking_v2.trading.orders import OrderQueue
 
 
+@pytest.mark.parametrize("arm, sellable, expected", [
+    ("AUTO", 0, ("WAIT", "PROTECT_WAITING_SETTLEMENT")),
+    ("AUTO", 300, ("SELL", "NORMAL_PROTECTION")),
+    ("ALERT", 300, ("WAIT", "PROTECT_ALERT")),
+])
+def test_hdb_screenshot_after_arm_is_independent_from_dynamic_alert(arm, sellable, expected):
+    params = StaticRuleParameters(normal_policy=arm, dynamic_policy="ALERT",
+                                  normal_arm_pct=7, normal_giveback_pct=2.5)
+    peak_pct = (24.6 / 22.65 - 1) * 100
+    position = {"quantity": 300, "avg_price": 22.65, "current_price": 23.2,
+                "trade_quantity": sellable, "peak_profit_pct": peak_pct, "normal_armed": True,
+                "em_modes": ["NORMAL"], "sl_enabled": False}
+    decision = StaticRule(params).evaluate({"symbol": "HDB", "bars": [], "confirmed_market_state": "UPTREND"},
+                                           {"position": position, "position_quantity": 300})
+    assert (decision.action, decision.reason) == expected
+    assert decision.details["protection_stage"] == "ARM"
+    assert decision.details["normal_mfe_pct"] == pytest.approx(8.6092715)
+    assert decision.details["normal_trigger_price"] == pytest.approx(23.985)
+    assert decision.details["normal_policy"] == arm and decision.details["dynamic_policy"] == "ALERT"
+    if decision.action == "SELL":
+        assert decision.quantity_fraction == pytest.approx(.33)
+
+
 @pytest.mark.parametrize("arm", ["AUTO", "ALERT"])
 @pytest.mark.parametrize("dynamic", ["AUTO", "ALERT"])
 @pytest.mark.parametrize("stage,peak,price", [("ARM", 10, 107), ("DYN", 4, 102.5)])
@@ -206,3 +229,28 @@ def test_telegram_separates_condition_queue_and_execution(policy, queued):
     assert "100 CP" in message if queued else "100 CP" not in message
     assert "chưa xác nhận tạo/gửi/khớp" in message if policy == "AUTO" and not queued else True
     assert "chỉ báo, không đặt lệnh" in message if policy == "ALERT" else True
+
+
+@pytest.mark.parametrize("stage,arm,dynamic", [("ARM", "AUTO", "ALERT"), ("DYN", "ALERT", "AUTO")])
+def test_protect_telegram_shows_exact_modes_and_only_active_stage_metrics(stage, arm, dynamic):
+    from viking_v2.connections.telegram import SignalTelegramService
+    from support.tests.test_telegram_buy_lost import Telegram
+    client = Telegram()
+    service = SignalTelegramService(client, chat_id="offline")
+    service.notify_protect_alert(symbol="HDB", price=23.2, mfe_pct=8.61, peak_price=24.6,
+        protect_price=23.985, sell_pct=33, dynamic=True, policy="AUTO", stage=stage,
+        arm_policy=arm, dynamic_policy=dynamic, arm_pct=7, giveback_pct=2.5,
+        atr_value=.549, atr_pct=2.38, atr_activation_multiplier=.55, atr_multiplier=.8,
+        retention_pct=72, retention_until_pct=5,
+        order_id="3d0178c2cd", order_quantity=100, order_status="PENDING", execution_mode="REAL")
+    message = client.sent[0]
+    assert f"SAU ARM {arm} · DYNAMIC {dynamic}" in message
+    assert "AUTO · SELL #3d0178c2cd · 100 CP · PENDING" in message
+    assert "DYNAMIC ON" not in message
+    if stage == "ARM":
+        assert "SAU ARM · HDB · REAL" in message
+        assert "ARM 7% · Lùi đỉnh 2.5%" in message
+        assert "START ATR" not in message and "Giữ 72%" not in message
+    else:
+        assert "DYNAMIC · HDB · REAL" in message
+        assert "START ATR: ×0.55 · TRAIL ATR: ×0.8" in message and "Giữ 72%" in message

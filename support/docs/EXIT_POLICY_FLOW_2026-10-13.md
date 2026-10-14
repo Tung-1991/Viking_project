@@ -47,6 +47,11 @@ Preset còn áp dụng hạn mức/P1/Telegram đã chốt, không tự bật PR
 Telegram mới ghi rõ nhóm kích hoạt và tỷ lệ yêu cầu. Chỉ ghi mã, KL và trạng thái lệnh khi planner đã tạo
 intent; không tự suy ra “đã tạo” từ AUTO. Khớp thực tế tiếp tục theo thông báo/ledger khớp lệnh riêng.
 
+Ảnh HDB ngày 14/10: MFE +8,61%, đỉnh 24.600đ, ARM 7%, lùi đỉnh 2,5% → PROTECT 23.985đ.
+Giá 23.200đ chạm **SAU ARM**, dùng MODE của SAU ARM. Khi SAU ARM AUTO và DYNAMIC ALERT,
+nhánh SAU ARM vẫn được bán theo cấu hình; DYNAMIC ALERT không phải công tắc dừng toàn bộ PROTECT.
+Tin Telegram bỏ nhãn DYNAMIC ON trong hit SAU ARM, hiện hai MODE của snapshot và chỉ số của nhánh đang chạy.
+
 ## ATR và kiểm chứng
 
 ATR14 Wilder hiện cả đơn vị giá và phần trăm, ví dụ `535đ 2,38%`; đây là ví dụ UI tổng hợp.

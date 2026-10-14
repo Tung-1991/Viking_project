@@ -472,6 +472,10 @@ class SignalTelegramService:
         order_id: str = "",
         order_quantity: int = 0,
         order_status: str = "",
+        arm_policy: str = "",
+        dynamic_policy: str = "",
+        arm_pct: float = 0.0,
+        giveback_pct: float = 0.0,
     ) -> bool:
         """Report a PROTECT hit; RULE policy remains the source of action."""
         symbol = str(symbol or "").strip().upper()
@@ -480,6 +484,11 @@ class SignalTelegramService:
         policy = "AUTO" if str(policy or "").upper() == "AUTO" else "ALERT"
         stage = str(stage or "").upper()
         stage_label = "DYNAMIC" if stage == "DYN" else "SAU ARM" if stage == "ARM" else "PROTECT"
+        arm_policy = str(arm_policy or "").upper()
+        dynamic_policy = str(dynamic_policy or "").upper()
+        modes = (f"SAU ARM {arm_policy} · DYNAMIC {dynamic_policy}"
+                 if arm_policy in {"AUTO", "ALERT"} and dynamic_policy in {"AUTO", "ALERT"}
+                 else f"{stage_label} {policy}")
         action_line = "ALERT · chỉ báo, không đặt lệnh."
         if policy == "AUTO":
             action_line = (
@@ -498,21 +507,25 @@ class SignalTelegramService:
             + (f"tới MFE {float(retention_until_pct):g}%" if retention_until_enabled else "tới ARM")
             if dynamic and retention_enabled and float(retention_pct) > 0 else "Giữ lãi: OFF"
         )
-        return self._send(
-            "\n".join((
-                "🟠 PROTECT HIT" + (f" · {stage_label}" if stage else "") + f" · {symbol}"
-                + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
-                f"Giá: {self._price(price)} · MFE {float(mfe_pct):+.2f}%",
-                f"Peak: {self._price(peak_price)} · PROTECT: {self._price(protect_price)}",
+        lines = [
+            "🟠 PROTECT HIT" + (f" · {stage_label}" if stage else "") + f" · {symbol}"
+            + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
+            f"Giá: {self._price(price)} · MFE {float(mfe_pct):+.2f}%",
+            f"Peak: {self._price(peak_price)} · PROTECT: {self._price(protect_price)}",
+        ]
+        if stage == "ARM":
+            if arm_pct > 0 and giveback_pct > 0:
+                lines.append(f"ARM {float(arm_pct):g}% · Lùi đỉnh {float(giveback_pct):g}%")
+        else:
+            lines.extend((
                 "ATR14 · phiên trước: "
                 + (f"{self._price(atr_value)} · " if atr_value > 0 else "")
                 + f"{float(atr_pct):.2f}%",
                 f"START ATR: {start_label} · TRAIL ATR: {trail_label}",
                 keep_label,
-                f"Khối lượng {float(sell_pct):g}% · DYNAMIC {'ON' if dynamic else 'OFF'}",
-                action_line,
             ))
-        )
+        lines.extend((f"Khối lượng {float(sell_pct):g}% · {modes}", action_line))
+        return self._send("\n".join(lines))
 
     def notify_external_sell(
         self,
