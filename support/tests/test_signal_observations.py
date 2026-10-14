@@ -251,12 +251,12 @@ def test_phase2_cross_preview_occupies_existing_right_hand_space(ui_root):
         evidence = ema_cross_evidence(dict(buy_ema_fast=22.45, buy_ema_slow=22.4),
                                       dict(buy_ema_fast=22.44, buy_ema_slow=22.4), required=True)
         subject._render_ema_cross_preview({"ema_cross": evidence})
-        assert subject.preview_rule_cross.cget("text") == "CHỜ XUỐNG"
-        assert subject.preview_rule_cross.cget("text_color") == COL_WARN
+        assert "CHỜ XUỐNG" in subject._ema_cross_hint()
+        assert "CHƯA ĐẠT" in subject.preview_ema_entry_gate.cget("text")
         subject._render_ema_cross_preview({"ema_cross": evidence, "buy_window": {
             "state": "WAITING", "signal_time": "2026-10-09T13:39:31+07:00",
             "ema_cross": {"crossed_up": True, "cross_at": "2026-10-09T13:39:31+07:00"}}})
-        assert subject.preview_rule_cross.cget("text") == "ĐÃ LÊN 13:39:31"
+        assert subject.preview_rule_cross.cget("text") == "LÊN 09/10 13:39"
         assert subject.preview_rule_cross.cget("text_color") == COL_GREEN
         archived = {"ema_cross": evidence, "ema_cross_preview_closed": True,
                     "ema_cross_preview_expired": True, "buy_window": {
@@ -264,13 +264,12 @@ def test_phase2_cross_preview_occupies_existing_right_hand_space(ui_root):
                         "fast": 73.98, "slow": 73.13, "label": "CUỐI 14:44"}}
         before = deepcopy(archived)
         subject._render_ema_cross_preview(archived)
-        assert subject.preview_rule_cross.cget("text") == "HẾT PHIÊN"
-        assert subject.preview_rule_cross_detail.cget("text") == "CUỐI 14:44: 73.98 > 73.13"
-        assert subject.preview_rule_cross_detail.cget("text_color") == COL_GREEN
+        assert "HẾT PHIÊN" in subject._ema_cross_hint()
+        assert subject._preview_ema_details["ema_cross_last_preview"] == archived["ema_cross_last_preview"]
         assert archived == before
         subject.settings.rule_parameters["buy_signal_require_ema_cross"] = False
         subject._render_ema_cross_preview({})
-        assert subject.preview_rule_cross.cget("text") == "OFF"
+        assert subject.preview_ema_entry_gate.cget("text") == "EMA CẮT: OFF"
     finally:
         parent.destroy()
 

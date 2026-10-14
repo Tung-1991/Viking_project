@@ -234,6 +234,7 @@ def test_three_session_expiry_can_remember_the_previous_fridays_up_cross(ui_root
         assert view._preview_ema_gate_evidence["expiry_sessions"] == ["2026-10-09", "2026-10-12", "2026-10-13"]
         assert view.preview_rule_cross_detail.cget("text") == "LÊN 09/10 09:31"
         assert "hạn 13/10 14:45, gồm phiên cắt" in view._ema_cross_hint()
+        assert "Lần cắt lên hết hạn" in view._ema_cross_hint()
         assert raw == before and not view._preview_ema_gate_evidence["valid"]
     finally:
         top.destroy()
@@ -275,11 +276,20 @@ def test_alternate_view_does_not_seed_the_active_va_rule(ui_root, monkeypatch):
     try:
         view._render_ema_cross_preview({"ema_cross": raw})
         assert not view._preview_ema_gate_evidence["valid"]
+        assert view.preview_rule_cross_detail.cget("text") == "THEO DÕI 13/10 09:00"
         view.preview_ema_swap.invoke()
         assert view.preview_rule_cross_counts.cget("text") == "5 CẮT - 3P"
         assert view._preview_ema_gate_evidence["valid"]
+        assert view.preview_rule_cross_detail.cget("text") == "LÊN 13/10 09:17"
+        assert "Theo dõi từ 13/10 09:00" in view._ema_cross_hint()
         view.preview_ema_swap.invoke()
         assert view.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
+        assert not view._preview_ema_gate_evidence["valid"]
+        view._alternate_ema_history = lambda _: {"ready": True, "start": "2026-10-09", "end": "2026-10-13",
+                                               "up": 0, "down": 0, "cross": {}}
+        view.preview_ema_swap.invoke()
+        assert view.preview_rule_cross_counts.cget("text") == "0 CẮT - 3P"
+        assert view.preview_rule_cross_detail.cget("text") == "QUÉT 09–13/10"
         assert not view._preview_ema_gate_evidence["valid"]
         assert (raw, view.settings.to_dict()) == before
     finally:
@@ -301,9 +311,11 @@ def test_failed_history_preview_cannot_present_a_live_zero_as_verified_three_ses
         assert view.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
         view.preview_ema_swap.invoke()
         assert view.preview_rule_cross_counts.cget("text") == "— CẮT - 3P"
+        assert view.preview_rule_cross_detail.cget("text") == "CHƯA TẢI ĐƯỢC"
         assert "thử lại sau 60 giây" in view._ema_memory_preview_hint()
         view.preview_ema_swap.invoke()
         assert view.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
+        assert view.preview_rule_cross_detail.cget("text") == "THEO DÕI 01/10 09:00"
     finally:
         top.destroy()
 

@@ -23,7 +23,10 @@ Kiểm tra layout cùng tỷ lệ chữ/cửa sổ 100/150/200%: chiều cao nh�
 không chồng nút và không đổi kích thước khi chọn AUTO/ALERT.
 
 P2 phân biệt bộ đếm với lần cắt lên đang nhớ: `1 CẮT - 0P` là số lần đổi phía hôm nay.
-Dòng cuối hiện giao cắt gần nhất: `LÊN/XUỐNG dd/mm HH:MM`, chưa có mốc thì `—`.
+Dưới bộ đếm chỉ còn một dòng: có giao cắt hiện `LÊN/XUỐNG dd/mm HH:MM`;
+VA chưa có cắt hiện `THEO DÕI dd/mm HH:MM`, X chưa có cắt hiện `QUÉT 09–13/10`.
+Chờ lên/xuống, đã dùng, hết hạn và ngày bắt đầu khi đã có cắt nằm trong nút ⓘ.
+Một trạng thái CẮT ở đầu; không có dòng trạng thái chờ riêng hoặc dấu `—` bên dưới.
 VA không quét trước lúc thêm mã vẫn giữ lần LIVE đã ghi nhận tới khi dùng.
 Tái hiện 13/10 lên → 14/10 xuống: dòng cuối hiện XUỐNG 14/10, bộ nhớ BUY vẫn giữ
 mốc lên 13/10; EMA hiện tại dưới EMA chậm thì vẫn CHƯA ĐẠT.
@@ -86,3 +89,5 @@ Không copy venv sang máy khác; dùng BAT 4 để tạo môi trường tại m
   3 ca vệ sinh repo đạt; có ca tải đủ 7 phiên, chỉ cắt xuống, không cho BUY.
 - Mốc giao cắt gần nhất và hạn 3P: 236 ca UI/bộ nhớ/lịch sử, 3 ca vệ sinh repo đạt.
   Bộ nhớ BUY đã dùng vẫn giữ nguyên; kiểm tra giá HDB/MSN bằng cache, không gọi API tài khoản.
+- Gộp dòng P2: 166 ca UI/EMA/tín hiệu, 11 ca khởi động/refresh và 3 ca vệ sinh repo đạt.
+  Đã kiểm tra trường hợp X quét đủ nhưng 0 lần cắt và bố cục cố định ở 100/150/200%.

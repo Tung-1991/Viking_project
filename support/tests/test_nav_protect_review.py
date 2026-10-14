@@ -233,22 +233,22 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
             assert widget.winfo_y() + widget.winfo_height() <= widget.master.winfo_height()
         assert subject.preview_rule_cross_counts.cget("text") == "3 CẮT - 0P"
         assert subject.preview_rule_cross_counts.cget("font")[1] == 14
-        assert subject.preview_rule_cross.cget("font")[1] == 11
+        assert subject.preview_rule_cross.cget("font")[1] == 10
         assert subject.preview_rule_ema.cget("font")[1] == 12
         subject._render_ema_cross_preview({"ema_cross": {
             "tracking_version": 2, "initialized": True, "current_ready": True,
             "current_fast": 19.35, "current_slow": 19.59,
             "up_count": 0, "down_count": 0,
+            "started_at": market_now().isoformat(),
         }})
         ui_root.update_idletasks()
-        assert subject.preview_rule_cross.cget("text") == (
-            "CHỜ CẮT LÊN" if subject.preview_rule_cross.master._viking_cross_narrow else "CHỜ EMA3 > EMA6"
-        )
+        assert subject.preview_rule_cross.cget("text").startswith("THEO DÕI ")
         assert subject.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
-        assert subject.preview_rule_cross_detail.cget("text") == (
-            "—"
-        )
-        assert "⏸" not in subject.preview_rule_cross.cget("text")
+        body = [child for child in subject.preview_rule_cross.master.winfo_children()
+                if child.winfo_manager() == "grid" and int(child.grid_info()["column"]) == 2
+                and int(child.grid_info()["row"]) > 0]
+        assert set(body) == {subject.preview_rule_cross_counts, subject.preview_rule_cross_detail}
+        assert "Chờ EMA3 cắt từ dưới lên trên EMA6." in subject._ema_cross_hint()
     finally:
         top.destroy()
         ctk.set_widget_scaling(1.0)
@@ -452,21 +452,23 @@ def test_ema_prerequisite_shows_initial_wait_cross_and_consumption_even_after_cl
         below = advance_memory({}, {"buy_ema_fast": 99, "buy_ema_slow": 100}, **args)
         view._render_ema_cross_preview({"ema_cross": below})
         assert view.preview_ema_entry_gate.cget("text") == "EMA CẮT: CHƯA ĐẠT"
-        assert view.preview_rule_cross.cget("text") == "CHỜ EMA3 > EMA6"
+        assert view.preview_rule_cross.cget("text") == "THEO DÕI 13/10 13:00"
         assert "Mẫu đầu: EMA3 < EMA6. Chỉ cần một lần cắt lên." in view._ema_entry_gate_hint()
         above = advance_memory(below, {"buy_ema_fast": 101, "buy_ema_slow": 100},
                                **{**args, "now": now + timedelta(seconds=1)})
+        monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: now + timedelta(seconds=1))
         original = deepcopy(above)
         for closed in (False, True):
             view._render_ema_cross_preview({"ema_cross": above, "ema_cross_preview_closed": closed})
             assert view.preview_ema_entry_gate.cget("text") == "EMA CẮT: ĐẠT"
-            assert view.preview_rule_cross.cget("text") == "ĐÃ CẮT LÊN"
+            assert view.preview_rule_cross.cget("text") == "LÊN 13/10 13:00"
             if closed:
                 assert not view._preview_ema_cross_evidence[1]["valid"]
         assert above == original
         view._render_ema_cross_preview({"ema_cross": {**above, "used": True}})
         assert view.preview_ema_entry_gate.cget("text") == "EMA CẮT: CHƯA ĐẠT"
-        assert view.preview_rule_cross.cget("text") == "ĐÃ DÙNG"
+        assert view.preview_rule_cross.cget("text") == "LÊN 13/10 13:00"
+        assert "Lần cắt lên đã dùng" in view._ema_cross_hint()
         first_above = advance_memory({}, {"buy_ema_fast": 101, "buy_ema_slow": 100}, **args)
         view._render_ema_cross_preview({"ema_cross": first_above})
         assert view.preview_ema_entry_gate.cget("text") == "EMA CẮT: CHƯA ĐẠT"
@@ -495,7 +497,8 @@ def test_alternate_history_preview_marks_absent_cache_as_unknown(ui_root, monkey
         assert subject.preview_rule_cross_counts.cget("text") == "— CẮT - 3P"
         assert subject._preview_ema_cross_evidence[1]["state"] == "UNKNOWN"
         assert not subject._preview_ema_cross_evidence[1]["valid"]
-        assert "CHỜ DỮ LIỆU" in subject.preview_rule_cross.cget("text")
+        assert subject.preview_rule_cross.cget("text") == "QUÉT 08–12/10"
+        assert "Chưa đủ dữ liệu xác nhận cắt lên" in subject._ema_cross_hint()
     finally:
         top.destroy()
 

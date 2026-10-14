@@ -145,3 +145,48 @@ def latest_cross(evidence: dict, *, now: datetime) -> dict:
             add((history.get("cross") or {}).get("cross_at"), "UP")
             add(history.get("last_down_at"), "DOWN")
     return max(events, key=lambda event: event["timestamp"], default={})
+
+
+def watch_started(evidence: dict, *, now: datetime) -> datetime | None:
+    for value in (evidence.get("started_at"), (evidence.get("baseline") or {}).get("at")):
+        try:
+            at = datetime.fromisoformat(str(value))
+            at = at.replace(tzinfo=VN_TZ) if at.tzinfo is None else at.astimezone(VN_TZ)
+            if at <= now:
+                return at
+        except (TypeError, ValueError, OverflowError):
+            pass
+    return None
+
+
+def preview_info(evidence: dict, *, now: datetime, mode: str, sessions: int,
+                 holidays: list[str], history_status: dict | None = None) -> tuple[str, str]:
+    """One display line: latest cross, VA admission, or the selected history range."""
+    history_status = history_status or {}
+    if history_status.get("pending"):
+        return "ĐANG TẢI", "muted"
+    if history_status and not history_status.get("ready"):
+        return "CHƯA TẢI ĐƯỢC", "wait"
+    event = latest_cross({**evidence, "mode": mode}, now=now)
+    if event:
+        at = datetime.fromisoformat(event["at"])
+        up = event["direction"] == "UP"
+        return f"{'LÊN' if up else 'XUỐNG'} {at:%d/%m %H:%M}", "ok" if up else "down"
+    if mode == "VA":
+        admitted = watch_started(evidence, now=now)
+        return (f"THEO DÕI {admitted:%d/%m %H:%M}" if admitted else ""), "muted"
+    start = lookback_start(now, sessions, holidays=holidays)
+    end = lookback_start(now, 1, holidays=holidays)
+    if start is None or end is None:
+        return "", "muted"
+    history = evidence.get("ema_history_preview") or {}
+    if history.get("ready"):
+        try:
+            start = datetime.fromisoformat(history["start"])
+            end = datetime.fromisoformat(history["end"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            pass
+    span = (f"{start:%d/%m}" if start.date() == end.date() else
+            f"{start:%d}–{end:%d/%m}" if (start.year, start.month) == (end.year, end.month) else
+            f"{start:%d/%m}–{end:%d/%m}")
+    return f"QUÉT {span}", "muted"

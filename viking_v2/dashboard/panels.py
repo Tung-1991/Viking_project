@@ -1273,16 +1273,12 @@ class DashboardPanelsMixin:
             font=("Segoe UI", 14, "bold"), text_color=COL_MUTED, anchor="w",
         )
         self.preview_rule_cross_counts.grid(row=1, column=2, sticky="ew", padx=8)
-        self.preview_rule_cross = StatusLabel(
-            phase2, text="CHƯA ĐỦ DỮ LIỆU", width=1, height=17,
-            font=("Segoe UI", 11, "bold"), text_color=COL_MUTED, anchor="w",
-        )
-        self.preview_rule_cross.grid(row=2, column=2, sticky="ew", padx=8)
         self.preview_rule_cross_detail = StatusLabel(
-            phase2, text="TRƯỚC: —", width=1, height=14,
+            phase2, text="", width=1, height=14,
             font=("Segoe UI", 10), text_color=COL_PREVIEW_TEXT, anchor="w",
         )
-        self.preview_rule_cross_detail.grid(row=3, column=2, sticky="ew", padx=8, pady=(0, 3))
+        self.preview_rule_cross_detail.grid(row=2, column=2, sticky="ew", padx=8)
+        self.preview_rule_cross = self.preview_rule_cross_detail  # One shared information line.
         for row, name in ((1, "buy_ema"), (2, "sell_ema"), (3, "rsi")):
             key = StatusLabel(
                 phase2, text="--:", width=1, height=14,
@@ -1325,14 +1321,8 @@ class DashboardPanelsMixin:
                 phase2._viking_title_widget.configure(text="P2" if narrow else "P2 · BUY / E")
                 for value in (self.preview_rule_ema, self.preview_rule_sell_ema, self.preview_rule_rsi):
                     value.grid(padx=(0, 0) if narrow else (0, 8))
-                self.preview_rule_cross_detail.grid(row=3, column=2, columnspan=1, sticky="ew", padx=(4, 6))
+                self.preview_rule_cross_detail.grid_configure(padx=(4, 6))
                 self.preview_rule_cross_counts.grid_configure(padx=(4, 6))
-                self.preview_rule_cross.grid_configure(padx=(4, 6))
-            full = getattr(self.preview_rule_cross, "_viking_full_cross_text", "CHƯA ĐỦ DỮ LIỆU")
-            compact = getattr(self.preview_rule_cross, "_viking_compact_cross_text", full)
-            shown = compact if narrow else full
-            if self.preview_rule_cross.cget("text") != shown:
-                self.preview_rule_cross.configure(text=shown)
             gate = getattr(self.preview_ema_entry_gate, "_viking_full_gate_text", self.preview_ema_entry_gate.cget("text"))
             self.preview_ema_entry_gate.configure(text=gate.removeprefix("EMA "))
             fit_label_text(self.preview_ema_entry_gate, base_font=("Segoe UI", 10, "bold"), minimum_size=9)
@@ -1353,6 +1343,7 @@ class DashboardPanelsMixin:
             detail = getattr(self.preview_rule_cross_detail, "_viking_full_detail_text", self.preview_rule_cross_detail.cget("text"))
             compact_detail = getattr(self.preview_rule_cross_detail, "_viking_compact_detail_text", detail)
             self.preview_rule_cross_detail.configure(text=compact_detail if narrow else detail)
+            fit_label_text(self.preview_rule_cross_detail, base_font=("Segoe UI", 10), minimum_size=9)
         self._fit_phase2_row = fit_phase2_row
         phase2.bind("<Configure>", fit_phase2_row, add="+")
 
@@ -2035,66 +2026,36 @@ class DashboardPanelsMixin:
         self.preview_ema_entry_gate.configure(text=gate_text, text_color=gate_color)
         self._preview_ema_gate_evidence = gate_evidence
         self._preview_ema_cross_evidence = (caption, evidence)
-        widget._viking_full_cross_text = caption.removeprefix("CẮT EMA · ")
+        prior_sessions = (int(params.get("buy_ema_cross_sessions", 3))
+                          if view_mode == "SESSIONS" or params.get("buy_ema_va_lookback_enabled") else 0)
         if tracking:
             from .ema_history import view_counts
-            prior_sessions = (int(params.get("buy_ema_cross_sessions", 3))
-                              if view_mode == "SESSIONS" or params.get("buy_ema_va_lookback_enabled") else 0)
             counts = view_counts(evidence, now=market_now(), prior_sessions=prior_sessions,
                                  holidays=self.settings.trading_holidays)
             if history_status and not history_status.get("ready"):
                 counts.update(up=None, down=None)
-            state_label = {
-                "SESSION_ACTIVE": "ĐÃ CẮT LÊN", "SESSION_USED": "ĐÃ DÙNG", "EXPIRED": "HẾT HẠN",
-                "WAIT_UP": "CHỜ EMA3 > EMA6", "WAIT_DOWN": "CHỜ XUỐNG→LÊN",
-                "UNKNOWN": "CHỜ DỮ LIỆU", "MARKET_CLOSED": "ĐÃ ĐÓNG",
-            }.get(gate_state, "CHỜ")
-            if gate_state == "UNKNOWN" and history_status:
-                state_label = "ĐANG TẢI" if history_status.get("pending") else "CHƯA TẢI ĐƯỢC"
             total_crosses = counts["up"] + counts["down"] if counts["up"] is not None else "—"
             self.preview_rule_cross_counts.configure(
                 text=f"{total_crosses} CẮT - {prior_sessions}P",
                 text_color={"ok": COL_GREEN, "wait": COL_WARN}.get(role, COL_MUTED),
             )
             self.preview_rule_cross_counts.grid()
-            widget.grid(row=2, column=2, rowspan=1)
-            widget._viking_full_cross_text = state_label
-            widget._viking_compact_cross_text = {
-                "WAIT_UP": "CHỜ CẮT LÊN", "WAIT_DOWN": "CHỜ XUỐNG/LÊN",
-            }.get(gate_state, state_label)
         else:
-            self.preview_rule_cross_counts.grid_remove()
-            widget.grid(row=1, column=2, rowspan=2)
-            widget._viking_compact_cross_text = ("CHỜ DL" if widget._viking_full_cross_text == "CHƯA ĐỦ DỮ LIỆU"
-                                                else widget._viking_full_cross_text)
+            self.preview_rule_cross_counts.configure(text=f"— CẮT - {prior_sessions}P", text_color=COL_MUTED)
         title = (f"∞ VA+{int(params.get('buy_ema_cross_sessions', 3))}P" if params.get("buy_ema_va_lookback_enabled") else "∞ VA") if view_mode == "VA" else f"⏳ {int(params.get('buy_ema_cross_sessions', 3))}P"
         self.preview_rule_cross_title.configure(text=title, text_color=COL_WARN if getattr(self, "_preview_ema_alternate", False) else COL_PREVIEW_TEXT)
-        widget.configure(text=widget._viking_full_cross_text,
-                         text_color={"ok": COL_GREEN, "wait": COL_WARN}.get(role, COL_MUTED))
-        from ..services.indicator_comparison import number_comparison
-        comparison = details.get("ema_cross_last_preview") or {}
-        last = bool(details.get("ema_cross_preview_closed"))
-        left, right = (comparison.get("fast"), comparison.get("slow")) if last else (
-            evidence.get("previous_fast"), evidence.get("previous_slow"))
-        a, b = finite(left), finite(right)
-        color = COL_MUTED if a is None or b is None else COL_GREEN if a > b else COL_RED if a < b else COL_WARN
-        label = comparison.get("label", "CUỐI") if last else "TRƯỚC"
-        text = number_comparison(left, right) if a is not None and b is not None else "CHƯA CÓ MỐC LƯU" if last else "—"
-        self.preview_rule_cross_detail.configure(
-            text=f"{label}: {text}", text_color=color)
-        self.preview_rule_cross_detail._viking_full_detail_text = ("OFF · " if tracking and not required else "") + f"{label}: {text}"
-        if tracking:
-            from .ema_history import latest_cross
-            event = latest_cross(evidence, now=market_now())
-            when = datetime.fromisoformat(event["at"]) if event else None
-            direction = "LÊN" if event.get("direction") == "UP" else "XUỐNG"
-            recent = f"{direction} {when:%d/%m %H:%M}" if when else "—"
-            self.preview_rule_cross_detail._viking_full_detail_text = recent
-            self.preview_rule_cross_detail._viking_compact_detail_text = recent
-            self.preview_rule_cross_detail.configure(text=recent, text_color=(
-                COL_GREEN if event.get("direction") == "UP" else COL_RED if event else COL_MUTED))
-        else:
-            self.preview_rule_cross_detail._viking_compact_detail_text = f"{label}: {text}"
+        from .ema_history import preview_info
+        information = dict(evidence)
+        if not tracking and not information.get("cross_at"):
+            saved = (details.get("buy_window") or {}).get("ema_cross") or {}
+            if saved.get("crossed_up"):
+                information["cross_at"] = saved.get("cross_at")
+        text, info_role = preview_info(information, now=market_now(), mode=view_mode,
+                                      sessions=int(params.get("buy_ema_cross_sessions", 3)),
+                                      holidays=self.settings.trading_holidays, history_status=history_status)
+        widget._viking_full_detail_text = widget._viking_compact_detail_text = text
+        widget.configure(text=text, text_color={"ok": COL_GREEN, "down": COL_RED,
+                                               "wait": COL_WARN}.get(info_role, COL_MUTED))
         fit = getattr(self, "_fit_phase2_row", None)
         if callable(fit) and widget.master.winfo_width() > 1:
             fit()
@@ -2133,9 +2094,14 @@ class DashboardPanelsMixin:
             "SESSION_USED": "Lần cắt lên đã dùng; cần lần cắt lên mới.",
             "EXPIRED": "Lần cắt lên hết hạn; cần lần cắt lên mới.",
         }.get(state, "Chưa đủ dữ liệu xác nhận cắt lên.")
+        if evidence.get("tracking_version") != 2:
+            condition = getattr(self, "_preview_ema_cross_evidence", (condition, {}))[0].removeprefix("CẮT EMA · ")
         if not (params.get("buy_signal_use_ema", True) and params.get("buy_signal_require_ema_cross", True)):
             condition = "Điều kiện chờ EMA cắt lên đang OFF."
-        return f"{lines[0]}\n{condition}\n{lines[-1]}"
+        from .ema_history import watch_started
+        admitted = watch_started(evidence, now=market_now())
+        started = f"\nTheo dõi từ {admitted:%d/%m %H:%M}." if admitted else ""
+        return f"{lines[0]}\n{condition}\n{lines[-1]}{started}"
 
     def _ema_memory_preview_hint(self) -> str:
         from .ema_history import view_counts
