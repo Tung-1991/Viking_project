@@ -141,7 +141,7 @@ def test_child_stays_visible_when_position_snapshot_disappears_then_returns(ui_r
 
 
 @pytest.mark.parametrize("status", ["FILLED", "CANCELLED"])
-def test_final_child_is_removed_while_confirmed_position_stays(ui_root, status):
+def test_filled_child_disappears_but_cancelled_result_stays_visible(ui_root, status):
     subject, tree, intent, _cycle, position, _items, _cycles = partial_subject(ui_root)
     try:
         subject._render_tables({})
@@ -153,9 +153,14 @@ def test_final_child_is_removed_while_confirmed_position_stays(ui_root, status):
             position["openQuantity"] = 500
         subject._render_tables({})
         assert tree.get_children() == (parent,)
-        assert not tree.get_children(parent) and not tree.exists("LOCAL:buy-500")
-        assert tree.selection() == (parent,)
-        assert set(subject._running_row_actions["REAL"]) == {parent}
+        if status == "FILLED":
+            assert not tree.get_children(parent) and not tree.exists("LOCAL:buy-500")
+            assert tree.selection() == (parent,)
+            assert set(subject._running_row_actions["REAL"]) == {parent}
+        else:
+            assert tree.get_children(parent) == ("LOCAL:buy-500",)
+            assert "ĐÃ HỦY" in tree.item("LOCAL:buy-500", "values")[7]
+            assert not subject._running_row_actions["REAL"]["LOCAL:buy-500"]["cancellable"]
         assert f"KL {500 if status == 'FILLED' else 400}" in tree.item(parent, "values")[2]
     finally:
         tree.destroy()

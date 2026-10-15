@@ -69,6 +69,7 @@ class StrategyOrderPlanner:
         price = float(tick.get(price_key, tick.get("price", 0.0)) or 0.0)
         if price <= 0 or not quote_is_fresh(tick, symbol, require_timestamp=False):
             return PlanResult(None, "NO_LIVE_EXECUTION_PRICE")
+        signal_price = price
 
         if side == "BUY":
             window = decision.details.get("buy_window") or {}
@@ -256,6 +257,7 @@ class StrategyOrderPlanner:
             # The signal has already been consumed. It is not a future BUY job.
             intent.expires_at = min(intent.expires_at, time.time() + 30.0)
             intent.details["reservation_price"] = price
+            intent.details["signal_price"] = signal_price
             if session_cross.get("session"):
                 intent.details["session_ema_cross"] = dict(session_cross)
         if side == "BUY" and window:

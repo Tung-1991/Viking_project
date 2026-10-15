@@ -12,6 +12,7 @@ from .market import order_is_due, VN_TZ, in_buy_window
 from ..models import BrokerOrderResult, OrderIntent
 from .portfolio import validate_quantity, board_price, account_price
 from .durable import DurableJSONStore
+from .buy_watch import watch_visible
 
 
 FINAL_STATUSES = {"FILLED", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"}
@@ -97,7 +98,7 @@ class OrderQueue:
     def discard_unsubmitted_bot_buys(self, reason: str) -> None:
         with self._lock:
             for intent in self.list_all():
-                if intent.source == "BOT" and intent.side == "BUY" and intent.status in LOCALLY_CONTROLLABLE_STATUSES and not intent.handed_off_at and not intent.broker_order_id:
+                if intent.source == "BOT" and intent.side == "BUY" and intent.status in LOCALLY_CONTROLLABLE_STATUSES and not intent.handed_off_at and not intent.broker_order_id and not intent.details.get("buy_remainder"):
                     self._update(intent.id, status="CANCELLED", result=reason)
 
     def recover_claims(self) -> None:
@@ -107,7 +108,7 @@ class OrderQueue:
                     continue
                 if intent.handed_off_at or intent.details.get("claim_protocol") != "durable-v1":
                     self._update(intent.id, status="UNKNOWN", result="Restart: đối soát hand-off, không tự gửi lại")
-                elif intent.source == "BOT" and intent.side == "BUY":
+                elif intent.source == "BOT" and intent.side == "BUY" and not intent.details.get("buy_remainder"):
                     self._update(intent.id, status="CANCELLED", result="Restart: bỏ BUY chưa gửi")
                 else:
                     self.release(intent.id, "PENDING", "Restart: giữ yêu cầu chưa hand-off")
@@ -124,6 +125,9 @@ class OrderQueue:
             result = None
             for row in rows:
                 if str(row.get("id")) == str(order_id):
+                    if changes.get("status") in FINAL_STATUSES and (
+                            row.get("status") not in FINAL_STATUSES or not (row.get("details") or {}).get("finished_at")):
+                        changes["details"] = {**(changes.get("details", row.get("details")) or {}), "finished_at": self._now()}
                     row.update(changes)
                     result = OrderIntent.from_dict(row)
                     row.update(result.to_dict())
@@ -136,10 +140,13 @@ class OrderQueue:
         """Forget orders that finished more than a day ago."""
         kept: list[dict[str, Any]] = []
         for row in rows:
+            if watch_visible(OrderIntent.from_dict(row), now):
+                kept.append(row)
+                continue
             if str(row.get("status", "")).upper() not in FINAL_STATUSES:
                 kept.append(row)
                 continue
-            done = float(row.get("claimed_at") or row.get("created_at") or 0.0)
+            done = float((row.get("details") or {}).get("finished_at") or row.get("claimed_at") or row.get("created_at") or 0.0)
             if not done or now - done < SETTLED_KEEP_SECONDS:
                 kept.append(row)
         return kept
@@ -154,7 +161,17 @@ class OrderQueue:
             rows = trimmed
             for row in rows:
                 status = str(row.get("status", "")).upper()
-                if status in FINAL_STATUSES | {"UNKNOWN", "WORKING", "PARTIAL", "CANCEL_PENDING", "REPLACE_PENDING"}:
+                if status in FINAL_STATUSES | {"UNKNOWN", "WORKING", "PARTIAL", "CANCEL_PENDING", "REPLACE_PENDING", "WAITING_REMAINDER"}:
+                    continue
+                if (status in LOCALLY_CONTROLLABLE_STATUSES and row.get("source") == "BOT"
+                        and row.get("side") == "BUY" and not row.get("handed_off_at")
+                        and not row.get("broker_order_id") and not (row.get("details") or {}).get("buy_remainder")
+                        and datetime.fromtimestamp(float(row["created_at"]), VN_TZ).date()
+                        < datetime.fromtimestamp(now, VN_TZ).date()):
+                    row.update(status="EXPIRED", result="HẾT HIỆU LỰC · không mang BUY chưa khớp sang ngày sau")
+                    row["details"] = {**(row.get("details") or {}), "finished_at": now}
+                    expired.append(OrderIntent.from_dict(row))
+                    changed = True
                     continue
                 # A sell waiting for T+2 is not a stale trading instruction.
                 # It cannot legally be sent yet, and weekends/holidays routinely
@@ -176,6 +193,7 @@ class OrderQueue:
                         and (not row.get("buy_window_end") or status in LOCALLY_CONTROLLABLE_STATUSES)):
                     row["status"] = "EXPIRED"
                     row["result"] = "Hết khung giờ mua" if row.get("buy_window_end") else "Hết thời hạn yêu cầu chưa gửi"
+                    row["details"] = {**(row.get("details") or {}), "finished_at": now}
                     expired.append(OrderIntent.from_dict(row))
                     changed = True
             if changed:
@@ -430,13 +448,22 @@ class OrderQueue:
         logical_quantity = max(logical_quantity, filled_total)
         remaining = max(0, logical_quantity - filled_total)
         progress[broker_id] = {**previous, "filled": absolute_filled, "notional": self._broker_notional(broker_order), "fee": broker_fee, "tax": broker_tax, "status": normalized}
+        if broker_order.get("history_order_id") and any(key in broker_order for key in ("fillQuantity", "filledQuantity")):
+            progress[broker_id]["history_order_id"] = broker_order["history_order_id"]
+        broker_type = str(broker_order.get("orderType", "")).upper()
+        if broker_type:
+            details["broker_order_type"] = broker_type
+        broker_price = account_price(broker_order, broker_order.get("price", 0))
+        converted_mtl = broker_type == "MTL" and absolute_filled > 0
+        if broker_price > 0 and (intent.order_type == "LO" or broker_type == "LO" or converted_mtl):
+            details["remainder_limit_price"] = intent.limit_price if intent.order_type == "LO" else broker_price
         details["broker_progress"] = progress
         changes: dict[str, Any] = {
             "quantity": logical_quantity,
             "filled_quantity": filled_total,
             "remaining_quantity": remaining,
             "broker_filled_quantity": absolute_filled,
-            "result": normalized,
+            "result": str(broker_order.get("rejectReason") or broker_order.get("message") or broker_order.get("reason") or normalized),
             "broker_fee_logged": broker_fee,
             "broker_tax_logged": broker_tax,
             "broker_notional_logged": self._broker_notional(broker_order),
@@ -517,9 +544,11 @@ class OrderQueue:
     @_transactional
     def cancel_local(self, order_id: str) -> OrderIntent | None:
         item = self.get(order_id)
-        if not item or item.status.upper() not in LOCALLY_CONTROLLABLE_STATUSES:
+        if not item or item.status.upper() not in LOCALLY_CONTROLLABLE_STATUSES | {"WAITING_REMAINDER"}:
             return None
-        return self._update(order_id, status="CANCELLED", result="Cancelled locally")
+        return self._update(order_id, status="CANCELLED", result="Cancelled locally",
+                            cancel_requested=True,
+                            details={**item.details, "buy_remainder_closed": True})
 
     @_transactional
     def cancel_claimed_local(self, order_id: str, result: str) -> OrderIntent | None:
@@ -530,7 +559,7 @@ class OrderQueue:
             or item.status.upper() != "SENDING"
             or item.broker_order_id
             or item.handed_off_at
-            or item.filled_quantity > 0
+            or (item.filled_quantity > 0 and not item.details.get("buy_remainder"))
         ):
             return None
         return self._update(
@@ -539,6 +568,7 @@ class OrderQueue:
             result=str(result or "Cancelled before broker hand-off"),
             claimed_at=0.0,
             working_quantity=0,
+            details={**item.details, "buy_remainder_closed": True},
         )
 
     @_transactional

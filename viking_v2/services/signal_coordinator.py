@@ -213,7 +213,7 @@ class BuySlotAllocator:
             intent.symbol
             for intent in intents
             if intent.side == "BUY"
-            and intent.source == "BOT"
+            and (intent.source == "BOT" or intent.details.get("operator_armed_buy"))
             and intent.execution_mode == mode
             and str(intent.status or "").upper() not in FINAL_STATUSES
         )

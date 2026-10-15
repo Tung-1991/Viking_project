@@ -182,6 +182,58 @@ def buy_timers(monkeypatch):
     return timers
 
 
+def _queued_progress_info():
+    return {"order_id": "CTS-ORDER", "created_at": 1_800_000_000, "order_type": "MARKET", "quantity": 300,
+            "fee_vnd": 1000, "gross_vnd": 6_136_000, "budget_vnd": 7_450_000, "budget_price": 20.45}
+
+
+@pytest.mark.parametrize("status", ["CANCELLED", "EXPIRED", "FILLED", "WORKING"])
+def test_order_progress_supersedes_queued_digest_without_dropping_other_buys(buy_timers, status):
+    tele = Telegram()
+    service = SignalTelegramService(tele, chat_id="7", buy_batch_minutes=30)
+    service.notify_buy(symbol="CTS", signal_id="CTS-SIGNAL", price=20.45, market_state="UPTREND",
+                       execution_mode="REAL", order_info=_queued_progress_info())
+    service.notify_buy(symbol="FPT", signal_id="OTHER-SIGNAL", price=100, market_state="UPTREND", execution_mode="REAL")
+    intent = OrderIntent("CTS-ORDER", "CTS", "BUY", 300, "MARKET", source="BOT", execution_mode="REAL", status=status)
+    assert service.notify_buy_progress(intent)
+    assert service.flush_buys()
+    assert len(tele.sent) == 2 and "CTS" in tele.sent[0][1]
+    assert "FPT" in tele.sent[1][1] and "CTS" not in tele.sent[1][1]
+
+
+@pytest.mark.parametrize("minutes", [0, 30])
+def test_late_queue_notification_cannot_follow_an_already_sent_order_outcome(buy_timers, minutes):
+    tele = Telegram()
+    service = SignalTelegramService(tele, chat_id="7", buy_batch_minutes=minutes)
+    intent = OrderIntent("CTS-ORDER", "CTS", "BUY", 300, "MARKET", source="BOT", execution_mode="REAL", status="CANCELLED")
+    assert service.notify_buy_progress(intent)
+    assert service.notify_buy(symbol="CTS", signal_id="CTS-SIGNAL", price=20.45, market_state="UPTREND",
+                              execution_mode="REAL", order_info=_queued_progress_info())
+    assert not service.flush_buys() and len(tele.sent) == 1
+
+
+def test_progress_supersedes_only_the_same_book_and_order_id(buy_timers):
+    tele = Telegram()
+    service = SignalTelegramService(tele, chat_id="7", buy_batch_minutes=30)
+    for mode in ("REAL", "PAPER"):
+        service.notify_buy(symbol="CTS", signal_id="CTS-SIGNAL", price=20.45, market_state="UPTREND",
+                           execution_mode=mode, order_info=_queued_progress_info())
+    intent = OrderIntent("CTS-ORDER", "CTS", "BUY", 300, "MARKET", source="BOT", execution_mode="REAL", status="CANCELLED")
+    assert service.notify_buy_progress(intent) and service.flush_buys()
+    assert len(tele.sent) == 2 and "PAPER" in tele.sent[1][1] and "REAL" not in tele.sent[1][1]
+
+
+def test_failed_progress_delivery_keeps_original_queue_notice_retryable(buy_timers):
+    class FailingTelegram(Telegram):
+        def send_message(self, chat_id, text):
+            raise OSError("OFFLINE_SEND_FAILED")
+    service = SignalTelegramService(FailingTelegram(), chat_id="7", buy_batch_minutes=30)
+    service.notify_buy(symbol="CTS", signal_id="CTS-SIGNAL", price=20.45, market_state="UPTREND",
+                       execution_mode="REAL", order_info=_queued_progress_info())
+    intent = OrderIntent("CTS-ORDER", "CTS", "BUY", 300, "MARKET", source="BOT", execution_mode="REAL", status="CANCELLED")
+    assert not service.notify_buy_progress(intent) and len(service._pending_buys) == 1
+
+
 def test_immediate_buy_sends_each_order_without_batch_timer(buy_timers):
     tele = Telegram()
     service = SignalTelegramService(tele, chat_id="7", buy_batch_minutes=0)
@@ -845,7 +897,7 @@ def test_rejected_bot_buy_is_written_back_to_signal_history(tmp_path):
     )
 
 
-@pytest.mark.parametrize("broker_status", ["REJECTED", "FAILED", "EXPIRED"])
+@pytest.mark.parametrize("broker_status", ["REJECTED", "FAILED"])
 def test_failed_buy_reports_system_error_not_a_new_technical_signal(monkeypatch, tmp_path, broker_status):
     subject, tele = _technical_subject(monkeypatch, tmp_path)
     subject.signal_log = SignalLog(tmp_path / "signal_log.csv")
@@ -864,6 +916,14 @@ def test_failed_buy_reports_system_error_not_a_new_technical_signal(monkeypatch,
     assert f"REAL BUY HDB: {broker_status}" in tele.sent[0][1]
     assert "TÍN HIỆU BUY" not in tele.sent[0][1]
     assert len(subject.signal_log.read_all()) == 1
+
+
+@pytest.mark.parametrize("broker_status", ["EXPIRED", "CANCELLED"])
+def test_normal_buy_expiry_and_cancel_do_not_report_system_errors(monkeypatch, tmp_path, broker_status):
+    subject, tele = _technical_subject(monkeypatch, tmp_path)
+    intent = OrderIntent.create("CTS", "BUY", 300, "MARKET", execution_mode="REAL", source="BOT")
+    subject._record_failed_buy_execution("REAL", intent, BrokerOrderResult(False, broker_status))
+    assert not tele.sent
 
 
 def test_telegram_does_not_report_a_partial_exit_as_closed():

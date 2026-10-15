@@ -9,6 +9,7 @@ from .. import config
 from ..config import STOCK_ROUND_LOT
 from .quote_boards import MATCHED_DATA_POLICY
 from .market import action_for_symbol
+from .buy_watch import managed_buy
 
 if TYPE_CHECKING:
     from ..rules.state import RuleStateStore
@@ -233,15 +234,15 @@ def priority_entry_orders(
     bot_cycle = cycle if cycle and cycle.source == "BOT" else None
     filled = set(bot_cycle.entry_order_ids) if bot_cycle else set()
     if bot_cycle and not filled:
-        filled.update(item.id for item in intents if item.side == "BUY" and item.source == "BOT"
+        filled.update(item.id for item in intents if managed_buy(item)
                       and item.trade_id == bot_cycle.id and item.filled_quantity > 0)
     used = max(len(filled), int(bool(bot_cycle and bot_cycle.entry_quantity > 0)))
     pending_buys = [item for item in intents if item.side == "BUY" and item.id != exclude_intent_id
                     and item.status not in {"FILLED", "CANCELLED", "EXPIRED", "FAILED", "REJECTED"}]
-    pending = {item.id for item in pending_buys if item.source == "BOT"}
+    pending = {item.id for item in pending_buys if managed_buy(item)}
     # The legacy marker stands for the original filled order if its old row
     # is still working. Do not count that same partial fill twice.
-    covered = filled | {item.id for item in intents if bot_cycle and item.source == "BOT"
+    covered = filled | {item.id for item in intents if bot_cycle and managed_buy(item)
                         and item.trade_id == bot_cycle.id and item.filled_quantity > 0}
     used += len(pending - covered)
     exiting = any(item.side == "SELL" and item.status not in {"FILLED", "CANCELLED", "EXPIRED", "FAILED", "REJECTED"} for item in intents)
@@ -469,7 +470,7 @@ class PortfolioContextBuilder:
             pending_value += value
             cost = value * (1.0 + fee_rate)
             pending_costs[item.symbol] = pending_costs.get(item.symbol, 0.0) + cost
-            if not item.broker_order_id and not item.handed_off_at:
+            if item.status == "WAITING_REMAINDER" or (not item.broker_order_id and not item.handed_off_at):
                 pending_cash += cost
         budget = order_budget(
             nav=nav,
@@ -543,7 +544,7 @@ class PortfolioContextBuilder:
             if str(row.get("symbol", "") or "").upper() == symbol
             and position_quantity(row) > 0
         ]
-        bot_pending_buys = [item for item in pending_buys if item.source == "BOT"]
+        bot_pending_buys = [item for item in pending_buys if managed_buy(item)]
         bot_open_symbols = {
             cycle.symbol
             for cycle in self.trades.list_cycles()

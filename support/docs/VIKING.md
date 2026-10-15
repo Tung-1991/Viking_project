@@ -43,6 +43,26 @@ TRACE ON cho bốn mã, 14:00–14:30 mỗi 2 phút (16 mẫu/mã/sổ, gồm m�
 - Timeout gửi là chưa rõ kết quả, không POST lại trước đối soát. PendingCancel chưa
   phải hủy xong. Fill tích lũy chỉ áp dụng phần tăng mới; queue/vị thế cùng transaction
   SQLite. Khớp từng phần thuộc cùng lệnh/trade, không tự tách sổ.
+- BUY mới vẫn theo khung giờ mua (mặc định từ 14:00). BUY BOT chưa gửi/không khớp
+  không chuyển thành yêu cầu mua ngày sau. MTL không có đối ứng có thể bị hủy ngay;
+  MARKET trên HOSE/HNX hiện được adapter gửi dưới dạng MTL, không phải LO chờ hàng.
+- BUY BOT đã khớp một phần, phần LO hết hiệu lực được mua nốt **chỉ trong 1 ngày
+  giao dịch kế tiếp**, giữ giá LO cũ, cùng intent/trade/lượt BUY. Lịch DNSE quyết định
+  ngày kế tiếp; không đoán cuối tuần/ngày lễ. Chỉ gửi sau khi lịch sử đúng ngày xác
+  nhận lệnh cũ kết thúc và lượng khớp cuối cùng; không rõ thì giữ chờ đối soát.
+  Hủy tay, đã thoát/đang bán, OFF, thiếu sức mua/biên giá hợp lệ vẫn chặn. Restart
+  giữ phần dư hợp lệ; không đòi tín hiệu BUY mới hoặc khung 14:00 cho phần dư.
+  Lệnh bị hủy tay không tự mua lại; MTL chỉ được mua nốt nếu đã xác nhận phần dư LO
+  và giá LO từ broker. Bảng chạy giữ kết quả hủy/hết hiệu lực trong ngày; Telegram
+  nhóm LỆNH & KẾT QUẢ báo tiến độ và phân biệt MUA MỚI/MUA NỐT PHẦN DƯ/HẾT HIỆU LỰC.
+  Hết hiệu lực bình thường không phát ORDER_FAILURE. Regression: `test_buy_remainder.py`.
+- BUY BOT đã gửi nhưng khớp 0 và bị hủy/hết hiệu lực giữ **bản ghi tham khảo** đến hết
+  ngày giao dịch kế tiếp, không phải yêu cầu mua: không giữ vốn, slot/lượt BUY hoặc
+  chặn tín hiệu mới. Chuột phải **Bật mua…** để chọn khối lượng/giá LO và xác nhận tạo
+  lệnh **MANUAL mới**, chỉ đặt trong ngày giao dịch kế tiếp của lệnh gốc, được trước
+  14h và khi BOT mua tự động OFF. Không tự nâng giá; vẫn kiểm tra tiền, biên giá,
+  quota/slot và đối soát lệnh gốc. Khớp được quản lý như một lượt BUY mới với SL/TP/
+  Protect; hủy bản ghi/lệnh cũ không tự bật lại, không lặp cache vô hạn từ lệnh bật tay.
 - SL/TP/E AUTO bán 100%; ARM dùng `normal_sell_pct`, DYNAMIC dùng `dynamic_sell_pct`; AUTO/ALERT riêng. E độc lập với ARM.
   MFE là lãi đỉnh từng đạt, không phải PNL đã chốt. REPEAT giữ rule cũ.
   E/M mặc định chỉ gắn cho trade BOT mới, không xóa chế độ của vị thế đã mở.
@@ -62,6 +82,8 @@ TRACE ON cho bốn mã, 14:00–14:30 mỗi 2 phút (16 mẫu/mã/sổ, gồm m�
   LO giá giới hạn. Giảm cap không tự bán/top-up.
 - Backtest hiện chỉ hỗ trợ MAX LỆNH=1; MAX>1 phải báo lỗi rõ, không giả kết quả tương đương LIVE.
 - Telegram BUY/closed lưu theo book + mã; BUY thêm có ID riêng trong digest, không ghi đè BUY trước.
+  Khi đã gửi tiến độ/kết quả của một lệnh, bỏ tin xếp lệnh cũ còn chờ trong digest
+  đúng book + ID; không để tin đã xếp xuất hiện sau tin đã hủy/khớp.
   Reject BUY thêm không xóa record tổng kết vị thế đang giữ. Delivery thật phụ thuộc token/chat/mạng.
   BUY kỹ thuật/MẤT BUY có hàng đợi bền vững; chỉ commit dedup sau delivery thành công,
   lease/thử lại 60 giây. Mỗi lần thử kiểm tra nhóm/tổng/nơi nhận hiện tại.

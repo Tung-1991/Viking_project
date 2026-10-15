@@ -5,6 +5,7 @@ import uuid
 import hashlib
 import json
 import math
+from copy import deepcopy
 from dataclasses import asdict
 from dataclasses import replace
 from datetime import datetime
@@ -31,6 +32,7 @@ from ..rules.protection import PROTECTION_EVENTS, sale_quantity, protection_stag
 from .validation import quote_is_fresh
 from .portfolio import cash_from_balance
 from ..rules.state import RuleStateStore
+from .buy_watch import managed_buy, submitted_day, zero_fill_candidate, watch_armable
 
 
 class ExecutionService:
@@ -52,6 +54,7 @@ class ExecutionService:
         protection_policy_provider: Callable[[str], str] | None = None,
         bot_trade_allowed_provider: Callable[[str], bool] | None = None,
         protection_history_allowed_provider: Callable[[OrderIntent], bool] | None = None,
+        working_dates_provider: Callable[[], list[str]] | None = None,
     ):
         self.real = real
         self.paper = paper
@@ -70,6 +73,7 @@ class ExecutionService:
         self.protection_policy_provider = protection_policy_provider
         self.bot_trade_allowed_provider = bot_trade_allowed_provider
         self.protection_history_allowed_provider = protection_history_allowed_provider
+        self.working_dates_provider = working_dates_provider
         self.database = queue.store.database
         self._blocked_rechecks: set[str] = set()
         self._deferred_events: list[tuple[str, TradeCycle, OrderIntent]] | None = None
@@ -293,7 +297,9 @@ class ExecutionService:
                 }
             ):
                 continue
-            if (
+            local_remainder = (intent.status == "WAITING_REMAINDER" or (
+                intent.details.get("buy_remainder") and not intent.broker_order_id and not intent.handed_off_at))
+            if not local_remainder and (
                 intent.filled_quantity > 0
                 or intent.broker_order_id
                 or intent.handed_off_at
@@ -351,13 +357,14 @@ class ExecutionService:
     def _cancel_unsent_order(self, intent: OrderIntent, message: str) -> OrderIntent | None:
         with self.database:
             current = self.queue.get(intent.id)
-            if not current or current.broker_order_id or current.handed_off_at:
+            if not current or ((current.broker_order_id or current.handed_off_at) and current.status != "WAITING_REMAINDER"):
                 return None
             if current.status == "SENDING":
                 # A completed partial SELL may have a local T+2 remainder;
                 # cancel only that unsent remainder, preserving recorded fills.
                 cancelled = (self.queue.release(current.id, "CANCELLED", message)
-                             if current.filled_quantity else self.queue.cancel_claimed_local(current.id, message))
+                             if current.filled_quantity and not current.details.get("buy_remainder")
+                             else self.queue.cancel_claimed_local(current.id, message))
             else:
                 cancelled = self.queue.cancel_local(current.id)
                 if cancelled:
@@ -396,6 +403,8 @@ class ExecutionService:
         mode = str(execution_mode).upper()
         token_ready = True if mode == "PAPER" else self.real.has_trading_token()
         broker: Any = self.paper if mode == "PAPER" else self.real
+        self._prepare_zero_fill_watches(mode)
+        self._prepare_buy_remainders(mode)
         if self.bot_trade_allowed_provider or self.protection_history_allowed_provider or self.trade_state:
             for pending in self.queue.list_all():
                 if pending.execution_mode == mode and pending.status.upper() in {
@@ -437,6 +446,12 @@ class ExecutionService:
                     completed.append((current, BrokerOrderResult(True, "CANCELLED", message=current.result)))
                 continue
             intent = current
+            origin_problem = self._armed_origin_error(intent)
+            if origin_problem:
+                cancelled = self.queue.cancel_claimed_local(intent.id, origin_problem)
+                if cancelled:
+                    completed.append((cancelled, BrokerOrderResult(True, "CANCELLED", message=origin_problem)))
+                continue
             if self._cancel_disabled_position_order(intent):
                 continue
             if self._cancel_unverified_protection(intent):
@@ -529,7 +544,7 @@ class ExecutionService:
                 remaining_quantity=send_quantity,
                 order_type=intent_phase if intent.order_type == "MARKET" and intent_phase in {"ATO", "ATC"} else intent.order_type,
             )
-            needs_quote = intent.order_type == "MARKET" or intent.source in {"BOT", "EM"}
+            needs_quote = intent.order_type == "MARKET" or intent.source in {"BOT", "EM"} or managed_buy(intent)
             if self.quote_provider and needs_quote:
                 quote = self.quote_provider(intent.symbol)
                 if not quote_is_fresh(quote, intent.symbol):
@@ -559,7 +574,7 @@ class ExecutionService:
                                 continue
                             if other.status == "UNKNOWN":
                                 raise ValueError("Chờ đối soát BUY chưa rõ trạng thái trước khi phân bổ tiền tiếp")
-                            if other.broker_order_id or other.handed_off_at:
+                            if (other.broker_order_id or other.handed_off_at) and other.status != "WAITING_REMAINDER":
                                 continue  # Broker availableCash already reserves accepted orders.
                             if other.id in due_ids:
                                 continue  # Serialized batch validates fresh cash before each hand-off.
@@ -614,7 +629,7 @@ class ExecutionService:
                                               "queue_status": rejected.status, "result": asdict(result)})
                     completed.append((intent, result))
                     continue
-            if intent.side == "BUY" and intent.source == "BOT" and self.bot_entry_guard:
+            if managed_buy(intent) and self.bot_entry_guard:
                 try:
                     blocked = self.bot_entry_guard(intent, quote or {})
                 except Exception:
@@ -916,17 +931,17 @@ class ExecutionService:
         fee = broker_fee + broker_tax
         if intent.side == "BUY":
             previous = self.trade_state.get(intent.trade_id)
-            if intent.source == "BOT" and previous and previous.entry_quantity > 0 and not previous.entry_order_ids:
+            if managed_buy(intent) and previous and previous.entry_quantity > 0 and not previous.entry_order_ids:
                 previous.entry_order_ids = list(dict.fromkeys(
                     item.id for item in self.queue.list_all() if item.id != intent.id
-                    and item.side == "BUY" and item.source == "BOT" and item.trade_id == previous.id and item.filled_quantity > 0
+                    and managed_buy(item) and item.trade_id == previous.id and item.filled_quantity > 0
                 )) or [f"legacy:{previous.id}"]
                 self.trade_state.save(previous)
             if not previous:
                 created_cycle = self.trade_state.create(
                     intent.symbol,
                     intent.execution_mode,
-                    source=intent.source,
+                    source="BOT" if managed_buy(intent) else intent.source,
                     trade_id=intent.trade_id,
                     em_modes=intent.em_modes,
                     sl_enabled=intent.sl_enabled,
@@ -953,7 +968,7 @@ class ExecutionService:
                         created_cycle.record_buy_fill(int(baseline["quantity"]), float(baseline["cost"]))
                         self.trade_state.save(created_cycle)
             cycle = self.trade_state.record_buy_fill(intent.trade_id, filled, price, fee,
-                                                     order_id=intent.id if intent.source == "BOT" else "")
+                                                     order_id=intent.id if managed_buy(intent) else "")
             if cycle and (not previous or previous.entry_quantity == 0):
                 self._emit_trade_event("OPEN", cycle, intent)
         else:
@@ -1016,7 +1031,191 @@ class ExecutionService:
                     self.real.get_orders(force=True))
         return self.real.get_balance() or {}, self.real.get_positions(), self.real.get_orders()
 
-    def _finished_order_history(self, broker: Any, intent: OrderIntent, ids: set[str]) -> list[dict[str, Any]]:
+    def _prepare_buy_remainders(self, mode: str) -> list[OrderIntent]:
+        """Continue an expired, partially executed BUY using the same logical ID.
+
+        A terminal broker snapshot is mandatory. The next trading date comes
+        from the broker calendar, never from an assumed weekday. Old broker IDs
+        are archived before reuse because exchange IDs can repeat across days.
+        """
+        now = datetime.fromtimestamp(self.queue._now(), VN_TZ)
+        changed = []
+        for item in self.queue.list_all():
+            if (item.execution_mode != mode or not managed_buy(item)
+                    or item.cancel_requested or not 0 < item.filled_quantity < item.quantity
+                    or item.status not in {"EXPIRED", "WAITING_REMAINDER"}
+                    or item.details.get("buy_remainder_closed")
+                    or (item.details.get("buy_watch") or {}).get("armed_order_id")):
+                continue
+            details = dict(item.details)
+            price = item.limit_price if item.order_type == "LO" else float(details.get("remainder_limit_price", 0) or 0)
+            progress = details.get("broker_progress") or {}
+            ids = {value for value in [item.broker_order_id, *item.broker_order_ids] if value}
+            if (not ids or not math.isfinite(price) or price <= 0
+                    or any((progress.get(value) or {}).get("status") not in FINAL_STATUSES for value in ids)
+                    or details.get("requested_replace") or details.get("fill_accounting_reconcile_required")):
+                continue
+            submitted_day = datetime.fromtimestamp(item.handed_off_at or item.claimed_at or item.created_at, VN_TZ).date().isoformat()
+            origin = str(details.get("buy_remainder_origin_date") or submitted_day)
+            details["buy_remainder_origin_date"] = origin
+            # A terminal partial remains active and reserves its cash while the
+            # calendar is unavailable, or while waiting for the next session.
+            with self.database:
+                current = self.queue.get(item.id)
+                if not current or current.status != item.status or current.cancel_requested:
+                    continue
+                staged = self.queue._update(item.id, status="WAITING_REMAINDER", details=details,
+                    result="MUA NỐT PHẦN DƯ · chờ ngày giao dịch và đối soát cuối cùng")
+            if staged and item.status != "WAITING_REMAINDER":
+                changed.append(staged)
+            try:
+                dates = sorted({str(value)[:10] for value in self.working_dates_provider()}) if self.working_dates_provider else []
+            except Exception:
+                continue
+            if origin not in dates:
+                continue
+            future = [value for value in dates if value > origin]
+            if not future:
+                continue
+            deadline = future[0]
+            if now.date().isoformat() > deadline:
+                details["buy_remainder_closed"] = True
+                expired = self.queue._update(item.id, status="EXPIRED", details=details,
+                    result="HẾT HIỆU LỰC · hết hạn mua nốt phần dư")
+                if expired:
+                    changed.append(expired)
+                continue
+            if now.date().isoformat() not in dates or now.date().isoformat() <= submitted_day:
+                continue
+            # Reconciliation must have read a terminal HISTORY snapshot after
+            # the old session ended. An old POST ack is never sufficient.
+            if any(not (progress.get(value) or {}).get("history_order_id") for value in ids):
+                continue
+            with self.database:
+                current = self.queue.get(item.id)
+                if not current or current.status != "WAITING_REMAINDER" or current.filled_quantity != item.filled_quantity:
+                    continue
+                cycle = self.trade_state.get(item.trade_id) if self.trade_state and item.trade_id else None
+                exiting = any(other.trade_id == item.trade_id and other.execution_mode == mode
+                              and other.side == "SELL" and other.status not in FINAL_STATUSES for other in self.queue.list_all())
+                if self.trade_state and (not cycle or cycle.status != "OPEN" or cycle.sold_quantity or exiting):
+                    details["buy_remainder_closed"] = True
+                    self.queue._update(item.id, status="EXPIRED", details=details,
+                        result="HẾT HIỆU LỰC · vị thế đã thoát hoặc đang có yêu cầu bán")
+                    continue
+                archive = list(details.get("buy_remainder_history") or [])
+                archive.append({"date": submitted_day, "broker_order_id": item.broker_order_id,
+                                "broker_progress": progress, "filled_quantity": item.filled_quantity})
+                details.update(buy_remainder=True, buy_remainder_history=archive, broker_progress={},
+                               reservation_price=price)
+                details.pop("session_ema_cross", None)
+                details.pop("broker_order_type", None)
+                expiry = datetime.fromisoformat(deadline).replace(hour=15, tzinfo=VN_TZ).timestamp()
+                ready = self.queue._update(item.id, status="PENDING", order_type="LO", limit_price=price,
+                    wait_for_trigger=False, allow_ato=False, allow_atc=False, details=details,
+                    broker_order_id="", broker_order_ids=[], request_tag="", handed_off_at=0.0,
+                    claimed_at=0.0, working_quantity=0, broker_filled_quantity=0,
+                    broker_fee_logged=0.0, broker_tax_logged=0.0, broker_notional_logged=0.0,
+                    attempt=item.attempt + 1, expires_at=expiry, buy_window_start="",
+                    buy_window_end="", buy_window_date="", defer_expiry_until_eligible=False,
+                    result=f"MUA NỐT PHẦN DƯ · KHỚP {item.filled_quantity}/{item.quantity} · CÒN {item.remaining_quantity}")
+                if ready:
+                    changed.append(ready)
+        return changed
+
+    def _prepare_zero_fill_watches(self, mode: str) -> None:
+        candidates = [item for item in self.queue.list_all() if item.execution_mode == mode and zero_fill_candidate(item)
+                      and not (item.details.get("buy_watch") or {}).get("session_date")]
+        if not candidates:
+            return
+        try:
+            dates = sorted({str(value)[:10] for value in self.working_dates_provider()}) if self.working_dates_provider else []
+        except Exception:
+            dates = []
+        with self.database:
+            for item in candidates:
+                current = self.queue.get(item.id)
+                if not current or not zero_fill_candidate(current):
+                    continue
+                watch = dict(current.details.get("buy_watch") or {})
+                if watch.get("session_date"):
+                    continue
+                origin = submitted_day(current)
+                future = [value for value in dates if value > origin]
+                watch["origin_date"] = origin
+                if origin in dates and future:
+                    watch["session_date"] = future[0]
+                    watch["visible_until"] = datetime.fromisoformat(future[0]).replace(hour=15, tzinfo=VN_TZ).timestamp()
+                self.queue._update(current.id, details={**current.details, "buy_watch": watch})
+
+    def _armed_origin_error(self, intent: OrderIntent) -> str:
+        authorization = intent.details.get("operator_armed_buy") or {}
+        if not authorization or intent.details.get("buy_remainder"):
+            return ""
+        origin = self.queue.get(str(authorization.get("origin_id", "")))
+        if not origin or not zero_fill_candidate(origin):
+            return "Lệnh gốc đã thay đổi hoặc có khớp; cần đối soát trước khi bật mua."
+        progress = origin.details.get("broker_progress") or {}
+        ids = {value for value in [origin.broker_order_id, *origin.broker_order_ids] if value}
+        if not ids or any((progress.get(value) or {}).get("status") not in {"CANCELLED", "EXPIRED"}
+                          or int((progress.get(value) or {}).get("filled", -1)) != 0 for value in ids):
+            return "Chưa xác nhận lệnh gốc đã kết thúc và khớp 0; chờ đối soát."
+        day = datetime.fromtimestamp(self.queue._now(), VN_TZ).date().isoformat()
+        if day > submitted_day(origin) and any(not (progress.get(value) or {}).get("history_order_id") for value in ids):
+            return "Chưa đối soát lịch sử cuối cùng của lệnh gốc; chưa bật mua."
+        return ""
+
+    def arm_zero_fill_buy(self, order_id: str, *, quantity: int, limit_price: float,
+                          em_modes: list[str] | None = None, sl_enabled: bool | None = None) -> OrderIntent:
+        """Turn an explicitly reviewed passive record into one new manual BUY."""
+        original = self.queue.get(order_id)
+        if not original:
+            raise ValueError("Bản ghi đã hết hạn hoặc không còn tồn tại.")
+        self.reconcile_working(original.execution_mode)
+        self._prepare_zero_fill_watches(original.execution_mode)
+        valid, reason, normalized = validate_quantity(quantity)
+        if not valid:
+            raise ValueError(reason)
+        if not math.isfinite(limit_price) or limit_price <= 0:
+            raise ValueError("Cần giá LO hợp lệ, lớn hơn 0.")
+        with self.database:
+            original = self.queue.get(order_id)
+            if not original or not watch_armable(original, self.queue._now()):
+                raise ValueError("Bản ghi đã được bật mua, đã thay đổi hoặc hết phiên lưu.")
+            if self.queue.find_active(original.symbol, execution_mode=original.execution_mode):
+                raise ValueError("Mã đang có lệnh chờ; không tạo thêm BUY trùng.")
+            if self.trade_state and self.trade_state.active_for(original.symbol, original.execution_mode):
+                raise ValueError("Mã đã có vị thế được quản lý; không bật lại từ bản ghi cũ.")
+            watch = dict(original.details["buy_watch"])
+            intent = OrderIntent.create(original.symbol, "BUY", normalized, "LO", limit_price=limit_price,
+                execution_mode=original.execution_mode, source="MANUAL", trade_id=uuid.uuid4().hex,
+                reason="OPERATOR_ARMED_BUY", em_modes=original.em_modes if em_modes is None else em_modes,
+                sl_enabled=original.sl_enabled if sl_enabled is None else sl_enabled,
+                sl_mode=original.sl_mode, sl_value=original.sl_value, tp_mode=original.tp_mode, tp_value=original.tp_value,
+                entry_market_state=self.rule_state.confirmed_market_state() if self.rule_state else original.entry_market_state,
+                entry_budget=normalized * limit_price * 1000.0,
+                details={"reservation_price": limit_price, "operator_armed_buy": {
+                    "origin_id": original.id, "session_date": watch["session_date"]}})
+            problem = self._armed_origin_error(intent)
+            if problem:
+                raise ValueError(problem)
+            intent.loan_package_id = original.loan_package_id
+            intent.created_at = self.queue._now()
+            intent.expires_at = float(watch["visible_until"])
+            intent.buy_window_start, intent.buy_window_end = "09:00", "15:00"
+            intent.buy_window_date = watch["session_date"]
+            self.queue.add(intent)
+            watch["armed_order_id"] = intent.id
+            self.queue._update(original.id, details={**original.details, "buy_watch": watch})
+            if self.rule_state:
+                self.rule_state.discard_telegram_signal(original.symbol, original.execution_mode, signal_id=original.trade_id)
+                self.rule_state.open_telegram_signal(intent.symbol, f"MANUAL_ARM:{intent.id}", price=limit_price,
+                    market_state=intent.entry_market_state, signal_id=intent.trade_id, stream=intent.execution_mode)
+            self._append_local_event({"ts": self.queue._now(), "intent": intent.to_dict(), "queue_status": "PENDING",
+                "result": {"ok": True, "status": "PENDING", "message": "OPERATOR_ARMED_BUY", "raw": {}}})
+        return intent
+
+    def _finished_order_history(self, broker: Any, intent: OrderIntent, ids: set[str], *, force: bool = False) -> list[dict[str, Any]]:
         """Read late costs from history without polling a finished live ID."""
         history_reader = getattr(broker, "get_order_history", None)
         if not ids or not callable(history_reader):
@@ -1026,7 +1225,8 @@ class ExecutionService:
         cache = getattr(self, "_finished_histories", {})
         self._finished_histories = cache
         previous = cache.get(day)
-        if previous is None or now - previous[0] >= 300:
+        today_start = datetime.fromtimestamp(self.queue._now(), VN_TZ).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        if previous is None or now - previous[0] >= (30 if force else 300) or (force and previous[0] < today_start):
             try:
                 rows = list(history_reader(day, day) or [])
             except Exception:
@@ -1054,6 +1254,7 @@ class ExecutionService:
         self.recover_results()
         mode = str(execution_mode or "PAPER").upper()
         broker = self.paper if mode == "PAPER" else self.real
+        self._reconcile_remainder_costs(mode, broker)
         active = [
             intent
             for intent in self.queue.list_all()
@@ -1068,17 +1269,21 @@ class ExecutionService:
             # frequently, but the REST endpoint must not be hit every second.
             broker_orders = list(broker.get_orders() if mode == "PAPER" else broker.get_orders(force=False) or [])
         except Exception:
-            return []
+            broker_orders = []
         updated: list[OrderIntent] = []
         for intent in active:
             ids = {value for value in [intent.broker_order_id, *intent.broker_order_ids] if value}
-            matches = [row for row in broker_orders if (
+            previous_day = (managed_buy(intent)
+                            and datetime.fromtimestamp(intent.handed_off_at or intent.claimed_at or intent.created_at, VN_TZ).date()
+                            < datetime.fromtimestamp(self.queue._now(), VN_TZ).date())
+            matches = [row for row in ([] if previous_day else broker_orders) if (
                 str(row.get("orderId", row.get("id", ""))) in ids
                 or (intent.request_tag and intent.request_tag == str(row.get("remark", "") or ""))
             )]
             missing_ids = ids - {str(row.get("orderId", row.get("id", ""))) for row in matches}
-            if intent.status in FINAL_STATUSES:
-                matches.extend(self._finished_order_history(broker, intent, missing_ids))
+            if intent.status in FINAL_STATUSES or previous_day or intent.status == "WAITING_REMAINDER":
+                matches.extend(self._finished_order_history(broker, intent, missing_ids,
+                    force=previous_day and intent.status not in FINAL_STATUSES))
                 missing_ids = set()
             if hasattr(broker, "get_order_detail"):
                 for broker_id in missing_ids:
@@ -1105,14 +1310,67 @@ class ExecutionService:
                     if progress.get("snapshot_digest") == digest:
                         continue
                     revision = int(progress.get("snapshot_revision", 0)) + 1
-                    key = f"reconcile:{intent.id}:{broker_id}:{revision}:{digest}"
+                    key = f"reconcile:{intent.id}:{intent.attempt}:{broker_id}:{revision}:{digest}"
                     payload = {"kind": "reconcile", "intent": current.to_dict(), "broker": match,
                                "snapshot_digest": digest, "snapshot_revision": revision}
                     self.database.put_result(key, payload)
                 reconciled = self._apply_broker_row(key, payload)
                 if reconciled:
                     updated.append(reconciled)
+        updated.extend(self._prepare_buy_remainders(mode))
+        self._prepare_zero_fill_watches(mode)
         return updated
+
+    def _reconcile_remainder_costs(self, mode: str, broker: Any) -> None:
+        """Keep late fees from archived attempts without confusing reused IDs."""
+        if not self.trade_state:
+            return
+        for item in self.queue.list_all():
+            if item.execution_mode != mode or not item.details.get("buy_remainder_history"):
+                continue
+            for index, archive in enumerate(item.details["buy_remainder_history"]):
+                previous_progress = archive["broker_progress"]
+                old = replace(item, handed_off_at=datetime.fromisoformat(archive["date"]).replace(tzinfo=VN_TZ).timestamp())
+                for row in self._finished_order_history(broker, old, set(previous_progress)):
+                    broker_id = str(row["orderId"])
+                    absolute = int(row.get("fillQuantity", row.get("filledQuantity", 0)) or 0)
+                    with self.database:
+                        current = self.queue.get(item.id)
+                        if not current:
+                            break
+                        details = dict(current.details)
+                        histories = deepcopy(details["buy_remainder_history"])
+                        previous = histories[index]["broker_progress"][broker_id]
+                        if absolute != int(previous["filled"]):
+                            if absolute > int(previous["filled"]):
+                                details["fill_accounting_reconcile_required"] = broker_id
+                                self.queue._update(item.id, status="UNKNOWN", details=details,
+                                    result="BUY_REMAINDER_HISTORY_CHANGED: cần đối soát lượng khớp lệnh cũ")
+                            continue
+                        cost_row = row
+                        if absolute > 0 and self.queue._broker_notional(row) <= 0:
+                            cost_row = {**row, "price_unit": "VND", "averagePrice": float(previous["notional"]) / absolute}
+                        fee, tax = self.queue._broker_costs(cost_row)
+                        if not any(row.get(key) is not None for key in ("fee", "totalFee", "feeRate")):
+                            fee = float(previous.get("fee", 0))
+                        if not any(row.get(key) is not None for key in ("tax", "taxRate")):
+                            tax = float(previous.get("tax", 0))
+                        delta = fee + tax - float(previous.get("fee", 0)) - float(previous.get("tax", 0))
+                        if fee == float(previous.get("fee", 0)) and tax == float(previous.get("tax", 0)):
+                            continue
+                        fee_delta, tax_delta = fee - float(previous.get("fee", 0)), tax - float(previous.get("tax", 0))
+                        previous.update(fee=fee, tax=tax, cost_revision=int(previous.get("cost_revision", 0)) + 1)
+                        details["buy_remainder_history"] = histories
+                        self.queue._update(item.id, details=details)
+                        self.trade_state.adjust_costs(item.trade_id, delta)
+                        revision = previous["cost_revision"]
+                        self.database.add_event({"event_id": f"remainder-cost:{item.id}:{archive['date']}:{broker_id}:{revision}",
+                            "ts": time.time(), "intent": current.to_dict(), "queue_status": current.status,
+                            "result": {"ok": True, "status": "COST_ADJUSTMENT", "order_id": broker_id,
+                                       "message": "BROKER_COST_RECONCILED", "raw": {
+                                           "fee": fee_delta, "tax": tax_delta,
+                                           "fee_known": True, "tax_known": True}}})
+        self.flush_events()
 
     def _apply_broker_row(self, key: str, payload: dict[str, Any]) -> OrderIntent | None:
         notifications: list[tuple[str, TradeCycle, OrderIntent]] = []
@@ -1160,7 +1418,7 @@ class ExecutionService:
                     return None
                 delta = max(0, absolute - int(progress.get("filled", 0)))
                 notional = self.queue._broker_notional(match)
-                if delta and notional <= float(progress.get("notional", 0)):
+                if (absolute > 0 and notional <= 0) or (delta and notional <= float(progress.get("notional", 0))):
                     # Do not poison replay with an incomplete broker snapshot.
                     # Keep tracking the order; a later complete detail is a new
                     # inbox item and supplies the authoritative fill price.

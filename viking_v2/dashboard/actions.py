@@ -56,6 +56,7 @@ from ..trading.portfolio import (
     position_quantity, sell_quantity_for_fraction, validate_quantity,
 )
 from ..trading.validation import decision_is_fresh, decisions_for_mode, quote_is_fresh
+from ..trading.buy_watch import managed_buy
 from .view import (
     COL_GRAY, COL_GREEN, COL_MUTED, COL_PREVIEW_TEXT, COL_RED, COL_SURFACE_2,
     COL_TEXT, COL_TITLE, COL_WARN, _cash, _compact_vnd, _display_price, _number,
@@ -95,6 +96,7 @@ class DashboardActionsMixin:
         return (
             intent.status, intent.quantity, intent.filled_quantity,
             intent.remaining_quantity, intent.limit_price, intent.broker_order_id,
+            intent.attempt,
         )
 
     def _log_order_progress(self, intent: OrderIntent) -> None:
@@ -109,6 +111,7 @@ class DashboardActionsMixin:
         label = {
             "PENDING": "CHỜ GỬI", "WAITING_TOKEN": "CHỜ OTP",
             "WAITING_SETTLEMENT": "CHỜ CỔ VỀ", "PAUSED": "TẠM DỪNG",
+            "WAITING_REMAINDER": "MUA NỐT PHẦN DƯ · CHỜ PHIÊN KẾ TIẾP",
             "SENDING": "ĐANG GỬI", "WORKING": "ĐÃ GỬI · CHỜ KHỚP",
             "PARTIAL": "KHỚP MỘT PHẦN", "FILLED": "KHỚP HẾT",
             "CANCEL_PENDING": "CHỜ XÁC NHẬN HỦY",
@@ -133,9 +136,28 @@ class DashboardActionsMixin:
         if intent.broker_order_id:
             broker_name = "DNSE" if intent.execution_mode == "REAL" else "PAPER"
             message += f" · {broker_name} #{intent.broker_order_id}"
-        if intent.result and intent.status in {"REJECTED", "FAILED", "EXPIRED", "WAITING_TOKEN", "WAITING_SETTLEMENT"}:
+        if intent.result and intent.status in {"REJECTED", "FAILED", "EXPIRED", "CANCELLED", "WAITING_TOKEN", "WAITING_SETTLEMENT", "WAITING_REMAINDER"}:
             message += " · " + " ".join(str(intent.result).split())[:220]
         self._log(message, "bot" if intent.source in {"BOT", "EM"} else "manual")
+        DashboardActionsMixin._notify_buy_order_progress(self, intent)
+
+    def _notify_buy_order_progress(self, intent: OrderIntent) -> None:
+        if managed_buy(intent) and intent.status in {"EXPIRED", "CANCELLED"} and not intent.filled_quantity:
+            trades = getattr(self, "trade_state", None)
+            cycle = trades.get(intent.trade_id) if trades else None
+            rules = getattr(self, "rule_state", None)
+            if rules and (not cycle or cycle.open_quantity <= 0):
+                rules.discard_telegram_signal(intent.symbol, intent.execution_mode, signal_id=intent.trade_id)
+        service = getattr(self, "telegram", None)
+        if (not service or not managed_buy(intent)
+                or intent.status == "SENDING" or (intent.status == "PENDING" and not intent.details.get("operator_armed_buy"))
+                or not DashboardActionsMixin._telegram_notification_enabled(self, "buy_queued")):
+            return
+        occurrence = f"{intent.attempt}|{intent.status}|{intent.filled_quantity}|{intent.quantity}"
+        DashboardActionsMixin._queue_telegram_notice(self, service, "buy_queued",
+            f"BUY_PROGRESS|{intent.execution_mode}|{intent.id}", intent.symbol, occurrence,
+            {"notice_kind": "BUY_PROGRESS", "execution_mode": intent.execution_mode,
+             "intent": intent.to_dict()})
 
     def _sync_order_progress(self, items: list[OrderIntent]) -> None:
         """Observe a local render snapshot; no broker calls or replay on startup."""
@@ -151,6 +173,8 @@ class DashboardActionsMixin:
             if key not in states and item.status == "PENDING":
                 # The manual/planner submission already logs the new candidate.
                 states[key] = DashboardActionsMixin._order_progress_signature(item)
+                if item.details.get("operator_armed_buy"):
+                    DashboardActionsMixin._notify_buy_order_progress(self, item)
             else:
                 DashboardActionsMixin._log_order_progress(self, item)
         current_keys = {(item.execution_mode, item.id) for item in items}
@@ -1678,6 +1702,8 @@ class DashboardActionsMixin:
                 elif notice["payload"].get("notice_kind") == "SELL_REQUEST":
                     payload = {key: value for key, value in notice["payload"].items() if key != "notice_kind"}
                     sent = bool(service.notify_sell_request(**payload))
+                elif notice["payload"].get("notice_kind") == "BUY_PROGRESS":
+                    sent = bool(service.notify_buy_progress(OrderIntent.from_dict(notice["payload"]["intent"])))
                 elif notice["payload"].get("notice_kind") == "INDICATOR_ALERT":
                     payload = {key: value for key, value in notice["payload"].items() if key != "notice_kind"}
                     sent = bool(service.notify_indicator_exit_alert(**payload))
@@ -2126,7 +2152,14 @@ class DashboardActionsMixin:
         menu.add_command(label="Đóng", state="normal" if closable else "disabled",
                          image=icons[1], compound="left",
                          command=lambda: self._close_running_selection(actions))
+        if len(actions) == 1 and action.get("buy_watch"):
+            menu.add_command(label="Bật mua…", state="normal" if action.get("armable") else "disabled",
+                             command=lambda: self._arm_running_buy(action))
         menu.post(event.x_root, event.y_root)
+
+    def _arm_running_buy(self, action: dict[str, Any]) -> None:
+        from .buy_watch import show_arm_buy
+        show_arm_buy(self, action)
 
     def _selected_running_actions(self) -> list[dict]:
         mode = "REAL" if self.tabs.get() == "CKCS REAL" else "PAPER"
@@ -3375,17 +3408,26 @@ class DashboardActionsMixin:
                 balance, positions = broker.get_balance(), broker.get_positions()
         from ..rules.business import StaticRuleParameters
         policy = StaticRuleParameters.from_dict(params)
+        entry_state = intent.entry_market_state
+        if intent.details.get("operator_armed_buy") and getattr(self, "rule_state", None):
+            entry_state = self.rule_state.confirmed_market_state()
         exposure = (self.settings.market_phase_override_exposure_pct / 100.0
                     if self.settings.market_phase_override_enabled
-                    else float(policy.exposure.get(intent.entry_market_state, 0.0)))
+                    else float(policy.exposure.get(entry_state, 0.0)))
         if intent.entry_exposure > 0:
             exposure = min(exposure, intent.entry_exposure)
         context = self._build_entry_limits(intent.symbol, intent.execution_mode, quote,
                                          balance, positions, exposure, intent.id,
                                          fee_rate=quote.get("buy_fee_rate"))
+        active_cycle = self.trade_state.active_for(intent.symbol, intent.execution_mode)
+        if intent.details.get("buy_remainder"):
+            if (not active_cycle or active_cycle.id != intent.trade_id
+                    or active_cycle.sold_quantity or active_cycle.status != "OPEN"
+                    or not 0 < intent.filled_quantity < intent.quantity):
+                return "BUY_REMAINDER_POSITION_CHANGED"
+            replacement = True
         if not replacement and not context["entry_orders_available"]:
             return "MAX_SYMBOL_ORDERS"
-        active_cycle = self.trade_state.active_for(intent.symbol, intent.execution_mode)
         if not replacement and active_cycle and active_cycle.open_quantity > 0 and not context["scale_in_allowed"]:
             return "POSITION_NOT_READY_FOR_ADD"
         if not replacement and not context["entry_slot_available"]:
@@ -4101,6 +4143,8 @@ class DashboardActionsMixin:
             return
         status = str(getattr(broker_result, "status", "") or "").upper()
         ok = bool(getattr(broker_result, "ok", False))
+        if status in {"EXPIRED", "CANCELLED"}:
+            return  # Normal order lifecycle is reported in LỆNH & KẾT QUẢ.
         if ok and status not in {"REJECTED", "FAILED", "EXPIRED"}:
             return
         reason = {
@@ -4215,8 +4259,8 @@ class DashboardActionsMixin:
                     broker_status = str(getattr(broker_result, "status", "") or "").upper()
                     broker_ok = bool(getattr(broker_result, "ok", False))
                     if intent.side != "BUY" and (
-                        not broker_ok
-                        or broker_status in {"REJECTED", "FAILED", "EXPIRED"}
+                        (not broker_ok and broker_status not in {"EXPIRED", "CANCELLED"})
+                        or broker_status in {"REJECTED", "FAILED"}
                     ):
                         DashboardActionsMixin._notify_system_event(
                             self,

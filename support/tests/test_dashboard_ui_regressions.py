@@ -802,7 +802,7 @@ def test_row_updates_partial_fills_and_action_metadata_without_reinsert(ui_root,
         tree.destroy()
 
 
-def test_finished_order_is_removed_but_other_rows_and_selection_survive(ui_root):
+def test_filled_order_is_removed_and_cancelled_result_keeps_selection(ui_root):
     from tkinter import ttk
 
     tree = ttk.Treeview(ui_root, show="headings")
@@ -820,8 +820,9 @@ def test_finished_order_is_removed_but_other_rows_and_selection_survive(ui_root)
         assert set(subject._running_row_actions["REAL"]) == {"LOCAL:second"}
         second.status = "CANCELLED"
         subject._render_tables({})
-        assert not tree.get_children() and not tree.selection()
-        assert subject._running_row_actions["REAL"] == {}
+        assert tree.get_children() == ("LOCAL:second",) and tree.selection() == ("LOCAL:second",)
+        assert "ĐÃ HỦY" in tree.item("LOCAL:second", "values")[7]
+        assert not subject._running_row_actions["REAL"]["LOCAL:second"]["cancellable"]
     finally:
         tree.destroy()
 

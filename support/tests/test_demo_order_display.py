@@ -120,6 +120,23 @@ def test_close_order_merged_into_position_is_not_repeated_as_external_order(ui_r
         tree.destroy()
 
 
+@pytest.mark.parametrize("status", ["CANCELLED", "EXPIRED"])
+def test_zero_fill_buy_result_stays_visible_and_has_no_cancel_or_edit_action(ui_root, status):
+    intent = OrderIntent("CTS-ZERO", "CTS", "BUY", 300, "MARKET", source="BOT",
+                         execution_mode="REAL", status=status, broker_order_id="CTS-DNSE")
+    subject, tree = table_subject(ui_root, items=[intent])
+    try:
+        subject._render_tables({})
+        iid, = tree.get_children()
+        text = tree.item(iid, "values")[7]
+        assert "Khớp 0/300" in text and "YÊU CẦU ĐÃ KẾT THÚC" in text
+        assert ("ĐÃ HỦY" if status == "CANCELLED" else "HẾT HIỆU LỰC") in text
+        assert not subject._running_row_actions["REAL"][iid]["cancellable"]
+        assert not subject._running_row_actions["REAL"][iid]["editable"]
+    finally:
+        tree.destroy()
+
+
 @pytest.mark.parametrize("status,expected", [
     ("PendingCancel", "CHỜ XÁC NHẬN HỦY"), ("CANCEL_PENDING", "CHỜ XÁC NHẬN HỦY"),
     ("PendingReplace", "CHỜ XÁC NHẬN SỬA"), ("REPLACE_PENDING", "CHỜ XÁC NHẬN SỬA"),

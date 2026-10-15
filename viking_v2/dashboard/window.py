@@ -95,6 +95,10 @@ class VikingApp(DashboardPanelsMixin, DashboardActionsMixin, DashboardTablesMixi
             protection_policy_provider=self._protection_policy,
             bot_trade_allowed_provider=lambda symbol: not config.is_priority_alert(self.settings, symbol),
             protection_history_allowed_provider=self._protection_history_allowed,
+            working_dates_provider=lambda: [
+                value for value in self.real.get_working_dates()
+                if str(value)[:10] not in set(self.settings.trading_holidays)
+            ],
         )
         self.daily_fees = DailyFeeTracker(
             self.bridge.history_csv_path,

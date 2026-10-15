@@ -12,6 +12,8 @@ from customtkinter.windows.widgets.scaling.scaling_tracker import ScalingTracker
 from .. import config
 from ..services.runtime import recent_ui_logs
 from ..trading.orders import CLAIMABLE_STATUSES, FINAL_STATUSES, LOCALLY_CONTROLLABLE_STATUSES
+from ..trading.market import VN_TZ
+from ..trading.buy_watch import watch_visible, watch_armable, submitted_day
 from ..trading.portfolio import account_price
 from ..trading.validation import decision_is_fresh, decisions_for_mode
 from .view import _compact_vnd, _display_price, _number, _price_unit
@@ -270,7 +272,10 @@ class DashboardTablesMixin:
         if hasattr(self, "_order_log_states"):
             self._sync_order_progress(local_items)
         for item in local_items:
-            if item.status.upper() not in FINAL_STATUSES:
+            finished = float(item.details.get("finished_at") or item.handed_off_at or item.claimed_at or item.created_at)
+            show_result = (item.status in FINAL_STATUSES - {"FILLED"}
+                           and datetime.fromtimestamp(finished, VN_TZ).date() == datetime.now(VN_TZ).date())
+            if item.status.upper() not in FINAL_STATUSES or show_result or watch_visible(item, time.time()):
                 local_by_mode[item.execution_mode].append(item)
         # One fresh read per render, not one full ledger decode per visible row.
         # These indexes are local display snapshots; no trading decision uses them.
@@ -306,7 +311,7 @@ class DashboardTablesMixin:
             params = self.settings.rule_parameters if isinstance(self.settings.rule_parameters, dict) else {}
             take_profit_pct = float(params.get("take_profit_pct", 7.0) or 7.0)
             normal_tp = float(params.get("normal_arm_pct", 7.0) or 7.0)
-            close_items = [item for item in local_by_mode[mode] if item.action == "CLOSE"]
+            close_items = [item for item in local_by_mode[mode] if item.action == "CLOSE" and item.status not in FINAL_STATUSES]
             consumed_close_ids: set[str] = set()
             position_ids: dict[str, int] = {}
 
@@ -606,13 +611,16 @@ class DashboardTablesMixin:
 
             # Include close requests merged into a position row as well.
             local_broker_ids = {value for item in local_by_mode[mode]
+                                if not watch_visible(item, time.time()) or submitted_day(item) == datetime.now(VN_TZ).date().isoformat()
                                 for value in [item.broker_order_id, *item.broker_order_ids] if value}
             for item in reversed(local_by_mode[mode]):
                 if item.id in consumed_close_ids:
                     continue
-                if item.broker_order_id:
-                    local_broker_ids.add(item.broker_order_id)
-                local_broker_ids.update(item.broker_order_ids)
+                passive_watch = watch_visible(item, time.time())
+                if not passive_watch or submitted_day(item) == datetime.now(VN_TZ).date().isoformat():
+                    if item.broker_order_id:
+                        local_broker_ids.add(item.broker_order_id)
+                    local_broker_ids.update(item.broker_order_ids)
                 price_text = _display_price(item.limit_price) if item.limit_price > 0 else item.order_type
                 gross = item.limit_price * item.quantity * 1000.0 if item.limit_price > 0 else 0.0
                 cycle = cycles_by_id.get(item.trade_id) if item.trade_id else None
@@ -661,10 +669,16 @@ class DashboardTablesMixin:
                     remaining_label += " CHỜ KHỚP"
                 elif status_upper == "WAITING_SETTLEMENT":
                     remaining_label += " CHỜ CỔ VỀ ĐỂ BÁN"
+                elif status_upper == "WAITING_REMAINDER":
+                    remaining_label += " MUA NỐT PHIÊN KẾ TIẾP"
+                elif status_upper in FINAL_STATUSES:
+                    remaining_label += " · YÊU CẦU ĐÃ KẾT THÚC"
                 is_working = status_upper in {"WORKING", "PARTIAL", "UNKNOWN", "CANCEL_PENDING", "REPLACE_PENDING"}
                 cancellable = status_upper in LOCALLY_CONTROLLABLE_STATUSES or (
                     mode == "REAL" and bool(item.broker_order_id) and is_working
                 )
+                if status_upper == "WAITING_REMAINDER":
+                    cancellable = True
                 editable = status_upper in LOCALLY_CONTROLLABLE_STATUSES or (
                     mode == "REAL" and bool(item.broker_order_id) and item.order_type == "LO" and is_working
                 )
@@ -683,6 +697,9 @@ class DashboardTablesMixin:
                     "PENDING": "[CACHE] CHỜ GỬI",
                     "WAITING_TOKEN": "[CACHE] CHỜ TOKEN",
                     "WAITING_SETTLEMENT": "[T+2] CHỜ CỔ VỀ",
+                    "WAITING_REMAINDER": "MUA NỐT PHẦN DƯ · CHỜ PHIÊN KẾ TIẾP",
+                    "CANCELLED": "ĐÃ HỦY", "EXPIRED": "HẾT HIỆU LỰC",
+                    "REJECTED": "BỊ TỪ CHỐI", "FAILED": "THẤT BẠI",
                     "PAUSED": "[CACHE] TẠM DỪNG",
                     "SENDING": "[DNSE] ĐANG GỬI",
                     "WORKING": "[DNSE] CHỜ KHỚP",
@@ -693,11 +710,25 @@ class DashboardTablesMixin:
                 }.get(status_upper, f"[{status_upper}]")
                 if mode == "PAPER":
                     status_label = status_label.replace("[DNSE]", "[PAPER]")
+                if item.side == "BUY" and item.source == "BOT" and status_upper != "WAITING_REMAINDER":
+                    status_label = ("MUA NỐT PHẦN DƯ" if item.details.get("buy_remainder") else "MUA MỚI") + " · " + status_label
+                watch = item.details.get("buy_watch") or {}
+                if passive_watch:
+                    status_label = "LƯU THAM KHẢO · " + status_label
+                    remaining_label = (f"ĐÃ BẬT MUA TAY #{watch['armed_order_id'][:8]}" if watch.get("armed_order_id")
+                                       else ("CHƯA BẬT MUA" if watch.get("session_date") else "CHỜ LỊCH · CHƯA BẬT MUA")
+                                       + " · KHÔNG GIỮ VỐN/LƯỢT MUA")
+                elif item.details.get("operator_armed_buy"):
+                    status_label = "MUA BẬT TAY · " + status_label
                 estimated_fee = (
                     self._preview_buy_fee(gross, item.symbol, mode)
                     if item.side == "BUY" else None
                 )
                 fee_text = _compact_vnd(estimated_fee) if estimated_fee is not None else "--"
+                cost_text = f"FEE {fee_text}" if gross > 0 else f"HẾT HẠN {self._row_time(item.expires_at)}"
+                if passive_watch:
+                    cost_text = ("LƯU ĐẾN " + datetime.fromtimestamp(float(watch["visible_until"]), VN_TZ).strftime("%d/%m %H:%M")
+                                 if watch.get("visible_until") else "CHỜ LỊCH GIAO DỊCH")
                 risk_text = item_sl_label
                 reward_text = item_tp_label
                 self._update_running_row(
@@ -707,11 +738,13 @@ class DashboardTablesMixin:
                         self._row_time(item.created_at),
                         _order_caption(mode, display_source, item.side, item.symbol, item.quantity, price_text, self._row_time(item.created_at)),
                         target_text,
-                        f"FEE {fee_text}" if gross > 0 else f"HẾT HẠN {self._row_time(item.expires_at)}",
+                        cost_text,
                         f"R {risk_text} · E {reward_text}" if item.action == "OPEN" else "--",
                         f"-- · -- · -- · Khớp {item.filled_quantity}/{item.quantity}",
                         f"{status_label} · Khớp {item.filled_quantity}/{item.quantity}\n"
                         f"{remaining_label} · {em_text}\n{item.result or item.reason or 'ĐANG CHỜ'}",
+                        "Chưa bật mua" if passive_watch and not watch.get("armed_order_id") else
+                        "Đã bật tay" if passive_watch else
                         position_bot_cell(self.settings, cycle) if cycle else "Bật" if item.source in {"BOT", "EM"} else "—",
                         "X" if override_items else "—",
                     ),
@@ -725,7 +758,7 @@ class DashboardTablesMixin:
                     tree._viking_override_rows[iid] = override_items
                 self._running_row_actions[mode][iid] = {
                     "kind": "local", "mode": mode, "symbol": item.symbol,
-                    "local_id": item.id, "broker_order_id": item.broker_order_id,
+                    "local_id": item.id, "broker_order_id": "" if status_upper == "WAITING_REMAINDER" else item.broker_order_id,
                     "order_type": item.order_type, "quantity": item.quantity,
                     "price": item.limit_price, "editable": editable, "cancellable": cancellable,
                     "pausable": status_upper in CLAIMABLE_STATUSES,
@@ -733,6 +766,12 @@ class DashboardTablesMixin:
                     "status": status_upper, "source": item.source, "side": item.side,
                     "result": item.result, "reason": item.reason,
                     "expires_at": item.expires_at,
+                    "buy_watch": passive_watch,
+                    "armable": watch_armable(item, time.time()) and not any(
+                        other.symbol == item.symbol and other.execution_mode == mode and other.status not in FINAL_STATUSES
+                        for other in local_items) and not any(
+                        candidate.symbol == item.symbol and candidate.execution_mode == mode and candidate.status == "OPEN"
+                        and candidate.open_quantity > 0 for candidate in cycles),
                 }
                 parent = self._running_position_parent(self._running_row_actions[mode], item)
                 if parent:

@@ -7,7 +7,7 @@ from typing import Any
 
 import requests
 
-from ..models import TradeCycle
+from ..models import OrderIntent, TradeCycle
 from ..branding import APP_NAME
 from ..trading.market import VN_TZ
 
@@ -62,6 +62,7 @@ class SignalTelegramService:
         self._buy_timer: threading.Timer | None = None
         self._buy_window_started: datetime | None = None
         self._buy_generation = 0
+        self._progressed_buys: dict[tuple[str, str], None] = {}
 
     def configure_buy_delivery(self, *, buy_batch_minutes: float) -> None:
         """Keep queued notices when switching delivery; never block the UI on I/O."""
@@ -114,6 +115,56 @@ class SignalTelegramService:
             logger.warning("Telegram trade notification failed: %s", message)
             return False
 
+    def notify_buy_progress(self, intent: OrderIntent) -> bool:
+        labels = {"WORKING": "ĐÃ GỬI · CHỜ KHỚP", "PARTIAL": "KHỚP MỘT PHẦN",
+                  "PENDING": "ĐÃ BẬT MUA TAY · CHỜ PHIÊN",
+                  "FILLED": "KHỚP ĐỦ", "CANCELLED": "ĐÃ HỦY", "EXPIRED": "HẾT HIỆU LỰC",
+                  "REJECTED": "BỊ TỪ CHỐI", "FAILED": "THẤT BẠI",
+                  "UNKNOWN": "CHƯA RÕ · CHỜ ĐỐI SOÁT", "CANCEL_PENDING": "CHỜ XÁC NHẬN HỦY",
+                  "REPLACE_PENDING": "CHỜ XÁC NHẬN SỬA", "WAITING_TOKEN": "CHỜ OTP",
+                  "WAITING_REMAINDER": "CHỜ NGÀY GIAO DỊCH KẾ TIẾP", "PAUSED": "TẠM DỪNG"}
+        kind = "MUA NỐT PHẦN DƯ" if intent.details.get("buy_remainder") or intent.status == "WAITING_REMAINDER" else "MUA MỚI"
+        if intent.details.get("operator_armed_buy"):
+            kind += " · BẬT TAY"
+        lines = [f"📋 BUY · {intent.symbol} · {intent.execution_mode} · {kind} · #{intent.id[:8]}",
+                 labels.get(intent.status, intent.status),
+                 f"Khớp {intent.filled_quantity:,}/{intent.quantity:,} CP · Còn {intent.remaining_quantity:,} CP"]
+        broker_type = intent.details.get("broker_order_type") or intent.order_type
+        lines.append(str(broker_type) + (f" · Giá LO {self._price(intent.limit_price)}" if intent.limit_price > 0 else ""))
+        if intent.status == "WAITING_REMAINDER":
+            lines.append("Chỉ mua nốt trong 1 ngày giao dịch kế tiếp, giữ giá LO cũ; không thêm lượt BUY.")
+        elif intent.status in {"EXPIRED", "CANCELLED"} and intent.filled_quantity == 0:
+            lines.append("Chưa mua được cổ nào. Lệnh cũ đã kết thúc; không tự mua lại.")
+            if intent.source == "BOT" and not intent.details.get("operator_armed_buy"):
+                lines.append("Bản ghi chỉ để theo dõi thêm 1 phiên; muốn mua lại, chọn Bật mua trên app.")
+            if intent.order_type == "MARKET" and intent.status == "CANCELLED":
+                lines.append("MTL có thể bị hủy khi không có lệnh bán đối ứng.")
+        elif intent.status == "UNKNOWN":
+            lines.append("Chưa đặt tiếp cho đến khi đối soát được lệnh cũ.")
+        if intent.details.get("operator_armed_buy") and intent.status == "PENDING":
+            authorization = intent.details["operator_armed_buy"]
+            lines.append(f"Phiên {authorization['session_date']} · Lệnh tay vẫn thực hiện khi BOT mua tự động OFF.")
+        if intent.result and intent.result not in {intent.status, "WORKING", "PARTIAL", "FILLED"}:
+            lines.append(" ".join(intent.result.split())[:220])
+        sent = self._send("\n".join(lines))
+        if sent:
+            with self._buy_lock:
+                self._progressed_buys[(intent.execution_mode, intent.id)] = None
+                if len(self._progressed_buys) > 512:
+                    self._progressed_buys.pop(next(iter(self._progressed_buys)))
+                self._pending_buys = {key: item for key, item in self._pending_buys.items()
+                                      if not self._buy_has_progress(item)}
+                if not self._pending_buys:
+                    if self._buy_timer is not None:
+                        self._buy_timer.cancel()
+                        self._buy_timer = None
+                    self._buy_window_started = None
+        return sent
+
+    def _buy_has_progress(self, item: dict[str, Any]) -> bool:
+        order_id = str((item.get("order_info") or {}).get("order_id", ""))
+        return bool(order_id and (item.get("execution_mode", ""), order_id) in self._progressed_buys)
+
     def notify_buy(
         self,
         *,
@@ -137,6 +188,8 @@ class SignalTelegramService:
             "order_info": dict(order_info or {}),
         }
         with self._buy_lock:
+            if self._buy_has_progress(item):
+                return True  # A newer order outcome already superseded this queued notice.
             key = self._buy_key(item)
             if key in self._pending_buys:
                 return True  # Already retained for delivery; do not send twice.
@@ -152,7 +205,7 @@ class SignalTelegramService:
         if self._send(self._format_buys([item])):
             return True
         with self._buy_lock:
-            if generation == self._buy_generation:
+            if generation == self._buy_generation and not self._buy_has_progress(item):
                 item["immediate_delivery"] = True
                 self._pending_buys.setdefault(key, item)
                 if self._buy_timer is None:
@@ -215,7 +268,7 @@ class SignalTelegramService:
         budget = float(info["budget_vnd"])
         return [
             f"🟢 BUY · {item['symbol']} · {item['execution_mode']} · ĐÃ XẾP LỆNH · #{str(info['order_id'])[:8]}"
-            + (f" · Lượt {int(info['entry_orders_used']) + 1}/{max(1, int(info['entry_orders_max']))}" if "entry_orders_used" in info else ""),
+            + (f" · Lượt {int(info['entry_orders_used']) + 1}/{max(1, int(info['entry_orders_max']))}" if "entry_orders_used" in info else "") + " · MUA MỚI",
             f"🕒 {created:%H:%M} · {info['order_type']} · {int(info['quantity'])} CP · Giá tín hiệu {self._price(item['price'])}",
             f"💰 Dự trù {amount(gross)} (gồm phí {amount(fee)}) / vốn {amount(budget)} · Giá tính vốn {self._price(info['budget_price'])}",
         ]
@@ -231,7 +284,7 @@ class SignalTelegramService:
             self._buy_timer = None
             if timer is not None and timer is not threading.current_thread():
                 timer.cancel()
-            items = list(self._pending_buys.values())
+            items = [item for item in self._pending_buys.values() if not self._buy_has_progress(item)]
             self._pending_buys.clear()
             started = self._buy_window_started
             self._buy_window_started = None
@@ -245,6 +298,8 @@ class SignalTelegramService:
             with self._buy_lock:
                 if generation != self._buy_generation:
                     return False  # Category/destination changed while a prior send was in flight.
+                if self._buy_has_progress(item):
+                    continue
             if item.get("immediate_delivery"):
                 if not self._send(self._format_buys([item])):
                     failed.append(item)
@@ -254,14 +309,16 @@ class SignalTelegramService:
             with self._buy_lock:
                 if generation != self._buy_generation:
                     return False
-            if not self._send(self._format_buys(batched, started=started)):
+                batched = [item for item in batched if not self._buy_has_progress(item)]
+            if batched and not self._send(self._format_buys(batched, started=started)):
                 failed.extend(batched)
         sent = not failed
         with self._buy_lock:
             if not sent and generation == self._buy_generation:
                 for item in failed:
-                    self._pending_buys.setdefault(self._buy_key(item), item)
-                if self._buy_timer is None:
+                    if not self._buy_has_progress(item):
+                        self._pending_buys.setdefault(self._buy_key(item), item)
+                if self._pending_buys and self._buy_timer is None:
                     self._buy_window_started = started or datetime.now()
                     # Switching to immediate must not cause a zero-delay retry loop.
                     self._buy_timer = threading.Timer(max(60.0, self.buy_batch_seconds), self.flush_buys)
