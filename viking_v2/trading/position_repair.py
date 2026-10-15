@@ -86,7 +86,8 @@ def restart_price_observations(trades, rules, queue, trade_id: str, quote: dict,
         mfe = max(0, (high / cycle.avg_entry_price - 1) * 100)
         mae = min(0, (low / cycle.avg_entry_price - 1) * 100)
         rules.update_position_metrics(cycle.symbol, trade_id, profit_pct=profit, net_pnl=pnl,
-            market_price=price, entry_notional_vnd=cycle.buy_notional, market_data_policy=MATCHED_DATA_POLICY)
+            market_price=price, entry_avg_price=cycle.avg_entry_price,
+            entry_notional_vnd=cycle.buy_notional, market_data_policy=MATCHED_DATA_POLICY)
         return rules.replace_verified_price_metrics(cycle.symbol, trade_id, metrics={
             "peak_profit_pct": mfe, "mfe_pct": mfe, "mae_pct": mae,
             "market_price": price, "current_profit_pct": profit, "current_net_pnl": pnl,

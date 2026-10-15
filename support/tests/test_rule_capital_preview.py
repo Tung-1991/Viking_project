@@ -205,7 +205,10 @@ def test_preview_status_has_only_one_hover_handler(ui_root, monkeypatch):
     import customtkinter as ctk
     import viking_v2.dashboard.panels as module
     registrations = []
-    monkeypatch.setattr(module, "_HoverHint", lambda widget, *_args, **_kwargs: registrations.append(widget))
+    def hover_hint(widget, *_args, **_kwargs):
+        registrations.append(widget)
+        return SimpleNamespace(_show=lambda: None)
+    monkeypatch.setattr(module, "_HoverHint", hover_hint)
     top = ctk.CTkToplevel(ui_root)
     try:
         view = subject()
@@ -317,7 +320,7 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
         view._refresh_full_order_preview(status)
         ui_root.update_idletasks()
         assert tuple(label.cget("text") for label in content) == preview_on
-        assert view.preview_em_normal.cget("text") == "PROTECT · OFF"
+        assert view.preview_em_normal.cget("text") == "PROTECT · OFF · ARM AUTO"
         assert view.preview_em_exit.cget("text") == "E · OFF"
         assert view.settings.to_dict() == settings_before
         for alternate in (True, False):
@@ -338,8 +341,9 @@ def test_compact_rule_card_keeps_confirmation_and_guards_visible(ui_root, state,
         )
         view._refresh_full_order_preview(status)
         assert view.preview_normal_value.cget("text") == "ĐÃ ARM · BÁN: 7,700"
-        assert view.preview_em_normal.cget("text") == "PROTECT · OFF"
-        assert "Mốc bán của vị thế: 7,700 đ" in view._protect_preview_hint()
+        assert view.preview_em_normal.cget("text") == "PROTECT · OFF · ARM AUTO"
+        assert "MỐC 7,700đ" in view._protect_preview_hint()
+        assert "ARM AUTO" in view._protect_preview_hint()
         status["decisions"]["AAA"]["details"]["normal_trigger_price"] = 0
         view._refresh_full_order_preview(status)
         assert view.preview_normal_value.cget("text").startswith("ARM:")

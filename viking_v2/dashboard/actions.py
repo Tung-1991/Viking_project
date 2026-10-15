@@ -2140,7 +2140,7 @@ class DashboardActionsMixin:
             if not cycle:
                 raise ValueError("Vị thế đã thay đổi hoặc đã đóng.")
             history = load_position_history(self.real, cycle, sessions,
-                holidays=getattr(self.settings, "trading_holidays", ()))
+                holidays=getattr(self.settings, "trading_holidays", ()), exchange=self._symbol_exchange(symbol))
             quote = MarketDataService._normalize(symbol, self.real.get_latest_trade(symbol),
                                                 self.real.get_latest_quote(symbol))
             quote["price"] = _price_unit(quote["price"])

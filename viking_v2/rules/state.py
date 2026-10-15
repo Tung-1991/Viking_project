@@ -631,7 +631,9 @@ class RuleStateStore:
                             absolute = old_basis * (1 + float(current[field]) / 100)
                             current[field] = (absolute / entry_avg_price - 1) * 100
                 current["entry_avg_price"] = entry_avg_price
-            current["peak_profit_pct"] = max(float(current.get("peak_profit_pct", profit_pct) or profit_pct), float(profit_pct))
+            previous_peak = current.get("peak_profit_pct")
+            current["peak_profit_pct"] = max(
+                float(profit_pct if previous_peak is None else previous_peak), float(profit_pct))
             current["current_profit_pct"] = float(profit_pct)
             current["mae_pct"] = min(0.0, float(current.get("mae_pct", 0.0) or 0.0), float(profit_pct))
             current["mfe_pct"] = max(0.0, float(current.get("mfe_pct", 0.0) or 0.0), float(profit_pct))

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import math
 
-from .market import VN_TZ, is_working_day
+from .market import VN_TZ, exchange_close_minute, is_working_day, normalize_exchange
 
 
 def session_count(value) -> int:
@@ -53,15 +53,17 @@ def _bars(payload, *, minute=False) -> list[dict]:
     return sorted(rows.values(), key=lambda row: row["time"])
 
 
-def load_position_history(client, cycle, sessions=3, *, now=None, holidays=()) -> dict:
+def load_position_history(client, cycle, sessions=3, *, now=None, holidays=(), exchange="") -> dict:
     """Fetch per-day minute candles; never substitute a current quote for history.
 
     A minute straddling the purchase is omitted to exclude pre-entry prices.
-    Full prior sessions are checked against daily high/low to detect truncation.
+    Completed full sessions are checked against daily high/low to detect truncation.
     """
     count = session_count(sessions)
     now = now or datetime.now(VN_TZ)
     now = now.astimezone(VN_TZ)
+    # Without a known exchange, wait until every cash-equity session has closed.
+    close_minute = exchange_close_minute(normalize_exchange(exchange) or "UPCOM")
     if cycle.status != "OPEN" or cycle.open_quantity <= 0:
         raise ValueError("Vị thế đã thay đổi hoặc đã đóng.")
     if not math.isfinite(cycle.opened_at) or not 0 < cycle.opened_at <= now.timestamp():
@@ -98,7 +100,8 @@ def load_position_history(client, cycle, sessions=3, *, now=None, holidays=()) -
         rows = [row for row in rows if start <= row["time"] <= end]
         if not rows:
             raise ValueError(f"Thiếu nến phút phiên {day:%d/%m/%Y}; giữ nguyên MAE/MFE cũ.")
-        if day < now.date() and start == int(midnight.timestamp()):
+        completed = day < now.date() or now.hour * 60 + now.minute >= close_minute
+        if completed and start == int(midnight.timestamp()):
             reference = daily.get(day)
             high, low = max(row["high"] for row in rows), min(row["low"] for row in rows)
             if (not reference or not math.isclose(high, reference["high"], rel_tol=1e-7)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 import re
 
@@ -126,5 +127,7 @@ def test_bat_branding_preserves_python_module_and_repository():
     batch = (ROOT / "START_SYSTEM.bat").read_text(encoding="utf-8")
     helper = (ROOT / "support/launcher.ps1").read_text(encoding="utf-8")
     assert "title Money Hunter" in batch and "VIKING V2" not in batch
-    assert "https://github.com/Tung-1991/Viking_project.git" in helper
+    repository = json.loads((ROOT / "support/repository.json").read_text(encoding="utf-8"))
+    assert repository["url"] == "https://github.com/Tung-1991/Viking_project.git"
+    assert "support\\repository.json" in helper
     assert "-m viking_v2.main" in helper

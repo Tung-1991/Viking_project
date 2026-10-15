@@ -88,6 +88,57 @@ def test_before_market_open_does_not_count_today(tmp_path):
     assert result["session_dates"] == ["2026-10-09", "2026-10-12", "2026-10-13"]
 
 
+@pytest.mark.parametrize("exchange,clock", [("HOSE", "14:45:00"), ("HNX", "14:45:00"),
+                                           ("UPCOM", "15:00:00"), ("", "15:00:00")])
+@pytest.mark.parametrize("missing", ["high", "low", "daily"])
+def test_completed_today_requires_matching_daily_extrema(tmp_path, exchange, clock, missing):
+    trades, rules, _, cycle = historical_account(tmp_path)
+    client = HistoryClient()
+    if missing == "daily":
+        client.days[14] = payload([])
+    else:
+        client.days[14] = payload([(stamp(14), 23, 26 if missing == "high" else 24,
+                                   20 if missing == "low" else 21, 23, 100)])
+    before = trades.get(cycle.id).to_dict(), rules.position_metrics("HDB", cycle.id)
+    with pytest.raises(ValueError, match="chưa khớp đỉnh/đáy"):
+        load_position_history(client, cycle, now=datetime.fromtimestamp(stamp(14, clock), VN_TZ),
+                              exchange=exchange)
+    assert (trades.get(cycle.id).to_dict(), rules.position_metrics("HDB", cycle.id)) == before
+
+
+@pytest.mark.parametrize("exchange,clock", [("HOSE", "14:44:59"), ("HNX", "14:44:59"),
+                                           ("UPCOM", "14:45:00"), ("", "14:45:00"),
+                                           ("HOSE", "12:00:00")])
+def test_unfinished_today_does_not_require_a_closed_daily_candle(tmp_path, exchange, clock):
+    _, _, _, cycle = historical_account(tmp_path)
+    client = HistoryClient()
+    client.days[14] = payload([])
+    history = load_position_history(client, cycle, now=datetime.fromtimestamp(stamp(14, clock), VN_TZ),
+                                    exchange=exchange)
+    assert history["high"] == 24 and history["low"] == 21
+    assert history["loaded_sessions"] == 3
+
+
+@pytest.mark.parametrize("mode", ["REAL", "PAPER"])
+@pytest.mark.parametrize("use_history", [True, False])
+def test_repair_after_scale_in_keeps_extrema_on_the_next_update(tmp_path, mode, use_history):
+    trades, rules, queue, cycle = historical_account(tmp_path, mode=mode)
+    rules.update_position_metrics(cycle.symbol, cycle.id, profit_pct=0,
+        market_price=cycle.avg_entry_price, entry_avg_price=cycle.avg_entry_price)
+    trades.record_buy_fill(cycle.id, 100, 25)
+    cycle = trades.get(cycle.id)
+    before = cycle.to_dict()
+    history = load_position_history(HistoryClient(), cycle, now=NOW) if use_history else None
+    repaired = restart_price_observations(trades, rules, queue, cycle.id, g1(), history=history)
+    later = rules.update_position_metrics(cycle.symbol, cycle.id,
+        profit_pct=(23.1 / cycle.avg_entry_price - 1) * 100,
+        market_price=23.1, entry_avg_price=cycle.avg_entry_price)
+    for key in ("mfe_pct", "mae_pct", "peak_profit_pct"):
+        assert later[key] == pytest.approx(repaired[key])
+    assert repaired["entry_avg_price"] == cycle.avg_entry_price
+    assert trades.get(cycle.id).to_dict() == {**before, "auto_sell_enabled": False}
+
+
 def test_recent_entry_clips_pre_buy_bars_and_straddling_minute(tmp_path):
     _, _, _, cycle = historical_account(tmp_path, entered=stamp(14, "09:30:35"))
     client = HistoryClient()
@@ -243,7 +294,7 @@ def test_action_history_fetch_yields_to_tk_and_confirmation_can_cancel(ui_root, 
     main_thread = threading.get_ident()
     observed = []
     def read(client, cycle, sessions, **kwargs):
-        observed.append((threading.get_ident(), sessions))
+        observed.append((threading.get_ident(), sessions, kwargs["exchange"]))
         loaded.set()
         assert release.wait(5)
         return {"loaded_sessions": 3, "session_dates": ["2026-10-12", "2026-10-14"],
@@ -253,6 +304,7 @@ def test_action_history_fetch_yields_to_tk_and_confirmation_can_cancel(ui_root, 
                                                        get_latest_quote=lambda *_: {}), raising=False)
     posted = []
     monkeypatch.setattr(ui_root, "_post_ui", posted.append, raising=False)
+    monkeypatch.setattr(ui_root, "_symbol_exchange", lambda symbol: "HOSE", raising=False)
     confirmations, applied = [], []
     def confirm(_title, message, **kwargs):
         assert threading.get_ident() == main_thread
@@ -267,7 +319,7 @@ def test_action_history_fetch_yields_to_tk_and_confirmation_can_cancel(ui_root, 
     try:
         DashboardActionsMixin._restart_position_metrics(ui_root, action, sessions=3)
         pump(ui_root, loaded.is_set)
-        assert len(observed) == 1 and observed[0][0] != main_thread and observed[0][1] == 3
+        assert len(observed) == 1 and observed[0][0] != main_thread and observed[0][1:] == (3, "HOSE")
         assert not posted and not confirmations and not applied
         release.set()
         pump(ui_root, lambda: bool(posted))
