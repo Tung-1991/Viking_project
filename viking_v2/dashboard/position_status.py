@@ -39,89 +39,89 @@ def settlement_note(mode, settle, *, now=None):
 def position_status(*, symbol, mode, quantity, sellable, settle, price, entry, sl_enabled, sl_price,
                     tp_price, tp_pct, params, decision, normal_enabled, indicator_enabled, paused,
                     protect_mode, normal_state, history_untrusted, pending_close=None, metrics=None, now=None):
+    from .position_em import Milestone, em_status
+
     details = decision.get("details") or {}
     pending = max(0, quantity - sellable)
-    availability = f"BÁN ĐƯỢC {sellable:,} CP" + (f" · CHỜ VỀ {pending:,} CP" if pending else "")
+    available = f"BÁN ĐƯỢC {sellable:,} CP" + (f" · CHỜ VỀ {pending:,} CP" if pending else "")
+    availability = available
     settlement = "Số cổ đã có thể bán theo snapshot tài khoản."
     if pending:
         note, settlement = settlement_note(mode, settle, now=now)
         availability += f" · {note}"
+    em = em_status(entry=entry, price=price, params=params, details=details, metrics=metrics or {}, ready=bool(decision),
+        normal_enabled=normal_enabled, indicator_enabled=indicator_enabled, normal_state=normal_state,
+        history_untrusted=history_untrusted, signal=str(decision.get("signal", "")).upper(), sl_price=sl_price)
     sl_hit = sl_enabled and price > 0 and sl_price > 0 and price <= sl_price + 1e-9
     tp_hit = tp_price > 0 and price + 1e-9 >= tp_price
     sl = "SL TẮT" if not sl_enabled else "SL ĐÃ CHẠM" if sl_hit else "SL BẬT"
     tp = "TP TẮT" if tp_price <= 0 else f"TP {'ĐÃ CHẠM' if tp_hit else 'CHỜ'} +{tp_pct:g}%"
-    policy = "ALERT" if paused else str(details.get("indicator_exit_policy", params.get("indicator_exit_policy", "ALERT"))).upper()
-    e_signal = indicator_enabled and str(decision.get("signal", "")).upper() == "SELL"
-    e = "E TẮT" if not indicator_enabled else f"E {policy}: {'có tín hiệu' if e_signal else 'chờ tín hiệu'}"
-    floor = _number(details.get("normal_trigger_price"))
-    stage = str(details.get("protection_stage", ""))
-    mfe = finite(details.get("normal_mfe_pct"))
-    metrics = metrics or {}
-    saved_mfe = finite(metrics.get("peak_profit_pct", metrics.get("mfe_pct")))
-    if mfe is None and saved_mfe is not None and metrics.get("price_history_verified") is True and not history_untrusted:
-        from ..rules.business import protect_peak_for_sellable_phase
-        mfe = protect_peak_for_sellable_phase(
-            saved_mfe,
-            _number(metrics.get("normal_sellable_peak_profit_pct")), _number(params.get("normal_arm_pct", 7)),
-            reset_applied=bool(params.get("normal_dynamic_enabled", True) and params.get("normal_t2_reset_enabled")
-                               and metrics.get("normal_t2_reset_applied")),
-        )
-    atr = _number(details.get("normal_atr_pct", details.get("atr14_daily_pct")))
-    protect_hit = bool(normal_enabled and not history_untrusted and not details.get("protection_history_unverified")
-                       and floor > 0 and price > 0
-                       and price <= floor and normal_state in {"ARM", "DYN", "ALERT", "T+2", "WAITING_SETTLEMENT"})
-    if not normal_enabled or protect_mode == "OFF":
-        protection = "PROTECT TẮT" if not normal_enabled else f"PROTECT {stage or 'nhánh hiện tại'} TẮT"
-    elif history_untrusted or details.get("protection_history_unverified"):
-        protection = f"PROTECT {protect_mode} · Chờ xác minh đỉnh/đáy; cần đo lại MAE/MFE"
-    elif normal_state == "DONE":
-        protection = f"PROTECT {protect_mode} · Đã hoàn tất lượt bảo vệ đã cấu hình"
-    elif normal_state == "REARM":
-        protection = f"PROTECT {protect_mode} · Chờ điều kiện lặp lại sau lần báo/bán trước"
-    elif protect_hit:
-        protection = f"PROTECT {stage or 'DYNAMIC'} {protect_mode} · Đã chạm {_display_price(floor)}"
-    elif normal_state == "ALERT":
-        protection = f"PROTECT {protect_mode} · Đã cảnh báo lượt này; chờ điều kiện tiếp"
-    elif normal_state in {"ARM", "DYN"} and floor > 0:
-        protection = f"PROTECT {'SAU ARM' if normal_state == 'ARM' else 'DYNAMIC'} {protect_mode} · Theo đỉnh, mốc bán {_display_price(floor)}"
-    elif not decision:
-        protection = f"PROTECT {protect_mode} · Chờ đánh giá vị thế mới từ daemon"
-    elif (params.get("normal_dynamic_enabled", True) and atr <= 0
-          and (params.get("normal_atr_activation_enabled", True)
-               or params.get("normal_atr_trail_enabled", True) and not params.get("normal_retention_enabled", True))):
-        protection = f"PROTECT {protect_mode} · Chờ ATR14 từ nến ngày đã đóng"
-    elif mfe is None:
-        protection = f"PROTECT {protect_mode} · Chưa có đỉnh theo dõi của vị thế"
-    else:
-        activation = _number(details.get("normal_activation_mfe_pct"), atr * _number(params.get("normal_atr_activation_multiplier", .55)))
-        arm = _number(params.get("normal_arm_pct", 7))
-        if params.get("normal_dynamic_enabled", True) and activation > 0:
-            condition = "Chưa START" if mfe + 1e-9 < activation else "Đạt START; chờ mốc bảo vệ"
-            protection = f"PROTECT {protect_mode} · {condition}: MFE {mfe:+.2f}% / cần +{activation:.2f}%"
-        else:
-            condition = "Chưa ARM" if mfe + 1e-9 < arm else "Đạt ARM; chờ mốc bảo vệ"
-            protection = f"PROTECT {protect_mode} · {condition}: MFE {mfe:+.2f}% / cần +{arm:g}%"
-    controls = f"{sl} · {tp} · {e}"
+    trigger, trigger_policy = "", "AUTO"
+    event = str(decision.get("event") or decision.get("reason") or "").upper()
+    protection_selected = bool(set(event.split("+")).intersection({
+        "NORMAL_PROTECTION", "DYNAMIC_PROTECTION", "PRICE_PROTECTION", "PROTECT_ALERT", "PROTECT_WAITING_SETTLEMENT"}))
+    if sl_hit:
+        trigger = f"SL ĐÃ CHẠM {_display_price(sl_price)}"
+    elif tp_hit:
+        trigger = f"TP ĐÃ CHẠM +{tp_pct:g}% @ {_display_price(tp_price)}"
+    elif em.e_hit and not (em.hit and (protection_selected or em.e_policy != "AUTO")):
+        trigger, trigger_policy = "E CÓ TÍN HIỆU EMA/RSI", em.e_policy
+    elif em.hit:
+        trigger = f"PROTECT {'SAU ARM' if em.stage == 'ARM' else 'DYNAMIC'} · Đã chạm {_display_price(em.floor)}"
+        trigger_policy = em.policy
     order = "Chưa có yêu cầu SELL đang chờ; tín hiệu không đồng nghĩa đã gửi hoặc đã khớp."
-    trigger = " / ".join(label for hit, label in ((sl_hit, "SL ĐÃ CHẠM"), (tp_hit, f"TP ĐÃ CHẠM +{tp_pct:g}%"),
-                         (e_signal, "E CÓ TÍN HIỆU"), (protect_hit, "PROTECT ĐÃ CHẠM")) if hit)
+    line1 = availability
     if pending_close is not None:
         state = pending_close.status.upper()
-        order = {"PENDING": "SELL đã xếp hàng, chưa gửi", "WAITING_TOKEN": "SELL chờ OTP, chưa gửi",
-                 "WAITING_SETTLEMENT": "SELL chờ cổ về, chưa gửi", "SENDING": "SELL đang gửi, chưa xác nhận broker",
-                 "WORKING": "SELL đã gửi, chờ khớp", "PARTIAL": "SELL đang khớp một phần",
-                 "UNKNOWN": "SELL chưa rõ kết quả, cần đối soát", "CANCEL_PENDING": "SELL chờ xác nhận hủy",
-                 "REPLACE_PENDING": "SELL chờ xác nhận sửa", "PAUSED": "SELL đang tạm dừng"}.get(state, f"SELL {state}")
-        order += f" · Khớp {pending_close.filled_quantity:,}/{pending_close.quantity:,} CP"
-        summary = order
-    elif paused:
-        summary = "TỰ BÁN TẠM DỪNG · " + (f"{trigger}; chưa tạo SELL" if trigger else "Chỉ báo; chưa tạo SELL")
-    elif trigger and sellable < 100:
-        summary = f"{trigger} · Chờ cổ bán được; chưa tạo SELL"
+        short, state_text = {
+            "PENDING": ("XẾP HÀNG", "SELL đã xếp hàng, chưa gửi"),
+            "WAITING_TOKEN": ("CHỜ OTP", "SELL chờ OTP, chưa gửi"),
+            "WAITING_SETTLEMENT": ("CHỜ CỔ", "SELL chờ cổ về, chưa gửi"),
+            "SENDING": ("ĐANG GỬI", "SELL đang gửi, chưa xác nhận broker"),
+            "WORKING": ("CHỜ KHỚP", "SELL đã gửi, chờ khớp"),
+            "PARTIAL": ("KHỚP MỘT PHẦN", "SELL đang khớp một phần"),
+            "UNKNOWN": ("CHƯA RÕ", "SELL chưa rõ kết quả, cần đối soát"),
+            "CANCEL_PENDING": ("CHỜ HỦY", "SELL chờ xác nhận hủy"),
+            "REPLACE_PENDING": ("CHỜ SỬA", "SELL chờ xác nhận sửa"),
+            "PAUSED": ("TẠM DỪNG", "SELL đang tạm dừng"),
+        }.get(state, (state, f"SELL {state}"))
+        progress = f"Khớp {pending_close.filled_quantity:,}/{pending_close.quantity:,} CP"
+        order = f"{state_text} · {progress}"
+        line1 = f"{available} · SELL {short} · {progress}"
+        reasons = set(str(pending_close.reason or "").upper().split("+"))
+        source = next((label for key, label in (("STOP_LOSS", "SL"), ("TAKE_PROFIT", "TP"),
+            ("INDICATOR_EXIT", "E"), ("SELL_SIGNAL", "E"), ("NORMAL_PROTECTION", "SAU ARM"),
+            ("DYNAMIC_PROTECTION", "DYNAMIC"), ("PRICE_PROTECTION", "PROTECT")) if key in reasons), "")
+        why = f"THOÁT DO {source}" if source else "BÁN TAY" if pending_close.source in {"MANUAL", "MANUAL_VIKING"} else "YÊU CẦU BÁN"
+        summary = f"{why} · {state_text}"
+        if paused:
+            summary += " · TỰ BÁN TẠM DỪNG"
     elif trigger:
-        summary = f"{trigger} · Chưa có yêu cầu SELL" + (" · Chỉ báo" if (e_signal and policy == "ALERT") or (protect_hit and protect_mode == "ALERT") else "")
+        if paused:
+            summary = f"{trigger} · TỰ BÁN TẠM DỪNG; chưa tạo SELL"
+        elif sellable < 100:
+            summary = f"{trigger} · Chờ cổ bán được; chưa tạo SELL"
+        elif trigger_policy == "ALERT":
+            summary = f"{trigger} · Chỉ báo theo ALERT; chưa tạo SELL"
+        else:
+            summary = f"{trigger} · Chưa có yêu cầu SELL"
     else:
-        summary = controls
+        milestones = list(em.milestones)
+        if sl_enabled and price > sl_price > 0:
+            gap = price - sl_price
+            milestones.append(Milestone("SL", sl_price, gap,
+                f"GẦN SL {_display_price(sl_price)} · Giá {_display_price(price)} · Còn {_display_price(gap)}đ/CP"))
+        if tp_price > price > 0:
+            gap = tp_price - price
+            milestones.append(Milestone("TP", tp_price, gap,
+                f"TP CHỜ +{tp_pct:g}% @ {_display_price(tp_price)} · Còn {_display_price(gap)}đ/CP"))
+        priority = {"SL": 0, "TP": 1, "DYNAMIC": 2, "ARM": 3, "START": 4}
+        nearest = min(milestones, key=lambda item: (item.distance, priority.get(item.name, 5))) if milestones and price > 0 else None
+        summary = em.focus if em.blocked or nearest is None else nearest.summary
+        if not normal_enabled and not indicator_enabled and not sl_enabled and tp_price <= 0:
+            summary = "CHƯA BẬT QUẢN LÝ THOÁT · Theo dõi vị thế"
+        if paused:
+            summary += " · TỰ BÁN TẠM DỪNG"
     sl_detail = f"SL {_display_price(sl_price)} · {sl}" if sl_enabled else sl
     tp_detail = f"TP {_display_price(tp_price)} · {tp}" if tp_price > 0 else tp
     if sl_enabled and not sl_hit and price > sl_price > 0:
@@ -139,13 +139,13 @@ def position_status(*, symbol, mode, quantity, sellable, settle, price, entry, s
         rsi, previous = finite(marks.get("rsi")), finite(marks.get("rsi_previous"))
         if rsi is not None and previous is not None:
             evidence.append(f"RSI{params.get('rsi_period', 14)}: {previous:.2f} → {rsi:.2f}")
-    if evidence:
-        e += " · " + " · ".join(evidence)
-    hints = [f"{symbol} · {mode} · GIỮ {quantity:,} CP · Giá {_display_price(price)} / vốn {_display_price(entry)}", availability, settlement,
-             order, f"{sl_detail} · {tp_detail}", e, protection]
+    hints = [f"{symbol} · {mode} · GIỮ {quantity:,} CP · Giá {_display_price(price)} / vốn {_display_price(entry)}",
+             availability, settlement, order, em.line, f"{sl_detail} · {tp_detail}", " · ".join(evidence), em.hint,
+             "Khoảng cách đến mốc dùng giá hiện tại; START/ARM được xác nhận bằng đỉnh MFE đã ghi nhận.",
+             "Các AUTO/ALERT ở dòng E/M là cấu hình từng nhánh; quyền tự bán và cổ bán được quyết định thực thi.", summary]
     if paused:
-        hints.insert(4, "TỰ BÁN TẠM DỪNG: SL/TP/PROTECT/E chỉ báo; muốn tự bán cần bật lại BOT vị thế.")
-    return "\n".join((availability, summary, protection)), "\n".join(hints)
+        hints.insert(4, "TỰ BÁN TẠM DỪNG: SL/TP/PROTECT/E chỉ báo; muốn tự bán cần bật lại BOT vị thế. Lệnh đã gửi vẫn cần đối soát/hủy riêng.")
+    return "\n".join((line1, em.line, summary)), "\n".join(filter(None, hints))
 
 
 def preview_position_status(view, symbol, status):

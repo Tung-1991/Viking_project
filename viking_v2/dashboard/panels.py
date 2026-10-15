@@ -3135,10 +3135,10 @@ class DashboardPanelsMixin:
         self._preview_position_status = preview_position_status(self, symbol, status)
         reason_font = ("Segoe UI", 9, "bold")
         if self._preview_position_status:
-            availability, execution, protection = self._preview_position_status[0].splitlines()
-            urgent = any(word in execution for word in ("SELL", "ĐÃ CHẠM", "TẠM DỪNG", "CÓ TÍN HIỆU"))
+            availability, _em, summary = self._preview_position_status[0].splitlines()
+            urgent = any(word in availability + " " + summary for word in ("SELL", "ĐÃ CHẠM", "TẠM DỪNG", "CÓ TÍN HIỆU"))
             compact = availability.replace("BÁN ĐƯỢC ", "Bán ").replace("CHỜ VỀ ", "Chờ ").replace("CÒN", "Còn")
-            reason_text = f"{compact}\n{execution if urgent else protection}"
+            reason_text = f"{compact}\n{summary}"
             reason_color = COL_WARN if urgent or "CHỜ VỀ" in availability else COL_PREVIEW_TEXT
             reason_font = ("Segoe UI", 11)
         self.preview_rule_reason.configure(text=reason_text, text_color=reason_color, font=reason_font)

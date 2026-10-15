@@ -13,8 +13,9 @@ COLUMN_HINTS = {
     "RR": "R là mức lỗ SL, E là mức lãi TP; tỷ lệ E/R theo cấu hình đang áp dụng.",
     "PnL_MAE_MFE": "PnL gồm lãi/lỗ đã bán và phần còn giữ; % trên vốn mua gốc.\n"
                    "MAE/MFE hiện % biến động, giá thấp/cao và số tiền trên phần cổ còn giữ, trước phí.",
-    "Status": "Trạng thái cổ về và quản lý tự bán. Di chuột vào dòng để xem chi tiết.\n"
-              "Tạm dừng tự bán chặn SL/TP/PROTECT/E mới; lệnh đã gửi broker cần hủy riêng.",
+    "Status": "Ba dòng: cổ/lệnh thực tế; ARM/DYNAMIC/E cùng mốc giá; điều kiện gần/chạm hoặc lý do đang chờ.\n"
+              "Đạt ARM thì DYNAMIC nhường SAU ARM. E theo EMA/RSI, không có giá kích hoạt cố định.\n"
+              "Tạm dừng tự bán chặn SELL tự động mới; lệnh đã gửi broker cần hủy riêng.",
     "Bot": "Bật: quản lý theo RULE. Alert: chỉ tín hiệu. Bán Alert: tạm dừng tự bán.\nBOT chung chỉ bật/tắt mua tự động mới.",
     "Override": "X vàng: có cấu hình riêng. Di chuột để xem những mục ghi đè; chuột phải để chỉnh.",
 }

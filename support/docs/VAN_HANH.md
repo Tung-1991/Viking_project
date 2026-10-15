@@ -137,6 +137,12 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   SL/TP hiện giá kích hoạt và tiền lãi/lỗ trên số cổ còn giữ, trước phí. MAE/MFE có
   %, giá và tiền tương đương; PnL là kết quả toàn deal gồm phần đã bán và còn giữ.
   Trạng thái hiện lịch cổ về, lý do PROTECT chờ và tiến độ SELL thực tế; PREVIEW dùng cùng dữ liệu.
+  Cột này giữ đúng ba dòng: **cổ/lệnh thực tế → ARM/DYNAMIC/E → tóm tắt hành động**.
+  ARM hiện giá cần đạt hoặc giá bảo vệ; DYNAMIC hiện START hoặc mốc chạm đang hiệu lực.
+  Khi đỉnh đã đạt ARM, DYNAMIC hiện NHƯỜNG ARM; SAU ARM dùng chính sách/lùi đỉnh riêng.
+  Dòng cuối ưu tiên lệnh bán đang xử lý và điều kiện đã chạm, sau đó tới lý do thiếu dữ liệu
+  hoặc mốc giá gần nhất. DYNAMIC hiện sàn giữ lãi/ATR trail; E chỉ hiện trạng thái EMA/RSI.
+  Mốc tính thử chưa được daemon xác nhận ghi PREVIEW, không được coi là đã kích hoạt hay đã tạo SELL.
   REAL chỉ đếm ngược khi API có giờ cụ thể; PAPER dùng giờ mô phỏng. Hết đếm ngược
   vẫn cần snapshot xác nhận cổ bán được. Hint ngắn vừa nội dung, chi tiết dài có cuộn.
 - Mặc định BUY xét EMA nhanh > EMA chậm và RSI hiện tại > RSI phiên trước theo các công tắc RULE.

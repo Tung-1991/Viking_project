@@ -135,7 +135,8 @@ def test_preview_and_table_share_position_status_without_changing_fills_or_buy_s
         elif state == "stale":
             assert "Chờ đánh giá" in result[0] and "Đã chạm" not in result[0]
         else:
-            assert "MFE +0.42%" in result[0] and "Chưa có đỉnh" not in result[0]
+            assert "MFE +0.42%" in result[1] and "Chưa START 10,128" in result[0]
+            assert "Chưa có đỉnh" not in result[0]
         assert preview_position_status(app, "AAA", status) is None
         assert (cycle.to_dict(), row, metrics, status, [item.to_dict() for item in items]) == before
     finally:

@@ -55,7 +55,8 @@ def test_countdown_uses_only_the_paper_schedule_or_a_provided_api_time(mode, set
     ({"normal_atr_pct": 2.32}, True, "cần đo lại MAE/MFE"),
 ])
 def test_protection_replaces_generic_wait_with_the_specific_missing_condition(details, unverified, expected):
-    text, _ = status(decision={"details": details}, history_untrusted=unverified)
+    # Keep the quote below START; a quote ahead of saved MFE has its own case.
+    text, _ = status(price=22.7, decision={"details": details}, history_untrusted=unverified)
     assert expected in text and "CHỜ DỮ LIỆU" not in text
 
 

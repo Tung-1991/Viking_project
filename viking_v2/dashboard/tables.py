@@ -70,7 +70,7 @@ RUNNING_SAMPLES = {
     "CostInfo": "MUA ~16.3K\nBÁN ~16.7K",
     "RR": "R 3.50% · E 7.00% · 1:2.00",
     "PnL_MAE_MFE": "PnL +300.0K (+2.21%)\nMAE -0.88% · 22,450 · -80.0K\nMFE +3.53% · 23,450 · +320.0K",
-    "Status": "BÁN ĐƯỢC 400 CP · CHỜ VỀ 100 CP · 15/10 13:00 · CÒN 1g20p\nSL BẬT · TP CHỜ +7% · E AUTO: chờ tín hiệu\nPROTECT AUTO · Chờ ATR14 từ nến ngày đã đóng",
+    "Status": "BÁN ĐƯỢC 400 CP · CHỜ VỀ 100 CP · 15/10 13:00 · CÒN 1g20p\nARM AUTO: CHỜ 76,398 · DYN ALERT: START 72,374 · E AUTO: CHỜ\nGIỮ 72%: 23,046 · ATR TRAIL: 22,769 · Cách mốc 54đ/CP",
 }
 RUNNING_ANCHORS = {
     "Ticket": "center",
