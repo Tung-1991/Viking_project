@@ -93,6 +93,17 @@ TELEGRAM_NOTIFICATION_DEFAULTS: dict[str, bool] = {
     "corporate_action": True,
     "external_sell": True,
     "system": True,
+    "protect_armed": True,
+    "dynamic_protect": True,
+    "exit_wait": True,
+    "sl_tp": True,
+    "sell_queued": True,
+}
+TELEGRAM_NOTIFICATION_GROUPS = {
+    "buy_signals": ("TÍN HIỆU MUA", ("blocked_buy", "buy_lost")),
+    "position_exits": ("QUẢN LÝ THOÁT", ("protect_armed", "protect", "dynamic_protect", "indicator_exit", "sl_tp", "exit_wait")),
+    "orders": ("LỆNH & KẾT QUẢ", ("buy_queued", "sell_queued", "closed", "external_sell")),
+    "operations": ("HỆ THỐNG & LỊCH", ("system", "corporate_action")),
 }
 TELEGRAM_COOLDOWN_DEFAULTS: dict[str, int] = {
     "protect": 0,
@@ -102,6 +113,8 @@ TELEGRAM_COOLDOWN_DEFAULTS: dict[str, int] = {
     "corporate_action": 1440,
     "external_sell": 0,
     "system": 30,
+    "dynamic_protect": 0,
+    "sl_tp": 0,
 }
 
 # Canonical operating defaults shared by LIVE, PAPER and backtest.  Keep the
@@ -383,6 +396,7 @@ class AppSettings:
     telegram_notifications: dict[str, bool] = field(
         default_factory=lambda: dict(TELEGRAM_NOTIFICATION_DEFAULTS)
     )
+    telegram_groups: dict[str, bool] = field(default_factory=lambda: {key: True for key in TELEGRAM_NOTIFICATION_GROUPS})
     telegram_cooldown_minutes: dict[str, int] = field(
         default_factory=lambda: dict(TELEGRAM_COOLDOWN_DEFAULTS)
     )
@@ -488,9 +502,12 @@ class AppSettings:
             if isinstance(self.telegram_notifications, dict) else {}
         )
         self.telegram_notifications = {
-            key: bool(raw_notifications.get(key, default))
+            key: bool(raw_notifications.get(key, raw_notifications.get("protect", default)
+                      if key in {"protect_armed", "dynamic_protect", "exit_wait", "sl_tp"} else default))
             for key, default in TELEGRAM_NOTIFICATION_DEFAULTS.items()
         }
+        groups = self.telegram_groups if isinstance(self.telegram_groups, dict) else {}
+        self.telegram_groups = {key: bool(groups.get(key, True)) for key in TELEGRAM_NOTIFICATION_GROUPS}
         raw_cooldowns = (
             self.telegram_cooldown_minutes
             if isinstance(self.telegram_cooldown_minutes, dict) else {}
@@ -499,7 +516,8 @@ class AppSettings:
         for key, default in TELEGRAM_COOLDOWN_DEFAULTS.items():
             try:
                 normalized_cooldowns[key] = max(
-                    0, min(10080, int(float(raw_cooldowns.get(key, default))))
+                    0, min(10080, int(float(raw_cooldowns.get(key, raw_cooldowns.get("protect", default)
+                        if key in {"dynamic_protect", "sl_tp"} else default))))
                 )
             except (TypeError, ValueError):
                 normalized_cooldowns[key] = default

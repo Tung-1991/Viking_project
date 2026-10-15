@@ -112,6 +112,13 @@ def with_history(source: dict, result: dict) -> dict:
 
 def view_counts(evidence, *, now, prior_sessions, holidays):
     from ..rules.ema_memory import memory_day_counts, memory_window_counts
+    if not prior_sessions and evidence.get("mode", "VA") == "VA":
+        # VA retains its observed crosses across sessions. A daily counter
+        # must not replace the evidence still used by the entry prerequisite.
+        started = watch_started(evidence, now=now)
+        return {"up": int(evidence.get("up_count", 0)), "down": int(evidence.get("down_count", 0)),
+                "start": started.date().isoformat() if started else "", "end": now.date().isoformat(),
+                "from": evidence.get("started_at", ""), "partial": False, "retained": True}
     history = evidence.get("ema_history_preview") or {}
     if prior_sessions and history.get("ready"):
         live = memory_day_counts(evidence, now=now)

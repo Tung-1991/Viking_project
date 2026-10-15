@@ -55,7 +55,10 @@ def prepared_settings(account_id: str) -> config.AppSettings:
             or not isinstance(preset["rule_parameters"], dict)
             or set(preset["rule_parameters"]) != PRESET_RULE_FIELDS
             or not isinstance(preset["telegram_notifications"], dict)
-            or set(preset["telegram_notifications"]) != set(config.TELEGRAM_NOTIFICATION_DEFAULTS)
+            or set(preset["telegram_notifications"]) not in (
+                set(config.TELEGRAM_NOTIFICATION_DEFAULTS),
+                {"buy_queued", "closed", "protect", "indicator_exit", "blocked_buy", "buy_lost",
+                 "corporate_action", "external_sell", "system"})
             or any(value is not True for value in preset["telegram_notifications"].values())
             or not isinstance(preset["telegram_cooldown_minutes"], dict)
             or preset["telegram_cooldown_minutes"] != {"blocked_buy": 60, "buy_lost": 60, "system": 30}
@@ -148,7 +151,7 @@ def main() -> int:
         print("[PROTECT] ARM AUTO / DYNAMIC ALERT / E AUTO; khong thay doi cong tac bao ve tren trade.")
         print("[ENTRY] VA: QUET QUA KHU OFF (0P); cat len sau khi theo doi, giu toi khi dung.")
         print("[ENTRY] Ban dau EMA nhanh < cham: mot lan cat len la du; RSI/gio mua/von van phai dat.")
-        print("[PREVIEW] 0P: chi hom nay; XP: hom nay + X phien truoc. X=3 chi dung khi doi mode/ON quet truoc.")
+        print("[PREVIEW] VA: so cat tu luc theo doi, giu qua ngay; XP: hom nay + X phien truoc. X=3 dung khi doi mode/ON quet truoc.")
         print(f"[KL] AUTO tinh so CP theo ngan sach; preset nay cap IDC {caps['IDC']:g} trieu.")
         print("[PROTECT] ARM AUTO: ban 33% GOC, LAP ON. DYNAMIC ALERT: chi bao, khong ban. E AUTO: ban 100%.")
         print("[DYNAMIC] Giu 72% lai dinh = cho lai giam 28% tu dinh; ATR van dung muc bao ve cao hon.")

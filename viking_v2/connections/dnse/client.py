@@ -174,6 +174,7 @@ class DNSEClient:
         with self._lock:
             self._health["total_requests"] += 1
             self._health["last_endpoint"] = family
+            self._health["last_request_at"] = self._now()
             self._health["last_status"] = status
             self._health["last_error"] = safe_detail(
                 error, secrets=(self.api_key, self.api_secret, self.trading_token),

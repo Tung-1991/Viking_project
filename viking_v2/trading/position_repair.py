@@ -62,7 +62,7 @@ def restart_price_observations(trades, rules, queue, trade_id: str, quote: dict,
                 "bar_count", "ranges", "resolution", "entry_minute_omitted",
             )})
             evidence.update(source="OPERATOR_DNSE_OHLC_REBUILD", coverage="HISTORICAL_SESSIONS",
-                            high=high, low=low)
+                            high=high, low=low, pending_sessions=list(history.get("pending_sessions", [])))
         _, cancelled, broker_pending = pause_position_auto_sell(trades, queue, trade_id, enabled=False)
         broker_pending = list(dict.fromkeys([*broker_pending, *[
             item.id for item in queue.list_all()

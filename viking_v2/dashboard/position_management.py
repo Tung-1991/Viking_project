@@ -254,15 +254,20 @@ def _populate_position_management(app, action: dict, top, cycle, tick) -> None:
         detail_hint = lambda stage=stage: rule_summaries()[stage] + "\nNguồn: RULE → E/M.\n" + policy_hint
         hint(detail, detail_hint)
         hint_icon(group, detail_hint).grid(row=0, column=2)
-    status = ctk.CTkLabel(top, text="", height=20, font=("Segoe UI", 12), text_color="#F59E0B", anchor="w")
+    status = ctk.CTkLabel(top, text="", width=1, height=20, font=("Segoe UI", 12), text_color="#F59E0B",
+                         anchor="w", justify="left", wraplength=600)
     status.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(2, 0))
     status.grid_remove()
+    history_text, history_color = "", "#F59E0B"
     def show_status(text, color="#F59E0B"):
         status.configure(text=text, text_color=color)
         if text:
             status.grid()
         else:
             status.grid_remove()
+        request_layout = getattr(top, "_viking_request_layout", None)
+        if request_layout is not None:
+            request_layout()
     def target(raw, stop):
         text = str(raw).strip().replace(",", "")
         if not text or text.upper() == "AUTO":
@@ -292,7 +297,7 @@ def _populate_position_management(app, action: dict, top, cycle, tick) -> None:
                 entries[label].configure(text_color="#F59E0B" if explicit else "#E8EBEF",
                                          border_color="#F59E0B" if explicit else "#565B5E")
                 switches[label].configure(text_color="#F59E0B" if changed else "#22C55E" if label == "TP" else "#EF4444")
-            show_status("")
+            show_status(history_text, history_color)
         except (ValueError, TypeError, OverflowError):
             show_status("TP hoặc SL không hợp lệ.")
     for label in entries:
@@ -336,7 +341,6 @@ def _populate_position_management(app, action: dict, top, cycle, tick) -> None:
             tactic = "IND_EXIT" if stage == "E" else "NORMAL"
             variable.set("Theo RULE" if tactic in modes else "OFF")
         refresh()
-        show_status("Theo RULE · BOT Bật · Bấm LƯU để áp dụng.", "#C5CBD4")
     def save():
         nonlocal cycle
         try:
@@ -410,6 +414,19 @@ def _populate_position_management(app, action: dict, top, cycle, tick) -> None:
     if cycle:
         repair_row = ctk.CTkFrame(footer, fg_color="transparent", height=1)
         repair_row.grid(row=0, column=0, sticky="w")
+        def history_progress(text, state):
+            nonlocal cycle, history_text, history_color
+            if not top.winfo_exists():
+                return
+            history_text = text
+            history_color = "#22C55E" if state == "complete" else "#EF4444" if state == "error" else "#F59E0B"
+            busy = state == "loading"
+            repair.configure(text="Đang tải…" if busy else "Đo lại MAE/MFE", state="disabled" if busy else "normal")
+            session_entry.configure(state="disabled" if busy else "normal")
+            if state in {"partial", "complete", "blocked"}:
+                cycle = app.trade_state.get(cycle.id) or cycle
+                bot_on.set(cycle.bot_trade_enabled and cycle.auto_sell_enabled)
+            show_status(history_text, history_color)
         def reload_history():
             from ..trading.position_history import session_count
             try:
@@ -417,8 +434,8 @@ def _populate_position_management(app, action: dict, top, cycle, tick) -> None:
             except ValueError as exc:
                 show_status(str(exc))
                 return
-            top.destroy()
-            app._restart_position_metrics({**action, "trade_id": cycle.id}, sessions=count)
+            app._restart_position_metrics({**action, "trade_id": cycle.id}, sessions=count,
+                                          on_progress=history_progress, parent=top)
         repair = ctk.CTkButton(repair_row, text="Đo lại MAE/MFE", width=114, height=28, font=("Segoe UI", 11), fg_color="#3A3F47",
                               command=reload_history)
         repair.pack(side="left")
@@ -431,22 +448,38 @@ def _populate_position_management(app, action: dict, top, cycle, tick) -> None:
                         "Bỏ nến phút chứa thời điểm mua. Giữ nguyên cổ/fill; tự bán tạm dừng sau xác nhận.")
         hint(repair, history_hint)
         hint(session_entry, history_hint)
+        def detach_history(event):
+            if event.widget is not top:
+                return
+            requests = getattr(app, "_position_history_requests", {})
+            request = requests.get(cycle.id)
+            if request and request.get("on_progress") is history_progress:
+                request.update(on_progress=None, parent=None)
+                if not request.get("accepted"):
+                    requests.pop(cycle.id, None)
+        top.bind("<Destroy>", detach_history, add="+")
     reset = ctk.CTkButton(footer, text="VỀ RULE", width=90, height=28, font=("Segoe UI", 11), fg_color="#3A3F47", command=reset_to_rule)
     reset.grid(row=0, column=1, sticky="w", padx=(6, 8))
-    hint(reset, "Bỏ ghi đè: TP/SL AUTO; bật/tắt theo RULE → THỰC THI, chế độ theo RULE → E/M.\n"
-               "BOT vị thế trở về Bật. Chỉ áp dụng khi bấm LƯU. Giữ nguyên cổ, fill và MAE/MFE.")
     ctk.CTkButton(footer, text="LƯU", width=90, height=28, font=("Segoe UI", 12, "bold"), fg_color="#16A34A", command=save).grid(row=0, column=2)
     ctk.CTkButton(footer, text="ĐÓNG", width=80, height=28, font=("Segoe UI", 11), fg_color="#3A3F47", command=top.destroy).grid(row=0, column=3, padx=(8, 0))
-    def fit_height(_event=None):
+    layout_job = None
+    def fit_height():
+        nonlocal layout_job
+        layout_job = None
         scale = top._get_window_scaling()
         minimum_width = max(620, math.ceil(top.winfo_reqwidth() / scale))
         width = max(round(top._current_width), minimum_width)
         height = math.ceil(top.winfo_reqheight() / scale)
-        top.minsize(minimum_width, 1)
+        top.minsize(minimum_width, height)
         if width != round(top._current_width) or height != round(top._current_height):
             top.geometry(f"{width}x{height}")
-    position_panel.bind("<Configure>", fit_height, add="+")
-    exit_panel.bind("<Configure>", fit_height, add="+")
-    footer.bind("<Configure>", fit_height, add="+")
-    layout_job = top.after_idle(fit_height)
-    top.bind("<Destroy>", lambda event: top.after_cancel(layout_job) if event.widget is top else None, add="+")
+    def request_layout(_event=None):
+        nonlocal layout_job
+        if layout_job is None:
+            layout_job = top.after_idle(fit_height)
+    top._viking_request_layout = request_layout
+    for widget in (position_panel, exit_panel, status, footer):
+        widget.bind("<Configure>", request_layout, add="+")
+    request_layout()
+    top.bind("<Destroy>", lambda event: top.after_cancel(layout_job)
+             if event.widget is top and layout_job is not None else None, add="+")

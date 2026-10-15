@@ -24,6 +24,9 @@ def position_basis(cycle) -> dict:
 
 def _bars(payload, *, minute=False) -> list[dict]:
     keys = ("t", "o", "h", "l", "c", "v")
+    if (isinstance(payload, dict) and payload.get("boardId", "G1") == "G1"
+            and payload.get("s") == "no_data" and not payload.get("t")):
+        return []
     if (not isinstance(payload, dict) or payload.get("boardId", "G1") != "G1"
             or str(payload.get("s", "ok")).lower() not in {"ok", "no_data"}
             or any(not isinstance(payload.get(key), list) for key in keys)
@@ -69,19 +72,30 @@ def load_position_history(client, cycle, sessions=3, *, now=None, holidays=(), e
     if not math.isfinite(cycle.opened_at) or not 0 < cycle.opened_at <= now.timestamp():
         raise ValueError("Chưa có thời điểm mua hợp lệ.")
     entered = datetime.fromtimestamp(cycle.opened_at, VN_TZ)
-    working_dates = client.get_working_dates()
-    if not working_dates:
-        raise ValueError("Chưa tải được lịch phiên giao dịch; giữ nguyên MAE/MFE cũ.")
+    # /market/working-dates describes the year FROM today; it need not
+    # contain historical sessions. Never treat that forward schedule as a
+    # complete historical calendar, or keep retrying it instead of OHLC.
+    working_dates = client.get_working_dates(force=True)
     end_day = now.date() if now.hour >= 9 else now.date() - timedelta(days=1)
     dates = sorted({datetime.strptime(str(day)[:10], "%Y-%m-%d").date() for day in working_dates})
     dates = [day for day in dates if day <= end_day and is_working_day(day, holidays=holidays)]
+    if len(dates) < count and (not dates or entered.date() < dates[0]):
+        # Index bars establish actual market sessions, including holiday gaps.
+        # Use the market index rather than the held stock: a suspended stock
+        # must not silently turn a missing session into an older one.
+        start_day = end_day - timedelta(days=max(45, count * 4 + 15))
+        index_left = datetime.combine(start_day, datetime.min.time(), VN_TZ)
+        index_rows = _bars(client.get_ohlc("VNINDEX", "1D", int(index_left.timestamp()), int(now.timestamp())))
+        observed = {datetime.fromtimestamp(row["time"], VN_TZ).date() for row in index_rows
+                    if index_left.timestamp() <= row["time"] <= now.timestamp()}
+        dates = sorted(set(dates) | {day for day in observed if day <= end_day and is_working_day(day, holidays=holidays)})
     if not dates:
-        raise ValueError("Lịch phiên chưa bao phủ khoảng cần tải.")
+        raise ValueError("Chưa có nến ngày VNINDEX để xác nhận các phiên cũ; giữ nguyên MAE/MFE.")
     chosen = [day for day in dates[-count:] if day >= entered.date()]
     if not chosen:
         raise ValueError("Chưa có phiên giao dịch kể từ lúc mua.")
     if len(dates) < count and entered.date() < dates[0]:
-        raise ValueError("Lịch phiên chưa đủ số phiên yêu cầu.")
+        raise ValueError(f"Nến ngày mới xác nhận {len(dates)}/{count} phiên đến {dates[-1]:%d/%m}; chờ bổ sung lịch sử.")
     left = datetime.combine(chosen[0], datetime.min.time(), VN_TZ)
     daily_rows = _bars(client.get_ohlc(cycle.symbol, "1D", int(left.timestamp()), int(now.timestamp())))
     daily = {datetime.fromtimestamp(row["time"], VN_TZ).date(): row for row in daily_rows}
@@ -89,6 +103,7 @@ def load_position_history(client, cycle, sessions=3, *, now=None, holidays=(), e
         raise ValueError("Lịch phiên chưa bao phủ dữ liệu nến mới nhất.")
     all_rows = []
     ranges = []
+    pending_sessions = []
     for day in chosen:
         midnight = datetime.combine(day, datetime.min.time(), VN_TZ)
         # Ceil to the first minute entirely after purchase, including exact boundaries.
@@ -98,9 +113,12 @@ def load_position_history(client, cycle, sessions=3, *, now=None, holidays=(), e
             raise ValueError("Chưa có nến phút sau thời điểm mua; thử lại sau.")
         rows = _bars(client.get_ohlc(cycle.symbol, "1", start, end), minute=True)
         rows = [row for row in rows if start <= row["time"] <= end]
-        if not rows:
-            raise ValueError(f"Thiếu nến phút phiên {day:%d/%m/%Y}; giữ nguyên MAE/MFE cũ.")
         completed = day < now.date() or now.hour * 60 + now.minute >= close_minute
+        if not rows:
+            if not completed:
+                pending_sessions.append(day.isoformat())
+                continue
+            raise ValueError(f"Thiếu nến phút phiên {day:%d/%m/%Y}; giữ nguyên MAE/MFE cũ.")
         if completed and start == int(midnight.timestamp()):
             reference = daily.get(day)
             high, low = max(row["high"] for row in rows), min(row["low"] for row in rows)
@@ -109,10 +127,13 @@ def load_position_history(client, cycle, sessions=3, *, now=None, holidays=(), e
                 raise ValueError(f"Lịch sử phút phiên {day:%d/%m/%Y} chưa khớp đỉnh/đáy nến ngày.")
         all_rows.extend(rows)
         ranges.append({"day": day.isoformat(), "from": start, "to": end, "bars": len(rows)})
+    if not all_rows:
+        raise ValueError("Chưa có nến phút sau lúc mua; chờ API cập nhật và thử lại.")
     return {
         "symbol": cycle.symbol, "basis": position_basis(cycle),
         "high": max(row["high"] for row in all_rows), "low": min(row["low"] for row in all_rows),
-        "requested_sessions": count, "loaded_sessions": len(chosen), "session_dates": [day.isoformat() for day in chosen],
+        "requested_sessions": count, "loaded_sessions": len(ranges), "session_dates": [row["day"] for row in ranges],
+        "pending_sessions": pending_sessions,
         "started_at": ranges[0]["from"], "ended_at": ranges[-1]["to"],
         "bar_count": len(all_rows), "ranges": ranges, "resolution": "1",
         "entry_minute_omitted": cycle.opened_at % 60 != 0 and entered.date() in chosen,

@@ -12,6 +12,8 @@
   Giữ PC/VM bật, không sleep/logoff. Ngắt RDP không phải đăng xuất.
 - **5 Chẩn đoán → 2** mở thư mục log bằng Explorer; nhiều tài khoản thì chọn đúng ID.
   Dùng được khi app đang chạy hoặc đã dừng, không cần OTP/venv, không sửa dữ liệu.
+- Trong app, bấm **HEALTH → MỞ LOG** để xem log đúng tài khoản. Tin lỗi Telegram
+  ghi giờ, API gây lỗi và đường dẫn; đối chiếu `daemon.log` / `ui.log` theo giờ đó.
 - **5 → 1** kiểm tra môi trường; **5 → 3** kiểm tra cấu trúc dữ liệu local, chỉ đọc.
 
 ## Trước khi bật BUY BOT
@@ -50,6 +52,10 @@ Các phiên kết thúc nằm trọn trong khoảng tải được đối chiế
 thiếu nến hoặc dữ liệu không khớp thì giữ số cũ. Xác nhận sẽ lưu số cũ đối chiếu,
 giữ nguyên cổ/fill, tạm dừng tự bán rồi tiếp tục theo dõi MAE/MFE trên nền lịch sử vừa tải.
 Hover MAE/MFE xem khoảng đã tải; muốn tự bán lại, bật BOT vị thế và **LƯU**.
+Popup giữ mở và báo tiến độ; thiếu dữ liệu tự tải lại sau 60 giây. Nếu hôm nay chưa có
+nến, app có thể dựng các phiên trước sau xác nhận rồi tự bổ sung phiên hiện tại.
+Lịch DNSE từ hiện tại không đủ để đếm phiên cũ thì dùng ngày có nến VNINDEX làm lịch;
+đỉnh/đáy vẫn lấy nến của chính mã đang đo, không dùng giá VNINDEX.
 
 ## Bộ thử MSN / CTS / HDB / IDC
 
@@ -61,7 +67,8 @@ Telegram tổng/token/chat, chu kỳ EMA/RSI, giờ mua, các mốc SL/TP/PROTEC
 Preset bật yêu cầu cắt lên, chọn ∞ VA; đặt ARM và DYNAMIC **33% GỐC, REPEAT ON** riêng;
 **ARM AUTO, DYNAMIC ALERT, E AUTO**; bật E mặc định cho BOT.
 Không tự bật PROTECT trên giao dịch đang giữ.
-Preset bật cả 9 loại tin Telegram, BUY gửi ngay, BUY kỹ thuật/MẤT BUY giãn 60 phút, hệ thống 30 phút.
+Preset bật các loại tin Telegram gốc của bộ thử, BUY gửi ngay, BUY kỹ thuật/MẤT BUY giãn 60 phút, hệ thống 30 phút.
+Các công tắc nhóm và lựa chọn riêng của nhánh tin mới giữ theo máy.
 Không tự bật công tắc Telegram tổng nếu máy đang OFF; các khoảng giãn khác giữ lựa chọn tại máy.
 Backup setting cũ nằm cạnh `settings.json` (`settings.before-va-*.bak`), không lên Git.
 Preset bật **TRACE ON, 14:00–14:30, mỗi 2 phút** cho **MSN / CTS / HDB / IDC**.
@@ -101,9 +108,9 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
 
 ## Khi đang chạy
 
-- BOT OFF / đổi PAPER **không dừng quản lý vị thế REAL đã mở**. SELL đang quản lý và
+- MUA AUTO OFF / đổi PAPER **không dừng quản lý vị thế REAL đã mở**. SELL đang quản lý và
   MANUAL vẫn chạy. Muốn dừng app thì đóng app.
-- BOT ON cho phép BUY tự động ở sổ đang chọn khi đủ tín hiệu, vốn và điều kiện an toàn.
+- MUA AUTO ON cho phép BUY tự động ở sổ đang chọn khi đủ tín hiệu, vốn và điều kiện an toàn.
   OFF vẫn tính chỉ báo/lưu lịch sử; tin BUY không thực hiện chỉ gửi nếu bật TÍN HIỆU.
 - SL → TP → E AUTO → PROTECT là thứ tự ưu tiên; E AUTO bán 100% cổ còn lại.
   ARM và DYNAMIC có AUTO/ALERT, % bán, GỐC/CÒN LẠI, REPEAT riêng.
@@ -126,6 +133,12 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   `BÁN ĐƯỢC 400 CP · CHỜ VỀ 100 CP` nghĩa là đã nắm giữ 500 CP, khác với 100 chưa khớp.
   Nút ✖ trên lệnh con yêu cầu hủy phần chưa khớp; cần token REAL và xác nhận của broker.
   Làm mới bảng giữ trạng thái bung/gọn và lệnh đang chọn.
+  STT `1.1` là lệnh con của vị thế `1`. BOT và Override có cột riêng; `X` là cấu hình riêng.
+  SL/TP hiện giá kích hoạt và tiền lãi/lỗ trên số cổ còn giữ, trước phí. MAE/MFE có
+  %, giá và tiền tương đương; PnL là kết quả toàn deal gồm phần đã bán và còn giữ.
+  Trạng thái hiện lịch cổ về, lý do PROTECT chờ và tiến độ SELL thực tế; PREVIEW dùng cùng dữ liệu.
+  REAL chỉ đếm ngược khi API có giờ cụ thể; PAPER dùng giờ mô phỏng. Hết đếm ngược
+  vẫn cần snapshot xác nhận cổ bán được. Hint ngắn vừa nội dung, chi tiết dài có cuộn.
 - Mặc định BUY xét EMA nhanh > EMA chậm và RSI hiện tại > RSI phiên trước theo các công tắc RULE.
   RSI hiện tại là nến 1D tạm tính từ giá mới; mốc so sánh là nến 1D phiên trước, không phải tick trước.
   **BUY CẦN EMA CẮT LÊN** ON: cần lần cắt lên hợp lệ theo mode bên dưới.
@@ -166,8 +179,9 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Tin BUY kỹ thuật/MẤT BUY chỉ đánh dấu đã gửi sau khi thành công. Tin lỗi lưu trên đĩa,
   thử lại sau 60 giây với số liệu gốc kể cả sau restart; tắt nhóm/tổng hoặc đổi nơi nhận hủy tin chờ.
   0 phút vẫn chống tin trùng. 1 TIN/VỊ THẾ = tổng kết khi BOT bán hết, không phải mỗi lần khớp.
-  Mặc định cả 9 loại tin ON: BUY đã xếp, BUY EMA/RSI, MẤT BUY, PROTECT, E ALERT, BOT đã đóng,
-  lịch nghỉ/chốt quyền, SELL trên DNSE app, hệ thống. BUY đã xếp mặc định GỬI NGAY;
+  Có bốn nhóm: **TÍN HIỆU MUA**, **QUẢN LÝ THOÁT**, **LỆNH & KẾT QUẢ**, **HỆ THỐNG & LỊCH**;
+  mỗi nhóm có công tắc tổng và các lựa chọn con. Mặc định các loại tin ON;
+  nâng cấp giữ lựa chọn đã lưu. BUY đã xếp mặc định GỬI NGAY;
   có thể đổi GOM TIN (mặc định nhớ 30 phút, chỉnh 1–120). Cửa sổ gom tính từ lệnh đầu tiên;
   không có lệnh mới thì không có tin gom mới, không trì hoãn đặt lệnh.
   Trong cùng popup **KẾT NỐI → TELEGRAM**, bật **GOM CẢ BUY KỸ THUẬT / MẤT BUY**
@@ -181,6 +195,11 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   tin thử lại vẫn riêng từng lệnh, chỉ thử lại tin thất bại. Tắt nhóm/Telegram hoặc đổi nơi gửi hủy tin chờ.
   Giãn mặc định: BUY EMA/RSI 60 phút, MẤT BUY 60, E ALERT 30, hệ thống 30, lịch 1440;
   PROTECT/SELL ngoài app 0 phút nhưng vẫn chống trùng sự kiện. CLOSED 1 tin/vị thế đã bán hết.
+  PROTECT ARM/DYNAMIC/E/SL/TP dùng cùng cooldown với tin chờ cổ về/tạm dừng của đúng
+  nhánh và vị thế. 0 nghĩa là không giãn thời gian, vẫn có thể báo sự kiện mới.
+  Đổi MAX LỆNH không gửi tin; còn lượt và xuất hiện tín hiệu BUY mới thì báo như cấu hình.
+  BUY kỹ thuật là tín hiệu, BUY xếp lệnh là yêu cầu đã tạo. Cùng lượt đã xếp BUY thì gộp
+  thông tin vào tin xếp lệnh. SELL chỉ báo/chờ cổ về không giảm số cổ hoặc mở lại lượt mua.
   BUY EMA/RSI phải đạt các chỉ báo đang bật; thông báo không bỏ qua RSI. Nó độc lập với giờ/khóa giao dịch.
   MẤT BUY chỉ gửi khi đã báo BUY, điều kiện mất và chưa xếp lệnh; thiếu dữ liệu không coi là mất BUY.
   BUY kỹ thuật/MẤT BUY chỉ ghi nhận khi mã đang ở ATO, khớp liên tục hoặc ATC, theo sàn và lịch giao dịch.
@@ -190,7 +209,7 @@ VỐN RIÊNG OFF dùng ngân sách P1 / số mã BOT như cũ, bỏ qua cap/% nh
   Tin gom từ bản cũ chưa lưu giờ ghi nhận bị bỏ vì không xác định được giờ của số liệu cuối cùng.
   Quyền đặt lệnh ATO/ATC vẫn theo công tắc thực thi riêng. Tin lệnh đã xếp/CLOSED/PROTECT/E/hệ thống có luồng riêng.
   E AUTO không gửi tin E ALERT; khi bán hết có tin BOT đã đóng. Telegram cần bật tổng, token/chat đúng.
-  Cập nhật Git giữ các lựa chọn OFF đã lưu; nạp lại preset VA là thao tác chủ động bật cả 9 loại tin.
+  Cập nhật Git giữ các lựa chọn OFF đã lưu; nạp lại preset VA chủ động bật các loại tin gốc trong preset.
 
 ## UI khi vào lại máy ảo / remote
 

@@ -26,18 +26,19 @@ class HistoryClient:
     def __init__(self):
         self.calls = []
         self.calendar = ["2026-10-09", "2026-10-12", "2026-10-13", "2026-10-14"]
+        self.index_days = (9, 12, 13, 14)
         self.days = {day: payload([(stamp(day), 23, 24, 21, 23, 100)]) for day in (9, 12, 13, 14)}
         self.minutes = {day: payload([(stamp(day, "09:30:00"), 23, 24, 21, 23, 100)])
                         for day in (9, 12, 13, 14)}
 
-    def get_working_dates(self):
+    def get_working_dates(self, *, force=False):
         return self.calendar
 
     def get_ohlc(self, symbol, resolution, left, right):
         self.calls.append((symbol, resolution, left, right))
         if resolution == "1D":
             rows = []
-            for day in (9, 12, 13, 14):
+            for day in self.index_days if symbol == "VNINDEX" else (9, 12, 13, 14):
                 if left <= stamp(day) <= right:
                     data = self.days[day]
                     rows.extend(zip(*(data[key] for key in ("t", "o", "h", "l", "c", "v"))))
@@ -174,6 +175,7 @@ def test_missing_or_unreliable_history_changes_no_account_state(tmp_path, failur
     client = HistoryClient()
     if failure == "calendar":
         client.calendar = []
+        client.index_days = ()
     elif failure == "empty_day":
         client.minutes[13] = payload([])
     elif failure == "truncated_high":
@@ -245,7 +247,13 @@ def test_popup_validates_and_forwards_session_count_without_saving_controls(ui_r
         count.delete(0, "end")
         count.insert(0, "5")
         repair.invoke()
-        assert calls[0][1] == {"sessions": 5}
+        assert calls[0][1]["sessions"] == 5 and calls[0][1]["parent"] is top
+        assert top.winfo_exists() and callable(calls[0][1]["on_progress"])
+        calls[0][1]["on_progress"]("Đang tải lịch sử MAE/MFE 5 phiên…", "loading")
+        assert repair.cget("state") == "disabled"
+        calls[0][1]["on_progress"]("Lịch DNSE mới có 2/5 phiên · Tự thử lại sau 60 giây.", "waiting")
+        assert repair.cget("state") == "normal"
+        assert any(isinstance(w, ctk.CTkLabel) and "2/5 phiên" in w.cget("text") for w in _widgets(top))
         assert calls[0][0]["trade_id"] == action["trade_id"]
         assert app.trade_state.get(action["trade_id"]).to_dict() == before
     finally:
@@ -298,7 +306,7 @@ def test_action_history_fetch_yields_to_tk_and_confirmation_can_cancel(ui_root, 
         loaded.set()
         assert release.wait(5)
         return {"loaded_sessions": 3, "session_dates": ["2026-10-12", "2026-10-14"],
-                "high": 110, "low": 90, "entry_minute_omitted": False}
+                "high": 110, "low": 90, "entry_minute_omitted": False, "basis": module.position_basis(cycle)}
     monkeypatch.setattr(module, "load_position_history", read)
     monkeypatch.setattr(ui_root, "real", SimpleNamespace(get_latest_trade=lambda *_: {"boardId": "G1", "matchPrice": 100},
                                                        get_latest_quote=lambda *_: {}), raising=False)

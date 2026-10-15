@@ -15,7 +15,7 @@ import time
 import tkinter as tk
 import uuid
 from tkinter import messagebox, ttk
-from typing import Any
+from typing import Any, Callable
 
 import customtkinter as ctk
 
@@ -970,11 +970,11 @@ class DashboardActionsMixin:
                 # have the rule state/mode widget wired yet.
                 pause_active = False
         if pause_active:
-            text, colour, hover = "BOT · PAUSE", COL_WARN, "#D97706"
+            text, colour, hover = "MUA AUTO · CHỜ", COL_WARN, "#D97706"
         elif enabled:
-            text, colour, hover = "BOT · ON", COL_GREEN, "#16A34A"
+            text, colour, hover = "MUA AUTO · ON", COL_GREEN, "#16A34A"
         else:
-            text, colour, hover = "BOT · OFF", COL_GRAY, "#4B515B"
+            text, colour, hover = "MUA AUTO · OFF", COL_GRAY, "#4B515B"
         self.bot_button.configure(
             text=text,
             fg_color=colour,
@@ -1189,7 +1189,12 @@ class DashboardActionsMixin:
 
     def _telegram_notification_enabled(self, key: str) -> bool:
         values = getattr(self.settings, "telegram_notifications", {})
-        return bool(values.get(str(key or ""), False)) if isinstance(values, dict) else False
+        groups = getattr(self.settings, "telegram_groups", {})
+        for group, (_, keys) in config.TELEGRAM_NOTIFICATION_GROUPS.items():
+            if key in keys and isinstance(groups, dict) and not groups.get(group, True):
+                return False
+        inherited = "protect" if key in {"protect_armed", "dynamic_protect", "exit_wait", "sl_tp"} else key
+        return bool(values.get(key, values.get(inherited, False))) if isinstance(values, dict) else False
 
     def _technical_telegram_batch_enabled(self) -> bool:
         return bool(getattr(self.settings, "telegram_batch_technical_signals", False)
@@ -1200,7 +1205,8 @@ class DashboardActionsMixin:
         if not isinstance(values, dict):
             return 0.0
         try:
-            return max(0.0, float(values.get(str(key or ""), 0.0) or 0.0) * 60.0)
+            fallback = values.get("protect", 0.0) if key in {"dynamic_protect", "sl_tp"} else 0.0
+            return max(0.0, float(values.get(str(key or ""), fallback) or 0.0) * 60.0)
         except (TypeError, ValueError):
             return 0.0
 
@@ -1232,18 +1238,22 @@ class DashboardActionsMixin:
         service = self.telegram
         details = decision.details if isinstance(decision.details, dict) else {}
         for notice in details.get("exit_wait_notices") or []:
-            category = "indicator_exit" if notice.get("kind") == "E" else "protect"
+            kind = notice.get("kind", "")
+            category = ("indicator_exit" if kind == "E" else "dynamic_protect" if kind == "PROTECT DYN"
+                        else "sl_tp" if kind in {"STOP_LOSS", "TAKE_PROFIT"} else "protect")
+            family = kind.removeprefix("PROTECT ")
             if (service and self.settings.telegram_enabled
-                    and DashboardActionsMixin._telegram_notification_enabled(self, category)):
+                    and DashboardActionsMixin._telegram_notification_enabled(self, category)
+                    and DashboardActionsMixin._telegram_notification_enabled(self, "exit_wait")):
                 DashboardActionsMixin._queue_telegram_notice(
-                    self, service, category, f"EXIT_WAIT|{notice['kind']}|{execution_mode}", symbol,
+                    self, service, category, f"EXIT|{family}|{execution_mode}|{details.get('trade_id', '')}", symbol,
                     notice["occurrence"], {**notice, "notice_kind": "EXIT_WAIT"})
         arm_notice = details.get("protect_arm_notice")
         if (isinstance(arm_notice, dict) and service and self.settings.telegram_enabled
-                and DashboardActionsMixin._telegram_notification_enabled(self, "protect")):
+                and DashboardActionsMixin._telegram_notification_enabled(self, "protect_armed")):
             occurrence = f"{details.get('trade_id', '')}|{arm_notice['armed_at']}"
             DashboardActionsMixin._queue_telegram_notice(
-                self, service, "protect", f"PROTECT_ARM|{execution_mode}", symbol,
+                self, service, "protect_armed", f"PROTECT_ARM|{execution_mode}", symbol,
                 occurrence, {**arm_notice, "notice_kind": "PROTECT_ARM"},
             )
         candle_key = str(
@@ -1307,8 +1317,20 @@ class DashboardActionsMixin:
                 or bool(PROTECTION_EVENTS.intersection(str(decision.reason or "").upper().split("+")))
             )
         )
+        if order_intent and order_intent.side == "SELL" and not protect_hit:
+            if service and DashboardActionsMixin._telegram_notification_enabled(self, "sell_queued"):
+                DashboardActionsMixin._queue_telegram_notice(
+                    self, service, "sell_queued", f"SELL_REQUEST|{execution_mode}", symbol, order_intent.id,
+                    {"notice_kind": "SELL_REQUEST", "symbol": symbol, "execution_mode": execution_mode,
+                     "order_id": order_intent.id, "quantity": order_intent.quantity,
+                     "status": order_intent.status, "reason": decision.reason})
+            return None
         if protect_hit:
-            if not service or not DashboardActionsMixin._telegram_notification_enabled(self, "protect"):
+            stage = str(details.get("protection_stage", "ARM") or "ARM")
+            category = "dynamic_protect" if stage == "DYN" else "protect"
+            if not service or not DashboardActionsMixin._telegram_notification_enabled(self, category):
+                return None
+            if order_intent and not DashboardActionsMixin._telegram_notification_enabled(self, "sell_queued"):
                 return None
             occurrence = str(
                 details.get("protect_occurrence")
@@ -1316,12 +1338,7 @@ class DashboardActionsMixin:
                 or details.get("candle_key")
                 or f"{decision.timestamp:.6f}"
             )
-            event_key = f"protect|{str(execution_mode or '').upper()}"
-            if not DashboardActionsMixin._claim_telegram_event(self, event_key, symbol, occurrence):
-                return None
-            threading.Thread(
-                target=service.notify_protect_alert,
-                kwargs={
+            payload = {
                     "symbol": symbol,
                     "price": price,
                     "mfe_pct": float(details.get("normal_mfe_pct", 0.0) or 0.0),
@@ -1357,9 +1374,11 @@ class DashboardActionsMixin:
                     "retention_until_enabled": bool(details.get("normal_retention_until_enabled", True)),
                     "policy": "AUTO" if decision.action == "SELL" else "ALERT",
                     "execution_mode": execution_mode,
-                },
-                daemon=True,
-            ).start()
+                    "initial_hit": int(details.get("normal_event_count", 0) or 0) == 0,
+                }
+            DashboardActionsMixin._queue_telegram_notice(
+                self, service, category, f"EXIT|{stage}|{execution_mode}|{details.get('trade_id', '')}",
+                symbol, occurrence, {**payload, "notice_kind": "PROTECT_HIT"})
             return None
 
         if event == "INDICATOR_EXIT_ALERT":
@@ -1368,16 +1387,11 @@ class DashboardActionsMixin:
             occurrence = str(
                 details.get("signal_cycle") or details.get("candle_key", "") or ""
             )
-            event_key = f"indicator_exit|{str(execution_mode or '').upper()}"
-            if not DashboardActionsMixin._claim_telegram_event(self, event_key, symbol, occurrence):
-                return None
             indicators = (
                 details.get("indicators")
                 if isinstance(details.get("indicators"), dict) else {}
             )
-            threading.Thread(
-                target=service.notify_indicator_exit_alert,
-                kwargs={
+            payload = {
                     "symbol": symbol,
                     "price": price,
                     "ema_fast_period": int(
@@ -1396,9 +1410,10 @@ class DashboardActionsMixin:
                     "ema_enabled": bool(details.get("indicator_exit_use_ema", True)),
                     "rsi_enabled": bool(details.get("indicator_exit_use_rsi", True)),
                     "execution_mode": execution_mode,
-                },
-                daemon=True,
-            ).start()
+                }
+            DashboardActionsMixin._queue_telegram_notice(
+                self, service, "indicator_exit", f"EXIT|E|{execution_mode}|{details.get('trade_id', '')}",
+                symbol, occurrence, {**payload, "notice_kind": "INDICATOR_ALERT"})
             return None
 
         # A raw SELL signal is never sent to Telegram.  If the earlier BUY did
@@ -1415,10 +1430,13 @@ class DashboardActionsMixin:
         # Technical information is independent of entry permission. It is
         # delivered for both blocked candidates and successfully planned BUYs;
         # the queue and every trading guard remain untouched by this alert.
-        self._notify_signal_only(
-            service, symbol, signal, decision, price, execution_mode,
-            watch_id=str(watch.get("id", "")), snapshot=technical,
-        )
+        queued_buy = bool(order_intent and order_intent.side == "BUY" and
+                          DashboardActionsMixin._telegram_notification_enabled(self, "buy_queued"))
+        if not queued_buy:
+            self._notify_signal_only(
+                service, symbol, signal, decision, price, execution_mode,
+                watch_id=str(watch.get("id", "")), snapshot=technical,
+            )
         if decision.action != "BUY" or signal != "BUY" or not signal_id:
             return None
         if not (
@@ -1455,6 +1473,8 @@ class DashboardActionsMixin:
                         "budget_price": budget_price, "fee_vnd": value * fee_rate,
                         "gross_vnd": value * (1.0 + fee_rate),
                         "budget_vnd": order_intent.entry_budget * (1.0 + fee_rate),
+                        "entry_orders_used": checks.get("entry_orders_used", 0),
+                        "entry_orders_max": checks.get("entry_orders_max", 1),
                     }
             threading.Thread(
                 target=service.notify_buy,
@@ -1547,7 +1567,7 @@ class DashboardActionsMixin:
         identity = self.rule_state.queue_telegram_notice(
             f"TELEGRAM|{key.upper()}|{symbol.upper()}", occurrence,
             {"category": category, "symbol": symbol, "execution_mode": payload["execution_mode"],
-             "destination": str(getattr(service, "chat_id", self.settings.telegram_chat_id)),
+             "destination": str(getattr(service, "chat_id", getattr(self.settings, "telegram_chat_id", ""))),
              "payload": payload, "watch_id": watch_id, "batch_technical": batch,
              "session": dict(session or {})},
             0.0 if batch else DashboardActionsMixin._telegram_cooldown_seconds(self, category),
@@ -1560,10 +1580,17 @@ class DashboardActionsMixin:
         read_cycles = getattr(getattr(self, "trade_state", None), "list_cycles", None)
         read_intents = getattr(getattr(self, "queue", None), "list_all", None)
         snapshot = getattr(self, "snapshots", {}).get(mode)
-        return position_notice_context(symbol, mode,
+        context = position_notice_context(symbol, mode,
             cycles=read_cycles() if callable(read_cycles) else (),
             positions=snapshot[1] if snapshot is not None else None,
             intents=read_intents() if callable(read_intents) else ())
+        if context is not None and callable(getattr(getattr(self, "trade_state", None), "active_for", None)) and callable(read_intents):
+            from ..trading.portfolio import priority_entry_orders
+            settings = self.settings
+            context.update(priority_entry_orders(symbol, mode, self.trade_state, self.queue,
+                getattr(settings, "priority_capital_enabled", False), getattr(settings, "priority_symbols", []),
+                getattr(settings, "priority_allocations", {})))
+        return context
 
     def _technical_telegram_notice_is_current(self, notice: dict) -> bool:
         watch = self.rule_state.telegram_buy_watch(notice["symbol"], notice["execution_mode"])
@@ -1618,12 +1645,16 @@ class DashboardActionsMixin:
             sent = False
             try:
                 current_service = getattr(self, "telegram", service)
-                destination = str(getattr(current_service, "chat_id", self.settings.telegram_chat_id))
+                destination = str(getattr(current_service, "chat_id", getattr(self.settings, "telegram_chat_id", "")))
+                kind = notice["payload"].get("notice_kind")
                 if (not self.settings.telegram_enabled
                         or not DashboardActionsMixin._telegram_notification_enabled(self, notice["category"])
                         or (notice.get("batch_technical")
                             and not DashboardActionsMixin._technical_telegram_notice_is_current(self, notice))
-                        or destination != notice["destination"]):
+                        or destination != notice["destination"]
+                        or (kind == "EXIT_WAIT" and not DashboardActionsMixin._telegram_notification_enabled(self, "exit_wait"))
+                        or (kind == "PROTECT_HIT" and notice["payload"].get("order_id")
+                            and not DashboardActionsMixin._telegram_notification_enabled(self, "sell_queued"))):
                     self.rule_state.discard_telegram_notice(identity)
                     return
                 if current_service is not service:
@@ -1641,7 +1672,16 @@ class DashboardActionsMixin:
                 elif notice["payload"].get("notice_kind") == "EXIT_WAIT":
                     payload = {key: value for key, value in notice["payload"].items() if key != "notice_kind"}
                     sent = bool(service.notify_exit_wait(**payload))
-                elif notice["category"] == "protect" and notice["payload"].get("notice_kind") == "PROTECT_ARM":
+                elif notice["payload"].get("notice_kind") == "PROTECT_HIT":
+                    payload = {key: value for key, value in notice["payload"].items() if key != "notice_kind"}
+                    sent = bool(service.notify_protect_alert(**payload))
+                elif notice["payload"].get("notice_kind") == "SELL_REQUEST":
+                    payload = {key: value for key, value in notice["payload"].items() if key != "notice_kind"}
+                    sent = bool(service.notify_sell_request(**payload))
+                elif notice["payload"].get("notice_kind") == "INDICATOR_ALERT":
+                    payload = {key: value for key, value in notice["payload"].items() if key != "notice_kind"}
+                    sent = bool(service.notify_indicator_exit_alert(**payload))
+                elif notice["payload"].get("notice_kind") == "PROTECT_ARM":
                     payload = {key: value for key, value in notice["payload"].items() if key != "notice_kind"}
                     sent = bool(service.notify_protect_armed(**payload))
                 else:
@@ -2123,22 +2163,50 @@ class DashboardActionsMixin:
                 "Đã khóa tạo/gửi SELL tự động mới. Còn lệnh broker đã nhận; kiểm tra và hủy riêng trên DNSE.", parent=self)
         self._refresh_local()
 
-    def _restart_position_metrics(self, action: dict[str, Any], *, sessions: int = 3) -> None:
+    def _restart_position_metrics(self, action: dict[str, Any], *, sessions: int = 3, _retry: bool = False,
+                                  on_progress: Callable[[str, str], None] | None = None, parent: Any = None) -> None:
         """Load session history off Tk, then review before local repair."""
         from ..trading.market import MarketDataService
-        from ..trading.position_history import load_position_history, session_count
+        from ..trading.position_history import load_position_history, session_count, position_basis
         from ..trading.position_repair import restart_price_observations
+        from ..trading.validation import quote_is_fresh
         symbol, trade_id = str(action.get("symbol", "")), str(action.get("trade_id", ""))
         try:
             sessions = session_count(sessions)
         except ValueError as exc:
             messagebox.showwarning("MAE/MFE", str(exc), parent=self)
             return
+        requests = getattr(self, "_position_history_requests", None)
+        if requests is None:
+            self._position_history_requests = requests = {}
+        if not _retry:
+            requests[trade_id] = {"accepted": False, "on_progress": on_progress, "parent": parent}
+        request = requests.get(trade_id)
+        if request is None or not getattr(self, "running", True):
+            return
+        def progress(text, state):
+            request.update(message=text, state=state)
+            callback = request.get("on_progress")
+            if callback is not None:
+                callback(text, state)
+        def dialog_parent():
+            window = request.get("parent")
+            return window if window is not None and window.winfo_exists() else self
+        def retry_later():
+            schedule = getattr(self, "after", None)
+            if callable(schedule):
+                def retry():
+                    if requests.get(trade_id) is request and getattr(self, "running", False):
+                        self._restart_position_metrics(action, sessions=sessions, _retry=True)
+                schedule(60_000, retry)
         self._log(f"{symbol} · Đang tải lịch sử MAE/MFE {sessions} phiên...")
+        progress(f"Đang tải lịch sử MAE/MFE {sessions} phiên…", "loading")
         def read():
             cycle = self.trade_state.get(trade_id)
             if not cycle:
                 raise ValueError("Vị thế đã thay đổi hoặc đã đóng.")
+            if request["accepted"] and (cycle.auto_sell_enabled or request.get("basis") != position_basis(cycle)):
+                raise ValueError("Dừng tải tiếp: vị thế hoặc quyền tự bán đã thay đổi.")
             history = load_position_history(self.real, cycle, sessions,
                 holidays=getattr(self.settings, "trading_holidays", ()), exchange=self._symbol_exchange(symbol))
             quote = MarketDataService._normalize(symbol, self.real.get_latest_trade(symbol),
@@ -2151,29 +2219,62 @@ class DashboardActionsMixin:
                 quote, history = result.result()
             except Exception as exc:
                 detail = str(exc) if isinstance(exc, ValueError) else "Không tải được lịch sử/giá G1; dữ liệu chưa đổi."
-                self._post_ui(lambda detail=detail: messagebox.showwarning("MAE/MFE", detail, parent=self))
+                def failed(detail=detail):
+                    if requests.get(trade_id) is not request:
+                        return
+                    if "Dừng tải tiếp" in detail or "đã đóng" in detail:
+                        requests.pop(trade_id, None)
+                        self._log(f"{symbol} · {detail}")
+                        progress(detail, "stopped")
+                        return
+                    self._log(f"{symbol} · {detail} · thử lại sau 60 giây")
+                    progress(f"{detail} · Tự thử lại sau 60 giây; dữ liệu chưa đổi.", "waiting")
+                    retry_later()
+                self._post_ui(failed)
                 return
             def review():
-                if not quote.get("price"):
-                    messagebox.showwarning("MAE/MFE", "Chưa lấy được giá khớp lệnh G1 hợp lệ.", parent=self)
+                if requests.get(trade_id) is not request:
                     return
-                if not messagebox.askyesno("Đo lại MAE/MFE",
+                if not quote.get("price") or not quote_is_fresh(quote, symbol):
+                    self._log(f"{symbol} · Chờ giá khớp G1 để đo MAE/MFE; thử lại sau 60 giây")
+                    progress("Chờ giá khớp G1 mới · Tự thử lại sau 60 giây; dữ liệu chưa đổi.", "waiting")
+                    retry_later()
+                    return
+                progress(f"Đã tải {history['loaded_sessions']}/{sessions} phiên · Đang kiểm tra dữ liệu.", "loading")
+                if not request["accepted"] and not messagebox.askyesno("Đo lại MAE/MFE",
                     f"{symbol} · {history['loaded_sessions']}/{sessions} phiên · "
                     f"{history['session_dates'][0]} → {history['session_dates'][-1]}\n"
                     f"Đỉnh {_display_price(history['high'])} · Đáy {_display_price(history['low'])}\n"
                     "Dựng lại từ nến phút sau lúc mua, rồi tiếp tục theo dõi; số cũ được lưu đối chiếu.\n"
                     + ("Bỏ nến phút chứa thời điểm mua để loại giá trước khi mua.\n" if history['entry_minute_omitted'] else "") +
-                    "Giữ nguyên số cổ và mọi lệnh đã khớp. Tự bán sẽ TẠM DỪNG.\nĐo lại?", parent=self):
+                    ("Phiên hiện tại chưa có nến; tự tải bổ sung sau 60 giây.\n" if history.get("pending_sessions") else "") +
+                    "Giữ nguyên số cổ và mọi lệnh đã khớp. Tự bán sẽ TẠM DỪNG.\nĐo lại?", parent=dialog_parent()):
+                    requests.pop(trade_id, None)
+                    progress("Đã hủy đo lại MAE/MFE; dữ liệu chưa đổi.", "cancelled")
                     return
                 try:
                     repaired = restart_price_observations(self.trade_state, self.rule_state, self.queue, trade_id, quote, history=history)
                 except (ValueError, TypeError) as exc:
-                    messagebox.showwarning("MAE/MFE", str(exc), parent=self)
+                    requests.pop(trade_id, None)
+                    progress(str(exc), "error")
+                    messagebox.showwarning("MAE/MFE", str(exc), parent=dialog_parent())
                     return
                 if repaired.get("blocked_by_broker_orders"):
-                    messagebox.showwarning("SELL tại DNSE", "Đã tạm dừng tự bán. Cần đối soát/hủy SELL broker trước khi đo lại.", parent=self)
+                    requests.pop(trade_id, None)
+                    progress("Đã tạm dừng tự bán · Cần đối soát/hủy SELL broker trước khi đo lại MAE/MFE.", "blocked")
+                    messagebox.showwarning("SELL tại DNSE", "Đã tạm dừng tự bán. Cần đối soát/hủy SELL broker trước khi đo lại.", parent=dialog_parent())
                 else:
                     self._log(f"{symbol} · Đã tải lại MAE/MFE {history['loaded_sessions']} phiên · TỰ BÁN TẠM DỪNG")
+                    request.update(accepted=True, basis=history["basis"])
+                    if history.get("pending_sessions"):
+                        self._log(f"{symbol} · Chờ nến phiên {', '.join(history['pending_sessions'])}; tự tải bổ sung")
+                        progress(f"Đã đo {history['loaded_sessions']}/{sessions} phiên · Tự bán tạm dừng. "
+                                 f"Chờ nến {', '.join(history['pending_sessions'])}; tự tải bổ sung sau 60 giây.", "partial")
+                        retry_later()
+                    else:
+                        requests.pop(trade_id, None)
+                        progress(f"Đã đo MAE/MFE {history['loaded_sessions']} phiên · "
+                                 f"Đỉnh {_display_price(history['high'])} · Đáy {_display_price(history['low'])} · Tự bán tạm dừng.", "complete")
                 self._refresh_local()
             self._post_ui(review)
         future.add_done_callback(ready)
@@ -3854,6 +3955,13 @@ class DashboardActionsMixin:
         ):
             return False
         kwargs = {"summary": summary, "execution_mode": execution_mode}
+        kwargs["observed_at"] = time.time()
+        log_dir = getattr(getattr(self, "bridge", None), "log_dir", None)
+        if log_dir is not None:
+            kwargs["log_dir"] = str(log_dir)
+        logger = getattr(self, "logger", None)
+        if logger is not None and code == "HEALTH":
+            logger.warning("SYSTEM %s [%s] %s", code, execution_mode, summary.replace("\n", " · "))
         if severity != "ERROR":
             kwargs["severity"] = severity
         threading.Thread(
@@ -3954,6 +4062,9 @@ class DashboardActionsMixin:
                 f"DNSE API HTTP {int(last_status)}"
                 if isinstance(last_status, (int, float)) else "DNSE API LỖI"
             )
+            endpoint = safe_detail(rest.get("last_endpoint") or "chưa rõ API", secrets=secrets)
+            detail = safe_detail(rest.get("last_error"), secrets=secrets)
+            issues[-1] += f" · {endpoint}" + (f"\nChi tiết: {detail}" if detail else "")
 
         ws = health.get("websocket") if isinstance(health.get("websocket"), dict) else {}
         market_active = market_status in {"ATO", "OPEN", "CONTINUOUS", "ATC"}

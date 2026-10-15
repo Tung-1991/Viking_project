@@ -151,7 +151,7 @@ def test_seven_prior_sessions_can_contain_only_a_down_cross(ui_root, monkeypatch
     try:
         top.update()
         view._render_ema_cross_preview({"ema_cross": raw})
-        assert view.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
+        assert view.preview_rule_cross_counts.cget("text") == "197 CẮT · VA"
         view.preview_ema_swap.invoke()
         top.update_idletasks()
         assert requested_windows == [7]
@@ -283,7 +283,7 @@ def test_alternate_view_does_not_seed_the_active_va_rule(ui_root, monkeypatch):
         assert view.preview_rule_cross_detail.cget("text") == "LÊN 13/10 09:17"
         assert "Theo dõi từ 13/10 09:00" in view._ema_cross_hint()
         view.preview_ema_swap.invoke()
-        assert view.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
+        assert view.preview_rule_cross_counts.cget("text") == "197 CẮT · VA"
         assert not view._preview_ema_gate_evidence["valid"]
         view._alternate_ema_history = lambda _: {"ready": True, "start": "2026-10-09", "end": "2026-10-13",
                                                "up": 0, "down": 0, "cross": {}}
@@ -308,13 +308,13 @@ def test_failed_history_preview_cannot_present_a_live_zero_as_verified_three_ses
     view._alternate_ema_history = lambda _: {"ready": False, "issue": "MINUTE_HISTORY"}
     try:
         view._render_ema_cross_preview({"ema_cross": raw})
-        assert view.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
+        assert view.preview_rule_cross_counts.cget("text") == "0 CẮT · VA"
         view.preview_ema_swap.invoke()
         assert view.preview_rule_cross_counts.cget("text") == "— CẮT - 3P"
         assert view.preview_rule_cross_detail.cget("text") == "CHƯA TẢI ĐƯỢC"
         assert "thử lại sau 60 giây" in view._ema_memory_preview_hint()
         view.preview_ema_swap.invoke()
-        assert view.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
+        assert view.preview_rule_cross_counts.cget("text") == "0 CẮT · VA"
         assert view.preview_rule_cross_detail.cget("text") == "THEO DÕI 01/10 09:00"
     finally:
         top.destroy()

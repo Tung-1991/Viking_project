@@ -1261,7 +1261,12 @@ class ConnectionPopup:
                 "Không hủy lệnh. Gửi riêng: mặc định giãn 60 phút/mã/sổ. Bật gom tín hiệu: mỗi mã/sổ chỉ giữ trạng thái mới nhất.",
                 "cooldown",
             ),
-            ("protect", "PROTECT CHẠM MỨC", "AUTO báo đã tạo yêu cầu bán, chưa xác nhận khớp. ALERT chỉ báo, không bán. Tắt tin không tắt PROTECT. Phút = giãn tin mới cùng mã, không trì hoãn SELL.", "cooldown"),
+            ("protect_armed", "ARM · BẮT ĐẦU BẢO VỆ", "Báo một lần khi đạt ARM. Tắt tin không thay đổi bảo vệ vị thế.", "once"),
+            ("protect", "PROTECT · SAU ARM", "AUTO báo yêu cầu bán, chưa xác nhận khớp. ALERT chỉ báo. Cooldown dùng chung với tin chờ/tạm dừng của cùng vị thế và loại cảnh báo.", "cooldown"),
+            ("dynamic_protect", "DYNAMIC · TRƯỚC ARM", "Giãn tin Dynamic theo vị thế, kể cả nhánh tạm dừng/chờ cổ về. 0 = không giãn, vẫn loại tin trùng.", "cooldown"),
+            ("sl_tp", "SL / TP", "Cảnh báo SL/TP, ghi rõ chỉ báo, chờ cổ về hoặc đã tạo yêu cầu SELL.", "cooldown"),
+            ("exit_wait", "CHỜ CỔ VỀ / TẠM DỪNG", "Cho phép tin chờ của PROTECT/E/SL/TP. Dùng cooldown của từng loại, không có bộ đếm riêng để vượt giãn tin.", "once"),
+            ("sell_queued", "SELL · ĐÃ TẠO YÊU CẦU", "Báo yêu cầu SELL đã tạo, chưa xác nhận gửi hay khớp; gộp lý do PROTECT/E/SL/TP trong cùng tin.", "once"),
             ("indicator_exit", "E · EXIT ALERT", "Chỉ báo khi E ở ALERT: không đặt bán, nên cần chống lặp. E AUTO không gửi tin này; khi vị thế BOT bán hết sẽ báo CLOSED.", "cooldown"),
             ("closed", "VỊ THẾ BOT ĐÃ ĐÓNG", "Gửi 1 tin tổng kết khi vị thế BOT đã bán hết, không chờ phút. Ví dụ mua 1.000 CP: bán 500 chưa tổng kết; bán nốt 500 gửi 1 tin. Vị thế BOT tiếp theo có tin riêng. Cần bật Telegram + dòng này và LƯU.", "once"),
             ("external_sell", "SELL TRÊN DNSE APP", f"Báo khi {APP_NAME} phát hiện và đồng bộ một lệnh bán ngoài app {APP_NAME}. Phút = giãn các thông báo mới; 0 = không giãn thời gian, vẫn chống trùng theo lệnh.", "cooldown"),
@@ -1279,7 +1284,21 @@ class ConnectionPopup:
         )
         notifications = self.settings.telegram_notifications
         cooldowns = self.settings.telegram_cooldown_minutes
-        for row_index, (key, label, hint, timing_mode) in enumerate(rows, start=1):
+        row_map = {row[0]: row for row in rows}
+        ordered = []
+        for group, (title, keys) in config.TELEGRAM_NOTIFICATION_GROUPS.items():
+            ordered.append((group, title, "", "group"))
+            ordered.extend(row_map[key] for key in keys)
+        self.tele_group_switches = {}
+        for row_index, (key, label, hint, timing_mode) in enumerate(ordered, start=1):
+            if timing_mode == "group":
+                ctk.CTkLabel(event_box, text=label, font=("Segoe UI", 12, "bold"),
+                             text_color=self.BLUE, anchor="w").grid(row=row_index, column=0, columnspan=3, sticky="w", padx=10, pady=(9, 3))
+                variable = tk.BooleanVar(value=self.settings.telegram_groups.get(key, True))
+                self.tele_group_switches[key] = variable
+                ctk.CTkSwitch(event_box, text="", variable=variable, width=38,
+                              progress_color=self.GREEN).grid(row=row_index, column=3, padx=6)
+                continue
             label_widget = ctk.CTkLabel(
                 event_box, text=label, font=("Segoe UI", 11, "bold"),
                 text_color=self.TEXT, anchor="w",
@@ -1346,7 +1365,7 @@ class ConnectionPopup:
                     self._telegram_buy_mode_changed()
             else:
                 timing = ctk.CTkLabel(
-                    event_box, text="1 TIN/VỊ THẾ", font=("Segoe UI", 9, "bold"),
+                    event_box, text="THEO LOẠI" if key == "exit_wait" else "GỬI NGAY" if key == "sell_queued" else "1 TIN/VỊ THẾ", font=("Segoe UI", 9, "bold"),
                     text_color=self.MUTED,
                 )
                 timing.grid(row=row_index, column=4, columnspan=2, padx=6)
@@ -2254,6 +2273,7 @@ class ConnectionPopup:
             key: bool(variable.get())
             for key, variable in self.tele_event_switches.items()
         }
+        self.settings.telegram_groups = {key: bool(variable.get()) for key, variable in self.tele_group_switches.items()}
         self.settings.telegram_cooldown_minutes = cooldowns
         location = self._store_telegram_token(token)
         save_settings(self.settings, self.account_id)

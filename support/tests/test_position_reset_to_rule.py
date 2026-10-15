@@ -39,7 +39,7 @@ def popup(root, cycle):
 @pytest.mark.parametrize("modes,sl,dynamic", [(["NORMAL", "IND_EXIT"], True, True),
                                              ([], False, False), (["TP", "IND_EXIT"], True, False),
                                              (["TP", "NORMAL"], False, False)])
-@pytest.mark.parametrize("scale", [1., 1.5])
+@pytest.mark.parametrize("scale", [1., 1.25, 1.5, 2.])
 def test_reset_uses_current_rule_and_removes_overrides_only_when_saved(ui_root, monkeypatch, tmp_path, modes, sl, dynamic, scale):
     settings = AppSettings(bot_em_modes=modes, bot_sl_enabled=sl,
         rule_parameters={"take_profit_pct": 9, "initial_sl_pct": -4, "normal_policy": "AUTO",
@@ -57,6 +57,7 @@ def test_reset_uses_current_rule_and_removes_overrides_only_when_saved(ui_root, 
         widgets = list(_widgets(top))
         reset = next(w for w in widgets if isinstance(w, ctk.CTkButton) and w.cget("text") == "VỀ RULE")
         reset.invoke()
+        ui_root.update_idletasks()
         assert trades.get(cycle.id).to_dict() == before
         assert rules.position_metrics(cycle.symbol, cycle.id) == history and queue.get(manual.id).to_dict() == pending
         assert all(w.get() == "AUTO" for w in widgets if isinstance(w, ctk.CTkEntry) and w.cget("placeholder_text") == "Giá hoặc %")
@@ -68,7 +69,8 @@ def test_reset_uses_current_rule_and_removes_overrides_only_when_saved(ui_root, 
         for w in widgets:
             if isinstance(w, ctk.CTkButton):
                 assert w.winfo_rootx() + w.winfo_width() <= top.winfo_rootx() + top.winfo_width() + 2
-        assert any(isinstance(w, ctk.CTkLabel) and "BOT Bật" in w.cget("text") and "LƯU" in w.cget("text") for w in widgets)
+                assert w.winfo_rooty() + w.winfo_height() <= top.winfo_rooty() + top.winfo_height() + 2
+        assert not any(isinstance(w, ctk.CTkLabel) and "Bấm LƯU để áp dụng" in w.cget("text") for w in widgets)
         next(w for w in widgets if isinstance(w, ctk.CTkButton) and w.cget("text") == "LƯU").invoke()
         after = trades.get(cycle.id)
         assert set(after.em_modes) == set(modes) and after.exit_rule_overrides == {}

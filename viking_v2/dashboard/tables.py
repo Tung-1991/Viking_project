@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+import math
 import time
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import ttk
 from typing import Any
+from customtkinter.windows.widgets.scaling.scaling_tracker import ScalingTracker
 
 from .. import config
 from ..services.runtime import recent_ui_logs
@@ -25,56 +27,100 @@ RUNNING_COLUMNS = (
     "RR",
     "PnL_MAE_MFE",
     "Status",
+    "Bot",
     "Override",
+    "STT",
 )
 RUNNING_HEADERS = {
     "Ticket": "Ticket",
     "Time": "Thời gian",
-    "Order": "Thông tin Lệnh",
-    "Targets": "Chốt lời/Lỗ (SL|TP)",
-    "CostInfo": "Chi phí/Phí qua đêm",
+    "Order": "Lệnh / Vị thế",
+    "Targets": "SL / TP / PROTECT",
+    "CostInfo": "Phí mua / bán",
     "RR": "Rủi ro/Kỳ vọng (%)",
-    "PnL_MAE_MFE": "PnL / MAE / MFE",
+    "PnL_MAE_MFE": "PnL · MAE / MFE",
     "Status": "Trạng thái",
-    "Override": "BOT / Override",
+    "Bot": "BOT",
+    "Override": "Override",
+    "STT": "STT",
 }
 RUNNING_WIDTHS = {
     "Ticket": 170,
-    "Time": 230,
-    "Order": 560,
-    "Targets": 390,
-    "CostInfo": 390,
+    "Time": 150,
+    "Order": 245,
+    "Targets": 270,
+    "CostInfo": 125,
     "RR": 310,
-    "PnL_MAE_MFE": 660,
-    "Status": 900,
-    "Override": 160,
+    "PnL_MAE_MFE": 270,
+    "Status": 520,
+    "Bot": 85,
+    "Override": 80,
+    "STT": 52,
 }
-RUNNING_FONT = ("Segoe UI", 16)
-RUNNING_HEADING_FONT = ("Segoe UI", 15, "bold")
-RUNNING_COLUMN_PADDING = 48
+RUNNING_FONT = ("Segoe UI", 14)
+RUNNING_HEADING_FONT = ("Segoe UI", 14, "bold")
+RUNNING_COLUMN_PADDING = 20
 # Measure representative cells with the same font that operators see. In
 # particular, PNL/MAE/MFE must have room for all three amounts and percentages.
 RUNNING_SAMPLES = {
     "Ticket": "#b7d6775a40d9",
     "Time": "13/10/2026 14:09:45",
-    "Order": "REAL · BOT · BUY HDB @ 23,150 · KL 600",
-    "Targets": "SL▼ 21,857 (-3.5%) · TP▲ 24,770 (+7.0%)",
-    "CostInfo": "PHÍ MUA ~16.3K · DỰ KIẾN BÁN 16.7K",
+    "Order": "BUY HDB · KL 600 @ 23,150\nREAL · BOT · 13/10 14:09\nARM 24,236 · START 22,939",
+    "Targets": "SL -3.5% -317.1K @ 21,857\nTP +7% +634.2K @ 24,236\nPROTECT DYN 23,046 · ALERT",
+    "CostInfo": "MUA ~16.3K\nBÁN ~16.7K",
     "RR": "R 3.50% · E 7.00% · 1:2.00",
-    "PnL_MAE_MFE": "▲300.0K (+2.21%) · MAE 22,450 (-0.88%) · MFE 23,450 (+3.53%)",
+    "PnL_MAE_MFE": "PnL +300.0K (+2.21%)\nMAE -0.88% · 22,450 · -80.0K\nMFE +3.53% · 23,450 · +320.0K",
+    "Status": "BÁN ĐƯỢC 400 CP · CHỜ VỀ 100 CP · 15/10 13:00 · CÒN 1g20p\nSL BẬT · TP CHỜ +7% · E AUTO: chờ tín hiệu\nPROTECT AUTO · Chờ ATR14 từ nến ngày đã đóng",
 }
 RUNNING_ANCHORS = {
     "Ticket": "center",
     "Time": "center",
     "Order": "w",
-    "Targets": "center",
-    "CostInfo": "center",
+    "Targets": "w",
+    "CostInfo": "w",
     "RR": "center",
-    "PnL_MAE_MFE": "center",
+    "PnL_MAE_MFE": "w",
     "Status": "w",
+    "Bot": "center",
     "Override": "center",
+    "STT": "center",
 }
 VISIBLE_LOG_LINE_LIMIT = 2000
+
+
+def _trade_money(value: float, *, signed: bool = False) -> str:
+    return f"{float(value) / 1000:+,.1f}K" if signed else f"{float(value) / 1000:,.1f}K"
+
+
+def _running_scale(root) -> float:
+    try:
+        return ScalingTracker.get_widget_scaling(root)
+    except (AttributeError, KeyError):
+        return 1.0
+
+
+def running_font(root, *, heading=False) -> tuple:
+    base = RUNNING_HEADING_FONT if heading else RUNNING_FONT
+    # ttk does not receive CTk's Windows DPI/widget scaling callbacks.
+    return (base[0], -round(base[1] * _running_scale(root)), *base[2:])
+
+
+def running_row_height(root) -> int:
+    return max(round(56 * _running_scale(root)),
+               tkfont.Font(root=root, font=running_font(root)).metrics("linespace") * 3 + round(8 * _running_scale(root)))
+
+
+def _order_caption(mode: str, source: str, side: str, symbol: str, quantity: int, price: str, opened: str) -> str:
+    source = source.replace("EXTERNAL_DNSE", "DNSE").replace("MANUAL_APP", "TAY")
+    clock = str(opened or "")
+    for pattern in ("%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            clock = datetime.strptime(clock[:19].replace("T", " "), pattern).strftime("%d/%m %H:%M")
+            break
+        except ValueError:
+            continue
+    return (f"{side} {symbol} · KL {quantity:,} @ {price}\n{mode} · {source}"
+            + (f" · {clock}" if clock and clock not in {"--", "None"} else ""))
 
 
 class DashboardTablesMixin:
@@ -84,11 +130,12 @@ class DashboardTablesMixin:
         configured = RUNNING_WIDTHS.get(column, 180)
         try:
             root = tree.winfo_toplevel()
-            heading = tkfont.Font(root=root, font=RUNNING_HEADING_FONT)
-            body = tkfont.Font(root=root, font=RUNNING_FONT)
+            scale = _running_scale(root)
+            heading = tkfont.Font(root=root, font=running_font(root, heading=True))
+            body = tkfont.Font(root=root, font=running_font(root))
             measured = max(heading.measure(RUNNING_HEADERS.get(column, column)),
-                           body.measure(RUNNING_SAMPLES.get(column, "")))
-            return max(configured, measured + RUNNING_COLUMN_PADDING)
+                           *(body.measure(line) for line in RUNNING_SAMPLES.get(column, "").split("\n")))
+            return max(round(configured * scale), measured + round(RUNNING_COLUMN_PADDING * scale))
         except (AttributeError, RuntimeError, TypeError, ValueError, tk.TclError):
             return configured
 
@@ -120,8 +167,10 @@ class DashboardTablesMixin:
     @staticmethod
     def _configure_tree(tree: ttk.Treeview, columns: tuple[str, ...]) -> None:
         tree.configure(columns=columns, show="tree headings")
+        if isinstance(tree, ttk.Treeview):
+            tree.configure(displaycolumns=("STT", *(key for key in columns if key not in {"Ticket", "Time", "RR", "STT"})))
         tree.heading("#0", text="")
-        tree.column("#0", width=40, minwidth=40, stretch=False)
+        tree.column("#0", width=24, minwidth=24, stretch=False)
         for column in columns:
             width = DashboardTablesMixin._running_column_width(tree, column)
             tree.heading(
@@ -134,7 +183,7 @@ class DashboardTablesMixin:
                 width=width,
                 minwidth=width,
                 anchor=RUNNING_ANCHORS.get(column, "w"),
-                stretch=False,
+                stretch=column == "Status",
             )
         if isinstance(tree, ttk.Treeview) and not hasattr(tree, "_viking_column_hint"):
             from .running_hints import RunningTableHint
@@ -142,6 +191,28 @@ class DashboardTablesMixin:
         if isinstance(tree, ttk.Treeview) and not hasattr(tree, "_viking_override_cells"):
             from .override_cells import OverrideCells
             tree._viking_override_cells = OverrideCells(tree)
+        if isinstance(tree, ttk.Treeview) and not hasattr(tree, "_viking_table_cells"):
+            from .table_cells import RunningTableCells
+            tree._viking_table_cells = RunningTableCells(tree)
+        if isinstance(tree, ttk.Treeview) and not hasattr(tree, "_viking_running_scaling"):
+            def rescale(*_scaling):
+                root = tree.winfo_toplevel()
+                name = str(tree.cget("style")) or "Running.Treeview"
+                tree.configure(style=name)
+                style = ttk.Style(tree)
+                style.configure(name, font=running_font(root), rowheight=running_row_height(root))
+                scale = _running_scale(root)
+                style.configure(name + ".Heading", font=running_font(root, heading=True),
+                                padding=(round(8 * scale), round(5 * scale)))
+                for key in columns:
+                    width = DashboardTablesMixin._running_column_width(tree, key)
+                    tree.column(key, width=width, minwidth=width)
+                tree._viking_table_cells.schedule()
+            tree._viking_running_scaling = rescale
+            ScalingTracker.add_widget(rescale, tree)
+            tree.bind("<Destroy>", lambda event: ScalingTracker.remove_widget(rescale, tree)
+                      if event.widget is tree else None, add="+")
+            rescale()
 
     @staticmethod
     def _running_rows(tree: ttk.Treeview, parent: str = "") -> tuple[str, ...]:
@@ -180,9 +251,13 @@ class DashboardTablesMixin:
         """Update display cells only; action metadata is rebuilt separately."""
         row_order.append(iid)
         previous = existing.get(iid)
+        # Keep stable value indexes for row actions; STT is displayed first.
+        if len(values) == len(RUNNING_COLUMNS) - 1:
+            number = str(previous["values"][-1]) if previous and len(previous["values"]) == len(RUNNING_COLUMNS) else ""
+            values = (*values, number)
         if previous is None:
             tree.insert("", "end", iid=iid, tags=tags, values=values)
-        elif tuple(previous["values"]) != values or tuple(previous["tags"]) != tags:
+        elif tuple(map(str, previous["values"])) != tuple(map(str, values)) or tuple(previous["tags"]) != tags:
             tree.item(iid, tags=tags, values=values)
 
     def _render_tables(self, runtime_status: dict[str, Any] | None = None) -> None:
@@ -233,6 +308,7 @@ class DashboardTablesMixin:
             normal_tp = float(params.get("normal_arm_pct", 7.0) or 7.0)
             close_items = [item for item in local_by_mode[mode] if item.action == "CLOSE"]
             consumed_close_ids: set[str] = set()
+            position_ids: dict[str, int] = {}
 
             for index, row in enumerate(positions):
                 symbol = str(row.get("symbol", row.get("instrumentId", "?")) or "?").upper()
@@ -299,7 +375,12 @@ class DashboardTablesMixin:
                     tp_price = 0.0
                 gross = avg_price * quantity * 1000.0
                 market_value = market_price * quantity * 1000.0
-                buy_fee = _number(row.get("buyFee", row.get("fee", 0)))
+                fee_value = row.get("buyFee", row.get("fee"))
+                try:
+                    fee_known = fee_value is not None and math.isfinite(float(fee_value)) and float(fee_value) >= 0
+                except (ValueError, TypeError, OverflowError):
+                    fee_known = False
+                buy_fee = float(fee_value) if fee_known else 0.0
                 buy_fee_text = f"PHÍ MUA {_compact_vnd(buy_fee)}"
                 if mode == "PAPER":
                     estimated_exit_cost = market_value * (
@@ -308,10 +389,10 @@ class DashboardTablesMixin:
                 else:
                     buy_rate = self._cached_fee_rate(symbol, "BUY")
                     sell_rate = self._cached_fee_rate(symbol, "SELL")
-                    if buy_fee <= 0 and buy_rate is not None:
+                    if not fee_known and buy_rate is not None:
                         buy_fee = gross * buy_rate
                         buy_fee_text = f"PHÍ MUA ~{_compact_vnd(buy_fee)}"
-                    elif buy_fee <= 0 and not any(key in row for key in ("buyFee", "fee")):
+                    elif not fee_known:
                         buy_fee_text = "PHÍ MUA CHỜ DNSE"
                     if cycle and cycle.fees_paid > 0:
                         buy_fee_text = f"PHÍ ĐÃ GHI {_compact_vnd(cycle.fees_paid)}"
@@ -320,20 +401,20 @@ class DashboardTablesMixin:
                     float(cycle.net_pnl) if cycle else -abs(buy_fee)
                 ) + (market_price - avg_price) * quantity * 1000.0 - estimated_exit_cost
                 pnl = float(metrics.get("current_net_pnl", fallback_pnl) or 0.0)
-                mae = float(metrics.get("mae_net_pnl", min(0.0, pnl)) or 0.0)
-                mfe = float(metrics.get("mfe_net_pnl", max(0.0, pnl)) or 0.0)
                 basis = (cycle.buy_notional if cycle else 0) or _number(metrics.get("entry_notional_vnd")) or gross
                 pnl_pct = pnl / basis * 100.0 if basis > 0 else 0.0
                 history_verified = metrics.get("price_history_verified") is True
                 history_untrusted = (metrics.get("price_history_verified") is False or (
                     "peak_profit_pct" in metrics and metrics.get("market_data_policy") != "G1_MATCH_V1"))
-                extrema_text = "MAE — · MFE — · CHỜ XÁC MINH"
+                extrema_text = "MAE — · MFE —\nCHỜ XÁC MINH"
                 if history_verified:
                     mae_pct, mfe_pct = _number(metrics.get("mae_pct")), _number(metrics.get("mfe_pct"))
                     mae_price, mfe_price = avg_price * (1 + mae_pct / 100), avg_price * (1 + mfe_pct / 100)
-                    extrema_text = f"MAE {_display_price(mae_price)} ({mae_pct:+.2f}%) · MFE {_display_price(mfe_price)} ({mfe_pct:+.2f}%)"
+                    extrema_text = (f"MAE {mae_pct:+.2f}% · {_display_price(mae_price)} · "
+                                    f"{_trade_money((mae_price - avg_price) * quantity * 1000, signed=True)}\n"
+                                    f"MFE {mfe_pct:+.2f}% · {_display_price(mfe_price)} · "
+                                    f"{_trade_money((mfe_price - avg_price) * quantity * 1000, signed=True)}")
                 pending = max(0, quantity - sellable)
-                settle = str(row.get("settleDate", "") or "")[:10]
                 row_source = str(row.get("source", "") or "").upper()
                 if cycle:
                     source = {
@@ -354,9 +435,11 @@ class DashboardTablesMixin:
                 opened = row.get("openedAt", row.get("createdAt", row.get("time", "")))
                 if not opened and cycle:
                     opened = cycle.opened_at
-                iid = f"POSITION:{mode}:{trade_id or symbol}:{index}"
-                peak_pct = float(metrics.get("peak_profit_pct", pnl_pct) or pnl_pct)
-                take_profit_enabled = tp_price > 0
+                broker_position = row.get("id", row.get("positionId", row.get("loanPackageId", "")))
+                position_key = f"POSITION:{mode}:{trade_id or symbol}:{broker_position}"
+                occurrence = position_ids.get(position_key, 0)
+                position_ids[position_key] = occurrence + 1
+                iid = position_key if not occurrence else f"{position_key}:ROW{occurrence}"
                 normal_enabled = "NORMAL" in cycle_modes
                 indicator_enabled = "IND_EXIT" in cycle_modes
                 decision = runtime_decisions.get(symbol) if isinstance(runtime_decisions.get(symbol), dict) else {}
@@ -374,24 +457,6 @@ class DashboardTablesMixin:
                     "DONE" if metrics.get("normal_protection_done") and not repeat_effective else
                     str(decision_details.get("normal_state", "WAIT") or "WAIT").upper()
                 )
-                decision_checks = (
-                    decision_details.get("entry_checks")
-                    if isinstance(decision_details.get("entry_checks"), dict) else {}
-                )
-                indicator_policy = str(
-                    decision_details.get(
-                        "indicator_exit_policy",
-                        params.get("indicator_exit_policy", "ALERT"),
-                    ) or "ALERT"
-                ).upper()
-                if cycle and (not cycle.auto_sell_enabled or not cycle.bot_trade_enabled):
-                    indicator_policy = "ALERT"
-                indicator_signal = str(decision.get("signal", "")).upper() == "SELL"
-                indicator_state = (
-                    "OFF" if not indicator_enabled
-                    else f"{indicator_policy}·SIGNAL" if indicator_signal
-                    else f"{indicator_policy}·WAIT"
-                )
                 from ..rules.protection import policy_for_stage
                 protect_mode = policy_for_stage(params, str(decision_details.get("protection_stage", "ARM")))
                 if cycle and (not cycle.auto_sell_enabled or not cycle.bot_trade_enabled):
@@ -401,60 +466,7 @@ class DashboardTablesMixin:
                                (str(decision_details.get("protection_stage", "ARM")) == "DYN" and
                                 params.get("normal_dynamic_enabled") is False))):
                     protect_mode = "OFF"
-                protect_mfe = decision_details.get("normal_mfe_pct")
-                protect_trail = decision_details.get("normal_effective_trail_pct")
                 protect_price = decision_details.get("normal_trigger_price")
-                protect_atr = decision_details.get("normal_atr_pct")
-                protect_atr_activation_multiplier = decision_details.get(
-                    "normal_atr_activation_multiplier",
-                    params.get("normal_atr_activation_multiplier", 0.6),
-                )
-                protect_activation_mfe = decision_details.get("normal_activation_mfe_pct")
-                protect_atr_multiplier = decision_details.get(
-                    "normal_atr_multiplier", params.get("normal_atr_multiplier", 0.6),
-                )
-                protect_retention = decision_details.get(
-                    "normal_retention_pct", params.get("normal_retention_pct", 0.0),
-                )
-                protect_retention_until = decision_details.get(
-                    "normal_retention_until_pct",
-                    params.get("normal_retention_until_pct", 0.0),
-                )
-                dynamic_active = bool(decision_details.get(
-                    "normal_dynamic_enabled", params.get("normal_dynamic_enabled", False),
-                ))
-                start_active = dynamic_active and bool(decision_details.get(
-                    "normal_atr_activation_enabled", params.get("normal_atr_activation_enabled", True),
-                ))
-                atr_active = dynamic_active and bool(decision_details.get(
-                    "normal_atr_trail_enabled", params.get("normal_atr_trail_enabled", True),
-                ))
-                keep_active = dynamic_active and bool(decision_details.get(
-                    "normal_retention_enabled", params.get("normal_retention_enabled", True),
-                )) and _number(protect_retention) > 0
-                until_active = bool(decision_details.get(
-                    "normal_retention_until_enabled", params.get("normal_retention_until_enabled", True),
-                ))
-                start_text = (
-                    f"START {_number(protect_activation_mfe):.1f}% "
-                    f"(ATR1D T−1 {_number(protect_atr):.1f}%×{_number(protect_atr_activation_multiplier):g})"
-                    if start_active and protect_atr is not None and protect_activation_mfe is not None
-                    else "START CHỜ ATR" if start_active else "START OFF"
-                )
-                atr_text = (
-                    f"LÙI ATR {_number(protect_atr) * _number(protect_atr_multiplier):.1f}% "
-                    f"({_number(protect_atr_multiplier):g}×ATR)"
-                    if atr_active and protect_atr is not None
-                    else "LÙI CHỜ ATR" if atr_active else "ATR TRAIL OFF"
-                )
-                until_text = f"{_number(protect_retention_until):g}%" if until_active else "ARM"
-                keep_text = (
-                    f"GIỮ {_number(protect_retention):g}%→{until_text}"
-                    if keep_active else "GIỮ OFF"
-                )
-                protect_sell = decision_details.get(
-                    "sell_share_pct", params.get("normal_sell_pct", 100.0),
-                )
                 pending_close = next(
                     (
                         item for item in close_items
@@ -471,87 +483,7 @@ class DashboardTablesMixin:
                         and pending_event in {"NORMAL_PROTECTION", "DYNAMIC_PROTECTION", "PRICE_PROTECTION"}
                     ):
                         normal_state = "T+2"
-                settle_short = f"{settle[8:10]}/{settle[5:7]}" if len(settle) == 10 else settle
-                settlement_status = "✓ĐÃ VỀ"
-                if pending:
-                    settlement_status = (
-                        f"T+ CACHE·{settle_short or '--'}·{pending}CP"
-                        if pending_close and pending_close.status.upper() == "WAITING_SETTLEMENT"
-                        else f"T+·{settle_short or '--'}·{pending}CP"
-                    )
-                settlement_status = (
-                    f"BÁN ĐƯỢC {sellable} CP · CHỜ VỀ {pending} CP · {settlement_status}"
-                )
-                stored_entry_state = str(
-                    cycle.entry_market_state if cycle else ""
-                ).strip().upper()
-                entry_state = (
-                    stored_entry_state
-                    if stored_entry_state not in {"", "UNKNOWN"}
-                    else str(decision.get("market_state", "UNKNOWN") or "UNKNOWN").upper()
-                )
-                entry_exposure = float(
-                    (cycle.entry_exposure if cycle else 0.0)
-                    or decision_details.get("exposure", 0.0)
-                    or 0.0
-                )
-                entry_budget = float(
-                    (cycle.entry_budget if cycle else 0.0)
-                    or decision_checks.get("order_budget", 0.0)
-                    or 0.0
-                )
-                exposure_pct = entry_exposure * 100.0 if 0 < entry_exposure <= 1.0 else entry_exposure
-                entry_context = entry_state
-                if exposure_pct > 0:
-                    entry_context += f" {exposure_pct:g}%"
-                if entry_budget > 0:
-                    entry_context += f" · {entry_budget / 1_000_000.0:.2f}tr"
-                take_profit_state = (
-                    "OFF" if not take_profit_enabled
-                    else "HIT" if market_price + 1e-9 >= tp_price else "WAIT"
-                )
-                status_parts = [
-                    entry_context,
-                    settlement_status,
-                    f"TP {take_profit_state}" + (f"·+{tp_pct:g}%" if take_profit_enabled else ""),
-                    (
-                        f"PROTECT {protect_mode}/{normal_state}"
-                        f"·MFE {_number(protect_mfe):.1f}%"
-                        f"·TRAIL {_number(protect_trail):.1f}%"
-                        f"·{start_text}"
-                        f"·{atr_text}"
-                        f"·{keep_text}"
-                        f"·{_display_price(protect_price)}"
-                        f"·SELL {_number(protect_sell):g}%"
-                    ) if normal_enabled and protect_mfe is not None and protect_trail is not None else (
-                        f"PROTECT {protect_mode}/{normal_state}"
-                        + ("·CHỜ DỮ LIỆU" if normal_state != "DONE" else "")
-                        + f"·SELL {_number(protect_sell):g}%"
-                    ) if normal_enabled else "PROTECT OFF",
-                    f"E {indicator_state}",
-                ]
-                if cycle and cycle.is_reentry:
-                    status_parts.append("[REENTRY]")
-                compact_settlement = f"BÁN ĐƯỢC {sellable} CP" + (f" · CHỜ VỀ {pending} CP" if pending else "")
                 paused = bool(cycle and (not cycle.auto_sell_enabled or not cycle.bot_trade_enabled))
-                compact_status = [compact_settlement,
-                    f"TP {take_profit_state}" + (f"·+{tp_pct:g}%" if take_profit_enabled else ""),
-                    "PROTECT CHỜ XÁC MINH" if normal_enabled and history_untrusted else
-                    "PROTECT ALERT" if normal_enabled and paused else
-                    f"PROTECT {protect_mode}/{normal_state}" + ("·CHỜ DỮ LIỆU" if protect_mfe is None and normal_state != "DONE" else "")
-                    if normal_enabled else "PROTECT OFF",
-                    "E ALERT" if indicator_enabled and paused else f"E {indicator_state}"]
-                if pending_close and pending_close.status.upper() != "WAITING_SETTLEMENT":
-                    close_label = {
-                        "PENDING": "ĐÓNG·CACHE",
-                        "WAITING_TOKEN": "ĐÓNG·OTP",
-                        "SENDING": "ĐÓNG·GỬI",
-                        "WORKING": "ĐÓNG·KHỚP",
-                        "PARTIAL": "ĐÓNG·MỘT PHẦN",
-                        "UNKNOWN": "ĐÓNG·KIỂM TRA",
-                    }.get(pending_close.status.upper(), "ĐÓNG·CHỜ")
-                    status_parts.insert(0, close_label)
-                    compact_status.insert(0, close_label)
                 if pending_close and pending_close.status.upper() == "WAITING_SETTLEMENT":
                     row_tag = "position_waiting"
                 elif pending_close:
@@ -573,27 +505,55 @@ class DashboardTablesMixin:
                     else (f"R -- · E {reward_pct:.2f}%" if not sl_enabled else f"R {risk_pct:.2f}% · E --")
                 )
                 sl_text = (
-                    f"SL▼ {_display_price(sl_price)} ({sl_pct:+g}%)"
+                    f"SL {sl_pct:+g}% {_trade_money((sl_price - avg_price) * quantity * 1000)} @ {_display_price(sl_price)}"
                     if sl_enabled else "SL OFF"
                 )
+                target_lines = [sl_text,
+                    (f"TP +{tp_pct:g}% +{_trade_money((tp_price - avg_price) * quantity * 1000)} @ {_display_price(tp_price)}"
+                     if tp_price > 0 else "TP OFF")]
+                activation_text = ""
+                if normal_enabled:
+                    from .protect_preview import dynamic_start_preview
+                    activation = dynamic_start_preview(avg_price, params, decision_details)
+                    arm_enabled = params.get("normal_arm_enabled", True)
+                    arm_text = _display_price(avg_price * (1 + _number(params.get("normal_arm_pct", 7)) / 100)) if arm_enabled else "OFF"
+                    start_price = activation["start"]
+                    start_target = (_display_price(start_price) if start_price > 0 else "CHỜ ATR") if activation["start_enabled"] else "CÓ LÃI"
+                    if activation["state"] == "OFF":
+                        start_target = "OFF"
+                    activation_text = f"ARM {arm_text} · START {start_target}"
+                    stage = str(decision_details.get("protection_stage", "ARM"))
+                    floor = _number(protect_price)
+                    floor_text = (_display_price(floor) if floor > 0 else "CHỜ DỮ LIỆU") if not history_untrusted else "CHỜ XÁC MINH"
+                    target_lines.append(f"PROTECT {stage} {floor_text} · {protect_mode}")
                 from ..trading.position_controls import position_override_items, position_bot_cell
                 override_items = position_override_items(self.settings, cycle)
                 if override_items:
                     tree._viking_override_rows[iid] = override_items
+                from .position_status import position_status
+                status_text, status_hint = position_status(
+                    symbol=symbol, mode=mode, quantity=quantity, sellable=sellable,
+                    settle=row.get("settleDate"), price=market_price, entry=avg_price,
+                    sl_enabled=sl_enabled, sl_price=sl_price, tp_price=tp_price, tp_pct=tp_pct,
+                    params=params, decision=decision, normal_enabled=normal_enabled,
+                    indicator_enabled=indicator_enabled, paused=paused, protect_mode=protect_mode,
+                    normal_state=normal_state, history_untrusted=history_untrusted, pending_close=pending_close, metrics=metrics,
+                )
                 self._update_running_row(
                     tree, existing, row_order, iid=iid, tags=(row_tag,),
                     values=(
                         f"#{(trade_id or str(row.get('positionId', index)))[:12]}",
                         self._row_time(opened),
-                        f"{mode} · {source} · BUY {symbol} @ {_display_price(avg_price)} · KL {quantity}",
-                        f"{sl_text} · "
-                        + (f"TP▲ {_display_price(tp_price)} ({tp_pct:+g}%)" if tp_price > 0 else "TP▲ --"),
-                        f"{buy_fee_text} · DỰ KIẾN BÁN {_compact_vnd(estimated_exit_cost)}",
+                        _order_caption(mode, source, "BUY", symbol, quantity, _display_price(avg_price), self._row_time(opened))
+                        + (f"\n{activation_text}" if activation_text else ""),
+                        "\n".join(target_lines),
+                        f"{buy_fee_text.replace('PHÍ MUA', 'MUA').replace('PHÍ ĐÃ GHI', 'ĐÃ GHI')}\nBÁN "
+                        + (f"~{_trade_money(estimated_exit_cost)}" if mode == "PAPER" or sell_rate is not None else "CHỜ DNSE"),
                         rr_text,
-                        f"{pnl_icon}{_compact_vnd(pnl)} ({pnl_pct:+.2f}%)"
-                        f" · {extrema_text}",
-                        " · ".join(value for value in compact_status if value),
+                        f"PnL {pnl_icon}{_trade_money(pnl, signed=True)} ({pnl_pct:+.2f}%)\n{extrema_text}",
+                        status_text,
                         position_bot_cell(self.settings, cycle),
+                        "X" if override_items else "—",
                     ),
                 )
                 evidence = metrics.get("price_history_evidence") or {}
@@ -605,16 +565,27 @@ class DashboardTablesMixin:
                               "tiếp tục theo dõi giá mới")
                     if evidence.get("entry_minute_omitted"):
                         period += " (bỏ nến phút chứa lúc mua)"
+                    if evidence.get("pending_sessions"):
+                        period += f" · Chờ nến {', '.join(evidence['pending_sessions'])}; tự tải bổ sung"
                 tree._viking_row_hints[iid] = {
                     "Ticket": f"Vị thế #{trade_id}\nChuột phải → Mở bảng: sửa TP/SL, ARM/DYNAMIC/E hoặc đo lại MAE/MFE.",
-                    "Order": f"{mode} · {source} · {symbol}\nGiá vốn {_display_price(avg_price)} · Còn {quantity:,} CP"
+                    "Order": f"{mode} · {source} · {symbol}\nMở {self._row_time(opened)}\nGiá vốn {_display_price(avg_price)} · Còn {quantity:,} CP"
+                             + (f"\n{activation_text}" if activation_text else "")
                              + (f"\nĐã mua {cycle.entry_quantity:,} CP · Bán khớp {cycle.sold_quantity:,} CP" if cycle else ""),
-                    "PnL_MAE_MFE": f"PnL {_compact_vnd(pnl)} / vốn mua gốc {_compact_vnd(basis)} = {pnl_pct:+.2f}%\n"
+                    "Targets": f"Còn {quantity:,} CP · Lãi/lỗ tại SL/TP trước phí và trượt giá.\n"
+                               f"SL {_display_price(sl_price)} ({sl_pct:+g}%) · TP {_display_price(tp_price)} ({tp_pct:+g}%)\n"
+                               "ARM/START bật theo dõi (xem cột Lệnh); PROTECT là mốc giá lùi để xét bán.\n"
+                               + (f"{activation_text}\n" if activation_text else "") + "\n".join(target_lines[2:]),
+                    "CostInfo": "Phí đã ghi theo sổ giao dịch; ~ là ước tính, CHỜ DNSE là chưa có dữ liệu.\n"
+                                "Phí bán dự kiến không đồng nghĩa đã bán, chưa tự trừ thêm vào PnL REAL.",
+                    "Bot": "Quyền tự động của vị thế. BOT chung chỉ bật/tắt BUY mới; SL/TP/PROTECT/E theo cấu hình vị thế.",
+                    "PnL_MAE_MFE": f"PnL toàn deal: đã chốt + phần còn giữ, theo phí đã ghi nhận.\nPnL {_compact_vnd(pnl)} / vốn mua gốc {_compact_vnd(basis)} = {pnl_pct:+.2f}%\n"
                                     f"MAE/MFE theo giá vốn {_display_price(avg_price)}. {period}.\n"
+                                    f"Tiền MAE/MFE = chênh lệch giá × {quantity:,} CP còn giữ, trước phí; không cộng phần đã chốt.\n"
+                                    + (f"Đáy {_display_price(mae_price)} · Đỉnh {_display_price(mfe_price)}\n" if history_verified else "")
                                     + (extrema_text if history_verified else
                                        "Lịch sử cũ chưa xác minh; không dùng cho PROTECT. Mở bảng vị thế để đo lại từ giá G1."),
-                    "Status": "\n".join(status_parts) + ("\nBOT vị thế: Alert, SL/TP/PROTECT/E chỉ báo." if cycle and not cycle.bot_trade_enabled else
-                                                             "\nTỰ BÁN TẠM DỪNG: SL/TP/PROTECT/E chỉ báo." if paused else ""),
+                    "Status": status_hint,
                     "Override": "Cấu hình riêng của vị thế:\n" + "\n".join(override_items) +
                                 "\nTP/SL AUTO hoặc chế độ Theo RULE để bỏ ghi đè."
                                 if override_items else "BOT vị thế: Bật, tuân theo BOT chung và RULE.\nKhông có cấu hình riêng. X = ghi đè; chuột phải → Mở bảng để chỉnh."
@@ -734,19 +705,22 @@ class DashboardTablesMixin:
                     values=(
                         f"[CACHE] {item.id[:8]}",
                         self._row_time(item.created_at),
-                        f"{mode} · {display_source} · {item.side} {item.symbol} @ {price_text} · KL {item.quantity}",
+                        _order_caption(mode, display_source, item.side, item.symbol, item.quantity, price_text, self._row_time(item.created_at)),
                         target_text,
                         f"FEE {fee_text}" if gross > 0 else f"HẾT HẠN {self._row_time(item.expires_at)}",
                         f"R {risk_text} · E {reward_text}" if item.action == "OPEN" else "--",
                         f"-- · -- · -- · Khớp {item.filled_quantity}/{item.quantity}",
-                        f"{status_label} · Khớp {item.filled_quantity}/{item.quantity} · "
-                        f"{remaining_label} · {em_text} · {item.result or item.reason or 'ĐANG CHỜ'}",
-                        position_bot_cell(self.settings, cycle) if cycle else
-                        ("Bật · X" if override_items else "Bật") if item.source in {"BOT", "EM"} else
-                        "X" if override_items else "",
+                        f"{status_label} · Khớp {item.filled_quantity}/{item.quantity}\n"
+                        f"{remaining_label} · {em_text}\n{item.result or item.reason or 'ĐANG CHỜ'}",
+                        position_bot_cell(self.settings, cycle) if cycle else "Bật" if item.source in {"BOT", "EM"} else "—",
+                        "X" if override_items else "—",
                     ),
                 )
-                tree._viking_row_hints[iid] = {"Override": "\n".join(override_items) if override_items else "Không có cấu hình riêng."}
+                tree._viking_row_hints[iid] = {
+                    "Order": f"{mode} · {display_source} · {item.side} {item.symbol}\n"
+                             f"Tạo {self._row_time(item.created_at)} · KL {item.quantity:,} @ {price_text}",
+                    "Override": "\n".join(override_items) if override_items else "Không có cấu hình riêng.",
+                }
                 if override_items:
                     tree._viking_override_rows[iid] = override_items
                 self._running_row_actions[mode][iid] = {
@@ -799,14 +773,16 @@ class DashboardTablesMixin:
                     values=(
                         f"[DNSE] {(order_id or str(index))[:10]}",
                         self._row_time(row.get('createdAt', row.get('createdDate', ''))),
-                        f"{mode} · EXTERNAL_DNSE · {side} {symbol} @ {_display_price(price) if price else kind} · KL {quantity}",
+                        _order_caption(mode, "EXTERNAL_DNSE", side, symbol, quantity, _display_price(price) if price else kind,
+                                       self._row_time(row.get('createdAt', row.get('createdDate', '')))),
                         "SL/TP SAU KHI KHỚP" if side == "BUY" else "ĐÓNG VỊ THẾ",
                         f"FEE {_compact_vnd(fee)}",
                         "--",
                         f"-- · -- · -- · Khớp {filled}/{quantity}",
-                        f"[DNSE][{pending_ack or ('PARTIAL' if partial else 'WORKING')}] · "
+                        f"[DNSE][{pending_ack or ('PARTIAL' if partial else 'WORKING')}]\n"
                         f"Khớp {filled}/{quantity} · CÒN {remaining}"
                         + (" CHỜ KHỚP" if not pending_ack else ""),
+                        "",
                         "",
                     ),
                 )
@@ -816,6 +792,11 @@ class DashboardTablesMixin:
                     "quantity": quantity, "filled_quantity": filled, "price": price,
                     "editable": mode == "REAL" and kind == "LO" and not pending_ack,
                     "cancellable": mode == "REAL" and bool(order_id) and not pending_ack,
+                }
+                tree._viking_row_hints[iid] = {
+                    "Order": f"{mode} · EXTERNAL_DNSE · {side} {symbol}\n"
+                             f"Tạo {self._row_time(row.get('createdAt', row.get('createdDate', '')))}\n"
+                             f"Mã lệnh {order_id} · KL {quantity:,}",
                 }
             current_ids = set(row_order)
             root_order = [iid for iid in row_order if iid not in row_parents]
@@ -839,6 +820,14 @@ class DashboardTablesMixin:
             if removed:
                 removed_ids = set(removed)
                 tree.delete(*(iid for iid in removed if tree.parent(iid) not in removed_ids))
+            for number, iid in enumerate(root_order, 1):
+                label = str(number)
+                if tree.set(iid, "STT") != label:
+                    tree.set(iid, "STT", label)
+                for child_number, child in enumerate(child_order.get(iid, []), 1):
+                    label = f"{number}.{child_number}"
+                    if tree.set(child, "STT") != label:
+                        tree.set(child, "STT", label)
             restored = tuple(iid for iid in selected_before if iid in current_ids)
             if tuple(tree.selection()) != restored:
                 tree.selection_set(restored)
@@ -847,6 +836,9 @@ class DashboardTablesMixin:
             cells = getattr(tree, "_viking_override_cells", None)
             if cells:
                 cells.schedule()
+            decorations = getattr(tree, "_viking_table_cells", None)
+            if decorations:
+                decorations.schedule()
         self._sync_cancel_button()
 
     def _log(self, message: str, target: str = "manual") -> None:

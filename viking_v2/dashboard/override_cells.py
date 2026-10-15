@@ -46,13 +46,16 @@ class OverrideCells:
                                    for tag in self.tree.item(iid, "tags") if self.tree.tag_configure(tag, "background")),
                                   style.lookup(name, "background") or "#22262D")
             label = self.labels.get(iid)
+            cell_font = style.lookup(name, "font") or ("Segoe UI", 14)
+            from .tables import _running_scale
+            top_padding = round(4 * _running_scale(self.tree.winfo_toplevel()))
             if label is None:
                 label = self.labels[iid] = tk.Label(self.tree, text="", fg="#F59E0B", borderwidth=0,
-                                                   font=("Segoe UI", 11, "bold"), cursor="arrow")
+                                                   font=cell_font, cursor="arrow", anchor="n")
                 for event in ("<Motion>", "<Leave>", "<Button-1>", "<ButtonRelease-1>", "<Button-3>", "<MouseWheel>"):
                     label.bind(event, lambda e, event=event, label=label: self.forward(e, event, label))
-            label.configure(bg=background, text=self.tree.set(iid, "Override"))
-            label.place(x=x + 1, y=y + 1, width=max(1, width - 2), height=max(1, height - 2))
+            label.configure(bg=background, font=cell_font, pady=top_padding, text=self.tree.set(iid, "Override"))
+            label.place(x=x + 1, y=y, width=max(1, width - 2), height=height)
             label.lift()
         for iid, label in list(self.labels.items()):
             if iid not in active:

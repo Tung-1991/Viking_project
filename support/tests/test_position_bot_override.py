@@ -37,7 +37,7 @@ def test_local_bot_alert_cancels_cached_auto_orders_preserving_manual_and_ledger
     assert cycle.to_dict() == {**before, "bot_trade_enabled": False}
     assert app.settings.to_dict() == settings and broker.sent == []
     assert app.trade_state.get(actions[1]["trade_id"]).bot_trade_enabled is True
-    assert position_bot_cell(app.settings, cycle) == "Alert · X"
+    assert position_bot_cell(app.settings, cycle) == "Alert"
     assert TradeStateStore(app.trade_state.store.path).get(trade_id).bot_trade_enabled is False
 
 
@@ -118,7 +118,7 @@ def test_legacy_trades_keep_their_existing_auto_sell_hold():
     assert TradeCycle.from_dict({"id": "legacy", "symbol": "HDB"}).bot_trade_enabled is True
     held = TradeCycle.from_dict({"id": "legacy", "symbol": "HDB", "auto_sell_enabled": False})
     assert held.bot_trade_enabled is True and held.auto_sell_enabled is False
-    assert position_bot_cell(AppSettings(), held) == "Bán Alert · X"
+    assert position_bot_cell(AppSettings(), held) == "Bán Alert"
 
 
 @pytest.mark.parametrize("side", ["BUY", "SELL"])

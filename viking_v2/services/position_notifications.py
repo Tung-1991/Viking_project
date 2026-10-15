@@ -46,6 +46,10 @@ def position_notice_lines(context):
         return []
     held, bought, sold = context["held_quantity"], context["bought_quantity"], context["sold_quantity"]
     lines = [f"Vị thế app: đang giữ {held:,} CP"]
+    maximum = context.get("entry_orders_max")
+    if maximum is not None:
+        used = int(context.get("entry_orders_used", 0))
+        lines.append(f"Đã dùng {used}/{int(maximum)} lượt mua · Còn {max(0, int(maximum) - used)} lượt")
     if sold is not None:
         lines[0] += f" · Đã bán khớp {sold:,} CP"
         if bought > 0 and sold > 0:

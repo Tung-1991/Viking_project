@@ -817,7 +817,7 @@ class RuleStateStore:
             self.store.write(raw)
             return dict(current)
 
-    def observe_exit_wait(self, symbol: str, trade_id: str, snapshot: dict | None) -> list[dict]:
+    def observe_exit_wait(self, symbol: str, trade_id: str, snapshot: dict | None, *, cleared: bool = True) -> list[dict]:
         """Retain one notice per condition episode, including a missed first GUI poll."""
         with self._lock:
             raw = self._read()
@@ -827,14 +827,19 @@ class RuleStateStore:
                 return []
             kind = str((snapshot or {}).get("kind", ""))
             prior = str(current.get("exit_wait_active_kind", ""))
-            if kind and kind != prior:
+            if not kind and prior and not cleared:
+                return [dict(row) for row in current.get("exit_wait_notices", [])]
+            old_notice = next((row for row in current.get("exit_wait_notices", []) if row["kind"] == kind), {})
+            fresh_event = bool((snapshot or {}).get("event_occurrence") and
+                               snapshot["event_occurrence"] != old_notice.get("event_occurrence"))
+            if kind and (kind != prior or fresh_event):
                 sequence = int(current.get("exit_wait_sequence", 0)) + 1
                 current["exit_wait_sequence"] = sequence
                 notices = {row["kind"]: row for row in current.get("exit_wait_notices", [])}
                 notices[kind] = {**snapshot, "observed_at": time.time(),
-                                 "occurrence": f"{trade_id}|{kind}|{sequence}|{time.time():.6f}"}
+                                 "occurrence": snapshot.get("event_occurrence") or f"{trade_id}|{kind}|{sequence}|{time.time():.6f}"}
                 current["exit_wait_notices"] = list(notices.values())
-            if kind != prior:
+            if kind != prior or fresh_event:
                 current["exit_wait_active_kind"] = kind
                 raw["symbols"][key] = current
                 self.store.write(raw)
@@ -871,7 +876,7 @@ class RuleStateStore:
             if not isinstance(current, dict) or current.get("trade_id") != trade_id:
                 raise ValueError("Position metrics no longer match this trade")
             repaired = {**current, **{key: float(metrics[key]) for key in required},
-                        "market_data_policy": MATCHED_DATA_POLICY, "price_history_verified": True,
+                        "market_data_policy": MATCHED_DATA_POLICY, "price_history_verified": not bool(evidence.get("pending_sessions")),
                         "price_history_evidence": dict(evidence), "price_history_repaired_at": time.time(),
                         "updated_at": time.time()}
             repaired["price_history_before_repair"] = {

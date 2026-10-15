@@ -66,13 +66,12 @@ def position_override_items(settings, position) -> list[str]:
 
 
 def position_bot_cell(settings, position) -> str:
-    """Combine local trading permission and the override mark in one cell."""
+    """Local trading permission; overrides have their own adjacent column."""
     if position is None:
         return "—"
-    mark = " · X" if position_override_items(settings, position) else ""
     state = ("Alert" if getattr(position, "bot_trade_enabled", True) is False else
              "Bán Alert" if getattr(position, "auto_sell_enabled", True) is False else "Bật")
-    return state + mark
+    return state
 
 
 def exit_stage_policy(params, cycle, stage: str) -> str:

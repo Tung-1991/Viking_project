@@ -329,16 +329,16 @@ def test_bot_button_has_clear_on_pause_and_off_states() -> None:
 
     subject.rule_state = _EntryPauseState(False)
     subject._paint_bot(True, force=True)
-    assert subject.bot_button.options["text"] == "BOT · ON"
+    assert subject.bot_button.options["text"] == "MUA AUTO · ON"
     assert subject.bot_button.options["fg_color"] == COL_GREEN
 
     subject.rule_state = _EntryPauseState(True)
     subject._paint_bot(True, force=True)
-    assert subject.bot_button.options["text"] == "BOT · PAUSE"
+    assert subject.bot_button.options["text"] == "MUA AUTO · CHỜ"
     assert subject.bot_button.options["fg_color"] == COL_WARN
 
     subject._paint_bot(False, force=True)
-    assert subject.bot_button.options["text"] == "BOT · OFF"
+    assert subject.bot_button.options["text"] == "MUA AUTO · OFF"
     assert subject.bot_button.options["fg_color"] == COL_GRAY
 
 
@@ -662,13 +662,15 @@ def test_running_table_keeps_the_completed_split_column_design() -> None:
     assert [tree.headings[key]["text"] for key in RUNNING_COLUMNS] == [
         "Ticket",
         "Thời gian",
-        "Thông tin Lệnh",
-        "Chốt lời/Lỗ (SL|TP)",
-        "Chi phí/Phí qua đêm",
+        "Lệnh / Vị thế",
+        "SL / TP / PROTECT",
+        "Phí mua / bán",
         "Rủi ro/Kỳ vọng (%)",
-        "PnL / MAE / MFE",
+        "PnL · MAE / MFE",
         "Trạng thái",
-        "BOT / Override",
+        "BOT",
+        "Override",
+        "STT",
     ]
     assert all(tree.column_options[key]["width"] == RUNNING_WIDTHS[key] for key in RUNNING_COLUMNS)
     assert RUNNING_HEADERS["Order"] != "Lệnh / KL / SL / TP / FEE"
@@ -683,10 +685,8 @@ def test_running_headers_fit_their_rendered_font(ui_root) -> None:
     try:
         DashboardTablesMixin._configure_tree(tree, RUNNING_COLUMNS)
         ui_root.update_idletasks()
-        heading_font = tkfont.Font(
-            root=ui_root, family=FONT_TABLE_HEADING[0],
-            size=FONT_TABLE_HEADING[1], weight="bold", slant="italic",
-        )
+        from viking_v2.dashboard.tables import RUNNING_HEADING_FONT
+        heading_font = tkfont.Font(root=ui_root, font=RUNNING_HEADING_FONT)
         for column in RUNNING_COLUMNS:
             required = heading_font.measure(RUNNING_HEADERS[column]) + 32
             assert int(tree.column(column, "width")) >= required
@@ -872,8 +872,8 @@ def test_display_cycle_snapshot_is_read_once_and_respects_mode_package_and_next_
         paper_id, = paper_tree.get_children()
         assert subject._running_row_actions["REAL"][real_id]["trade_id"] == "real-2"
         assert subject._running_row_actions["PAPER"][paper_id]["trade_id"] == "paper-1"
-        assert "(-8%)" in real_tree.item(real_id, "values")[3]
-        assert "(-2%)" in paper_tree.item(paper_id, "values")[3]
+        assert "SL -8%" in real_tree.item(real_id, "values")[3]
+        assert "SL -2%" in paper_tree.item(paper_id, "values")[3]
         cycles[2] = TradeCycle("real-2", "FPT", "REAL", loan_package_id="2", sl_enabled=False)
         subject._render_tables({})
         assert len(reads) == 2
@@ -1055,15 +1055,17 @@ def test_settings_popups_open_and_have_no_overlapping_grid_controls(ui_root) -> 
         assert connection_popup.tele_event_time_controls["buy_queued"] is connection_popup.tele_batch
         assert connection_popup.tele_event_time_controls["closed"].cget("text") == "1 TIN/VỊ THẾ"
         assert list(connection_popup.tele_event_labels) == [
-            "buy_queued", "blocked_buy", "buy_lost", "protect", "indicator_exit", "closed",
-            "external_sell", "corporate_action", "system",
+            "blocked_buy", "buy_lost", "protect_armed", "protect", "dynamic_protect",
+            "indicator_exit", "sl_tp", "exit_wait", "buy_queued", "sell_queued", "closed",
+            "external_sell", "system", "corporate_action",
         ]
+        assert list(connection_popup.tele_group_switches) == ["buy_signals", "position_exits", "orders", "operations"]
         assert {int(button.grid_info()["column"]) for button in connection_popup.tele_event_hint_buttons.values()} == {1}
         assert connection_popup.save_telegram_token_switch.cget("text") == "LƯU BOT TOKEN"
         assert connection_popup.btn_clear_telegram_token.cget("text") == "XÓA"
         assert set(connection_popup.tele_cooldown_entries) == {
             "protect", "indicator_exit", "blocked_buy", "buy_lost", "corporate_action", "external_sell",
-            "system",
+            "system", "dynamic_protect", "sl_tp",
         }
     finally:
         for _label, popup in popups:

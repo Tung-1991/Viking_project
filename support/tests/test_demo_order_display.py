@@ -54,8 +54,8 @@ def test_position_management_display_uses_its_own_book(ui_root, mode, expected, 
         subject._render_tables({"decisions": books["PAPER" if mode == "REAL" else "REAL"],
                                 "decisions_by_mode": books})
         text = tree.item(tree.get_children()[0], "values")[7]
-        assert f"PROTECT AUTO/{expected}" in text
-        assert f"PROTECT AUTO/{other}" not in text
+        assert f"PROTECT {'SAU ARM' if expected == 'ARM' else 'DYNAMIC'} AUTO" in text
+        assert f"PROTECT {'SAU ARM' if other == 'ARM' else 'DYNAMIC'} AUTO" not in text
     finally:
         tree.destroy()
 
@@ -69,9 +69,9 @@ def test_stale_other_book_or_previous_position_does_not_show_active_exit(ui_root
     try:
         subject._render_tables({"decisions_by_mode": {"REAL": {"MSN": decision("REAL", **change)}}})
         text = tree.item(tree.get_children()[0], "values")[7]
-        assert "PROTECT AUTO/ARM" not in text
-        assert "E ALERT·SIGNAL" not in text
-        assert "CHỜ DỮ LIỆU" in text and "MFE 0.0%" not in text
+        assert "PROTECT SAU ARM AUTO" not in text
+        assert "E ALERT: có tín hiệu" not in text
+        assert "Chờ đánh giá vị thế mới từ daemon" in text and "MFE 0.0%" not in text
     finally:
         tree.destroy()
 
@@ -82,8 +82,8 @@ def test_unmanaged_external_position_does_not_claim_automatic_stop_loss(ui_root)
     try:
         subject._render_tables({})
         values = tree.item(tree.get_children()[0], "values")
-        assert "SL OFF" in values[3] and "TP OFF" in values[7]
-        assert "PROTECT OFF" in values[7] and "MFE 0.0%" not in values[7]
+        assert "SL OFF" in values[3] and "TP TẮT" in values[7]
+        assert "PROTECT TẮT" in values[7] and "MFE 0.0%" not in values[7]
     finally:
         tree.destroy()
 
@@ -95,7 +95,7 @@ def test_position_id_cannot_bind_management_from_other_book(ui_root):
         subject._render_tables({})
         values = tree.item(tree.get_children()[0], "values")
         assert "SL OFF" in values[3] and "(-20%)" not in values[3]
-        assert "PROTECT OFF" in values[7]
+        assert "PROTECT TẮT" in values[7]
         assert not subject._running_row_actions["PAPER"][tree.get_children()[0]]["trade_id"]
     finally:
         tree.destroy()
@@ -139,10 +139,10 @@ def test_external_pending_acknowledgement_stays_visible_without_repeat_actions(u
 
 
 @pytest.mark.parametrize("tp_mode,tp_value,em_modes,price,expected", [
-    ("PERCENT", 10, [], 10.8, "TP WAIT·+10%"),
-    ("PRICE", 11, [], 11, "TP HIT·+10%"),
-    ("NONE", 0, ["TP"], 10.7, "TP HIT·+7%"),
-    ("NONE", 0, [], 11, "TP OFF"),
+    ("PERCENT", 10, [], 10.8, "TP CHỜ +10%"),
+    ("PRICE", 11, [], 11, "TP ĐÃ CHẠM +10%"),
+    ("NONE", 0, ["TP"], 10.7, "TP ĐÃ CHẠM +7%"),
+    ("NONE", 0, [], 11, "TP TẮT"),
 ])
 def test_tp_status_matches_actual_target_not_global_percentage_or_net_pnl(
     ui_root, tp_mode, tp_value, em_modes, price, expected,
@@ -155,7 +155,7 @@ def test_tp_status_matches_actual_target_not_global_percentage_or_net_pnl(
         values = tree.item(tree.get_children()[0], "values")
         assert expected in values[7]
         if em_modes == ["TP"]:
-            assert "TP▲ 10,700 (+7%)" in values[3]
+            assert "TP +7% +70.0K" in values[3]
     finally:
         tree.destroy()
 

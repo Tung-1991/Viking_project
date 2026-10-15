@@ -214,7 +214,8 @@ class SignalTelegramService:
         gross = float(info["gross_vnd"])
         budget = float(info["budget_vnd"])
         return [
-            f"🟢 BUY · {item['symbol']} · {item['execution_mode']} · ĐÃ XẾP LỆNH · #{str(info['order_id'])[:8]}",
+            f"🟢 BUY · {item['symbol']} · {item['execution_mode']} · ĐÃ XẾP LỆNH · #{str(info['order_id'])[:8]}"
+            + (f" · Lượt {int(info['entry_orders_used']) + 1}/{max(1, int(info['entry_orders_max']))}" if "entry_orders_used" in info else ""),
             f"🕒 {created:%H:%M} · {info['order_type']} · {int(info['quantity'])} CP · Giá tín hiệu {self._price(item['price'])}",
             f"💰 Dự trù {amount(gross)} (gồm phí {amount(fee)}) / vốn {amount(budget)} · Giá tính vốn {self._price(info['budget_price'])}",
         ]
@@ -465,21 +466,29 @@ class SignalTelegramService:
     def notify_exit_wait(self, *, symbol: str, execution_mode: str, kind: str, policy: str,
                          price: float, sellable_quantity: int, held_quantity: int,
                          peak_price: float, protect_price: float, observed_at: float,
-                         occurrence: str = "", auto_sell_paused: bool = False) -> bool:
+                         occurrence: str = "", auto_sell_paused: bool = False, event_occurrence: str = "") -> bool:
         from datetime import datetime
         from ..trading.market import VN_TZ
         clock = datetime.fromtimestamp(observed_at, VN_TZ).strftime("%d/%m %H:%M:%S")
         state = "CHỜ CỔ VỀ" if sellable_quantity < 100 else "TỰ BÁN TẠM DỪNG"
-        label = {"PROTECT ARM": "PROTECT HIT · SAU ARM", "PROTECT DYN": "PROTECT HIT · DYNAMIC",
+        if sellable_quantity < 100 and auto_sell_paused:
+            state += " · TỰ BÁN TẠM DỪNG"
+        label = {"PROTECT ARM": "PROTECT SAU ARM", "PROTECT DYN": "PROTECT DYNAMIC",
                  "STOP_LOSS": "SL", "TAKE_PROFIT": "TP"}.get(kind, kind)
-        lines = [f"🟠 {label} · {state} · {symbol} · {execution_mode} · {clock}",
-                 f"Giá {self._price(price)} · {policy}",
-                 f"Bán được {sellable_quantity:,}/{held_quantity:,} CP · Chưa gửi SELL."]
-        if peak_price > 0:
-            lines.append(f"Đỉnh {self._price(peak_price)} · PROTECT {self._price(protect_price)}")
-        lines.append("Tự bán đang tạm dừng; chỉ bật lại khi muốn tiếp tục." if auto_sell_paused else
-                     "Chuột phải vị thế → Mở bảng → tắt Tự bán → Lưu để chặn khi cổ về.")
+        level_name = "PROTECT" if kind.startswith("PROTECT ") else "Ngưỡng"
+        level = f" · {level_name} {self._price(protect_price)}" if protect_price > 0 else ""
+        peak = f" · Đỉnh {self._price(peak_price)}" if peak_price > 0 else ""
+        lines = [f"🟠 {symbol} · {execution_mode} · {label} · {policy}",
+                 f"{clock} · Giá {self._price(price)}{level}",
+                 f"{state} · Bán được {sellable_quantity:,}/{held_quantity:,} CP",
+                 f"Chưa gửi SELL.{peak}"]
         return self._send("\n".join(lines))
+
+    def notify_sell_request(self, *, symbol: str, execution_mode: str, order_id: str,
+                            quantity: int, status: str, reason: str) -> bool:
+        return self._send(f"🟠 SELL · {symbol} · {execution_mode} · ĐÃ TẠO YÊU CẦU\n"
+                          f"#{order_id[:10]} · {quantity:,} CP · {status}\n"
+                          f"Lý do: {reason}\nChưa xác nhận đã gửi/khớp. Chỉ khớp thực tế mới giảm số cổ.")
 
     def notify_protect_alert(
         self,
@@ -511,6 +520,7 @@ class SignalTelegramService:
         dynamic_policy: str = "",
         arm_pct: float = 0.0,
         giveback_pct: float = 0.0,
+        initial_hit: bool = False,
     ) -> bool:
         """Report a PROTECT hit; RULE policy remains the source of action."""
         symbol = str(symbol or "").strip().upper()
@@ -559,6 +569,8 @@ class SignalTelegramService:
                 f"START ATR: {start_label} · TRAIL ATR: {trail_label}",
                 keep_label,
             ))
+        if initial_hit and stage == "DYN":
+            lines.append("Giá đã dưới ngưỡng ở lần đánh giá đầu tiên.")
         lines.extend((f"Khối lượng {float(sell_pct):g}% · {modes}", action_line))
         return self._send("\n".join(lines))
 
@@ -666,17 +678,23 @@ class SignalTelegramService:
 
     def notify_system_alert(
         self, *, summary: str, execution_mode: str = "", severity: str = "ERROR",
+        observed_at: float | None = None, log_dir: str = "",
     ) -> bool:
         summary = str(summary or "").strip()
         if not summary:
             return False
+        from datetime import datetime
+        from ..trading.market import VN_TZ
+        clock = datetime.fromtimestamp(observed_at, VN_TZ) if observed_at is not None else datetime.now(VN_TZ)
         return self._send(
             "\n".join(
                 (
                     ("🟡 HỆ THỐNG · CẢNH BÁO" if severity == "WARNING" else "🔴 HỆ THỐNG CẦN KIỂM TRA")
                     + (f" · {str(execution_mode).upper()}" if execution_mode else ""),
+                    clock.strftime("%d/%m %H:%M:%S"),
                     summary,
-                    f"Xem HEALTH và log {APP_NAME} để kiểm tra chi tiết.",
+                    f"{APP_NAME}: bấm HEALTH → MỞ LOG; tìm daemon.log / ui.log theo giờ trên.",
+                    (f"Thư mục: {log_dir}" if log_dir else "Hoặc START_SYSTEM.bat → 5 Chẩn đoán → 2 Mở thư mục log."),
                 )
             )
         )

@@ -133,7 +133,8 @@ def test_wait_notice_survives_missed_event_and_retries_once(subject, monkeypatch
     app._notify_rule_signal("HDB", later, {"price": 23.1}, execution_mode="REAL")
     assert len(telegram.sent) == 1
     assert "CHỜ CỔ VỀ" in telegram.sent[0] and "Chưa gửi SELL" in telegram.sent[0]
-    assert "Mở bảng → tắt Tự bán → Lưu" in telegram.sent[0]
+    assert "Bán được 0/600 CP" in telegram.sent[0]
+    assert len(telegram.sent[0].splitlines()) == 4
 
 
 def test_wait_episode_can_notify_again_only_after_condition_clears(tmp_path):
@@ -222,10 +223,13 @@ def test_running_row_has_correct_original_basis_prices_and_explicit_history_stat
         pnl = values[RUNNING_COLUMNS.index("PnL_MAE_MFE")]
         assert "+2.06%" in pnl and "+3.09%" not in pnl and "12.91%" not in pnl
         if verified:
-            assert "22,450" in pnl and "23,450" in pnl and "+3.53%" in pnl
+            assert "MAE -0.88%" in pnl and "MFE +3.53%" in pnl
+            hint = tree._viking_column_hint.text_for(iid, "PnL_MAE_MFE")
+            assert "22,450" in hint and "23,450" in hint
         else:
             assert "CHỜ XÁC MINH" in pnl and "23,450" not in pnl
-        assert values[RUNNING_COLUMNS.index("Override")] == "Bán Alert · X"
+        assert values[RUNNING_COLUMNS.index("Bot")] == "Bán Alert"
+        assert values[RUNNING_COLUMNS.index("Override")] == "X"
         assert "TỰ BÁN TẠM DỪNG" in tree._viking_column_hint.text_for(iid, "Status")
         assert "Đã mua 600 CP · Bán khớp 200 CP" in tree._viking_column_hint.text_for(iid, "Order")
         assert "vốn mua gốc" in tree._viking_column_hint.text_for("", "PnL_MAE_MFE")

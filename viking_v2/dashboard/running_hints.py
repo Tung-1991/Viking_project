@@ -1,21 +1,22 @@
 """One delayed tooltip per running table, following its column and row."""
-import tkinter as tk
+from .hint_box import contains_pointer, fixed_hint
 
 COLUMN_HINTS = {
+    "STT": "Số thứ tự trong sổ đang xem. 1.1 là lệnh con thuộc vị thế số 1.",
     "Ticket": "Mã vị thế/lệnh. Chuột phải để quản lý; hủy lệnh không xóa cổ đã khớp.",
     "Time": "Thời điểm mở vị thế hoặc tạo yêu cầu lệnh.",
-    "Order": "Giá vốn và số cổ đang giữ; lịch sử mua/bán khớp xem trong hint của dòng.",
-    "Targets": "SL/TP tính từ giá vốn. Chạm ngưỡng là điều kiện bán, không bảo đảm giá khớp.",
+    "Order": "Mã, giá vốn, số cổ và thời gian; TAY = đặt trong app, DNSE = giao dịch ngoài app.\n"
+             "ARM/START là giá bật theo dõi bảo vệ. Chi tiết mua/bán khớp xem trong hint của dòng.",
+    "Targets": "SL/TP hiện giá kích hoạt và lãi/lỗ dự kiến trên số cổ còn giữ.\n"
+               "ARM/START bật theo dõi; PROTECT là mốc giá lùi để xét bán. Chưa đồng nghĩa đã khớp.",
     "CostInfo": "Phí đã ghi nhận hoặc ước tính; CHỜ DNSE nghĩa là chưa có phí xác nhận.",
     "RR": "R là mức lỗ SL, E là mức lãi TP; tỷ lệ E/R theo cấu hình đang áp dụng.",
     "PnL_MAE_MFE": "PnL gồm lãi/lỗ đã bán và phần còn giữ; % trên vốn mua gốc.\n"
-                   "MAE/MFE hiện giá thấp/cao và % so với giá vốn trong khoảng theo dõi.",
+                   "MAE/MFE hiện % biến động, giá thấp/cao và số tiền trên phần cổ còn giữ, trước phí.",
     "Status": "Trạng thái cổ về và quản lý tự bán. Di chuột vào dòng để xem chi tiết.\n"
               "Tạm dừng tự bán chặn SL/TP/PROTECT/E mới; lệnh đã gửi broker cần hủy riêng.",
-    "Override": "BOT Bật: cho phép giao dịch theo BOT chung và RULE. Alert: chỉ tín hiệu, chặn BUY/SELL tự động của vị thế.\n"
-                "X vàng: có cấu hình riêng. Di chuột để xem những mục ghi đè.\n"
-                "Bán Alert: chỉ tạm dừng bán của cấu hình cũ. Bật không ép BOT chung đang OFF thành ON.\n"
-                "Đây là thông tin, không phải nút hủy lệnh.",
+    "Bot": "Bật: quản lý theo RULE. Alert: chỉ tín hiệu. Bán Alert: tạm dừng tự bán.\nBOT chung chỉ bật/tắt mua tự động mới.",
+    "Override": "X vàng: có cấu hình riêng. Di chuột để xem những mục ghi đè; chuột phải để chỉnh.",
 }
 
 
@@ -23,8 +24,9 @@ class RunningTableHint:
     def __init__(self, tree, columns):
         self.tree, self.columns = tree, columns
         self.target, self.timer, self.popup = None, None, None
+        self.leave_timer = None
         tree.bind("<Motion>", self.motion, add="+")
-        tree.bind("<Leave>", self.hide, add="+")
+        tree.bind("<Leave>", self.leave, add="+")
         tree.bind("<ButtonPress>", self.hide, add="+")
         tree.bind("<Destroy>", self.hide, add="+")
 
@@ -41,6 +43,9 @@ class RunningTableHint:
         return text
 
     def motion(self, event):
+        if self.leave_timer is not None:
+            self.tree.after_cancel(self.leave_timer)
+            self.leave_timer = None
         region = self.tree.identify_region(event.x, event.y)
         identifier = self.tree.identify_column(event.x)
         if region not in {"heading", "cell"} or not identifier.startswith("#"):
@@ -51,7 +56,9 @@ class RunningTableHint:
             self.hide()
             return
         row = self.tree.identify_row(event.y) if region == "cell" else ""
-        target = (row, self.columns[index])
+        # #n identifies a displayed column, which may differ from columns[n].
+        column = self.tree.column(identifier, "id")
+        target = (row, column)
         if target != self.target:
             self.hide()
             self.target = target
@@ -65,9 +72,10 @@ class RunningTableHint:
         if not text:
             return
         host = self.tree.winfo_toplevel()
-        self.popup = tk.Label(host, text=text, justify="left", wraplength=max(240, min(650, host.winfo_width() - 40)),
-                              font=("Segoe UI", 13), bg="#252A31", fg="#F5F7FA", padx=12, pady=10,
-                              relief="solid", borderwidth=1)
+        row, column = target
+        self.popup = fixed_hint(host, text, compact=not row or column != "Status")
+        for widget in (self.popup, *self.popup.winfo_children()):
+            widget.bind("<Leave>", self.leave, add="+")
         self.popup.update_idletasks()
         width, height = self.popup.winfo_reqwidth(), self.popup.winfo_reqheight()
         px = self.tree.winfo_rootx() - host.winfo_rootx() + x + 12
@@ -78,7 +86,19 @@ class RunningTableHint:
                          y=max(8, min(py, host.winfo_height() - height - 8)))
         self.popup.lift()
 
+    def leave(self, _event=None):
+        if self.leave_timer is not None:
+            self.tree.after_cancel(self.leave_timer)
+        def check():
+            self.leave_timer = None
+            if not contains_pointer(self.popup) and not contains_pointer(self.tree):
+                self.hide()
+        self.leave_timer = self.tree.after(120, check)
+
     def hide(self, _event=None):
+        if self.leave_timer is not None:
+            self.tree.after_cancel(self.leave_timer)
+            self.leave_timer = None
         if self.timer is not None:
             self.tree.after_cancel(self.timer)
             self.timer = None

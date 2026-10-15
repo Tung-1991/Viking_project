@@ -36,7 +36,7 @@ from ..rules.entry_filters import apply_buy_filters
 from ..trading.state import TradeStateStore
 from ..trading.durable import AccountLease
 from .session_cross import SessionPriceCache, SessionCrossService
-from .exit_notifications import settlement_exit_snapshot
+from .exit_notifications import settlement_exit_snapshot, exit_condition_cleared
 
 
 def merge_live_tick(
@@ -793,7 +793,8 @@ def run(account_id: str | None = None) -> int:
                                 if trade_id:
                                     decision.details["exit_wait_notices"] = rule_state.observe_exit_wait(
                                         symbol, trade_id, settlement_exit_snapshot(
-                                            decision, portfolio.get("position") or {}, mode=decision_mode))
+                                            decision, portfolio.get("position") or {}, mode=decision_mode),
+                                        cleared=exit_condition_cleared(decision, portfolio.get("position") or {}))
                                 protect_state = str(
                                     decision.details.get("normal_state", "") or ""
                                 ).upper()

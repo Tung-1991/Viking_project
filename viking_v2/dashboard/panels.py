@@ -4,6 +4,8 @@ import time
 import math
 import re
 import tkinter as tk
+from pathlib import Path
+import os
 from datetime import datetime
 from tkinter import ttk
 from typing import Any
@@ -42,7 +44,7 @@ from .windows import (
     fit_entry_text,
     fit_label_text,
 )
-from .tables import RUNNING_FONT, RUNNING_HEADING_FONT
+from .tables import RUNNING_FONT, RUNNING_HEADING_FONT, running_row_height
 from .quote_direction import PRICE_DIRECTION_HINT, quote_background
 from .protect_preview import dynamic_start_preview, start_caption
 
@@ -336,7 +338,7 @@ class DashboardPanelsMixin:
             corner_radius=7,
         ).grid(row=0, column=0, sticky="ew", padx=(0, 5))
         self.bot_button = ctk.CTkButton(
-            mode_row, text="BOT · OFF", height=32, font=("Segoe UI", 11, "bold"),
+            mode_row, text="MUA AUTO · OFF", height=32, font=("Segoe UI", 11, "bold"),
             width=1,
             fg_color=COL_GRAY, hover_color="#4B515B", corner_radius=7,
             command=self._toggle_bot,
@@ -344,9 +346,9 @@ class DashboardPanelsMixin:
         self.bot_button.grid(row=0, column=1, sticky="ew")
         _HoverHint(
             self.bot_button,
-            "BOT ON (xanh): được phép tạo và gửi BUY tự động.\n"
-            "BOT PAUSE (vàng): đang khóa BUY tạm thời sau SELL MANUAL; SELL/SL/PROTECT vẫn chạy.\n"
-            "BOT OFF (xám): không tạo hoặc gửi BUY BOT.",
+            "MUA AUTO ON (xanh): được phép tạo và gửi BUY tự động.\n"
+            "CHỜ (vàng): đang khóa BUY tạm thời sau SELL MANUAL; SELL/SL/PROTECT vẫn chạy.\n"
+            "MUA AUTO OFF (xám): không tạo hoặc gửi BUY BOT; vị thế đang giữ vẫn được quản lý.",
         )
 
         tools_row = setting_row(2, "TOOLS")
@@ -718,13 +720,13 @@ class DashboardPanelsMixin:
         style.theme_use("clam")
         style.configure(
             "Running.Treeview", background=COL_SURFACE_2, foreground=COL_TEXT,
-            fieldbackground=COL_SURFACE_2, rowheight=58, font=RUNNING_FONT,
+            fieldbackground=COL_SURFACE_2, rowheight=running_row_height(self), font=RUNNING_FONT,
             borderwidth=0, relief="flat", bordercolor=COL_BORDER,
             lightcolor=COL_BORDER, darkcolor=COL_BORDER,
         )
         style.configure(
             "Running.Treeview.Heading", background=COL_SURFACE, foreground=COL_TITLE,
-            font=RUNNING_HEADING_FONT, relief="flat", padding=(12, 10),
+            font=RUNNING_HEADING_FONT, relief="flat", padding=(10, 6),
         )
         style.map(
             "Running.Treeview.Heading",
@@ -733,7 +735,7 @@ class DashboardPanelsMixin:
         )
         style.map(
             "Running.Treeview",
-            background=[("selected", "#5545A6")],
+            background=[("selected", "#393347")],
             foreground=[("selected", "#FFFFFF")],
         )
         for mode in ("CKCS REAL", "CKCS PAPER"):
@@ -970,7 +972,7 @@ class DashboardPanelsMixin:
         self.preview_status_reason.grid(
             row=0, column=1, sticky="ew", padx=5
         )
-        _HoverHint(self.preview_status_reason, self._order_status_hint, placement="inside")
+        _HoverHint(self.preview_status_reason, self._order_status_hint, placement="inside", fixed_size=True)
         self.preview_status_badge = StatusLabel(
             order_header, text="CHỜ", width=82, height=24,
             font=("Segoe UI", 10, "bold"), fg_color="#4A3B16",
@@ -1398,7 +1400,7 @@ class DashboardPanelsMixin:
             anchor="w", justify="left", wraplength=300,
         )
         self.preview_rule_reason.grid(row=4, column=0, sticky="ew", padx=8, pady=(2, 6))
-        _HoverHint(self.preview_rule_reason, self._rule_decision_hint, placement="inside")
+        _HoverHint(self.preview_rule_reason, self._rule_decision_hint, placement="inside", fixed_size=True)
 
         health_host = health_parent if health_parent is not None else parent
         health_group = ctk.CTkFrame(
@@ -1424,6 +1426,8 @@ class DashboardPanelsMixin:
             text_color="#60A5FA", anchor="w",
         )
         self.preview_health_title.grid(row=0, column=0, sticky="ew", padx=(8, 1))
+        self.preview_health_title.configure(cursor="hand2")
+        self.preview_health_title.bind("<Button-1>", self._show_api_health_details, add="+")
         self.preview_health_title.bind("<Configure>", self._fit_preview_health_title, add="+")
         self.preview_health_hint = StatusLabel(
             health_title, text="ⓘ", width=20, height=20,
@@ -1649,6 +1653,9 @@ class DashboardPanelsMixin:
         )
 
     def _rule_decision_hint(self) -> str:
+        position = getattr(self, "_preview_position_status", None)
+        if position:
+            return position[1]
         decision = getattr(self, "_preview_rule_decision", {})
         decision = decision if isinstance(decision, dict) else {}
         details = decision.get("details") if isinstance(decision.get("details"), dict) else {}
@@ -1704,7 +1711,7 @@ class DashboardPanelsMixin:
     def _api_health_preview_hint(self) -> str:
         return (
             "DAEMON: xử lý rule · DNSE/API: đọc tài khoản · WS: nhận giá.\n"
-            "OTP: quyền gửi lệnh REAL.\nBấm ⓘ để sao chép chi tiết lỗi."
+            "OTP: quyền gửi lệnh REAL.\nBấm HEALTH để xem lỗi và MỞ LOG; ⓘ để sao chép."
         )
 
     def _api_health_hint(self) -> str:
@@ -1746,7 +1753,9 @@ class DashboardPanelsMixin:
                     f"{rest.get('last_endpoint') or 'chưa rõ endpoint'} · {code} · {rest.get('last_error') or 'chưa có chi tiết'}",
                     secrets=secrets,
                 )
-                failures.append(f"{origin} · Lần REST gần nhất: {detail}")
+                request_at = _number(rest.get("last_request_at"))
+                clock = datetime.fromtimestamp(request_at, VN_TZ).strftime("%d/%m %H:%M:%S") if request_at > 0 else ""
+                failures.append(f"{origin} · Lần REST gần nhất: {detail}" + (f" · {clock}" if clock else ""))
             raw = rest.get("snapshot_errors") if isinstance(rest, dict) else None
             for row in (raw.values() if isinstance(raw, dict) else ()):
                 if isinstance(row, dict):
@@ -1773,6 +1782,40 @@ class DashboardPanelsMixin:
             + "\nMất/phục hồi giá: có ghi trong daemon.log, không ghi mỗi tick."
             + "\nBấm ⓘ cạnh HEALTH để sao chép chẩn đoán này."
         )
+
+    def _show_api_health_details(self, _event=None) -> None:
+        from .windows import _window
+        top = _window(self, "HEALTH · Chi tiết lỗi", "760x480")
+        top.minsize(620, 360)
+        top.grid_rowconfigure(0, weight=1)
+        top.transient(self)
+        log_dir = getattr(getattr(self, "bridge", None), "log_dir", None)
+        paths = (f"\n\nThư mục log: {log_dir}\ndaemon.log: backend / API · ui.log: giao diện."
+                 if log_dir is not None else "\nChưa có thư mục log tài khoản.")
+        text = self._api_health_hint() + paths
+        report = ctk.CTkTextbox(top, font=("Segoe UI", 14), wrap="word")
+        report.grid(row=0, column=0, sticky="nsew", padx=12, pady=(12, 6))
+        report.insert("1.0", text)
+        report.configure(state="disabled")
+        controls = ctk.CTkFrame(top, fg_color="transparent")
+        controls.grid(row=1, column=0, sticky="ew", padx=12, pady=(6, 12))
+        controls.grid_columnconfigure(0, weight=1)
+        def open_logs():
+            from tkinter import messagebox
+            if log_dir is None or not Path(log_dir).is_dir():
+                messagebox.showinfo("Log", f"Chưa có thư mục log.\n{log_dir or ''}", parent=top)
+                return
+            try:
+                os.startfile(str(Path(log_dir).resolve()))
+            except OSError:
+                messagebox.showerror("Log", f"Không mở được thư mục:\n{log_dir}", parent=top)
+        def copy():
+            self.clipboard_clear()
+            self.clipboard_append(text)
+        ctk.CTkButton(controls, text="MỞ LOG", width=110, command=open_logs).grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(controls, text="SAO CHÉP", width=110, command=copy).grid(row=0, column=1, padx=8)
+        ctk.CTkButton(controls, text="ĐÓNG", width=100, command=top.destroy).grid(row=0, column=2)
+        top.bind("<Escape>", lambda _event: top.destroy())
 
     def _copy_api_health_hint(self, _event: Any = None) -> None:
         # Copy the same sanitized, read-only text as the tooltip, without I/O.
@@ -2049,7 +2092,7 @@ class DashboardPanelsMixin:
                 counts.update(up=None, down=None)
             total_crosses = counts["up"] + counts["down"] if counts["up"] is not None else "—"
             self.preview_rule_cross_counts.configure(
-                text=f"{total_crosses} CẮT - {prior_sessions}P",
+                text=f"{total_crosses} CẮT · VA" if counts.get("retained") else f"{total_crosses} CẮT - {prior_sessions}P",
                 text_color={"ok": COL_GREEN, "wait": COL_WARN}.get(role, COL_MUTED),
             )
             self.preview_rule_cross_counts.grid()
@@ -2126,11 +2169,16 @@ class DashboardPanelsMixin:
         counts = view_counts(evidence, now=market_now(), prior_sessions=scan,
                              holidays=self.settings.trading_holidays)
         period = ((f"{counts['start']} → {counts['end']}" if counts['start'] else "Chưa đủ lịch phiên")
-                  if scan else "Hôm nay")
+                  if scan else "Từ lúc theo dõi mã (VA)")
         counted = (f"{period}: {counts['up']} lên + {counts['down']} xuống."
                    if counts["up"] is not None else f"{period}: chưa đủ dữ liệu để đếm.")
         if counts["partial"]:
             counted += f" Đếm từ {str(counts['from'])[11:16]}."
+        if counts.get("retained"):
+            from ..rules.ema_memory import memory_day_counts
+            daily = memory_day_counts(evidence, now=market_now())
+            if daily["up"] is not None:
+                counted += f"\nHôm nay: {daily['up']} lên + {daily['down']} xuống."
         history_status = getattr(self, "_preview_ema_history_status", {})
         if history_status.get("pending"):
             counted = f"Đang tải lịch sử {scan} phiên trước."
@@ -2150,7 +2198,7 @@ class DashboardPanelsMixin:
         else:
             policy = f"VA: nhớ lần cắt lên{remembered} tới khi dùng."
         history = (f"{scan}P: hôm nay + {scan} phiên trước; bỏ ngày nghỉ." if scan else
-                   "0P: chỉ đếm phiên hôm nay; không quét trước khi thêm mã.")
+                   "VA: đếm các lần cắt đã quan sát từ lúc theo dõi, giữ qua ngày và restart.")
         return f"{counted}\n{history}\n{policy} ⇄ chỉ đổi góc xem."
 
     def _atr_preview_hint(self) -> str:
@@ -3083,10 +3131,17 @@ class DashboardPanelsMixin:
             reason_color = COL_RED
         else:
             reason_color = COL_WARN if action == "WAIT" else COL_PREVIEW_TEXT
-        self.preview_rule_reason.configure(
-            text=reason_text,
-            text_color=reason_color,
-        )
+        from .position_status import preview_position_status
+        self._preview_position_status = preview_position_status(self, symbol, status)
+        reason_font = ("Segoe UI", 9, "bold")
+        if self._preview_position_status:
+            availability, execution, protection = self._preview_position_status[0].splitlines()
+            urgent = any(word in execution for word in ("SELL", "ĐÃ CHẠM", "TẠM DỪNG", "CÓ TÍN HIỆU"))
+            compact = availability.replace("BÁN ĐƯỢC ", "Bán ").replace("CHỜ VỀ ", "Chờ ").replace("CÒN", "Còn")
+            reason_text = f"{compact}\n{execution if urgent else protection}"
+            reason_color = COL_WARN if urgent or "CHỜ VỀ" in availability else COL_PREVIEW_TEXT
+            reason_font = ("Segoe UI", 11)
+        self.preview_rule_reason.configure(text=reason_text, text_color=reason_color, font=reason_font)
 
     def _select_info_tab(self, name: str) -> None:
         if not hasattr(self, "log_tabview"):

@@ -189,6 +189,8 @@ def test_telegram_defaults_enable_technical_buy_without_changing_buy_window():
         "buy_queued": True, "closed": True, "protect": True,
         "indicator_exit": True, "blocked_buy": True, "buy_lost": True,
         "corporate_action": True, "external_sell": True, "system": True,
+        "protect_armed": True, "dynamic_protect": True, "exit_wait": True,
+        "sl_tp": True, "sell_queued": True,
     }
     assert settings.telegram_buy_batch_minutes == 30
     assert settings.telegram_cooldown_minutes["blocked_buy"] == 60

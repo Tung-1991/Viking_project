@@ -556,12 +556,15 @@ def minimize_popup(popup: Any) -> bool:
 
 class _HoverHint:
     def __init__(self, widget: Any, text: str | Callable[[], str], placement: str = "side", *,
-                 font: tuple | None = None, max_width: int = 780, padding: tuple[int, int] = (16, 14)):
+                 font: tuple | None = None, max_width: int = 780, padding: tuple[int, int] = (16, 14),
+                 fixed_size: bool = False):
         self.widget, self.text, self.popup = widget, text, None
         self.placement = placement
         self.font, self.max_width, self.padding = font or HINT_FONT, max_width, padding
+        self.fixed_size, self.leave_timer = fixed_size, None
         widget.bind("<Enter>", self._show, add="+")
-        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<Leave>", self._leave if fixed_size else self._hide, add="+")
+        widget.bind("<Destroy>", self._hide, add="+")
 
     def _show(self, _event: Any = None) -> None:
         text = self.text() if callable(self.text) else self.text
@@ -571,11 +574,17 @@ class _HoverHint:
         # mixing winfo_root* coordinates with a new Toplevel can place the hint
         # hundreds of pixels away from its icon.
         host = self.widget.winfo_toplevel()
-        self.popup = tk.Label(
-            host, text=text, justify="left", wraplength=min(self.max_width, max(240, host.winfo_width() - 56)),
-            bg="#252A31", fg="#F5F7FA", padx=self.padding[0], pady=self.padding[1],
-            font=self.font, relief="solid", borderwidth=1,
-        )
+        if self.fixed_size:
+            from .hint_box import fixed_hint
+            self.popup = fixed_hint(host, text)
+            for child in (self.popup, *self.popup.winfo_children()):
+                child.bind("<Leave>", self._leave, add="+")
+        else:
+            self.popup = tk.Label(
+                host, text=text, justify="left", wraplength=min(self.max_width, max(240, host.winfo_width() - 56)),
+                bg="#252A31", fg="#F5F7FA", padx=self.padding[0], pady=self.padding[1],
+                font=self.font, relief="solid", borderwidth=1,
+            )
         self.popup.update_idletasks()
         width, height = self.popup.winfo_reqwidth(), self.popup.winfo_reqheight()
         host.update_idletasks()
@@ -606,7 +615,20 @@ class _HoverHint:
         self.popup.place(x=x, y=y)
         self.popup.lift()
 
+    def _leave(self, _event: Any = None) -> None:
+        if self.leave_timer is not None:
+            self.widget.after_cancel(self.leave_timer)
+        def check():
+            from .hint_box import contains_pointer
+            self.leave_timer = None
+            if not contains_pointer(self.popup) and not contains_pointer(self.widget):
+                self._hide()
+        self.leave_timer = self.widget.after(120, check)
+
     def _hide(self, _event: Any = None) -> None:
+        if self.leave_timer is not None:
+            self.widget.after_cancel(self.leave_timer)
+            self.leave_timer = None
         if self.popup:
             self.popup.destroy()
             self.popup = None

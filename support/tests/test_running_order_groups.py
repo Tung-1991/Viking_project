@@ -57,7 +57,9 @@ def test_partial_market_buy_groups_under_position_without_counting_pending_as_ow
         assert "KL 400" in tree.item(parent, "values")[2]
         assert "BÁN ĐƯỢC 0 CP · CHỜ VỀ 400 CP" in tree.item(parent, "values")[7]
         assert "KL 500" in tree.item(child, "values")[2]
-        assert "Khớp 400/500 · CÒN 100 CHỜ KHỚP" in tree.item(child, "values")[7]
+        progress = tree.item(child, "values")[7].splitlines()
+        assert progress[0].endswith("Khớp 400/500")
+        assert progress[1].startswith("CÒN 100 CHỜ KHỚP")
         actions = subject._running_row_actions[mode]
         assert actions[parent]["kind"] == "position" and not actions[parent]["cancellable"]
         assert actions[child]["broker_order_id"] == "B1"

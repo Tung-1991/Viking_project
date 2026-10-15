@@ -918,6 +918,7 @@ def test_dashboard_sends_each_indicator_exit_alert_once(monkeypatch, tmp_path):
         telegram = Service()
         rule_state = RuleStateStore(tmp_path / "rule_state.json")
         settings = SimpleNamespace(
+            telegram_enabled=True, telegram_chat_id="offline",
             telegram_notifications={"indicator_exit": True},
             telegram_cooldown_minutes={"indicator_exit": 0},
         )

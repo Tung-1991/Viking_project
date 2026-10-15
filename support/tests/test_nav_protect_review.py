@@ -231,7 +231,7 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
             assert widget.winfo_x() >= 0
             assert widget.winfo_x() + widget.winfo_width() <= widget.master.winfo_width()
             assert widget.winfo_y() + widget.winfo_height() <= widget.master.winfo_height()
-        assert subject.preview_rule_cross_counts.cget("text") == "3 CẮT - 0P"
+        assert subject.preview_rule_cross_counts.cget("text") == "3 CẮT · VA"
         assert subject.preview_rule_cross_counts.cget("font")[1] == 14
         assert subject.preview_rule_cross.cget("font")[1] == 10
         assert subject.preview_rule_ema.cget("font")[1] == 12
@@ -243,7 +243,7 @@ def test_ema_preview_keeps_mode_counts_and_details_visible_at_narrow_width(ui_ro
         }})
         ui_root.update_idletasks()
         assert subject.preview_rule_cross.cget("text").startswith("THEO DÕI ")
-        assert subject.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
+        assert subject.preview_rule_cross_counts.cget("text") == "0 CẮT · VA"
         body = [child for child in subject.preview_rule_cross.master.winfo_children()
                 if child.winfo_manager() == "grid" and int(child.grid_info()["column"]) == 2
                 and int(child.grid_info()["row"]) > 0]
@@ -333,7 +333,7 @@ def test_preview_can_swap_cached_va_and_history_without_changing_rules(ui_root, 
             viewing_history = (mode == "SESSIONS") != alternate
             assert evidence["mode"] == ("SESSIONS" if viewing_history else "VA")
             assert evidence["valid"] == viewing_history
-            assert subject.preview_rule_cross_counts.cget("text") == ("1 CẮT - 3P" if viewing_history else "0 CẮT - 0P")
+            assert subject.preview_rule_cross_counts.cget("text") == ("1 CẮT - 3P" if viewing_history else "0 CẮT · VA")
             assert subject.preview_rule_cross_title.cget("text") == ("⏳ 3P" if viewing_history else "∞ VA")
             assert int(subject.preview_rule_cross.grid_info()["column"]) == 2
             assert int(subject.preview_rule_cross_detail.grid_info()["column"]) == 2
@@ -367,9 +367,9 @@ def test_preview_counts_today_without_losing_yesterdays_unused_cross(ui_root, mo
     before = deepcopy(source)
     try:
         subject._render_ema_cross_preview({"ema_cross": source})
-        assert subject.preview_rule_cross_counts.cget("text") == "37 CẮT - 0P"
+        assert subject.preview_rule_cross_counts.cget("text") == "197 CẮT · VA"
         assert "Hôm nay: 19 lên + 18 xuống" in subject._ema_memory_preview_hint()
-        assert "0P: chỉ đếm phiên hôm nay" in subject._ema_memory_preview_hint()
+        assert "VA: đếm các lần cắt đã quan sát" in subject._ema_memory_preview_hint()
         subject.settings.rule_parameters['buy_ema_va_lookback_enabled'] = True
         subject._render_ema_cross_preview({"ema_cross": source})
         assert subject.preview_rule_cross_counts.cget("text") == "39 CẮT - 3P"
@@ -380,7 +380,7 @@ def test_preview_counts_today_without_losing_yesterdays_unused_cross(ui_root, mo
         subject.settings.rule_parameters['buy_ema_va_lookback_enabled'] = False
         monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: now + timedelta(days=1))
         subject._render_ema_cross_preview({"ema_cross": source})
-        assert subject.preview_rule_cross_counts.cget("text") == "0 CẮT - 0P"
+        assert subject.preview_rule_cross_counts.cget("text") == "197 CẮT · VA"
         assert subject._preview_ema_cross_evidence[1]["valid"]
         assert subject._preview_ema_cross_evidence[1]["cross_id"] == source["cross_id"]
         assert source == before
@@ -414,20 +414,20 @@ def test_va_today_down_count_is_separate_from_yesterdays_remembered_up(ui_root, 
         top.deiconify()
         top.update()
         view._render_ema_cross_preview({"ema_cross": source})
-        assert view.preview_rule_cross_counts.cget("text") == "1 CẮT - 0P"
+        assert view.preview_rule_cross_counts.cget("text") == "2 CẮT · VA"
         assert view.preview_rule_cross_detail._viking_compact_detail_text == "XUỐNG 14/10 09:15"
         assert "CHƯA ĐẠT" in view.preview_ema_entry_gate.cget("text")
         assert not view._preview_ema_gate_evidence["valid"]
         hint = view._ema_memory_preview_hint()
         assert "Hôm nay: 0 lên + 1 xuống" in hint
-        assert "không quét trước khi thêm mã" in hint
+        assert "giữ qua ngày" in hint
         assert "VA: nhớ lần cắt lên 13/10 tới khi dùng" in hint
         assert source == before
         fresh = advance_memory(source, {"buy_ema_fast": 34.6, "buy_ema_slow": 34.52},
                                now=now + timedelta(seconds=1), **args)
         monkeypatch.setattr("viking_v2.dashboard.panels.market_now", lambda: now + timedelta(seconds=1))
         view._render_ema_cross_preview({"ema_cross": fresh})
-        assert view.preview_rule_cross_counts.cget("text") == "2 CẮT - 0P"
+        assert view.preview_rule_cross_counts.cget("text") == "3 CẮT · VA"
         assert view.preview_rule_cross_detail._viking_compact_detail_text == "LÊN 14/10 09:15"
         assert view._preview_ema_gate_evidence["valid"]
         assert fresh["cross_id"] != source["cross_id"] and source == before

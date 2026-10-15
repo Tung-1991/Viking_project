@@ -64,17 +64,17 @@ def test_running_override_column_updates_without_making_x_a_cancel_button(ui_roo
     try:
         app._render_tables({})
         position = next(iid for iid in tree.get_children() if app._running_row_actions["REAL"][iid]["kind"] == "position")
-        assert tree.heading("Override", "text") == "BOT / Override"
-        assert tree.set(position, "Override") == "Bật"
-        assert tree.set(f"LOCAL:{order.id}", "Override") == ""
+        assert tree.heading("Override", "text") == "Override"
+        assert tree.set(position, "Bot") == "Bật" and tree.set(position, "Override") == "—"
+        assert tree.set(f"LOCAL:{order.id}", "Override") == "—"
         assert app._running_row_actions["REAL"][f"LOCAL:{order.id}"]["cancellable"]
         cycle.auto_sell_enabled = False
         app._render_tables({})
-        assert tree.set(position, "Override") == "Bán Alert · X"
+        assert tree.set(position, "Bot") == "Bán Alert" and tree.set(position, "Override") == "X"
         assert "Tự bán: TẠM DỪNG" in tree._viking_column_hint.text_for(position, "Override")
         cycle.auto_sell_enabled = True
         app._render_tables({})
-        assert tree.set(position, "Override") == "Bật" and position not in tree._viking_override_rows
+        assert tree.set(position, "Override") == "—" and position not in tree._viking_override_rows
     finally:
         tree.destroy()
 
