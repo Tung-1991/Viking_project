@@ -1,7 +1,29 @@
 """Display-only cell alignment and column rules for the running books."""
 from tkinter import Frame, Label, ttk
+from tkinter import font as tkfont
 
 from .view import COL_RUNNING_SELECTED
+
+
+def _fit_lines(text, metrics, width):
+    """Shorten the painted text; tree values remain intact for hover details."""
+    lines = []
+    for line in text.split("\n"):
+        if metrics.measure(line) <= width:
+            lines.append(line)
+            continue
+        if metrics.measure("…") > width:
+            lines.append("")
+            continue
+        low, high = 0, len(line)
+        while low < high:
+            middle = (low + high + 1) // 2
+            if metrics.measure(line[:middle] + "…") <= width:
+                low = middle
+            else:
+                high = middle - 1
+        lines.append(line[:low].rstrip() + "…")
+    return "\n".join(lines)
 
 
 class RunningTableCells:
@@ -48,6 +70,8 @@ class RunningTableCells:
         style = ttk.Style(tree)
         name = str(tree.cget("style")) or "Treeview"
         font = style.lookup(name, "font")
+        metrics = tkfont.Font(root=tree, font=font)
+        padding = round(8 * scale)
         height = int(style.lookup(name, "rowheight") or 20)
         width, bottom = tree.winfo_width(), tree.winfo_height()
         shown = tuple(tree["displaycolumns"])
@@ -84,8 +108,12 @@ class RunningTableCells:
                     label = self.labels[key] = Label(tree, borderwidth=0, takefocus=False, justify="left",
                                                      anchor="center" if column == "STT" else "n" if column in {"Bot", "Override"} else "nw")
                     self.bind_events(label)
-                options = dict(text=tree.set(iid, column), bg=background, fg=foreground, font=font,
-                               padx=round(8 * scale), pady=round(4 * scale))
+                layout = (tree.set(iid, column), cell_width, font, padding)
+                if getattr(label, "_running_layout", None) != layout:
+                    label._running_text = _fit_lines(layout[0], metrics, max(0, cell_width - 2 - 2 * padding))
+                    label._running_layout = layout
+                options = dict(text=label._running_text, bg=background, fg=foreground, font=font,
+                               padx=padding, pady=round(4 * scale))
                 if getattr(label, "_running_options", None) != options:
                     label.configure(**options)
                     label._running_options = options

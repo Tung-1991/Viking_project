@@ -748,6 +748,15 @@ class DashboardTablesMixin:
                                  if watch.get("visible_until") else "CHỜ LỊCH GIAO DỊCH")
                 risk_text = item_sl_label
                 reward_text = item_tp_label
+                full_status = (f"{status_label} · Khớp {item.filled_quantity}/{item.quantity}\n"
+                               f"{remaining_label} · {em_text}\n{item.result or item.reason or 'ĐANG CHỜ'}")
+                display_status = full_status
+                if passive_watch:
+                    result_label = "ĐÃ HỦY" if status_upper == "CANCELLED" else "HẾT HIỆU LỰC"
+                    display_status = (f"LƯU THAM KHẢO · {result_label} · Khớp 0/{item.quantity}\n"
+                                      f"{remaining_label}\n{cost_text}")
+                    if watch.get("session_date") and not watch.get("armed_order_id"):
+                        display_status += " · CHUỘT PHẢI → BẬT MUA…"
                 self._update_running_row(
                     tree, existing, row_order, iid=iid, tags=(tag,),
                     values=(
@@ -758,8 +767,7 @@ class DashboardTablesMixin:
                         cost_text,
                         f"R {risk_text} · E {reward_text}" if item.action == "OPEN" else "--",
                         f"-- · -- · -- · Khớp {item.filled_quantity}/{item.quantity}",
-                        f"{status_label} · Khớp {item.filled_quantity}/{item.quantity}\n"
-                        f"{remaining_label} · {em_text}\n{item.result or item.reason or 'ĐANG CHỜ'}",
+                        display_status,
                         "Chưa bật mua" if passive_watch and not watch.get("armed_order_id") else
                         "Đã bật tay" if passive_watch else
                         position_bot_cell(self.settings, cycle) if cycle else "Bật" if item.source in {"BOT", "EM"} else "—",
@@ -770,6 +778,8 @@ class DashboardTablesMixin:
                     "Order": order_hint,
                     "Override": "\n".join(override_items) if override_items else "Không có cấu hình riêng.",
                 }
+                if passive_watch:
+                    tree._viking_row_hints[iid]["Status"] = full_status + "\n" + cost_text + "\n" + order_hint
                 if override_items:
                     tree._viking_override_rows[iid] = override_items
                 self._running_row_actions[mode][iid] = {
