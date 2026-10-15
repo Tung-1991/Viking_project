@@ -714,12 +714,29 @@ class DashboardTablesMixin:
                     status_label = ("MUA NỐT PHẦN DƯ" if item.details.get("buy_remainder") else "MUA MỚI") + " · " + status_label
                 watch = item.details.get("buy_watch") or {}
                 if passive_watch:
+                    tag = "reference_armed_order" if watch.get("armed_order_id") else "reference_order"
                     status_label = "LƯU THAM KHẢO · " + status_label
                     remaining_label = (f"ĐÃ BẬT MUA TAY #{watch['armed_order_id'][:8]}" if watch.get("armed_order_id")
                                        else ("CHƯA BẬT MUA" if watch.get("session_date") else "CHỜ LỊCH · CHƯA BẬT MUA")
                                        + " · KHÔNG GIỮ VỐN/LƯỢT MUA")
                 elif item.details.get("operator_armed_buy"):
+                    if status_upper in {"PENDING", "WAITING_TOKEN"}:
+                        tag = "armed_order"
                     status_label = "MUA BẬT TAY · " + status_label
+                caption = _order_caption(mode, display_source, item.side, item.symbol, item.quantity, price_text, self._row_time(item.created_at))
+                order_hint = (f"{mode} · {display_source} · {item.side} {item.symbol}\n"
+                              f"Tạo {self._row_time(item.created_at)} · KL {item.quantity:,} @ {price_text}")
+                if passive_watch:
+                    caption += "\n✓ ĐÃ TẠO LỆNH TAY" if watch.get("armed_order_id") else "\n○ THAM KHẢO · CHƯA BẬT MUA"
+                    order_hint += (f"\nĐã tạo lệnh mua tay #{watch['armed_order_id'][:8]}; xem trạng thái ở dòng MUA TAY."
+                                   if watch.get("armed_order_id") else
+                                   "\nChỉ lưu tham khảo hết phiên kế tiếp; không tự mua, không giữ vốn/lượt.\n"
+                                   "Chuột phải → Bật mua… → chọn LO/KL → BẬT MUA TAY mới xác nhận.")
+                elif item.details.get("operator_armed_buy"):
+                    caption += "\n" + status_label.replace("MUA BẬT TAY", "MUA TAY").replace("[CACHE] ", "").replace("[DNSE] ", "").replace("[PAPER] ", "")
+                    session_date = item.details["operator_armed_buy"].get("session_date", "")
+                    order_hint += (f"\nMua tay LO · phiên {session_date}; không cần tín hiệu BUY mới, MUA AUTO OFF vẫn được mua.\n"
+                                   "Khớp quản lý SL/TP/Protect theo cấu hình. Khớp 0: hết phiên thì hết hiệu lực.")
                 estimated_fee = (
                     self._preview_buy_fee(gross, item.symbol, mode)
                     if item.side == "BUY" else None
@@ -736,7 +753,7 @@ class DashboardTablesMixin:
                     values=(
                         f"[CACHE] {item.id[:8]}",
                         self._row_time(item.created_at),
-                        _order_caption(mode, display_source, item.side, item.symbol, item.quantity, price_text, self._row_time(item.created_at)),
+                        caption,
                         target_text,
                         cost_text,
                         f"R {risk_text} · E {reward_text}" if item.action == "OPEN" else "--",
@@ -750,8 +767,7 @@ class DashboardTablesMixin:
                     ),
                 )
                 tree._viking_row_hints[iid] = {
-                    "Order": f"{mode} · {display_source} · {item.side} {item.symbol}\n"
-                             f"Tạo {self._row_time(item.created_at)} · KL {item.quantity:,} @ {price_text}",
+                    "Order": order_hint,
                     "Override": "\n".join(override_items) if override_items else "Không có cấu hình riêng.",
                 }
                 if override_items:

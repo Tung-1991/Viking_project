@@ -187,7 +187,7 @@ def test_expired_armed_buy_does_not_create_another_passive_retry(watch):
 def test_passive_watch_row_and_right_click_offer_explicit_activation(ui_root, watch, monkeypatch):
     p = watch
     class Menu:
-        _viking_icons = [None, None]
+        _viking_icons = [None, None, None]
         def __init__(self): self.commands = []
         def delete(self, *args): self.commands = []
         def add_command(self, **kwargs): self.commands.append(kwargs)

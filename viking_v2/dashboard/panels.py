@@ -31,6 +31,8 @@ from ..trading.portfolio import (
 from ..trading.validation import decision_is_fresh, decisions_for_mode, quote_diagnostics, quote_is_fresh
 from .view import (
     COL_BORDER, COL_GRAY, COL_GREEN, COL_MUTED, COL_SETTLEMENT_BG, COL_SETTLEMENT_TEXT,
+    COL_RUNNING_SELECTED, COL_BUY_REFERENCE_BG, COL_BUY_REFERENCE_TEXT,
+    COL_BUY_ARMED_BG, COL_BUY_ARMED_TEXT, COL_BUY_HISTORY_BG, COL_BUY_HISTORY_TEXT,
     COL_PREVIEW_TEXT, COL_RED, COL_SURFACE, COL_SURFACE_2, COL_TEXT, COL_WARN, FONT_BOLD,
     COL_TITLE, FONT_PREVIEW_TITLE, FONT_PREVIEW_VALUE, _compact_vnd, _display_price,
     _number, _price_unit, _active_order_notice, _render_order_notice,
@@ -735,7 +737,7 @@ class DashboardPanelsMixin:
         )
         style.map(
             "Running.Treeview",
-            background=[("selected", "#393347")],
+            background=[("selected", COL_RUNNING_SELECTED)],
             foreground=[("selected", "#FFFFFF")],
         )
         for mode in ("CKCS REAL", "CKCS PAPER"):
@@ -746,6 +748,9 @@ class DashboardPanelsMixin:
             tree.tag_configure("buy_row", background="#193524", foreground=COL_TEXT)
             tree.tag_configure("sell_row", background="#3A2024", foreground=COL_TEXT)
             tree.tag_configure("pending_order", background="#42351B", foreground="#FDE68A")
+            tree.tag_configure("reference_order", background=COL_BUY_REFERENCE_BG, foreground=COL_BUY_REFERENCE_TEXT)
+            tree.tag_configure("armed_order", background=COL_BUY_ARMED_BG, foreground=COL_BUY_ARMED_TEXT)
+            tree.tag_configure("reference_armed_order", background=COL_BUY_HISTORY_BG, foreground=COL_BUY_HISTORY_TEXT)
             tree.tag_configure("settlement_order", background=COL_SETTLEMENT_BG, foreground=COL_SETTLEMENT_TEXT)
             tree.tag_configure("position_profit", background="#193524", foreground="#E7F8ED")
             tree.tag_configure("position_loss", background="#3A2024", foreground="#FBEAEC")
@@ -3414,6 +3419,9 @@ class DashboardPanelsMixin:
 
         rows = (
             ("CACHE", "#42351B", "Chưa gửi: chờ phiên, token hoặc tạm dừng trong app."),
+            ("○ THAM KHẢO", COL_BUY_REFERENCE_BG, "Khớp 0 rồi hủy/hết hạn. Chưa bật mua; không giữ vốn/lượt, không chặn BUY mới. Lưu hết phiên kế tiếp."),
+            ("▶ BẬT MUA TAY", COL_BUY_ARMED_BG, "Đã xác nhận mua tay, đang chờ gửi LO trong phiên kế tiếp. Không cần tín hiệu BUY mới; MUA AUTO OFF vẫn được mua."),
+            ("✓ ĐÃ TẠO LỆNH TAY", COL_BUY_HISTORY_BG, "Dòng tham khảo gốc đã tạo lệnh mua tay riêng. Xem dòng MUA TAY để biết trạng thái hiện tại."),
             ("ĐANG GỬI", "#0B4F5C", "Đang xử lý gửi; chưa được coi là đã khớp."),
             ("CHỜ KHỚP", "#123F6B", "Chờ khớp hoặc xác nhận sửa/hủy. REAL: DNSE; PAPER: mô phỏng."),
             ("KHỚP MỘT PHẦN", "#6A3F08", "Mới khớp một phần khối lượng; phần còn lại vẫn chờ."),
@@ -3423,6 +3431,7 @@ class DashboardPanelsMixin:
             ("LỖ", "#3A2024", "Vị thế đang có PnL ròng âm."),
             ("HÒA VỐN", COL_SURFACE_2, "Vị thế có PnL ròng bằng 0."),
             ("UNKNOWN", "#5A1E1E", "Chưa rõ kết quả. Đối chiếu lệnh; không tự gửi lại để tránh trùng."),
+            ("ĐANG CHỌN", COL_RUNNING_SELECTED, "Chỉ đang chọn dòng để thao tác; không bật mua. Đọc nhãn chữ để biết trạng thái."),
         )
         for index, (label, color, explanation) in enumerate(rows):
             chip = ctk.CTkLabel(
@@ -3455,7 +3464,9 @@ class DashboardPanelsMixin:
 
         ctk.CTkLabel(
             top,
-            text="Chờ xử lý ưu tiên màu lãi/lỗ. Dòng chọn đổi màu; đọc trạng thái chữ.",
+            text="Chờ xử lý ưu tiên màu lãi/lỗ. Dòng chọn đổi màu xám xanh; chỉ để chọn thao tác.\n"
+                 "Chuột phải → Bật mua… → nhập LO/KL → BẬT MUA TAY mới xác nhận.",
+            justify="left", wraplength=530,
             font=("Segoe UI", 11), text_color=COL_MUTED,
         ).grid(row=2, column=0, sticky="w", padx=18, pady=(0, 14))
 

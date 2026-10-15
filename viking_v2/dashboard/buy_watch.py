@@ -19,22 +19,25 @@ def show_arm_buy(app, action):
     price = item.limit_price or float(item.details.get("signal_price", 0) or 0) or board_price(tick.get("price", 0))
     top = ctk.CTkToplevel(app)
     top.title(f"Bật mua tay · {item.symbol}")
-    top.geometry("550x350")
+    top.geometry("600x430")
+    top.minsize(580, 430)
     top.transient(app)
     top.grab_set()
     top.grid_columnconfigure(1, weight=1)
-    ctk.CTkLabel(top, text=f"MUA MỚI · {item.symbol} · {item.execution_mode}", font=("Segoe UI", 16, "bold")).grid(
+    ctk.CTkLabel(top, text=f"▶ MUA TAY · {item.symbol} · {item.execution_mode}", font=("Segoe UI", 16, "bold"), text_color="#5EEAD4").grid(
         row=0, column=0, columnspan=2, sticky="w", padx=18, pady=(14, 8))
-    ctk.CTkLabel(top, text=f"Chỉ đặt trong phiên liên tục ngày {day}, được trước 14h.\n"
-        "Lệnh tay vẫn thực hiện khi BOT mua tự động OFF.\n"
-        "Khớp thực tế được tính 1 lượt BUY, quản lý SL/TP/Protect.", justify="left", anchor="w").grid(
+    ctk.CTkLabel(top, text=f"Chỉ gửi LO trong phiên liên tục ngày {day} (1 phiên kế tiếp).\n"
+        "Không cần tín hiệu BUY mới; được trước 14h và khi MUA AUTO OFF.\n"
+        "Giá LO do Ngài chọn, không tự nâng giá.\n"
+        "Khớp tính 1 lượt BUY, quản lý SL/TP/Protect theo cấu hình.\n"
+        "Khớp 0: hết phiên thì hết hiệu lực, không tự mua lại.", justify="left", anchor="w", wraplength=560).grid(
             row=1, column=0, columnspan=2, sticky="ew", padx=18, pady=5)
     quantity = tk.StringVar(master=top, value=str(item.quantity))
     limit_price = tk.StringVar(master=top, value=_display_price(price) if price > 0 else "")
     for row, label, variable in ((2, "Khối lượng (CP)", quantity), (3, "Giá LO (đồng/CP)", limit_price)):
         ctk.CTkLabel(top, text=label).grid(row=row, column=0, sticky="w", padx=18, pady=7)
         ctk.CTkEntry(top, textvariable=variable).grid(row=row, column=1, sticky="ew", padx=18, pady=7)
-    status = ctk.CTkLabel(top, text="Giá LO cố định; chỉ khớp khi có bên bán phù hợp.", wraplength=505, text_color="#F59E0B")
+    status = ctk.CTkLabel(top, text="Nhấn BẬT MUA TAY mới xác nhận.\nLO chỉ khớp khi có bên bán phù hợp.", wraplength=560, text_color="#F59E0B")
     status.grid(row=4, column=0, columnspan=2, sticky="ew", padx=18, pady=8)
     busy = False
 

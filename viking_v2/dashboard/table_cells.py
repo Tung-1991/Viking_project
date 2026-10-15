@@ -1,6 +1,8 @@
 """Display-only cell alignment and column rules for the running books."""
 from tkinter import Frame, Label, ttk
 
+from .view import COL_RUNNING_SELECTED
+
 
 class RunningTableCells:
     def __init__(self, tree):
@@ -58,7 +60,7 @@ class RunningTableCells:
             if not iid:
                 continue
             if iid in selected:
-                background = style.lookup(name, "background", ("selected",)) or "#393347"
+                background = style.lookup(name, "background", ("selected",)) or COL_RUNNING_SELECTED
                 foreground = style.lookup(name, "foreground", ("selected",)) or "#FFFFFF"
             else:
                 tags = tree.item(iid, "tags")

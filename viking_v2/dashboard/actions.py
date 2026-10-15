@@ -2111,17 +2111,20 @@ class DashboardActionsMixin:
                        disabledforeground="#7C8592", relief="flat", borderwidth=1,
                        activeborderwidth=0)
         icons = []
-        for kind, color in (("open", "#60A5FA"), ("close", "#F87171")):
+        for kind, color in (("open", "#60A5FA"), ("close", "#F87171"), ("buy", "#34D399")):
             artwork = Image.new("RGBA", (20, 20))
             draw = ImageDraw.Draw(artwork)
             if kind == "open":
                 draw.rounded_rectangle((2, 3, 17, 17), radius=2, outline=color, width=2)
                 draw.line((2, 7, 17, 7), fill=color, width=2)
                 draw.line((7, 8, 7, 17), fill=color, width=2)
-            else:
+            elif kind == "close":
                 draw.rounded_rectangle((2, 2, 17, 17), radius=3, outline=color, width=2)
                 draw.line((6, 6, 13, 13), fill=color, width=2)
                 draw.line((13, 6, 6, 13), fill=color, width=2)
+            else:
+                draw.ellipse((1, 1, 18, 18), outline=color, width=2)
+                draw.polygon(((8, 5), (8, 14), (15, 10)), fill=color)
             icons.append(ImageTk.PhotoImage(artwork.resize((icon_size, icon_size), Image.Resampling.LANCZOS), master=tree))
         menu._viking_icons = icons
         menu._viking_icon_size = icon_size
@@ -2154,6 +2157,7 @@ class DashboardActionsMixin:
                          command=lambda: self._close_running_selection(actions))
         if len(actions) == 1 and action.get("buy_watch"):
             menu.add_command(label="Bật mua…", state="normal" if action.get("armable") else "disabled",
+                             image=icons[2], compound="left",
                              command=lambda: self._arm_running_buy(action))
         menu.post(event.x_root, event.y_root)
 
